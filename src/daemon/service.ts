@@ -13,11 +13,14 @@ import { resolveProject } from '../core/session/project';
 import { MemoryEngine } from '../core/memory/engine';
 import { makeMemoryApi } from '../core/memory-api';
 import { AgentRuntime } from '../core/agent/runtime';
+import { AgentHub } from '../core/agent/hub';
+import { ClaudeCodeEngine } from '../core/agent/claude-engine';
+import { executeTool } from '../core/agent/tools';
 import { AnthropicLlm, AnthropicProvider, makeClient, resolveCredentials, type Credentials } from '../core/agent/anthropic';
 import type { ToolEnv } from '../core/agent/tools';
 import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
-import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { claudeStatus, findClaude, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
 import type { Decision } from '../core/agent/types';
@@ -46,7 +49,9 @@ export class JafferService {
   readonly secrets: SecretStore;
   host!: SessionHost;
   memory!: MemoryEngine;
-  agent!: AgentRuntime;
+  agent!: AgentHub;
+  private claudeBin: string | null = null;
+  private claudeProbe: Promise<void> | null = null;
   private apiKey: string | null = null;
   private client: Anthropic | null = null;
   private startedAt = nowIso();
@@ -88,7 +93,7 @@ export class JafferService {
       llm: () => (this.credentialsReady() ? new AnthropicLlm(() => this.getClient(), this.config.get().memory.reflectorModel) : this.cliLlm),
     });
     this.host = new SessionHost(this.paths, this.config, this.version);
-    this.agent = new AgentRuntime({
+    const api = new AgentRuntime({
       paths: this.paths,
       config: this.config,
       provider: () => (this.credentialsReady() ? new AnthropicProvider(() => this.getClient()) : null),
@@ -97,6 +102,18 @@ export class JafferService {
       memory: this.memory,
       credentialsReady: () => this.credentialsReady(),
     });
+    const cli = new ClaudeCodeEngine({
+      paths: this.paths,
+      config: this.config,
+      memory: this.memory,
+      terminal: () => this.terminalInfo(),
+      claudePath: () => this.claudeBin,
+      mcp: () => ({ command: this.cliWrapper, args: ['mcp', '--session'], env: { JAFFER_HOME: this.paths.home } }),
+      env: () => this.claudeEnv(),
+      log: this.log,
+    });
+    this.agent = new AgentHub(api, cli, this.config, { api: () => this.credentialsReady(), claudeCode: () => this.claudeBin !== null });
+    this.probeClaude();
 
     this.wireEvents();
     this.registerMethods();
@@ -114,7 +131,7 @@ export class JafferService {
     this.stopping = true;
     for (const t of this.timers) clearInterval(t);
     this.memory?.stop();
-    this.agent?.cancel();
+    await this.agent?.dispose();
     try {
       // Learn from whatever is pending before going away.
       await Promise.race([this.memory?.reflect({ force: false, llm: false }), new Promise((r) => setTimeout(r, 3000))]);
@@ -292,6 +309,7 @@ export class JafferService {
       home: this.userHome,
       backfillDays: this.config.get().ingest.backfillDays,
       offsets: this.memory.cursorState().ingest,
+      skipCwds: [this.paths.agentDir],
       emit: (e) => void this.memory.observe(e),
       save: (offsets) => this.memory.updateCursor((c) => (c.ingest = offsets)),
     });
@@ -352,9 +370,10 @@ export class JafferService {
     r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version, recentCommands: this.recentCommands }));
 
     // ---- agent
-    r.handle('agent.send', (p: { text: string }) => {
+    r.handle('agent.send', async (p: { text: string }) => {
       const text = String(p?.text ?? '').trim();
       if (!text) throw new RpcError('Empty message');
+      if (this.claudeProbe) await this.claudeProbe;
       return this.agent.send(text);
     });
     r.handle('agent.cancel', () => {
@@ -362,12 +381,22 @@ export class JafferService {
       return true;
     });
     r.handle('agent.approve', (p: { callId: string; decision: Decision }) => this.agent.approve(p.callId, p.decision));
-    r.handle('agent.thread', () => ({ items: this.agent.thread.items(), status: this.agent.status() }));
+    r.handle('agent.thread', async () => {
+      if (this.claudeProbe) await this.claudeProbe; // so the first status already knows whether Claude Code is there
+      return { items: this.agent.thread.items(), status: this.agent.status() };
+    });
     r.handle('agent.status', () => this.agent.status());
     r.handle('agent.compact', async () => {
+      if (this.agent.kind() === 'claude-code') return { compacted: false }; // Claude Code compacts its own context
       const provider = this.credentialsReady() ? new AnthropicProvider(() => this.getClient()) : null;
       if (!provider) throw new RpcError('No credentials', 'ENOAUTH');
-      return { compacted: await this.agent.maybeCompact(provider, undefined, true) };
+      return { compacted: await this.agent.api.maybeCompact(provider, undefined, true) };
+    });
+    // Used by the panel's Claude Code process (through `jaffer mcp --session`) to act in the user's own terminal.
+    // Approval has already happened: Claude Code asked Jaffer's UI before calling the tool.
+    r.handle('agent.tool', async (p: { name: string; input: unknown }) => {
+      if (p?.name !== 'run_command' && p?.name !== 'read_terminal') throw new RpcError(`Unknown tool ${p?.name}`);
+      return executeTool(this.toolEnv(), p.name, p.input);
     });
 
     // ---- memory
@@ -378,7 +407,11 @@ export class JafferService {
     // ---- config & secrets
     r.handle('config.get', () => this.config.get());
     r.handle('config.patch', (p: DeepPartial<JafferConfig>) => this.config.patch(p ?? {}));
-    r.handle('secrets.status', async () => ({ ready: this.credentialsReady(), source: this.credentials().source, backend: this.secrets.backend }));
+    r.handle('secrets.status', async () => {
+      await this.probeClaude();
+      const st = this.agent.status();
+      return { ready: st.ready, apiKey: this.credentialsReady(), claudeCode: this.claudeBin !== null, engine: st.engine, source: this.credentials().source, backend: this.secrets.backend };
+    });
     r.handle('secrets.setAnthropicKey', async (p: { key: string; verify?: boolean }) => {
       const key = String(p?.key ?? '').trim();
       if (!key) throw new RpcError('Empty key');
@@ -406,7 +439,10 @@ export class JafferService {
 
     // ---- integrations
     r.handle('setup.targets', () => detectTargets(this.userHome));
-    r.handle('setup.claude.status', () => claudeStatus(this.userHome, this.userEnv()));
+    r.handle('setup.claude.status', async () => {
+      await this.probeClaude();
+      return claudeStatus(this.userHome, this.userEnv());
+    });
     r.handle('setup.claude.install', async () => {
       const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv() });
       this.config.patch({ ingest: { claudeCode: true }, export: { targets: [...new Set([...this.config.get().export.targets, 'claude-code' as const])] } });
@@ -441,6 +477,30 @@ export class JafferService {
 
   private userEnv(): NodeJS.ProcessEnv {
     return { ...process.env, HOME: this.userHome };
+  }
+
+  /** The environment the panel's Claude Code runs in: the user's own, signed in with their login rather than a key. */
+  private claudeEnv(): NodeJS.ProcessEnv {
+    const env = this.userEnv();
+    if (process.env.JAFFER_KEEP_ANTHROPIC_ENV !== '1') {
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+    }
+    env.JAFFER_NO_HOOKS = '1'; // the panel injects memory itself; Jaffer's hooks must not add it twice
+    return env;
+  }
+
+  /** Find the `claude` binary once (and again on demand), so readiness checks stay synchronous. */
+  private probeClaude(): Promise<void> {
+    if (!this.claudeProbe) {
+      this.claudeProbe = findClaude(this.userEnv())
+        .then((p) => void (this.claudeBin = p))
+        .catch(() => void (this.claudeBin = null))
+        .finally(() => {
+          this.claudeProbe = null;
+        });
+    }
+    return this.claudeProbe;
   }
 }
 

@@ -7,6 +7,9 @@ import { MockAnthropic } from './helpers/mock-anthropic';
 import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-client';
 import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
+import { findClaude } from '../src/core/integrations/claude';
+
+const CLAUDE = await findClaude().catch(() => null);
 
 /**
  * Black-box tests of the shipped artifacts: the bundled daemon and CLI run as real, separate
@@ -29,7 +32,20 @@ beforeAll(async () => {
     execPath: process.execPath,
     daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
     cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
-    env: { HOME: env.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: url, PS1: '$ ' },
+    env: {
+      HOME: env.userHome,
+      SHELL: '/bin/bash',
+      JAFFER_TICK_MS: '400',
+      ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000',
+      ANTHROPIC_BASE_URL: url,
+      PS1: '$ ',
+      // the panel's Claude Code process (only used by the Claude Code engine test): isolated profile, talks to the mock
+      CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'),
+      JAFFER_KEEP_ANTHROPIC_ENV: '1',
+      DISABLE_AUTOUPDATER: '1',
+      DISABLE_TELEMETRY: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    },
   };
 }, 60_000);
 
@@ -171,6 +187,34 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(fs.readFileSync(path.join(env.userHome, 'approved.txt'), 'utf8')).toBe('hello');
   });
 
+  it.skipIf(!CLAUDE)('runs the panel on a Claude Code login: its commands are typed into the shared terminal, after Jaffer approves them', async () => {
+    const c = await connect();
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await c.call('config.patch', { agent: { engine: 'claude-code' } });
+    expect((await c.call('secrets.status', {})).claudeCode).toBe(true);
+    const events = collect(c, 'agent.event');
+    const main = (b: any) => (b.tools?.length ?? 0) > 0;
+    const target = path.join(env.userHome, 'made-by-claude.txt');
+    mock.reset().queue({ kind: 'tool', id: 'toolu_cc1', name: 'mcp__jaffer-session__run_command', input: { command: 'touch made-by-claude.txt && echo claude-was-here' }, text: 'Creating it.', when: main }, { kind: 'text', text: 'Created the file.', when: main });
+    await c.call('agent.send', { text: 'make a file' });
+    await waitUntil(() => events.some((e) => e.type === 'approval_request' && e.name === 'run_command'), 60_000);
+    expect(fs.existsSync(target)).toBe(false); // asked first
+    const req = events.find((e) => e.type === 'approval_request' && e.name === 'run_command');
+    await c.call('agent.approve', { callId: req.callId, decision: 'allow' });
+    await waitUntil(() => events.some((e) => e.type === 'turn_end'), 60_000);
+    expect(events.find((e) => e.type === 'turn_end').error).toBeUndefined();
+    expect(fs.existsSync(target)).toBe(true);
+    // it ran in the user's own terminal session, where they can see it
+    const att = await c.call('session.attach', { cols: 100, rows: 30 });
+    expect(att.snapshot.data).toContain('touch made-by-claude.txt');
+    expect(att.snapshot.data).toContain('claude-was-here');
+    // the panel shows the conversation, and it is Claude Code's
+    const t = await c.call('agent.thread', {});
+    expect(t.status.engine).toBe('claude-code');
+    expect(t.items.some((i: any) => i.kind === 'tool' && i.name === 'run_command' && /claude-was-here/.test(i.output ?? ''))).toBe(true);
+    await c.call('config.patch', { agent: { engine: 'auto' } });
+  }, 120_000);
+
   it('survives a daemon restart: same directory, previous screen restored, conversation intact', async () => {
     const c = await connect();
     const cmds = collect(c, 'pty.command');
@@ -217,10 +261,18 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     }
 
     // nobody calls memory.reflect: the daemon must do it by itself
-    await waitUntil(async () => {
-      const items = (await c.call('memory.list', {})).items as { text: string; source: string }[];
-      return items.some((i) => /tabs/i.test(i.text)) && items.some((i) => /linter before every commit/.test(i.text));
-    }, 15_000);
+    try {
+      await waitUntil(async () => {
+        const items = (await c.call('memory.list', {})).items as { text: string; source: string }[];
+        return items.some((i) => /tabs/i.test(i.text)) && items.some((i) => /linter before every commit/.test(i.text));
+      }, 20_000);
+    } catch (e) {
+      // say what the daemon had done by then, so a slow or broken platform can be told apart
+      const items = ((await c.call('memory.list', {})).items as { text: string; source: string }[]).map((i) => `${i.source}: ${i.text}`);
+      const stats = await c.call('memory.stats', {});
+      const log = await c.call('memory.log', { limit: 20 });
+      throw new Error(`memory did not evolve in time. items=${JSON.stringify(items)} stats=${JSON.stringify(stats)} runs=${JSON.stringify(log.runs.map((r: any) => [r.sources, r.reason]))} reflectorRequests=${mock.requests.length} commands=${JSON.stringify(cmds.map((x: any) => [x.cmd, x.exit]))} (${(e as Error).message})`);
+    }
     const items = (await c.call('memory.list', {})).items as { text: string; source: string; kind: string }[];
     expect(items.length).toBeGreaterThan(before);
     expect(items.find((i) => /tabs/i.test(i.text))!.source).toBe('user'); // learned from the Claude Code transcript
@@ -235,7 +287,7 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     const rev = await c.call('memory.revert', { runId: run.runId });
     expect(rev.reverted).toBeGreaterThan(0);
     expect(((await c.call('memory.list', {})).items as any[]).some((i) => /linter before every commit/.test(i.text))).toBe(false);
-  }, 40_000);
+  }, 50_000);
 
   it('streams heavy output in order with no gaps, and the daemon stays responsive', async () => {
     const c = await connect();

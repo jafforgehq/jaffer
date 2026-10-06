@@ -3,8 +3,9 @@ import type { JafferPaths } from '../../shared/paths';
 import { Emitter, errMsg, nowIso, uid } from '../../shared/util';
 import type { MemoryEngine } from '../memory/engine';
 import { buildSystemPrompt, terminalContextBlock } from './prompt';
-import { allowKeyForCommand, assessCommand, assessFileRead, assessFileWrite, type Assessment } from './permissions';
-import { executeTool, resolvePath, TOOL_SPECS, toolSummary, type ToolEnv } from './tools';
+import { allowKeyForCommand, type Assessment } from './permissions';
+import { assessTool } from './assess';
+import { executeTool, TOOL_SPECS, toolSummary, type ToolEnv } from './tools';
 import { estimateTokens, isTurnStart, stripThinking, Thread } from './thread';
 import { costUsd } from './anthropic';
 import { emptyUsage, type AgentEvent, type AgentProvider, type ContentBlock, type Decision, type Message, type UsageTotals } from './types';
@@ -32,6 +33,10 @@ export interface AgentStatus {
   ready: boolean;
   busy: boolean;
   model: string;
+  /** Who is running the panel: your API key, or your Claude Code login. */
+  engine: 'api' | 'claude-code';
+  /** Which engines could run right now (set by the hub). */
+  engines?: { api: boolean; claudeCode: boolean };
   usage: UsageTotals;
   threadTokens: number;
   messages: number;
@@ -69,6 +74,7 @@ export class AgentRuntime {
       ready: this.deps.credentialsReady(),
       busy: this._busy,
       model: this.deps.config.get().agent.model,
+      engine: 'api',
       usage: { ...this.total },
       threadTokens: estimateTokens(this.thread.messages, this.system.length),
       messages: this.thread.messages.length,
@@ -240,29 +246,7 @@ export class AgentRuntime {
   // ------------------------------------------------------------------ tools
 
   private assess(name: string, input: any): Assessment {
-    const cfg = this.deps.config.get().agent;
-    const cwd = this.deps.terminal().cwd;
-    switch (name) {
-      case 'run_command':
-        return assessCommand(String(input?.command ?? ''), cfg.approvals, cfg.allow);
-      case 'read_file':
-        return assessFileRead(resolvePath(String(input?.path ?? ''), cwd));
-      case 'list_dir':
-      case 'search_files':
-      case 'read_terminal':
-      case 'recall':
-        return { verdict: 'auto', risk: 'read', reason: 'read-only' };
-      case 'write_file':
-      case 'edit_file':
-        return assessFileWrite(resolvePath(String(input?.path ?? ''), cwd), cfg.approvals, cfg.allow, name);
-      case 'terminal_input':
-        return { verdict: 'ask', risk: 'risky', reason: 'types into the program running in your terminal' };
-      case 'remember':
-      case 'forget':
-        return { verdict: 'auto', risk: 'write', reason: 'updates your memory (visible and reversible in the Memory panel)' };
-      default:
-        return { verdict: 'deny', risk: 'risky', reason: `unknown tool ${name}` };
-    }
+    return assessTool(name, input, this.deps.config.get().agent, this.deps.terminal().cwd);
   }
 
   private async runTool(turnId: string, tu: Extract<ContentBlock, { type: 'tool_use' }>, signal: AbortSignal): Promise<ContentBlock> {

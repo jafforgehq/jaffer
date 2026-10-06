@@ -17,6 +17,10 @@ export interface JafferPaths {
   screenSnapshot: string;
   thread: string;
   threadSummary: string;
+  /** The working directory of the Claude Code engine's process (stable, so its session can always be resumed). */
+  agentDir: string;
+  cliThread: string;
+  cliState: string;
   shellDir: string;
   binDir: string;
   memoryDir: string;
@@ -57,6 +61,9 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     screenSnapshot: path.join(sessionDir, 'screen.json'),
     thread: path.join(sessionDir, 'thread.jsonl'),
     threadSummary: path.join(sessionDir, 'summary.md'),
+    agentDir: path.join(home, 'agent'),
+    cliThread: path.join(sessionDir, 'cli-thread.json'),
+    cliState: path.join(sessionDir, 'cli-state.json'),
     shellDir: path.join(home, 'shell'),
     binDir: path.join(home, 'bin'),
     memoryDir,

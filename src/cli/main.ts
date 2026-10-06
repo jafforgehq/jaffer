@@ -109,7 +109,18 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'mcp': {
       const client = await tryConnect(paths);
-      runMcpServer({ version: VERSION, call: (m, p) => memoryCall(m, p, client) });
+      const session = args.includes('--session');
+      runMcpServer({
+        version: VERSION,
+        session,
+        call: (m, p) => {
+          if (m === 'agent.tool') {
+            if (!client) throw new Error("Jaffer's session is not running, so there is no terminal to run that in.");
+            return client.call(m, p, 15 * 60_000);
+          }
+          return memoryCall(m, p, client);
+        },
+      });
       client?.onClose.on(() => process.exit(0));
       return; // keep running on stdin
     }

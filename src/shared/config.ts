@@ -22,6 +22,13 @@ export interface JafferConfig {
   };
   shell: { path: string; args: string[] };
   agent: {
+    /**
+     * Who runs the agent panel. "api": your Anthropic API key. "claude-code": your Claude Code login (the `claude` CLI),
+     * so no API key is needed. "auto": the API key when there is one, otherwise Claude Code.
+     */
+    engine: 'auto' | 'api' | 'claude-code';
+    /** Model alias for the Claude Code engine ("sonnet", "opus", …); empty uses Claude Code's own default. */
+    cliModel: string;
     model: string;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     approvals: ApprovalMode;
@@ -65,6 +72,8 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   shell: { path: '', args: [] },
   agent: {
+    engine: 'auto',
+    cliModel: '',
     model: 'claude-sonnet-5-5',
     effort: 'medium',
     approvals: 'ask',
