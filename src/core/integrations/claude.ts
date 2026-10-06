@@ -122,8 +122,14 @@ function run(file: string, args: string[], env: NodeJS.ProcessEnv, timeout = 20_
 
 /** Locate `claude` the way the user's own shell would (the daemon may have a minimal PATH). */
 export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-  const candidates = [path.join(os.homedir(), '.claude', 'local', 'claude'), path.join(os.homedir(), '.local', 'bin', 'claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
-  for (const dir of (env.PATH ?? '').split(path.delimiter)) if (dir) candidates.unshift(path.join(dir, 'claude'));
+  // PATH first, in order (the first hit is the one the user's shell runs), then the usual install locations.
+  const candidates = [
+    ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, 'claude')),
+    path.join(os.homedir(), '.claude', 'local', 'claude'),
+    path.join(os.homedir(), '.local', 'bin', 'claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ];
   for (const c of candidates) {
     try {
       fs.accessSync(c, fs.constants.X_OK);

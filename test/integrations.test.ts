@@ -149,6 +149,21 @@ describe('Claude Code transcript ingestion', () => {
 });
 
 // The real thing: register the MCP server with the actual Claude Code CLI (isolated HOME) and ask it to connect.
+describe('findClaude', () => {
+  it('picks the first claude on PATH, the one the user\'s own shell would run', async () => {
+    const mk = (name: string) => {
+      const dir = path.join(env.root, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      return dir;
+    };
+    const first = mk('first');
+    const second = mk('second');
+    expect(await findClaude({ HOME: env.userHome, PATH: `${first}:${second}` })).toBe(path.join(first, 'claude'));
+    expect(await findClaude({ HOME: env.userHome, PATH: `${second}:${first}` })).toBe(path.join(second, 'claude'));
+  });
+});
+
 const CLAUDE_PATH = await findClaude().catch(() => null);
 describe.skipIf(!CLAUDE_PATH)('Claude Code CLI wiring (real claude binary)', () => {
   it('registers the MCP server and Claude Code connects to it', async () => {
