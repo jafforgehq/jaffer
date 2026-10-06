@@ -152,3 +152,30 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(res.output).toBe('[unset] [xterm-256color] [truecolor] [Jaffer] [1]');
   });
 });
+
+describe('shell integration regressions (found by macOS CI)', () => {
+  it('bash: only commands the user typed are recorded, even with user PROMPT_COMMAND hooks from their rc file', async () => {
+    // (the test helper starts a non-login shell, which reads ~/.bashrc — where real users put such hooks)
+    fs.writeFileSync(path.join(env.userHome, '.bashrc'), "PROMPT_COMMAND='export __user_hook=ran; true'\n");
+    sh = startShell(env, { shell: '/bin/bash' });
+    const seen: string[] = [];
+    sh.events.on((e) => e.type === 'command' && seen.push(e.cmd));
+    await untilReady(sh);
+    sh.write('echo typed-by-user\r');
+    await waitFor(sh, (e) => (e.type === 'command' && e.cmd === 'echo typed-by-user' ? e : false));
+    await untilReady(sh);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen).toEqual(['echo typed-by-user']); // neither startup lines nor the hook itself show up as commands
+    expect((await sh.runCommand('echo $__user_hook')).output).toBe('ran'); // and the user's own hook still ran
+  });
+
+  it('zsh: history stays in the user\'s home, never in the integration shim directory', async () => {
+    const zsh = SHELLS.find((s) => s.endsWith('zsh'));
+    if (!zsh) return;
+    sh = startShell(env, { shell: zsh });
+    await untilReady(sh);
+    const r = await sh.runCommand('print -r -- "$HISTFILE"');
+    expect(r.output).toBe(path.join(env.userHome, '.zsh_history'));
+    expect(r.output).not.toContain('.jaffer');
+  });
+});

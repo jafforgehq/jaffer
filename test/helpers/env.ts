@@ -22,7 +22,7 @@ export function makeEnv(): TestEnv {
   fs.mkdirSync(userHome, { recursive: true });
   const paths = makePaths(home);
   const config = new ConfigStore(paths);
-  return { root, home, userHome, paths, config, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, home, userHome, paths, config, cleanup: () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 120 }) };
 }
 
 export class FakeLlm implements LlmClient {

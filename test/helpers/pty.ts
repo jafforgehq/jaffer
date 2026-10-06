@@ -1,10 +1,14 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { buildShellSpawn, installShellIntegration } from '../../src/core/session/shell-integration';
 import { PtySession, type PtyEvent } from '../../src/core/session/terminal';
 import type { TestEnv } from './env';
 
 export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; rows?: number; cwd?: string } = {}): PtySession {
   installShellIntegration(env.paths);
+  // Debian/Ubuntu's global zshrc runs compinit, which prompts on CI runners; opt out via the user's own .zshenv
+  // (this doubles as a check that the integration sources the user's real dotfiles).
+  fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
   fs.mkdirSync(env.paths.binDir, { recursive: true });
   const shell = opts.shell ?? '/bin/bash';
   const spawn = buildShellSpawn({

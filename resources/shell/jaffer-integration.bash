@@ -13,8 +13,12 @@ __jaffer_esc() {
   printf '%s' "$s"
 }
 
-__jaffer_in_prompt=0
+# The DEBUG trap fires before *every* command, including startup lines and the user's own PROMPT_COMMAND
+# hooks. __jaffer_in_prompt stays 1 from the start of the prompt phase until our last hook runs, so only
+# commands the user actually typed are reported.
+__jaffer_in_prompt=1
 __jaffer_ran=0
+
 __jaffer_precmd() {
   local ec=$?
   __jaffer_in_prompt=1
@@ -26,9 +30,19 @@ __jaffer_precmd() {
   fi
   printf '\e]633;P;Cwd=%s\a' "$(__jaffer_esc "$PWD")"
   printf '\e]133;A\a'
+  # keep our end-of-prompt hook last, even if other tools rewrote PROMPT_COMMAND since
+  if [ "${PROMPT_COMMAND##*;}" != "__jaffer_prompt_end" ] && [ "${PROMPT_COMMAND}" != "__jaffer_prompt_end" ]; then
+    PROMPT_COMMAND="${PROMPT_COMMAND//;__jaffer_prompt_end/};__jaffer_prompt_end"
+  fi
+  return $ec
+}
+
+__jaffer_prompt_end() {
+  local ec=$?
   __jaffer_in_prompt=0
   return $ec
 }
+
 __jaffer_preexec() {
   [ "$__jaffer_in_prompt" = "1" ] && return
   [ "$__jaffer_ran" = "1" ] && return
@@ -41,4 +55,8 @@ __jaffer_preexec() {
   printf '\e]633;E;%s\a\e]133;C\a' "$(__jaffer_esc "$line")"
 }
 trap '__jaffer_preexec' DEBUG
-PROMPT_COMMAND="__jaffer_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+if [ -n "$PROMPT_COMMAND" ]; then
+  PROMPT_COMMAND="__jaffer_precmd;${PROMPT_COMMAND};__jaffer_prompt_end"
+else
+  PROMPT_COMMAND="__jaffer_precmd;__jaffer_prompt_end"
+fi

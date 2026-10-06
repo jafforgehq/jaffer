@@ -74,14 +74,24 @@ jobs:
           grep -q "SMOKE OK" smoke.log
       - name: Package (dmg + zip, arm64 and x64)
         env:
-          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Secrets are optional. They are copied into the variables electron-builder reads only when set:
+          # an empty CSC_LINK is treated as a path and breaks the build.
+          SECRET_CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          SECRET_CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           EXTRA=""
-          if [ -n "$APPLE_ID" ]; then EXTRA="-c.mac.notarize=true"; fi
+          if [ -n "$SECRET_CSC_LINK" ]; then
+            export CSC_LINK="$SECRET_CSC_LINK" CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
+          else
+            echo "No signing certificate configured: building ad-hoc signed apps."
+          fi
+          if [ -n "$SECRET_APPLE_ID" ]; then
+            export APPLE_ID="$SECRET_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
+            EXTRA="-c.mac.notarize=true"
+          fi
           npx electron-builder --mac --arm64 --x64 --publish never $EXTRA
           ls -la release
       - uses: actions/upload-artifact@v4

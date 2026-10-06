@@ -69,6 +69,7 @@ export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
   env.TERM_PROGRAM_VERSION = o.version;
   if (!env.LANG || !/UTF-?8/i.test(env.LANG)) env.LANG = 'en_US.UTF-8';
   env.JAFFER_SESSION = '1';
+  env.BASH_SILENCE_DEPRECATION_WARNING = '1'; // macOS's bash 3.2 otherwise nags about zsh on every start
   env.JAFFER_HOME = o.paths.home;
   env.JAFFER_SOCK = o.paths.socket;
   env.JAFFER_BIN = o.paths.binDir;

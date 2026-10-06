@@ -22,6 +22,7 @@ beforeAll(async () => {
   execFileSync(process.execPath, [path.join(root, 'scripts/build.mjs'), '--only=daemon'], { stdio: 'ignore' });
   execFileSync(process.execPath, [path.join(root, 'scripts/build.mjs'), '--only=cli'], { stdio: 'ignore' });
   env = makeEnv();
+  fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
   mock = new MockAnthropic();
   const url = await mock.listen();
   launcher = {
