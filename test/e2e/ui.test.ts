@@ -170,6 +170,10 @@ describe('Jaffer UI end to end', () => {
     const bg = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim());
     expect(bg).toBe('#1a1b26');
     await shot('07-tokyo-night');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-light' } }));
+    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fbfaf7', 8000, 'light theme');
+    await shot('07b-light');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'tokyo-night' } }));
   }, 30_000);
 
   it('settings dialog opens and reflects the configuration', async () => {
