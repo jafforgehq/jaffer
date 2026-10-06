@@ -101,8 +101,11 @@ APPS=()
 for APP in "${APPS[@]}"; do
   echo "--- $APP"
   codesign --verify --deep --strict --verbose=2 "$APP"
-  codesign -dv "$APP" 2>&1 | grep -q runtime || die "$APP is missing the hardened runtime flag"
-  codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q allow-jit || die "$APP lost its entitlements"
+  # capture first: `codesign | grep -q` dies of SIGPIPE under pipefail even when grep matched
+  SIGINFO="$(codesign -dv "$APP" 2>&1)"
+  printf '%s\n' "$SIGINFO" | grep -q runtime || die "$APP is missing the hardened runtime flag"
+  ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null)"
+  printf '%s\n' "$ENTITLEMENTS" | grep -q allow-jit || die "$APP lost its entitlements"
   if [ "$NOTARIZE" = 1 ]; then
     spctl --assess --type execute --verbose=4 "$APP"
     xcrun stapler validate "$APP"
