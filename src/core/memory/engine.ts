@@ -200,6 +200,10 @@ export class MemoryEngine {
   private async doReflect(opts: { force?: boolean; llm?: boolean }): Promise<ReflectionResult> {
     const state = this.cursor.read();
     const episodes = this.episodes.readAfter(state.reflectedSeq);
+    // Take the "learn this soon" flag together with the episodes it refers to. Clearing it after the (slow) model call would
+    // also wipe the flag of a rule observed meanwhile, which is not in this pass and would then wait for more activity.
+    const hadCorrection = this.pendingCorrection;
+    this.pendingCorrection = false;
     const run: RunCtx = this.store.newRun('heuristic', 'reflection');
     const counts: ApplyCounts = emptyCounts();
     let mode: ReflectionResult['mode'] = 'heuristic';
@@ -213,7 +217,7 @@ export class MemoryEngine {
 
     // 2. model-assisted curation — when permitted and due
     const llm = opts.llm === false ? null : this.llmClient();
-    const due = opts.force || this.pendingCorrection || this.clock() - this.lastLlmAt >= this.cfg.memory.llmMinIntervalSec * 1000;
+    const due = opts.force || hadCorrection || this.clock() - this.lastLlmAt >= this.cfg.memory.llmMinIntervalSec * 1000;
     if (llm && due && episodes.length > 0) {
       try {
         const r = await reflectWithLlm({ llm, store: this.store, episodes, policy: this.readPolicy(), model: this.cfg.memory.reflectorModel });
@@ -221,12 +225,13 @@ export class MemoryEngine {
         add(counts, lc);
         mode = 'both';
         this.lastLlmAt = this.clock();
-        this.pendingCorrection = false;
         if (r.dropped) lines.push(`${r.dropped} malformed op(s) ignored`);
       } catch (e) {
         error = errMsg(e);
       }
     }
+
+    if (error) this.pendingCorrection ||= hadCorrection; // the model did not get to look at it: try again soon
 
     const maxSeq = episodes.length ? Math.max(...episodes.map((e) => e.seq)) : state.reflectedSeq;
     this.cursor.update((c) => {

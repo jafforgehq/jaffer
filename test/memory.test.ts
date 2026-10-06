@@ -211,6 +211,27 @@ describe('MemoryEngine', () => {
     expect(quiet.store.listItems()).toHaveLength(0);
   });
 
+  it('an instruction that arrives while the model is reflecting is still learned, not stranded', async () => {
+    // The pass reads its episodes first and used to clear the "learn this soon" flag only after the model answered, so a
+    // rule observed in between (not in that pass) lost its flag and, as the only pending episode, waited for more activity.
+    env.config.patch({ onboarded: true });
+    let release!: () => void;
+    let calling!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const called = new Promise<void>((r) => (calling = r));
+    const llm = { complete: async () => (calling(), await gate, '{"ops":[]}') };
+    const engine = makeEngine(env, llm);
+    for (let i = 0; i < 4; i++) engine.observeCommand({ cmd: `pnpm test --run-${i}`, exit: 0, cwd: '/work/app', project: '/work/app' });
+    const inFlight = engine.reflect({ force: true }); // blocked on the model
+    await called; // the pass has read its episodes and is waiting for the answer
+    engine.observe({ t: 'ext', agent: 'claude-code', role: 'user', text: 'From now on always use tabs, never spaces, for indentation.', cwd: '/work/app', correction: false });
+    release();
+    await inFlight;
+    expect(engine.store.listItems().some((i) => /tabs/i.test(i.text))).toBe(false); // it was not part of that pass
+    await engine.tick();
+    expect(engine.store.listItems().some((i) => /tabs/i.test(i.text))).toBe(true); // and the next tick picks it up on its own
+  });
+
   it('never sends secrets to the model', async () => {
     env.config.patch({ onboarded: true });
     const llm = new FakeLlm(() => '{"ops":[]}');
