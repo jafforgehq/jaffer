@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JafferPaths } from '../../shared/paths';
-import { appendLine, dayKey, Emitter, ensureDir, nowIso, readJsonl, uid, writeFileAtomic, writeJsonl } from '../../shared/util';
+import { appendLine, dayKey, Emitter, ensureDir, readJsonl, uid, writeFileAtomic, writeJsonl } from '../../shared/util';
 import { redact } from '../../shared/redact';
 import type { JournalEntry, JournalOp, MemoryItem, MemoryKind, MemoryScope, MemorySource, SkillItem } from './types';
 import { MEMORY_KINDS } from './types';

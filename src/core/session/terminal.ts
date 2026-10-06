@@ -78,7 +78,7 @@ export class PtySession {
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
 
-  constructor(private opts: PtyOptions) {
+  constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();

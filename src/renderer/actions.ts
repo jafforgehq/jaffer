@@ -62,7 +62,7 @@ export const actions: Action[] = [
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'split-right', title: 'Split pane right', section: 'Terminal', keys: '⌘D', run: () => splitPane('row') },
   { id: 'split-down', title: 'Split pane down', section: 'Terminal', keys: '⇧⌘D', run: () => splitPane('col') },
-  { id: 'close-pane', title: 'Close pane', section: 'Terminal', keys: '⌘W', run: () => closePane() },
+  { id: 'close-pane', title: 'Close pane (or hide the window)', section: 'Terminal', keys: '⌘W', run: () => (panes.value.length > 1 && activePane.value !== 'main' ? closePane() : window.close()) },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
   { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => (overlay.value = 'find') },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },

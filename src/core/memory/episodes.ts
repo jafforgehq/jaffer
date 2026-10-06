@@ -27,7 +27,6 @@ const MAX_TEXT = 4000;
  */
 export class EpisodeLog {
   private seq = 0;
-  private cache: { file: string; mtime: number; rows: Episode[] } | null = null;
 
   constructor(
     private paths: JafferPaths,
