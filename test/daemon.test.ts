@@ -277,11 +277,11 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(items.length).toBeGreaterThan(before);
     expect(items.find((i) => /tabs/i.test(i.text))!.source).toBe('user'); // learned from the Claude Code transcript
     expect(items.find((i) => /linter before every commit/.test(i.text))!.source).toBe('reflector'); // curated by the model
-    // A stated rule is reflected on at once (before the shell commands pile up), so the first request may carry only the
-    // transcript line; the commands go out in a later reflection. Some request must have carried them.
+    // A stated rule is reflected on at once (before the shell commands pile up), so one request may carry only the transcript
+    // line and the commands go out in another. Both must have reached the model. A pass applies its offline rules before it
+    // sends its request, so the memory can be visible a moment before the request arrives: wait for both.
     const sentTo = () => mock.requests.map((r) => JSON.stringify(r.body?.messages ?? ''));
-    await waitUntil(() => sentTo().some((s) => s.includes('pnpm test')), 20_000);
-    expect(sentTo().some((s) => s.includes('From now on always use tabs'))).toBe(true);
+    await waitUntil(() => sentTo().some((s) => s.includes('pnpm test')) && sentTo().some((s) => s.includes('From now on always use tabs')), 20_000);
     // and every change is journaled so it can be undone
     const log = await c.call('memory.log', { limit: 100 });
     expect(log.runs.some((r: any) => r.sources.includes('reflector'))).toBe(true);
