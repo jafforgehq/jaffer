@@ -118,13 +118,21 @@ jobs:
           grep -q "SMOKE OK" smoke.log
           rm -rf release
 
+      - name: Import the signing certificate into a temporary keychain
+        if: steps.sign.outputs.sign == 'true'
+        env:
+          CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CERT_PW: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          scripts/ci-keychain.sh "$RUNNER_TEMP/cert.p12" "$CERT_PW"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
       - name: Package (dmg + zip, arm64 and x64) — signed and notarized when credentials exist
         env:
           SIGN: ${{ steps.sign.outputs.sign }}
           NOTARIZE_METHOD: ${{ steps.sign.outputs.method }}
-          # Copied into the variables electron-builder reads only when set: an empty CSC_LINK is treated as a path.
-          SECRET_CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
-          SECRET_CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          # Notarization credentials are copied into the variables electron-builder reads only when set (empty ones confuse it).
           SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
           SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -134,8 +142,7 @@ jobs:
         run: |
           CONFIG="electron-builder.yml"
           if [ "$SIGN" = true ]; then
-            export CSC_LINK="$SECRET_CSC_LINK" CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
-            CONFIG="electron-builder.signed.yml"   # adds dmg signing and, below, notarization
+            CONFIG="electron-builder.signed.yml"   # certificate comes from the keychain imported above (CSC_KEYCHAIN)
             if [ "$NOTARIZE_METHOD" = apple-id ]; then
               export APPLE_ID="$SECRET_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
             elif [ "$NOTARIZE_METHOD" = api-key ]; then
@@ -203,6 +210,10 @@ jobs:
       - name: Checksums
         run: cd release && shasum -a 256 *.dmg *.zip | tee SHA256SUMS.txt
 
+      - name: Remove the temporary keychain
+        if: always() && steps.sign.outputs.sign == 'true'
+        run: scripts/ci-keychain.sh --remove
+
       - uses: actions/upload-artifact@v4
         with:
           name: Jaffer-macOS
@@ -246,12 +257,14 @@ jobs:
           /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 -config cert.conf
           /usr/bin/openssl pkcs12 -export -inkey key.pem -in cert.pem -out cert.p12 -passout pass:dryrun
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain cert.pem
-          echo "CSC_LINK=$(base64 -i cert.p12)" >> "$GITHUB_ENV"
-          echo "CSC_KEY_PASSWORD=dryrun" >> "$GITHUB_ENV"
+          "$GITHUB_WORKSPACE/scripts/ci-keychain.sh" cert.p12 dryrun
       - name: Build with signing on (no notarization), layered config
         run: |
           sed 's/notarize: true/notarize: false/' electron-builder.signed.yml > electron-builder.dryrun.yml
           npx electron-builder --mac --arm64 --publish never --config electron-builder.dryrun.yml
+      - name: Remove the temporary keychain
+        if: always()
+        run: scripts/ci-keychain.sh --remove
       - name: Verify the result
         run: |
           APP=release/mac-arm64/Jaffer.app
