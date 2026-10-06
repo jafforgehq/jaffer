@@ -1,0 +1,409 @@
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import type { JafferPaths } from '../../shared/paths';
+import type { ConfigStore } from '../../shared/config';
+import { Emitter, SerialQueue, errMsg, nowIso, uid, writeFileAtomic } from '../../shared/util';
+import { isSensitiveCommand, redactText } from '../../shared/redact';
+import { MemoryStore, type RunCtx } from './store';
+import { CursorFile, EpisodeLog, type CursorState } from './episodes';
+import { detectCorrection, runHeuristics, type HeuristicEnv } from './heuristics';
+import { applyOps, emptyCounts, type ApplyCounts } from './apply';
+import { consolidateHeuristic } from './consolidate';
+import { buildContext, writeViews, type BuiltContext, type ContextOptions } from './context';
+import { DEFAULT_POLICY, reflectWithLlm } from './reflector';
+import type { LlmClient } from './llm';
+import { syncClaudeSkills, syncExports } from './exports';
+import type { CommandEpisode, Episode, EpisodeInput, MemoryItem, MemoryKind, MemoryScope, MemoryStats, ProposedOp, ReflectionResult, SkillItem } from './types';
+import { MEMORY_KINDS } from './types';
+import { rankItems, rankSkills } from './ranking';
+
+export type MemoryEvent =
+  | { type: 'updated'; reason: string }
+  | { type: 'reflection'; result: ReflectionResult }
+  | { type: 'learned'; items: MemoryItem[] };
+
+export interface EngineDeps {
+  paths: JafferPaths;
+  config: ConfigStore;
+  /** Returns a model client when credentials are available, else null. */
+  llm?: () => LlmClient | null;
+  clock?: () => number;
+  home?: string;
+  env?: HeuristicEnv;
+}
+
+export interface RecallResult {
+  items: (MemoryItem & { score: number })[];
+  skills: (SkillItem & { score: number })[];
+}
+
+/**
+ * The self-evolving memory. It watches the session (commands, agent turns, external agent
+ * transcripts), reflects on it in the background — offline rules always, a model when
+ * available — and keeps a small, ranked, decaying memory that every agent can read.
+ */
+export class MemoryEngine {
+  readonly store: MemoryStore;
+  readonly episodes: EpisodeLog;
+  readonly events = new Emitter<MemoryEvent>();
+  private cursor: CursorFile;
+  private queue = new SerialQueue();
+  private lastEpisodeAt = 0;
+  private lastLlmAt = 0;
+  private exportDirty = true;
+  private pendingCorrection = false;
+  private clock: () => number;
+  private home: string;
+  private lastResult: ReflectionResult | undefined;
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(private deps: EngineDeps) {
+    this.clock = deps.clock ?? Date.now;
+    this.home = deps.home ?? os.homedir();
+    this.store = new MemoryStore(deps.paths, this.clock);
+    this.episodes = new EpisodeLog(deps.paths, this.clock);
+    this.cursor = new CursorFile(deps.paths.memoryCursor);
+    if (!fs.existsSync(deps.paths.memoryPolicy)) writeFileAtomic(deps.paths.memoryPolicy, DEFAULT_POLICY, 0o600);
+    this.store.onChange.on(() => {
+      this.exportDirty = true;
+    });
+    this.refreshViews();
+  }
+
+  private get cfg() {
+    return this.deps.config.get();
+  }
+
+  get enabled(): boolean {
+    return this.cfg.memory.enabled;
+  }
+
+  start(intervalMs = 30_000): void {
+    this.stop();
+    this.timer = setInterval(() => void this.tick().catch(() => undefined), intervalMs);
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  // ------------------------------------------------------------ observation
+
+  observe(input: EpisodeInput): Episode | null {
+    if (!this.enabled) return null;
+    const ep = this.episodes.append(input);
+    if (ep) {
+      this.lastEpisodeAt = this.clock();
+      const corrected = ep.t === 'agent' || ep.t === 'ext' ? ep.correction : false;
+      if (corrected) this.pendingCorrection = true;
+    }
+    return ep;
+  }
+
+  observeCommand(c: { cmd: string; exit: number | null; cwd?: string; project?: string; durMs?: number; branch?: string; out?: string; by?: 'user' | 'agent' }): Episode | null {
+    if (isSensitiveCommand(c.cmd)) return null;
+    // Only failures and agent-run commands keep an output tail.
+    const keepOut = c.exit !== 0 || c.by === 'agent';
+    const ep: Omit<CommandEpisode, 'seq' | 'id' | 'ts'> = { t: 'cmd', cmd: c.cmd, exit: c.exit, cwd: c.cwd, project: c.project, durMs: c.durMs, branch: c.branch, by: c.by ?? 'user', out: keepOut ? c.out : undefined };
+    return this.observe(ep);
+  }
+
+  observeAgentTurn(t: { user: string; reply: string; tools: string[]; cwd?: string; project?: string; error?: string; previousAssistant?: boolean }): Episode | null {
+    const correction = !!t.previousAssistant && detectCorrection(t.user);
+    return this.observe({ t: 'agent', user: t.user, reply: t.reply, tools: t.tools, cwd: t.cwd, project: t.project, error: t.error, correction });
+  }
+
+  // ------------------------------------------------------------ explicit memory (user / agents)
+
+  remember(text: string, opts: { kind?: MemoryKind; scope?: MemoryScope; source?: 'user' | 'agent'; tags?: string[]; pinned?: boolean } = {}): { item: MemoryItem; deduped: boolean } | { error: string } {
+    const source = opts.source ?? 'user';
+    const run = this.store.newRun(source, 'explicit remember');
+    const kind = opts.kind && MEMORY_KINDS.includes(opts.kind) ? opts.kind : this.guessKind(text);
+    const res = this.store.add(run, { kind, scope: opts.scope ?? 'global', text, tags: opts.tags, confidence: source === 'user' ? 0.9 : 0.7, pinned: opts.pinned });
+    if (!res) return { error: 'Could not store that (too short, or it looks like it contains a secret).' };
+    this.store.flush();
+    this.observe({ t: 'note', text, cwd: undefined });
+    this.refreshViews();
+    this.events.emit({ type: 'learned', items: [res.item] });
+    this.events.emit({ type: 'updated', reason: 'remember' });
+    return res;
+  }
+
+  private guessKind(text: string): MemoryKind {
+    const t = text.toLowerCase();
+    if (/\b(never|don'?t|do not|avoid|stop)\b/.test(t)) return 'lesson';
+    if (/\b(prefer|like|always|favorite|use)\b/.test(t)) return 'preference';
+    if (/\b(run|build|test|deploy|command)\b/.test(t)) return 'workflow';
+    return 'fact';
+  }
+
+  forget(idOrQuery: string): { archived: MemoryItem[] } {
+    const run = this.store.newRun('user', 'forget');
+    const direct = this.store.getItem(idOrQuery);
+    const targets: MemoryItem[] = [];
+    if (direct) targets.push(direct);
+    else {
+      const ranked = rankItems(this.store.listItems(), { query: idOrQuery }).filter((r) => r.relevance > 0.6);
+      if (ranked[0]) targets.push(ranked[0].item);
+    }
+    const archived: MemoryItem[] = [];
+    for (const t of targets) {
+      const a = this.store.archive(run, t.id);
+      if (a) archived.push(a);
+    }
+    this.store.flush();
+    this.refreshViews();
+    if (archived.length) this.events.emit({ type: 'updated', reason: 'forget' });
+    return { archived };
+  }
+
+  recall(query: string, opts: { cwd?: string; limit?: number } = {}): RecallResult {
+    const limit = opts.limit ?? 8;
+    const items = rankItems(this.store.listItems(), { cwd: opts.cwd, query })
+      .filter((r) => r.relevance > 0)
+      .slice(0, limit);
+    const skills = rankSkills(this.store.listSkills(), { cwd: opts.cwd, query })
+      .filter((r) => r.score > 0.3)
+      .slice(0, 4);
+    this.store.markUsed(items.map((r) => r.item.id));
+    for (const s of skills) this.store.markSkillUsed(s.skill.id);
+    this.store.flush();
+    return { items: items.map((r) => ({ ...r.item, score: r.score })), skills: skills.map((s) => ({ ...s.skill, score: s.score })) };
+  }
+
+  context(opts: ContextOptions = {}): BuiltContext {
+    const ctx = buildContext(this.store, { home: this.home, ...opts });
+    if (ctx.itemIds.length) this.store.markUsed(ctx.itemIds);
+    return ctx;
+  }
+
+  // ------------------------------------------------------------ reflection
+
+  private llmClient(): LlmClient | null {
+    if (this.cfg.memory.llm === 'off' || !this.cfg.onboarded) return null;
+    try {
+      return this.deps.llm?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  reflect(opts: { force?: boolean; llm?: boolean } = {}): Promise<ReflectionResult> {
+    return this.queue.run(() => this.doReflect(opts));
+  }
+
+  private async doReflect(opts: { force?: boolean; llm?: boolean }): Promise<ReflectionResult> {
+    const state = this.cursor.read();
+    const episodes = this.episodes.readAfter(state.reflectedSeq);
+    const run: RunCtx = this.store.newRun('heuristic', 'reflection');
+    const counts: ApplyCounts = emptyCounts();
+    let mode: ReflectionResult['mode'] = 'heuristic';
+    let error: string | undefined;
+    const lines: string[] = [];
+
+    // 1. offline rules — always
+    const heur = runHeuristics({ episodes, candidates: state.candidates, now: this.clock(), env: this.deps.env ?? this.defaultEnv() });
+    const hc = applyOps(this.store, { ...run, source: 'heuristic' }, heur.ops, { maxOps: 40 });
+    add(counts, hc);
+
+    // 2. model-assisted curation — when permitted and due
+    const llm = opts.llm === false ? null : this.llmClient();
+    const due = opts.force || this.pendingCorrection || this.clock() - this.lastLlmAt >= this.cfg.memory.llmMinIntervalSec * 1000;
+    if (llm && due && episodes.length > 0) {
+      try {
+        const r = await reflectWithLlm({ llm, store: this.store, episodes, policy: this.readPolicy(), model: this.cfg.memory.reflectorModel });
+        const lc = applyOps(this.store, { ...run, source: 'reflector' }, r.ops, { maxOps: 12 });
+        add(counts, lc);
+        mode = 'both';
+        this.lastLlmAt = this.clock();
+        this.pendingCorrection = false;
+        if (r.dropped) lines.push(`${r.dropped} malformed op(s) ignored`);
+      } catch (e) {
+        error = errMsg(e);
+      }
+    }
+
+    const maxSeq = episodes.length ? Math.max(...episodes.map((e) => e.seq)) : state.reflectedSeq;
+    this.cursor.update((c) => {
+      c.reflectedSeq = Math.max(c.reflectedSeq, maxSeq);
+      c.candidates = heur.candidates;
+      c.lastReflectionAt = nowIso();
+    });
+    this.store.flush();
+    this.refreshViews();
+
+    const result: ReflectionResult = {
+      runId: run.runId,
+      ts: nowIso(),
+      mode,
+      episodes: episodes.length,
+      ...counts,
+      summary: summarize(counts, episodes.length, mode, lines),
+      error,
+    };
+    this.lastResult = result;
+    this.events.emit({ type: 'reflection', result });
+    if (counts.applied > 0) this.events.emit({ type: 'updated', reason: 'reflection' });
+    return result;
+  }
+
+  consolidate(): Promise<ReflectionResult> {
+    return this.queue.run(async () => {
+      const run = this.store.newRun('consolidator', 'consolidation');
+      this.store.backupDaily();
+      const c = consolidateHeuristic(this.store, run);
+      let llmCounts = emptyCounts();
+      const llm = this.llmClient();
+      if (llm && this.store.listItems().length > 20) {
+        try {
+          const r = await reflectWithLlm({
+            llm,
+            store: this.store,
+            episodes: [],
+            policy: this.readPolicy(),
+            model: this.cfg.memory.reflectorModel,
+            focus: 'This is a consolidation pass with no new activity. Merge duplicates, tighten wording, and forget obsolete or low-value items. Do not add new knowledge.',
+          });
+          llmCounts = applyOps(this.store, { ...run, source: 'consolidator' }, r.ops.filter((o) => o.op !== 'add' && o.op !== 'skill'), { maxOps: 12 });
+        } catch {
+          /* heuristic result stands */
+        }
+      }
+      this.episodes.prune(this.cfg.memory.retentionDays);
+      this.cursor.update((s) => {
+        s.lastConsolidationAt = nowIso();
+      });
+      this.store.flush();
+      this.refreshViews();
+      const res: ReflectionResult = {
+        runId: run.runId,
+        ts: nowIso(),
+        mode: 'consolidate',
+        episodes: 0,
+        applied: c.merged + c.archived + c.capped + llmCounts.applied,
+        skipped: llmCounts.skipped,
+        added: 0,
+        updated: c.merged + llmCounts.updated,
+        reinforced: 0,
+        archived: c.archived + c.capped + llmCounts.archived,
+        skills: 0,
+        summary: `Consolidated: merged ${c.merged}, archived ${c.archived + c.capped}${llmCounts.applied ? `, model tidied ${llmCounts.applied}` : ''}.`,
+      };
+      this.events.emit({ type: 'reflection', result: res });
+      if (res.applied) this.events.emit({ type: 'updated', reason: 'consolidation' });
+      return res;
+    });
+  }
+
+  /** Periodic housekeeping: decide whether reflection / consolidation / export are due. */
+  async tick(): Promise<void> {
+    if (!this.enabled) return;
+    const state = this.cursor.read();
+    const pending = this.episodes.pending(state.reflectedSeq);
+    const idleMs = this.clock() - this.lastEpisodeAt;
+    const c = this.cfg.memory;
+    if (pending >= c.reflectEveryN || (pending >= 3 && idleMs >= c.idleSeconds * 1000) || (this.pendingCorrection && pending > 0)) {
+      await this.reflect();
+    }
+    const lastCons = state.lastConsolidationAt ? Date.parse(state.lastConsolidationAt) : 0;
+    if (this.clock() - lastCons > 24 * 3_600_000 && idleMs > 60_000 && this.store.listItems().length > 0) await this.consolidate();
+    if (this.exportDirty) this.syncExports();
+  }
+
+  private readPolicy(): string {
+    try {
+      return fs.readFileSync(this.deps.paths.memoryPolicy, 'utf8');
+    } catch {
+      return DEFAULT_POLICY;
+    }
+  }
+
+  private defaultEnv(): HeuristicEnv {
+    return { platform: process.platform, arch: process.arch, shell: process.env.SHELL, osRelease: os.release(), home: this.home };
+  }
+
+  refreshViews(): void {
+    try {
+      writeViews(this.store, this.home);
+    } catch {
+      /* views are best-effort */
+    }
+  }
+
+  /** Push memory to the agents the user opted into (CLAUDE.md / AGENTS.md / GEMINI.md blocks, Claude skills). */
+  syncExports(): void {
+    this.exportDirty = false;
+    if (!this.cfg.onboarded) return;
+    try {
+      syncExports(this.store, this.cfg.export.targets, this.home);
+      syncClaudeSkills(this.store, this.cfg.export.claudeSkills, this.home);
+    } catch {
+      /* never let an export failure disturb the session */
+    }
+  }
+
+  // ------------------------------------------------------------ introspection
+
+  stats(): MemoryStats {
+    const s = this.store.stats();
+    const state = this.cursor.read();
+    return {
+      ...s,
+      episodesPending: this.episodes.pending(state.reflectedSeq),
+      lastReflection: this.lastResult,
+      lastConsolidation: state.lastConsolidationAt,
+    };
+  }
+
+  cursorState(): CursorState {
+    return this.cursor.read();
+  }
+
+  updateCursor(fn: (c: CursorState) => void): void {
+    this.cursor.update(fn);
+  }
+
+  newRunId(): string {
+    return uid('run');
+  }
+
+  /** Test seam: apply a list of ops as if a reflector proposed them. */
+  applyProposed(ops: ProposedOp[], source: RunCtx['source'] = 'reflector'): ApplyCounts {
+    const c = applyOps(this.store, this.store.newRun(source, 'proposed'), ops);
+    this.refreshViews();
+    return c;
+  }
+
+  redact(text: string): string {
+    return redactText(text);
+  }
+
+  projectName(p: string): string {
+    return path.basename(p);
+  }
+}
+
+function add(a: ApplyCounts, b: ApplyCounts): void {
+  a.applied += b.applied;
+  a.skipped += b.skipped;
+  a.added += b.added;
+  a.updated += b.updated;
+  a.reinforced += b.reinforced;
+  a.archived += b.archived;
+  a.skills += b.skills;
+}
+
+function summarize(c: ApplyCounts, episodes: number, mode: string, notes: string[]): string {
+  if (episodes === 0 && c.applied === 0) return 'Nothing new to learn.';
+  const parts: string[] = [];
+  if (c.added) parts.push(`learned ${c.added}`);
+  if (c.reinforced) parts.push(`reinforced ${c.reinforced}`);
+  if (c.updated) parts.push(`refined ${c.updated}`);
+  if (c.archived) parts.push(`let go of ${c.archived}`);
+  if (c.skills) parts.push(`${c.skills} skill${c.skills > 1 ? 's' : ''}`);
+  const body = parts.length ? parts.join(', ') : 'no changes';
+  return `Reviewed ${episodes} event${episodes === 1 ? '' : 's'} (${mode}): ${body}.${notes.length ? ' ' + notes.join('; ') + '.' : ''}`;
+}
