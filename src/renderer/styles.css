@@ -85,16 +85,16 @@ body.mac .titlebar { padding-left: 88px; }
 .pane.active::after { content: ''; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); opacity: 0; transition: opacity 0.15s; }
 .splitted .pane.active::after { opacity: 1; }
 .split { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.split.row { flex-direction: row; }
-.split.col { flex-direction: column; }
+.split.dir-row { flex-direction: row; }
+.split.dir-col { flex-direction: column; }
 .cell { min-width: 0; min-height: 0; display: flex; }
 .cell > * { flex: 1; min-width: 0; min-height: 0; }
 .divider { flex: none; background: var(--border); position: relative; z-index: 3; }
-.divider.row { width: 1px; cursor: col-resize; }
-.divider.col { height: 1px; cursor: row-resize; }
+.divider.dir-row { width: 1px; cursor: col-resize; }
+.divider.dir-col { height: 1px; cursor: row-resize; }
 .divider::after { content: ''; position: absolute; inset: -4px; }
-.divider.row::after { left: -4px; right: -4px; top: 0; bottom: 0; }
-.divider.col::after { top: -4px; bottom: -4px; left: 0; right: 0; }
+.divider.dir-row::after { left: -4px; right: -4px; top: 0; bottom: 0; }
+.divider.dir-col::after { top: -4px; bottom: -4px; left: 0; right: 0; }
 .term { flex: 1; min-width: 0; min-height: 0; padding: 6px 4px 4px 10px; user-select: text; -webkit-user-select: text; }
 .term.bell { animation: bell 0.16s; }
 @keyframes bell { 50% { background: var(--accent-soft); } }
@@ -283,7 +283,9 @@ kbd { font-size: 11px; color: var(--muted); background: var(--panel-2); border: 
 .field { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 7px 0; }
 .field-label { display: flex; flex-direction: column; font-weight: 550; }
 .field-label small { font-weight: 400; color: var(--faint); font-size: 11.5px; max-width: 330px; }
-.field-ctl { flex: none; max-width: 52%; }
+.field-ctl { flex: none; max-width: 56%; }
+.field-ctl .row { flex-wrap: wrap; justify-content: flex-end; }
+.field-ctl .row input { min-width: 150px; }
 .field-ctl input[type='text'], .field-ctl input[type='password'], .field-ctl select { width: 100%; min-width: 220px; }
 .field-ctl input[type='number'] { width: 80px; }
 .settings-foot { padding: 12px 0 0; color: var(--faint); font-size: 12px; }

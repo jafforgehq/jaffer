@@ -94,7 +94,7 @@ function Divider({ dir, onDrag }: { dir: 'row' | 'col'; onDrag: (frac: number) =
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
   };
-  return <div ref={ref} class={`divider ${dir}`} onPointerDown={down} />;
+  return <div ref={ref} class={`divider dir-${dir}`} onPointerDown={down} />;
 }
 
 function Node({ n, path }: { n: LayoutNode; path: number[] }): VNode {
@@ -111,7 +111,7 @@ function Node({ n, path }: { n: LayoutNode; path: number[] }): VNode {
     layout.value = upd(layout.value, path);
   };
   return (
-    <div class={`split ${n.dir}`}>
+    <div class={`split dir-${n.dir}`}>
       <div class="cell" style={{ flex: `${n.ratio} 1 0` }}>
         <Node n={n.a} path={[...path, 0]} />
       </div>

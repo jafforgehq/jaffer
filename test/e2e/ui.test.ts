@@ -184,9 +184,22 @@ describe('Jaffer UI end to end', () => {
   it('splits the terminal into a second pane that shares the session', async () => {
     await page.keyboard.press('Escape');
     await page.evaluate(() => (window as any).__menu('split-right'));
-    await page.waitForSelector('.split.row');
+    await page.waitForSelector('.split.dir-row');
     await until(async () => (await page.$$('.term .xterm')).length === 2, 10_000, 'two terminals');
     await shot('09-split');
+    // every terminal must fill its pane (no leftover bands above/below)
+    const boxes = await page.evaluate(() =>
+      [...document.querySelectorAll('.pane')].map((p) => {
+        const term = p.querySelector('.term') as HTMLElement;
+        const screen = p.querySelector('.xterm-screen') as HTMLElement;
+        return { pane: p.getBoundingClientRect().height, term: term.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
+      }),
+    );
+    for (const b of boxes) {
+      expect(b.term).toBeGreaterThan(b.pane - 4);
+      expect(b.screen).toBeGreaterThan(b.term - 40); // within a couple of text lines of the pane height
+      expect(b.pane).toBeGreaterThan(600); // and the pane itself spans the window (it used to be centred and short)
+    }
     const panes = await page.evaluate(() => window.jaffer.call('pane.list'));
     expect(panes).toHaveLength(2);
   }, 30_000);
