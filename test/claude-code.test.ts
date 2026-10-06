@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { startShell, untilReady } from './helpers/pty';
+import { startShell, stopShell, untilReady } from './helpers/pty';
 import type { PtySession } from '../src/core/session/terminal';
 
 function hasClaude(): boolean {
@@ -20,8 +20,8 @@ let sh: PtySession | null = null;
 beforeEach(() => {
   env = makeEnv();
 });
-afterEach(() => {
-  sh?.dispose();
+afterEach(async () => {
+  if (sh) await stopShell(sh);
   sh = null;
   env.cleanup();
 });

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { startShell, untilReady, waitFor } from './helpers/pty';
+import { startShell, stopShell, untilReady, waitFor } from './helpers/pty';
 import type { PtySession, PtyEvent } from '../src/core/session/terminal';
 import { RunRefused } from '../src/core/session/terminal';
 import { SessionHost } from '../src/core/session/host';
@@ -13,8 +13,8 @@ let sh: PtySession | null = null;
 beforeEach(() => {
   env = makeEnv();
 });
-afterEach(() => {
-  sh?.dispose();
+afterEach(async () => {
+  if (sh) await stopShell(sh);
   sh = null;
   env.cleanup();
 });
@@ -207,7 +207,9 @@ describe('one session, ever', () => {
       expect(host.list()).toHaveLength(1);
       expect('split' in host).toBe(false); // there is no API for it either
     } finally {
+      const main = host.get('main');
       host.dispose();
+      if (main) await stopShell(main);
     }
   });
 });

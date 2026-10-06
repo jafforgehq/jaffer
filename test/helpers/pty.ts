@@ -45,3 +45,27 @@ export async function untilReady(session: PtySession, ms = 8000): Promise<void> 
     await new Promise((r) => setTimeout(r, 20));
   }
 }
+
+/**
+ * Kill a test shell and wait until it has really exited. A shell that is still alive can write into the temporary HOME
+ * (zsh saves its history on the way out), which made the folder's removal fail with ENOTEMPTY on macOS CI.
+ */
+export async function stopShell(session: PtySession, graceMs = 1500, killMs = 5000): Promise<void> {
+  if (session.alive) {
+    let off = () => {};
+    const gone = new Promise<void>((resolve) => {
+      off = session.events.on((e) => {
+        if (e.type === 'exit') resolve();
+      });
+    });
+    const within = (ms: number) => Promise.race([gone, new Promise<void>((r) => setTimeout(r, ms))]);
+    session.kill();
+    await within(graceMs);
+    if (session.alive) {
+      session.kill('SIGKILL');
+      await within(killMs);
+    }
+    off();
+  }
+  session.dispose();
+}
