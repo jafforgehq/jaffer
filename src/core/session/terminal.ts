@@ -7,6 +7,7 @@ import { Emitter, SerialQueue, sleep } from '../../shared/util';
 export type PtyEvent =
   | { type: 'data'; data: string; seq: number }
   | { type: 'exit'; code: number | null; signal: number | null }
+  | { type: 'start'; cmd: string; by: 'user' | 'agent' }
   | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number; output: string; by: 'user' | 'agent' }
   | { type: 'cwd'; cwd: string }
   | { type: 'title'; title: string }
@@ -271,6 +272,7 @@ export class PtySession {
         if (!this.running) {
           this.running = { cmd: this.pendingCmd, startedAt: Date.now(), marker: this.term.registerMarker(0), by: this.nextBy };
           this.nextBy = 'user';
+          this.events.emit({ type: 'start', cmd: this.running.cmd, by: this.running.by });
         }
         this.pendingCmd = '';
       } else if (kind === 'D') {

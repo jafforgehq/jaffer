@@ -42,6 +42,8 @@ async function until<T>(fn: () => Promise<T | false | null | undefined>, ms = 15
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function shot(name: string): Promise<void> {
   fs.mkdirSync(shots, { recursive: true });
   await page.screenshot({ path: path.join(shots, `${name}.png`) });
@@ -116,6 +118,30 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.statusbar')).toContain('cd /tmp');
   });
 
+  it('the session rail shows where you are and what just ran, and can be hidden', async () => {
+    await page.waitForSelector('.rail');
+    const rail = (await page.textContent('.rail')) ?? '';
+    expect(rail).toContain('Session live');
+    expect(rail).toContain('Main session');
+    expect(await page.textContent('.rail .cmd-list')).toContain('hello-from-the-ui'); // from the daemon's record of the session
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.rail', { state: 'detached' });
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.rail');
+  });
+
+  it('marks finished commands in the terminal gutter: green when they worked, red when they failed', async () => {
+    await page.click('.term');
+    for (const cmd of ['true', 'false']) {
+      await page.keyboard.type(cmd, { delay: 8 });
+      await page.keyboard.press('Enter');
+      await sleep(400);
+    }
+    await until(async () => (await page.$('.blk.ok')) && (await page.$('.blk.err')), 10_000, 'a green and a red stripe');
+    // and the rail records the failure
+    await until(async () => /false/.test((await page.textContent('.rail .cmd-row.bad')) ?? ''), 10_000, 'the failed command in the rail');
+  }, 30_000);
+
   it('talks to the agent, runs its command in the shared terminal, and shows the answer', async () => {
     mock.reset().queue({ kind: 'tool', id: 'toolu_ui1', name: 'run_command', input: { command: 'echo agent-ran-this' }, text: 'Let me check.' }, { kind: 'text', text: 'Done — the command printed **agent-ran-this**.' });
     await page.fill('.composer textarea', 'run a quick echo');
@@ -171,7 +197,7 @@ describe('Jaffer UI end to end', () => {
     expect(bg).toBe('#1a1b26');
     await shot('07-tokyo-night');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-light' } }));
-    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fbfaf7', 8000, 'light theme');
+    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fdfcfa', 8000, 'light theme');
     await shot('07b-light');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'tokyo-night' } }));
   }, 30_000);
@@ -196,11 +222,13 @@ describe('Jaffer UI end to end', () => {
       [...document.querySelectorAll('.pane')].map((p) => {
         const term = p.querySelector('.term') as HTMLElement;
         const screen = p.querySelector('.xterm-screen') as HTMLElement;
-        return { pane: p.getBoundingClientRect().height, term: term.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
+        const head = (p.querySelector('.pane-head') as HTMLElement | null)?.getBoundingClientRect().height ?? 0;
+        return { pane: p.getBoundingClientRect().height, head, term: term.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
       }),
     );
     for (const b of boxes) {
-      expect(b.term).toBeGreaterThan(b.pane - 4);
+      expect(b.head).toBeGreaterThan(0); // split panes get a header (what, where, close)
+      expect(b.term).toBeGreaterThan(b.pane - b.head - 4);
       expect(b.screen).toBeGreaterThan(b.term - 40); // within a couple of text lines of the pane height
       expect(b.pane).toBeGreaterThan(600); // and the pane itself spans the window (it used to be centred and short)
     }
@@ -216,7 +244,7 @@ describe('Jaffer UI end to end', () => {
     const after = await page.evaluate(() => window.jaffer.call('pane.list'));
     expect(after.map((p: any) => p.pid)).toEqual(before.map((p: any) => p.pid));
     // and the agent conversation is still there (open the agent panel if the memory panel was showing)
-    if (!(await page.$('.thread'))) await page.click('.titlebar .icon-btn[title^="Agent"]');
+    if (!(await page.$('.thread'))) await page.click('.seg-btn[title^="Agent"]');
     await until(async () => /agent-ran-this/.test((await page.textContent('.thread')) ?? ''), 10_000, 'restored conversation');
     await shot('10-restored');
   }, 40_000);

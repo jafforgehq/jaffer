@@ -198,6 +198,24 @@ echo "      \${B}Tests\${X}  \${G}16 passed\${X} (16)"
 echo "   \${B}Duration\${X}  398ms"
 `;
   w('bin/test', test, 0o755);
+  const dev = `#!/usr/bin/env bash
+G=$'\\e[32m'; Y=$'\\e[33m'; R=$'\\e[31m'; D=$'\\e[2m'; B=$'\\e[1m'; C=$'\\e[36m'; X=$'\\e[0m'
+echo
+echo "  \${B}acme-api\${X} dev server \${D}v2.4.1\${X}"
+echo
+sleep 0.5
+echo "  \${G}➜\${X}  Local:   \${C}http://localhost:4000/\${X}"
+echo "  \${G}➜\${X}  Ready in \${B}312 ms\${X}"
+echo
+i=0
+for line in "GET  /health            200 3ms" "POST /v1/sessions        201 41ms" "GET  /v1/invoices       200 18ms" "GET  /v1/invoices/9f2   200 9ms" "POST /v1/sessions/refresh 200 12ms" "GET  /v1/me             401 2ms" "GET  /v1/invoices       200 17ms" "PUT  /v1/profile        200 26ms" "GET  /health            200 2ms" "POST /v1/sessions        201 38ms" "GET  /v1/invoices       200 16ms" "GET  /v1/invoices/a71   200 8ms"; do
+  i=$((i+1)); code=$(echo "$line" | awk '{print $(NF-1)}'); c=$G; [ "$code" -ge 400 ] && c=$Y
+  printf '  %s  %s%s%s\\n' "\${D}$(date +%H:%M:%S)\${X}" "$c" "$line" "$X"
+  sleep 0.55
+done
+sleep 30
+`;
+  w('bin/dev', dev, 0o755);
   git('init', '-q', '-b', 'main');
   const commit = (msg: string, date: string, files: string[]) => {
     git('add', ...files);
@@ -206,7 +224,7 @@ echo "   \${B}Duration\${X}  398ms"
   commit('Initial commit', '2026-09-22T10:02:11', ['README.md', 'package.json']);
   commit('Add invoice totals', '2026-09-24T15:41:03', ['src/billing']);
   commit('Add bearer token parsing', '2026-09-30T09:12:40', ['src/auth/token.ts']);
-  commit('Add session expiry with 30 minute TTL', '2026-10-02T17:25:18', ['src/auth/session.ts', 'src/auth/session.test.ts', 'bin/test']);
+  commit('Add session expiry with 30 minute TTL', '2026-10-02T17:25:18', ['src/auth/session.ts', 'src/auth/session.test.ts', 'bin/test', 'bin/dev']);
   fs.appendFileSync(path.join(repo, 'README.md'), '\n## Testing\n\nRun `./bin/test`.\n');
 }
 
@@ -334,27 +352,29 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('command palette, themes, split panes, settings', async () => {
     await clearToasts();
-    await page.click('.titlebar .icon-btn[title^="Agent"]').catch(() => undefined);
+    await page.click('.seg-btn[title^="Agent"]').catch(() => undefined);
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await shot('06-palette');
     await page.keyboard.press('Escape');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-light' } }));
-    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fbfaf7', 8000, 'light theme');
+    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fdfcfa', 8000, 'light theme');
     await shot('07-light');
-    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'tokyo-night' } }));
-    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#1a1b26', 8000, 'tokyo night');
-    await shot('08-tokyo-night');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-midnight' } }));
+    await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#0d1020', 8000, 'midnight');
+    await shot('08-midnight');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-dark' } }));
     await page.click('.term');
     await page.keyboard.type('clear', { delay: 14 });
     await page.keyboard.press('Enter');
     await sleep(600);
     await typeCommand('./bin/test');
+    await page.keyboard.press('Meta+j'); // give the panes the room
+    await sleep(500);
     await page.evaluate(() => (window as any).__menu('split-right'));
     await page.waitForSelector('.split.dir-row');
     await until(async () => (await page.$$('.term .xterm')).length === 2, 10_000, 'two terminals');
-    await sleep(900);
+    await sleep(1500);
     await page.keyboard.type("git log --format='%h %s'", { delay: 12 });
     await page.keyboard.press('Enter');
     await sleep(500);
@@ -414,4 +434,24 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await sleep(1200);
     await shot('11-claude-code');
   }, 150_000);
+
+  it('a long-running process shows up everywhere it should', async () => {
+    if ((await page.$$('.term .xterm')).length > 1) {
+      await page.evaluate(() => (window as any).__menu('close-pane'));
+      await until(async () => (await page.$$('.term .xterm')).length === 1, 10_000, 'back to a single pane');
+    }
+    await page.keyboard.press('Meta+j'); // bring the agent panel back
+    await sleep(500);
+    await page.click('.term');
+    await page.keyboard.type('clear', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await sleep(600);
+    await page.keyboard.type('./bin/dev', { delay: 20 });
+    await page.keyboard.press('Enter');
+    await until(async () => /Ready in/.test((await termLines()).join('\n')) && /GET\s+\/v1\/invoices\/9f2/.test((await termLines()).join('\n')), 20_000, 'dev server output');
+    await until(async () => !!(await page.$('.session-pill .running')), 10_000, 'the running process in the toolbar');
+    await sleep(1800);
+    await shot('11-running');
+    await page.keyboard.press('Control+c');
+  }, 60_000);
 });

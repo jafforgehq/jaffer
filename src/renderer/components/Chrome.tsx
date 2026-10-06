@@ -1,13 +1,11 @@
 import type { VNode } from 'preact';
-import { activePane, cfg, daemonUp, info, keyReady, memPulse, memStats, side, toggleSide, toasts, dismissToast, turn, agentUsage, overlay, panes } from '../state';
-import { IconAgent, IconBrain, IconGear, IconSplit, IconX } from './icons';
+import { agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, keyReady, memPulse, memStats, overlay, panes, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
+import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconSplit, IconX } from './icons';
 import { splitPane } from './PaneTree';
 
 function shortPath(p: string): string {
   if (!p) return '';
-  const home = (window as unknown as { __home?: string }).__home;
-  let s = p;
-  if (home && s.startsWith(home)) s = '~' + s.slice(home.length);
+  const s = tildePath(p);
   const parts = s.split('/');
   return parts.length > 4 ? `…/${parts.slice(-3).join('/')}` : s;
 }
@@ -15,32 +13,52 @@ function shortPath(p: string): string {
 export function TitleBar(): VNode {
   const i = info.value;
   const busy = !!turn.value;
+  const running = i.busy ?? null;
   return (
     <div class="titlebar">
-      <div class="tb-left" />
+      <div class="tb-left">
+        {!railOpen.value && (
+          <button class="icon-btn" title="Show sidebar (⌘B)" onClick={toggleRail}>
+            <IconSidebar size={16} />
+          </button>
+        )}
+      </div>
       <div class="tb-center">
         <span class="session-pill" title={i.cwd}>
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
           <span class="cwd">{shortPath(i.cwd) || 'Jaffer'}</span>
-          {i.branch && <span class="branch">{i.branch}</span>}
-          {i.busy && <span class="running">{i.busy.slice(0, 28)}</span>}
+          {i.branch && (
+            <>
+              <span class="sep" />
+              <span class="branch">
+                <IconBranch size={12} /> {i.branch}
+              </span>
+            </>
+          )}
+          {running && (
+            <>
+              <span class="sep" />
+              <span class="running">
+                <span class="spinner" /> {safeCommand(running).slice(0, 28)}
+              </span>
+            </>
+          )}
         </span>
       </div>
       <div class="tb-right">
         <button class="icon-btn" title="Split right (⌘D)" onClick={() => void splitPane('row')}>
           <IconSplit size={16} />
         </button>
-        <button class={`icon-btn ${side.value === 'memory' ? 'on' : ''}`} title="Memory (⇧⌘M)" onClick={() => toggleSide('memory')}>
-          <IconBrain size={16} />
-          {memPulse.value > 0 && <span class="pulse" key={memPulse.value} />}
-        </button>
-        <button class={`icon-btn ${side.value === 'agent' ? 'on' : ''}`} title="Agent (⌘J)" onClick={() => toggleSide('agent')}>
-          <IconAgent size={16} />
-          {busy && <span class="busy-dot" />}
-        </button>
-        <button class="icon-btn" title="Settings (⌘,)" onClick={() => (overlay.value = 'settings')}>
-          <IconGear size={16} />
-        </button>
+        <div class="seg">
+          <button class={`seg-btn ${side.value === 'agent' ? 'on' : ''}`} title="Agent (⌘J)" onClick={() => toggleSide('agent')}>
+            <IconAgent size={14} /> Agent
+            {busy && <span class="busy-dot" />}
+          </button>
+          <button class={`seg-btn seg-mem ${side.value === 'memory' ? 'on' : ''}`} title="Memory (⇧⌘M)" onClick={() => toggleSide('memory')}>
+            <IconBrain size={14} /> Memory
+            {memPulse.value > 0 && <span class="pulse" key={memPulse.value} />}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -51,19 +69,32 @@ export function StatusBar(): VNode {
   const i = info.value;
   const last = i.lastCommand;
   const cost = agentUsage.value?.costUsd ?? 0;
+  const claude = !!i.busy && /\bclaude\b/.test(i.busy);
+  const n = panes.value.length;
   return (
     <div class="statusbar">
       <span class="sb-item">
-        {panes.value.length > 1 ? `${panes.value.length} panes · ` : ''}
-        one session
+        <span class={`live ${daemonUp.value ? '' : 'off'}`} style={{ width: '6px', height: '6px' }} />
+        one session{n > 1 ? ` · ${n} panes` : ''}
       </span>
       {last && (
-        <span class={`sb-item ${last.exit === 0 ? '' : 'bad'}`} title={last.cmd}>
-          {last.exit === 0 ? '✓' : `✗ ${last.exit}`} {last.cmd.slice(0, 40)}
+        <span class={`sb-item cmd ${last.exit === 0 ? 'ok' : 'bad'}`} title={last.cmd}>
+          {last.exit === 0 ? <IconCheck size={11} /> : <IconX size={11} />}
+          {last.exit === 0 ? '' : `${last.exit} `}
+          {safeCommand(last.cmd).slice(0, 48)}
         </span>
       )}
       <div class="grow" />
-      {!keyReady.value && <span class="sb-item warn">no API key</span>}
+      {claude && (
+        <span class="sb-item accent">
+          <IconBolt size={11} /> Claude Code is running
+        </span>
+      )}
+      {!keyReady.value && (
+        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Add an Anthropic API key in Settings">
+          <IconInfo size={11} /> no API key
+        </button>
+      )}
       {cost > 0 && <span class="sb-item">${cost.toFixed(2)}</span>}
       <button class="sb-item sb-btn" onClick={() => toggleSide('memory')} title="Open memory">
         <span class="mem-dot" key={memPulse.value} /> {st ? `${st.active} memories · ${st.skills} skills` : 'memory'}
@@ -78,7 +109,7 @@ export function Toasts(): VNode {
     <div class="toasts">
       {toasts.value.map((t) => (
         <div key={t.id} class={`toast ${t.kind}`}>
-          {t.kind === 'learn' && <IconBrain size={14} />}
+          <span class="toast-ico">{t.kind === 'learn' ? <IconBrain size={13} /> : t.kind === 'error' ? <IconX size={13} /> : <IconInfo size={13} />}</span>
           <span class="toast-text">{t.text}</span>
           {t.action && (
             <button
@@ -91,7 +122,7 @@ export function Toasts(): VNode {
               {t.action.label}
             </button>
           )}
-          <button class="icon-btn" onClick={() => dismissToast(t.id)} aria-label="Dismiss">
+          <button class="icon-btn sm" onClick={() => dismissToast(t.id)} aria-label="Dismiss">
             <IconX size={12} />
           </button>
         </div>
@@ -105,4 +136,4 @@ export function DaemonBanner(): VNode | null {
   return <div class="daemon-banner">Reconnecting to your session…</div>;
 }
 
-void activePane;
+void fmtDuration;

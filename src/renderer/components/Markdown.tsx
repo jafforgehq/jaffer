@@ -1,4 +1,6 @@
+import { useState } from 'preact/hooks';
 import type { ComponentChildren, VNode } from 'preact';
+import { IconCheck, IconCopy } from './icons';
 
 /**
  * A small, safe markdown renderer for agent replies. It builds Preact nodes directly (no innerHTML),
@@ -35,12 +37,18 @@ function inline(text: string, keyBase: string): ComponentChildren[] {
 }
 
 export function CodeBlock({ code, lang }: { code: string; lang?: string }): VNode {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1400);
+  };
   return (
     <div class="codeblock">
       <div class="codeblock-bar">
         <span>{lang || 'text'}</span>
-        <button class="linkish" onClick={() => void navigator.clipboard.writeText(code)}>
-          Copy
+        <button class="btn ghost small" onClick={copy} title="Copy">
+          {copied ? <IconCheck size={12} /> : <IconCopy size={12} />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
       <pre>

@@ -41,3 +41,11 @@ Ranking = confidence × time-decay (half-life per kind) × usage × scope releva
 ## Process boundaries and trust
 
 The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. The agent's shell commands are classified (read-only / ordinary / risky / blocked) before they run, file writes to credentials and system paths always ask, and everything fed to memory or a model is redacted first.
+
+## The window
+
+The renderer is three layers on a canvas: a **session rail** (left), the **terminal card** (centre) and the **inspector** (right: agent or memory), with a toolbar above and a status bar below. Colours come from layered tokens derived from the active theme (`themes.ts`): `--chrome` is the canvas, `--surface` the cards on it, `--raised` cards on those. A theme change therefore repaints the whole app.
+
+- The rail reads `session.info` (project, branch, uptime, panes, and the daemon's ring of recent commands, which is redacted and omits sensitive commands) and keeps itself live from `pty.start`, `pty.command` and `pty.cwd` events. Because the daemon owns this state, the rail looks the same after you quit and reopen the app.
+- Command stripes are xterm decorations created from the OSC 133 sequences the shell integration already emits (`A` prompt, `C` output, `D;exit`). They live in the renderer only; the daemon's snapshots and the scrollback are untouched.
+- Approval cards preview what the agent is about to do (a diff for `edit_file`, the new contents for `write_file`, the command for `run_command`) from the tool input the daemon already sends.

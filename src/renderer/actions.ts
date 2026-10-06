@@ -1,4 +1,4 @@
-import { activePane, cfg, info, overlay, panes, patchConfig, refreshMemory, setSide, side, toast, toggleSide } from './state';
+import { activePane, cfg, info, overlay, panes, patchConfig, refreshMemory, setSide, side, toast, toggleRail, toggleSide } from './state';
 import { closePane, splitPane } from './components/PaneTree';
 import { terminals } from './components/TerminalView';
 import { composerFocus } from './components/AgentPanel';
@@ -46,6 +46,7 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 }
 
 export const actions: Action[] = [
+  { id: 'toggle-rail', title: 'Toggle sidebar', section: 'View', keys: '⌘B', keywords: 'session rail', run: toggleRail },
   { id: 'toggle-agent', title: 'Toggle agent panel', section: 'View', keys: '⌘J', run: () => toggleSide('agent') },
   { id: 'toggle-memory', title: 'Toggle memory panel', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
   {

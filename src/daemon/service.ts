@@ -6,6 +6,7 @@ import { ConfigStore, type DeepPartial, type JafferConfig } from '../shared/conf
 import { makePaths, type JafferPaths } from '../shared/paths';
 import { makeSecretStore, type SecretStore } from '../shared/secrets';
 import { ensureDir, errMsg, nowIso, writeFileAtomic } from '../shared/util';
+import { isSensitiveCommand, redactText } from '../shared/redact';
 import { RpcError, RpcServer, type ServerConn } from '../core/rpc';
 import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
@@ -50,6 +51,8 @@ export class JafferService {
   private client: Anthropic | null = null;
   private startedAt = nowIso();
   private lastCommand: { cmd: string; exit: number | null } | undefined;
+  /** The last commands of the session, for the app's session rail. Redacted; sensitive commands are left out entirely. */
+  private recentCommands: { cmd: string; exit: number | null; durMs: number; cwd: string; at: number; by: 'user' | 'agent' }[] = [];
   private timers: NodeJS.Timeout[] = [];
   private ingestor: ClaudeIngestor | null = null;
   private stopping = false;
@@ -261,6 +264,10 @@ export class JafferService {
       if (e.event.type === 'command') {
         const ev = e.event;
         this.lastCommand = { cmd: ev.cmd, exit: ev.exit };
+        if (ev.cmd.trim() && !isSensitiveCommand(ev.cmd)) {
+          this.recentCommands.push({ cmd: redactText(ev.cmd).slice(0, 300), exit: ev.exit, durMs: ev.durMs, cwd: ev.cwd, at: Date.now(), by: ev.by });
+          if (this.recentCommands.length > 40) this.recentCommands.splice(0, this.recentCommands.length - 40);
+        }
         const proj = resolveProject(ev.cwd, this.userHome);
         if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output, by: ev.by });
       }
@@ -342,7 +349,7 @@ export class JafferService {
       await this.host.restartMain();
       return true;
     });
-    r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version }));
+    r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version, recentCommands: this.recentCommands }));
 
     // ---- agent
     r.handle('agent.send', (p: { text: string }) => {

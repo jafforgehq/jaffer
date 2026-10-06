@@ -147,7 +147,7 @@ function createWindow(): void {
     show: false,
     title: 'Jaffer',
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 14 },
+    trafficLightPosition: { x: 18, y: 17 },
     vibrancy: 'under-window',
     visualEffectState: 'active',
     backgroundColor: '#00000000',
@@ -262,6 +262,7 @@ function buildMenu(): void {
       submenu: [
         { label: 'Command Palette…', accelerator: 'Cmd+P', click: act('palette') },
         { type: 'separator' },
+        { label: 'Toggle Sidebar', accelerator: 'Cmd+B', click: act('toggle-rail') },
         { label: 'Toggle Agent', accelerator: 'Cmd+J', click: act('toggle-agent') },
         { label: 'Toggle Memory', accelerator: 'Shift+Cmd+M', click: act('toggle-memory') },
         { type: 'separator' },

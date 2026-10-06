@@ -1,23 +1,34 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { memItems, memLog, memPulse, memSkills, memStats, refreshMemory, setSide, toast, type MemItemView } from '../state';
-import { IconBrain, IconPin, IconRefresh, IconUndo, IconX } from './icons';
+import { clock, fmtAgo, memItems, memLog, memPulse, memSkills, memStats, refreshMemory, setSide, toast, type MemItemView } from '../state';
+import { IconBolt, IconBook, IconBrain, IconCpu, IconFolder, IconInfo, IconLightbulb, IconPin, IconPlay, IconRefresh, IconSliders, IconUndo, IconUser, IconWand, IconX } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 type Tab = 'learned' | 'skills' | 'activity' | 'notes';
 
 const KIND_LABEL: Record<string, string> = { preference: 'preference', convention: 'convention', fact: 'fact', workflow: 'workflow', lesson: 'lesson', project: 'project', environment: 'machine' };
 
-function scopeTitle(scope: string): string {
-  return scope === 'global' ? 'About you' : `Project · ${scope.slice(8).split('/').filter(Boolean).pop() ?? scope}`;
+function kindIcon(kind: string): VNode {
+  switch (kind) {
+    case 'preference':
+      return <IconSliders size={13} />;
+    case 'convention':
+      return <IconBook size={13} />;
+    case 'lesson':
+      return <IconLightbulb size={13} />;
+    case 'workflow':
+      return <IconPlay size={12} />;
+    case 'environment':
+      return <IconCpu size={13} />;
+    case 'project':
+      return <IconFolder size={13} />;
+    default:
+      return <IconInfo size={13} />;
+  }
 }
 
-function ago(iso: string): string {
-  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  if (s < 90) return 'just now';
-  if (s < 5400) return `${Math.round(s / 60)}m ago`;
-  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
+function scopeTitle(scope: string): string {
+  return scope === 'global' ? 'About you' : `Project · ${scope.slice(8).split('/').filter(Boolean).pop() ?? scope}`;
 }
 
 function ItemRow({ item }: { item: MemItemView }): VNode {
@@ -35,7 +46,8 @@ function ItemRow({ item }: { item: MemItemView }): VNode {
     }
   };
   return (
-    <div class={`mem ${item.pinned ? 'pinned' : ''}`}>
+    <div class={`mem ${item.pinned ? 'pinned' : ''}`} data-kind={item.kind}>
+      <span class="mem-ico">{kindIcon(item.kind)}</span>
       <div class="mem-main">
         {editing ? (
           <textarea class="mem-edit" value={text} autofocus onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onBlur={() => void save()} onKeyDown={(e) => (e.key === 'Enter' && !e.shiftKey ? (e.preventDefault(), void save()) : e.key === 'Escape' && setEditing(false))} />
@@ -45,20 +57,20 @@ function ItemRow({ item }: { item: MemItemView }): VNode {
           </div>
         )}
         <div class="mem-meta">
-          <span class={`kind k-${item.kind}`}>{KIND_LABEL[item.kind] ?? item.kind}</span>
+          <span class="kind">{KIND_LABEL[item.kind] ?? item.kind}</span>
           <span class="conf" title={`confidence ${item.confidence.toFixed(2)} · seen ${item.evidence}× · used ${item.uses}×`}>
             <span class="conf-fill" style={{ width: `${Math.round(item.confidence * 100)}%` }} />
           </span>
-          <span class="faint">{item.source === 'user' ? 'you' : item.source}</span>
-          <span class="faint">{ago(item.lastSeenAt)}</span>
+          <span>{item.source === 'user' ? 'you' : item.source}</span>
+          <span>{fmtAgo(item.lastSeenAt, clock.value)}</span>
         </div>
       </div>
       <div class="mem-actions">
-        <button class={`icon-btn ${item.pinned ? 'on' : ''}`} title={item.pinned ? 'Unpin' : 'Pin (never fades)'} onClick={() => void call('memory.pin', { id: item.id, pinned: !item.pinned }).then(() => refreshMemory(0))}>
-          <IconPin size={14} />
+        <button class={`icon-btn sm ${item.pinned ? 'on' : ''}`} title={item.pinned ? 'Unpin' : 'Pin (never fades)'} onClick={() => void call('memory.pin', { id: item.id, pinned: !item.pinned }).then(() => refreshMemory(0))}>
+          <IconPin size={13} />
         </button>
-        <button class="icon-btn" title="Forget" onClick={() => void call('memory.forget', { id: item.id }).then(() => refreshMemory(0))}>
-          <IconX size={14} />
+        <button class="icon-btn sm" title="Forget" onClick={() => void call('memory.forget', { id: item.id }).then(() => refreshMemory(0))}>
+          <IconX size={13} />
         </button>
       </div>
     </div>
@@ -79,13 +91,20 @@ function Learned(): VNode {
       <input class="search" placeholder="Filter memories…" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
       {groups.length === 0 && (
         <div class="empty">
+          <div class="empty-mark is-mem">
+            <IconBrain size={22} />
+          </div>
           <div class="empty-title">Nothing learned yet</div>
           <p>Jaffer watches your commands, your agent conversations and your Claude Code sessions, and distils what is worth keeping — preferences, project conventions, fixes that worked. It shows up here, and you can pin, edit or forget anything.</p>
         </div>
       )}
       {groups.map(([scope, list]) => (
         <section key={scope}>
-          <h4>{scopeTitle(scope)}</h4>
+          <h4>
+            {scope === 'global' ? <IconUser size={12} /> : <IconFolder size={12} />}
+            {scopeTitle(scope)}
+            <span class="n">{list.length}</span>
+          </h4>
           {list.map((i) => (
             <ItemRow key={i.id} item={i} />
           ))}
@@ -101,13 +120,18 @@ function Skills(): VNode {
     <div class="mem-list">
       {skills.length === 0 && (
         <div class="empty">
+          <div class="empty-mark is-mem">
+            <IconWand size={22} />
+          </div>
           <div class="empty-title">No skills yet</div>
           <p>When you repeat a multi-step routine, Jaffer notices and saves it as a skill — and offers it to your agents (including Claude Code) next time.</p>
         </div>
       )}
       {skills.map((s) => (
         <div class="skill" key={s.id}>
-          <div class="skill-name">{s.name}</div>
+          <div class="skill-name">
+            <IconBolt size={14} /> {s.name}
+          </div>
           <div class="skill-when">{s.whenToUse}</div>
           <ol>
             {s.steps.map((st, i) => (
@@ -117,12 +141,8 @@ function Skills(): VNode {
             ))}
           </ol>
           <div class="mem-meta">
-            <span class="faint">seen {s.evidence}×</span>
-            <span class="faint">used {s.uses}×</span>
-            <div class="grow" />
-            <button class="linkish" onClick={() => void call('memory.recall', { query: s.name }).then(() => refreshMemory(0))}>
-              {' '}
-            </button>
+            <span>seen {s.evidence}×</span>
+            <span>used {s.uses}×</span>
           </div>
         </div>
       ))}
@@ -137,6 +157,9 @@ function Activity(): VNode {
     <div class="mem-list">
       {runs.length === 0 && (
         <div class="empty">
+          <div class="empty-mark is-mem">
+            <IconUndo size={22} />
+          </div>
           <div class="empty-title">No activity yet</div>
           <p>Every change to memory is logged here so you can see how it evolves — and undo any of it.</p>
         </div>
@@ -153,9 +176,9 @@ function Activity(): VNode {
               ))}
               <span class="faint">{r.reason ?? ''}</span>
               <div class="grow" />
-              <span class="faint">{ago(r.ts)}</span>
+              <span class="faint">{fmtAgo(r.ts, clock.value)}</span>
               {!isRevert && !reverted.has(r.runId) && (
-                <button class="icon-btn" title="Undo this change" onClick={() => void call('memory.revert', { runId: r.runId }).then(() => (refreshMemory(0), toast({ kind: 'info', text: 'Change undone.' })))}>
+                <button class="icon-btn sm" title="Undo this change" onClick={() => void call('memory.revert', { runId: r.runId }).then(() => (refreshMemory(0), toast({ kind: 'info', text: 'Change undone.' })))}>
                   <IconUndo size={13} />
                 </button>
               )}
@@ -188,7 +211,9 @@ function Notes(): VNode {
   }, [text, loaded]);
   return (
     <div class="mem-list notes">
-      <p class="faint">Your own notes for every agent. Jaffer never edits this — it is shared with the built-in agent and exported alongside what it learns.</p>
+      <p class="faint" style={{ margin: '0 0 8px' }}>
+        Your own notes for every agent. Jaffer never edits this — it is shared with the built-in agent and exported alongside what it learns.
+      </p>
       <textarea value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} placeholder={'e.g. My staging server is called atlas.\nI review PRs on Fridays.'} spellcheck={false} />
     </div>
   );
@@ -215,26 +240,32 @@ export function MemoryPanel(): VNode {
     <div class="memory">
       <div class="panel-head">
         <div class="title">
-          <IconBrain size={15} /> Memory
+          <span class="title-ico is-mem">
+            <IconBrain size={13} />
+          </span>
+          Memory
         </div>
         <div class="grow" />
         <button class="btn small" onClick={() => void reflect()} disabled={busy} title="Review recent activity now">
-          <IconRefresh size={13} class={busy ? 'spin' : ''} /> {busy ? 'Learning…' : 'Learn now'}
+          <IconRefresh size={12} class={busy ? 'spin' : ''} /> {busy ? 'Learning…' : 'Learn now'}
         </button>
         <button class="icon-btn" title="Close (⇧⌘M)" onClick={() => setSide(null)}>
           <IconX size={15} />
         </button>
       </div>
-      <div class="stats">
-        <span>
-          <b>{st?.active ?? 0}</b> memories
-        </span>
-        <span>
-          <b>{st?.skills ?? 0}</b> skills
-        </span>
-        <span title="Events that happened since the last reflection">
-          <b>{st?.episodesPending ?? 0}</b> new events
-        </span>
+      <div class="stat-tiles">
+        <div class="tile">
+          <b>{st?.active ?? 0}</b>
+          <span>memories</span>
+        </div>
+        <div class="tile skills">
+          <b>{st?.skills ?? 0}</b>
+          <span>skills</span>
+        </div>
+        <div class="tile events" title="Events that happened since the last reflection">
+          <b>{st?.episodesPending ?? 0}</b>
+          <span>new events</span>
+        </div>
       </div>
       <div class="tabs">
         {(['learned', 'skills', 'activity', 'notes'] as Tab[]).map((t) => (

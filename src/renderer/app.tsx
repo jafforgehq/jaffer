@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, overlay, ready, setSide, setSideWidth, side, sideWidth, toggleSide, appVersion } from './state';
+import { activePane, cfg, overlay, ready, railOpen, setSide, setSideWidth, side, sideWidth, toggleRail, toggleSide, appVersion } from './state';
 import { onMenu } from './actions';
 import { PaneTree, reconcile } from './components/PaneTree';
 import { AgentPanel } from './components/AgentPanel';
 import { MemoryPanel } from './components/MemoryPanel';
+import { SessionRail } from './components/SessionRail';
 import { DaemonBanner, StatusBar, TitleBar, Toasts } from './components/Chrome';
 import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
 import { panes } from './state';
@@ -50,6 +51,7 @@ export function App(): VNode | null {
       const k = e.key.toLowerCase();
       if (k === 'p' && !e.shiftKey) (e.preventDefault(), (overlay.value = overlay.value === 'palette' ? null : 'palette'));
       else if (k === 'j') (e.preventDefault(), toggleSide('agent'));
+      else if (k === 'b' && !e.shiftKey) (e.preventDefault(), toggleRail());
       else if (k === 'm' && e.shiftKey) (e.preventDefault(), toggleSide('memory'));
       else if (k === ',') (e.preventDefault(), (overlay.value = 'settings'));
       else if (k === 'f' && !e.shiftKey) (e.preventDefault(), (overlay.value = 'find'));
@@ -66,22 +68,25 @@ export function App(): VNode | null {
   void activePane.value;
   void appVersion.value;
   return (
-    <div class="app">
-      <TitleBar />
-      <DaemonBanner />
-      <div class="main">
-        <div class="terminal-area">
-          <PaneTree />
-          {overlay.value === 'find' && <FindBar />}
+    <div class={`app ${railOpen.value ? 'rail-open' : ''}`}>
+      {railOpen.value && <SessionRail />}
+      <div class="stage">
+        <TitleBar />
+        <DaemonBanner />
+        <div class="workspace">
+          <div class="terminal-area">
+            <PaneTree />
+            {overlay.value === 'find' && <FindBar />}
+          </div>
+          {s && (
+            <aside class="side" style={{ width: `${sideWidth.value}px` }}>
+              <SideResizer />
+              {s === 'agent' ? <AgentPanel /> : <MemoryPanel />}
+            </aside>
+          )}
         </div>
-        {s && (
-          <aside class="side" style={{ width: `${sideWidth.value}px` }}>
-            <SideResizer />
-            {s === 'agent' ? <AgentPanel /> : <MemoryPanel />}
-          </aside>
-        )}
+        <StatusBar />
       </div>
-      <StatusBar />
       <Toasts />
       {overlay.value === 'palette' && <Palette />}
       {overlay.value === 'settings' && <Settings />}

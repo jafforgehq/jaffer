@@ -5,6 +5,7 @@ import type { AgentStatus } from '../core/agent/runtime';
 import type { PaneInfo } from '../core/session/host';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
+import { isSensitiveCommand, redactText } from '../shared/redact';
 
 const jaffer = () => window.jaffer;
 const store = {
@@ -26,6 +27,15 @@ const store = {
 
 // ------------------------------------------------------------------ session & ui
 
+export interface CommandRec {
+  cmd: string;
+  exit: number | null;
+  durMs: number;
+  cwd: string;
+  at: number;
+  by: 'user' | 'agent';
+}
+
 export interface SessionInfo {
   cwd: string;
   project?: string;
@@ -34,6 +44,7 @@ export interface SessionInfo {
   lastCommand?: { cmd: string; exit: number | null };
   version?: string;
   startedAt?: string;
+  recentCommands?: CommandRec[];
 }
 
 export type Side = 'agent' | 'memory' | null;
@@ -47,6 +58,12 @@ export const panes = signal<PaneInfo[]>([]);
 export const activePane = signal('main');
 export const side = signal<Side>((store.get('jaffer.side') as Side) ?? 'agent');
 export const sideWidth = signal(Number(store.get('jaffer.sideWidth')) || 420);
+export const railOpen = signal(store.get('jaffer.rail') !== '0');
+/** A slow clock for relative times ("2m ago", uptime) without a timer per component. */
+export const clock = signal(Date.now());
+setInterval(() => (clock.value = Date.now()), 15_000);
+/** Recent commands of the one session (newest last), kept by the daemon so they survive quitting the app. */
+export const commandLog = signal<CommandRec[]>([]);
 export const overlay = signal<Overlay>(null);
 export const windowFocused = signal(true);
 export const appVersion = signal('');
@@ -58,6 +75,10 @@ export function setSide(s: Side): void {
 }
 export function toggleSide(s: Exclude<Side, null>): void {
   setSide(side.value === s ? null : s);
+}
+export function toggleRail(): void {
+  railOpen.value = !railOpen.value;
+  store.set('jaffer.rail', railOpen.value ? '1' : '0');
 }
 export function setSideWidth(w: number): void {
   sideWidth.value = Math.max(300, Math.min(760, Math.round(w)));
@@ -85,7 +106,7 @@ export function dismissToast(id: number): void {
 
 // ------------------------------------------------------------------ agent
 
-export type LiveItem = ThreadItem & { state?: 'running' | 'approval' | 'done'; risk?: string; reason?: string; callId?: string };
+export type LiveItem = ThreadItem & { state?: 'running' | 'approval' | 'done'; risk?: string; reason?: string; callId?: string; t0?: number; dur?: number };
 
 export const thread = signal<LiveItem[]>([]);
 export const agentStatus = signal<AgentStatus | null>(null);
@@ -129,13 +150,13 @@ export function applyAgentEvent(e: AgentEvent): void {
       break;
     case 'tool_call':
       liveAssistant = null; // text after a tool call starts a new bubble
-      thread.value = [...thread.value, { kind: 'tool', id: e.callId, callId: e.callId, name: e.name, summary: e.summary, input: e.input, state: 'running' }];
+      thread.value = [...thread.value, { kind: 'tool', id: e.callId, callId: e.callId, name: e.name, summary: e.summary, input: e.input, state: 'running', t0: Date.now() }];
       break;
     case 'approval_request':
       thread.value = thread.value.map((i) => (i.kind === 'tool' && i.id === e.callId ? { ...i, state: 'approval', risk: e.risk, reason: e.reason } : i));
       break;
     case 'tool_result':
-      thread.value = thread.value.map((i) => (i.kind === 'tool' && i.id === e.callId ? { ...i, output: e.output, isError: e.isError, state: 'done' } : i));
+      thread.value = thread.value.map((i) => (i.kind === 'tool' && i.id === e.callId ? { ...i, output: e.output, isError: e.isError, state: 'done', dur: i.t0 ? Date.now() - i.t0 : undefined } : i));
       break;
     case 'usage':
       agentUsage.value = e.usage;
@@ -245,8 +266,10 @@ export async function refreshInfo(): Promise<void> {
   try {
     const [i, p] = await Promise.all([jaffer().call('session.info', {}), jaffer().call('pane.list', {})]);
     batch(() => {
-      info.value = { ...info.value, ...i };
+      const { recentCommands, ...rest } = i as SessionInfo & { panes?: unknown };
+      info.value = { ...info.value, ...rest };
       panes.value = p;
+      if (recentCommands && commandLog.value.length === 0) commandLog.value = recentCommands;
     });
   } catch {
     /* ignore */
@@ -266,8 +289,15 @@ export async function bootstrap(): Promise<void> {
   j.onEvent((event, data) => {
     if (event.startsWith('pty.')) {
       ptyBus.emit({ event, data });
-      if (event === 'pty.command') {
-        info.value = { ...info.value, lastCommand: { cmd: data.cmd, exit: data.exit } };
+      if (event === 'pty.start') {
+        if (data.pane === 'main') info.value = { ...info.value, busy: data.cmd || 'command' };
+        void refreshInfoSoon();
+      } else if (event === 'pty.command') {
+        info.value = { ...info.value, busy: null, lastCommand: { cmd: data.cmd, exit: data.exit } };
+        if (data.cmd?.trim() && !isSensitiveCommand(data.cmd)) {
+          const rec: CommandRec = { cmd: redactText(data.cmd).slice(0, 300), exit: data.exit, durMs: data.durMs ?? 0, cwd: data.cwd ?? '', at: Date.now(), by: data.by === 'agent' ? 'agent' : 'user' };
+          commandLog.value = [...commandLog.value, rec].slice(-40);
+        }
         void refreshInfoSoon();
       } else if (event === 'pty.cwd') {
         info.value = { ...info.value, cwd: data.cwd };
@@ -309,4 +339,62 @@ function refreshInfoSoon(): void {
 export async function patchConfig(p: object): Promise<void> {
   const next = await jaffer().call('config.patch', p);
   cfg.value = next;
+}
+
+// ------------------------------------------------------------------ small display helpers
+
+/** A command as it may be shown in the UI: secrets redacted, sensitive commands hidden. */
+export function safeCommand(cmd: string): string {
+  return isSensitiveCommand(cmd) ? '(hidden)' : redactText(cmd);
+}
+
+export function homeDir(): string {
+  return (window as unknown as { __home?: string }).__home ?? '';
+}
+
+/** `/Users/maya/code/api` → `~/code/api`. */
+export function tildePath(p: string): string {
+  const home = homeDir();
+  if (home && (p === home || p.startsWith(home + '/'))) return '~' + p.slice(home.length);
+  return p;
+}
+
+export function baseName(p: string): string {
+  const parts = p.replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || p || '/';
+}
+
+export function fmtDuration(ms: number): string {
+  if (ms < 950) return `${Math.max(1, Math.round(ms))}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${Math.round(s - m * 60)}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m - h * 60}m`;
+}
+
+export function fmtAgo(ts: number | string, now = Date.now()): string {
+  const t = typeof ts === 'number' ? ts : Date.parse(ts);
+  const s = Math.max(0, (now - t) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 5400) return `${Math.max(1, Math.round(s / 60))}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+export function fmtUptime(startedAt: string | undefined, now = Date.now()): string {
+  if (!startedAt) return '';
+  const s = Math.max(0, (now - Date.parse(startedAt)) / 1000);
+  if (s < 60) return '<1m';
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  if (s < 129600) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.round((s % 86400) / 3600)}h`;
+}
+
+/** "Main session", "Split 2", … (the daemon's pane ids are random). */
+export function paneLabel(id: string): string {
+  if (id === 'main') return 'Main session';
+  const i = panes.value.findIndex((p) => p.id === id);
+  return `Split ${i < 0 ? '' : i + 1}`.trim();
 }

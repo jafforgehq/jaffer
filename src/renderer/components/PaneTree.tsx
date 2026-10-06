@@ -1,8 +1,9 @@
 import { signal, untracked } from '@preact/signals';
 import { useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, panes } from '../state';
+import { activePane, paneLabel, panes, safeCommand, tildePath } from '../state';
 import { TerminalView } from './TerminalView';
+import { IconX } from './icons';
 
 export type LayoutNode = { t: 'pane'; id: string } | { t: 'split'; dir: 'row' | 'col'; ratio: number; a: LayoutNode; b: LayoutNode };
 
@@ -97,10 +98,29 @@ function Divider({ dir, onDrag }: { dir: 'row' | 'col'; onDrag: (frac: number) =
   return <div ref={ref} class={`divider dir-${dir}`} onPointerDown={down} />;
 }
 
+function PaneHead({ id }: { id: string }): VNode {
+  const p = panes.value.find((x) => x.id === id);
+  return (
+    <div class="pane-head" onMouseDown={() => (activePane.value = id)}>
+      <span class="ph-dot" />
+      <span class="ph-title">{paneLabel(id).toLowerCase()}</span>
+      <span class="ph-title faint">{p ? tildePath(p.cwd) : ''}</span>
+      {p?.busy && <span class="ph-run">{safeCommand(p.busy).slice(0, 24)}</span>}
+      <div class="grow" />
+      {id !== 'main' && (
+        <button class="icon-btn sm" title="Close pane (⌘W)" onClick={() => void closePane(id)}>
+          <IconX size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Node({ n, path }: { n: LayoutNode; path: number[] }): VNode {
   if (n.t === 'pane') {
     return (
-      <div class={`pane ${activePane.value === n.id ? 'active' : ''}`} key={n.id}>
+      <div class={`pane ${activePane.value === n.id ? 'active' : ''}`} key={n.id} onMouseDown={() => (activePane.value = n.id)}>
+        {panes.value.length > 1 && <PaneHead id={n.id} />}
         <TerminalView pane={n.id} />
       </div>
     );
@@ -125,7 +145,7 @@ function Node({ n, path }: { n: LayoutNode; path: number[] }): VNode {
 
 export function PaneTree(): VNode {
   return (
-    <div class="panes">
+    <div class={`panes ${panes.value.length > 1 ? 'multi' : ''}`}>
       <Node n={layout.value} path={[]} />
     </div>
   );
