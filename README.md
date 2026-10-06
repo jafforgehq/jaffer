@@ -108,6 +108,21 @@ npm run dist:mac       # dmg + zip for arm64 and x64
 
 `src/core` (session, memory, agent, MCP) has no Electron dependency, so almost everything is tested as real processes: real PTYs with bash and zsh, the real `claude` binary (MCP registration and the TUI running in the PTY), the real Anthropic SDK against a mock Messages API, the bundled daemon and CLI as separate processes, and the renderer in headless Chromium. CI runs the whole suite on Linux **and macOS**, then builds the `.app`, boots the packaged app in a smoke test (`JAFFER_SMOKE=1`), and uploads the dmg/zip. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## What is verified, and how
+
+| Claim | Evidence |
+|---|---|
+| Claude Code runs inside the terminal | the real `claude` TUI is started in a Jaffer PTY and receives keystrokes; the screen restores from a snapshot |
+| Claude Code starts with your memory | the real `claude` binary, pointed at a mock API, fires the SessionStart hook and the model receives the memory |
+| The MCP server works with Claude Code | `claude mcp add-json` + `claude mcp list` reports it connected |
+| One session survives the app | black-box tests restart clients and the daemon: same shell PID, same screen, same cwd, same conversation |
+| Memory evolves without being asked | the bundled daemon learns from shell activity, a Claude Code transcript and a (mock) model pass, then the run is undone |
+| zsh, bash 3.2 and bash 5 integration | tests run against real shells on Linux and on GitHub's macOS runners |
+| The packaged `.app` boots on macOS | CI builds the `.app`, launches it (`JAFFER_SMOKE=1`) and checks daemon, shell, preload bridge and renderer |
+| The UI works | 11 Playwright tests drive the real UI against the real daemon |
+
+Not verified (needs a person at a Mac): Keychain prompts, notifications, the global hotkey, vibrancy, and the look of the WebGL renderer on your GPU; and everything that needs a live Anthropic API key (the agent is tested against a mock Messages API through the real SDK).
+
 ## Limitations
 
 - macOS is the target. Releases are unsigned unless the maintainer adds Apple credentials as repository secrets (`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`).
