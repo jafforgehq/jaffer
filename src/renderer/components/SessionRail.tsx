@@ -1,6 +1,5 @@
 import type { VNode } from 'preact';
-import { activePane, agentEngine, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, agentReady, memItems, overlay, paneLabel, panes, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
-import { splitPane } from './PaneTree';
+import { activePane, agentEngine, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, agentReady, memItems, overlay, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
 import { terminals } from './TerminalView';
 import { IconAgent, IconBolt, IconCheck, IconCommandKey, IconFolder, IconGear, IconBranch, IconPlus, IconSidebar, IconTerminal, IconX } from './icons';
 
@@ -24,11 +23,6 @@ export function SessionRail(): VNode {
     .filter((m) => (projectScope && m.scope === projectScope) || (m.scope === 'global' && m.pinned))
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.confidence - a.confidence)
     .slice(0, 3);
-
-  const focusPane = (id: string) => {
-    activePane.value = id;
-    terminals.get(id)?.focus();
-  };
 
   return (
     <aside class="rail">
@@ -76,27 +70,6 @@ export function SessionRail(): VNode {
             </span>
             {waiting ? <span class="row-dot attn" /> : t ? <span class="spinner" /> : null}
           </button>
-        </section>
-
-        <section>
-          <div class="rail-h">
-            <span>Panes</span>
-            <button onClick={() => void splitPane('row')} title="Split right (⌘D)">
-              + Split
-            </button>
-          </div>
-          {panes.value.map((p) => (
-            <button key={p.id} class={`row-item ${activePane.value === p.id ? 'on' : ''}`} onClick={() => focusPane(p.id)} title={p.cwd}>
-              <span class="row-ico">
-                <IconTerminal size={12} />
-              </span>
-              <span class="row-text">
-                <span class="row-title">{paneLabel(p.id)}</span>
-                <span class="row-sub">{p.busy ? safeCommand(p.busy) : tildePath(p.cwd)}</span>
-              </span>
-              {p.busy ? <span class="spinner" /> : panes.value.length > 1 ? <span class="row-end">{p.cols}×{p.rows}</span> : null}
-            </button>
-          ))}
         </section>
 
         <section>

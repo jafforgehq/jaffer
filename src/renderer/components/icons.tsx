@@ -77,12 +77,6 @@ export const IconRefresh = ({ size, class: c }: P): VNode => (
     <path d="M20 4v7h-7" />
   </svg>
 );
-export const IconSplit = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <path d="M12 4v16" />
-  </svg>
-);
 export const IconPlus = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M12 5v14M5 12h14" />

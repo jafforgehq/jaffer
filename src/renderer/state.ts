@@ -2,7 +2,6 @@ import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { AgentEvent, ThreadItem, UsageTotals } from '../core/agent/types';
 import type { AgentStatus } from '../core/agent/runtime';
-import type { PaneInfo } from '../core/session/host';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
@@ -54,7 +53,6 @@ export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
 export const ready = signal(false);
 export const info = signal<SessionInfo>({ cwd: '' });
-export const panes = signal<PaneInfo[]>([]);
 export const activePane = signal('main');
 export const side = signal<Side>((store.get('jaffer.side') as Side) ?? 'agent');
 export const sideWidth = signal(Number(store.get('jaffer.sideWidth')) || 420);
@@ -269,11 +267,10 @@ export const ptyBus = new Emitter<{ event: string; data: any }>();
 
 export async function refreshInfo(): Promise<void> {
   try {
-    const [i, p] = await Promise.all([jaffer().call('session.info', {}), jaffer().call('pane.list', {})]);
+    const i = await jaffer().call('session.info', {});
     batch(() => {
-      const { recentCommands, ...rest } = i as SessionInfo & { panes?: unknown };
+      const { recentCommands, panes: _panes, ...rest } = i as SessionInfo & { panes?: unknown };
       info.value = { ...info.value, ...rest };
-      panes.value = p;
       if (recentCommands && commandLog.value.length === 0) commandLog.value = recentCommands;
     });
   } catch {
@@ -401,11 +398,4 @@ export function fmtUptime(startedAt: string | undefined, now = Date.now()): stri
   if (s < 5400) return `${Math.round(s / 60)}m`;
   if (s < 129600) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
   return `${Math.floor(s / 86400)}d ${Math.round((s % 86400) / 3600)}h`;
-}
-
-/** "Main session", "Split 2", … (the daemon's pane ids are random). */
-export function paneLabel(id: string): string {
-  if (id === 'main') return 'Main session';
-  const i = panes.value.findIndex((p) => p.id === id);
-  return `Split ${i < 0 ? '' : i + 1}`.trim();
 }

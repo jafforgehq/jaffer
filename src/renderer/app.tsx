@@ -3,13 +3,12 @@ import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
 import { activePane, cfg, overlay, ready, railOpen, setSide, setSideWidth, side, sideWidth, toggleRail, toggleSide, appVersion } from './state';
 import { onMenu } from './actions';
-import { PaneTree, reconcile } from './components/PaneTree';
+import { PaneTree } from './components/PaneTree';
 import { AgentPanel } from './components/AgentPanel';
 import { MemoryPanel } from './components/MemoryPanel';
 import { SessionRail } from './components/SessionRail';
 import { DaemonBanner, StatusBar, TitleBar, Toasts } from './components/Chrome';
 import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
-import { panes } from './state';
 import { cssVars, themeById } from './themes';
 
 function applyTheme(): void {
@@ -40,7 +39,6 @@ function SideResizer(): VNode {
 
 export function App(): VNode | null {
   useEffect(() => effect(applyTheme), []);
-  useEffect(() => effect(() => void (panes.value, reconcile())), []);
   const off = useRef<(() => void) | null>(null);
 
   useEffect(() => {

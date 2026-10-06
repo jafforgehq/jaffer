@@ -22,6 +22,10 @@
 
 The shell must outlive the window. `jafferd` is spawned detached by the app (the app's own binary with `ELECTRON_RUN_AS_NODE=1`, so no separate Node install is needed). The app, the CLI, the MCP server and Claude Code hooks are all just clients of one socket (mode 0600 in a 0700 directory).
 
+## One session
+
+There is one shell, and the code makes it the only one: `SessionHost` runs a single `PtySession` (`main`), refuses to spawn any other, and ignores extra panes an older state file might list; the daemon has no RPC to open or close one (`pane.list` only reports it). The UI has no tabs, splits or extra windows. If the shell exits (`exit`, a crash, *Restart Shell*) the host starts a fresh one in the same folder with the previous screen restored. Only *Quit and End Session* (`⌥⌘Q`) ends it, on purpose.
+
 ## Terminal fidelity and re-attach
 
 PTY output is parsed by a headless xterm.js in the daemon *before* it is emitted to clients. A client attaches with `session.attach`, which waits for the write queue to drain and returns `serialize()` output (screen + scrollback + alt-screen + modes) plus a sequence number; every later `pty.data` event carries `seq`, so the renderer drops anything already covered by the snapshot and re-attaches on any gap. Slow clients are resynchronised from a snapshot instead of buffering without bound.
@@ -46,7 +50,7 @@ The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the dae
 
 The renderer is three layers on a canvas: a **session rail** (left), the **terminal card** (centre) and the **inspector** (right: agent or memory), with a toolbar above and a status bar below. Colours come from layered tokens derived from the active theme (`themes.ts`): `--chrome` is the canvas, `--surface` the cards on it, `--raised` cards on those. A theme change therefore repaints the whole app.
 
-- The rail reads `session.info` (project, branch, uptime, panes, and the daemon's ring of recent commands, which is redacted and omits sensitive commands) and keeps itself live from `pty.start`, `pty.command` and `pty.cwd` events. Because the daemon owns this state, the rail looks the same after you quit and reopen the app.
+- The rail reads `session.info` (project, branch, uptime, and the daemon's ring of recent commands, which is redacted and omits sensitive commands) and keeps itself live from `pty.start`, `pty.command` and `pty.cwd` events. Because the daemon owns this state, the rail looks the same after you quit and reopen the app.
 - Command stripes are xterm decorations created from the OSC 133 sequences the shell integration already emits (`A` prompt, `C` output, `D;exit`). They live in the renderer only; the daemon's snapshots and the scrollback are untouched.
 - Approval cards preview what the agent is about to do (a diff for `edit_file`, the new contents for `write_file`, the command for `run_command`) from the tool input the daemon already sends.
 

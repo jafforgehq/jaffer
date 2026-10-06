@@ -6,6 +6,7 @@ import { makeEnv, type TestEnv } from './helpers/env';
 import { startShell, untilReady, waitFor } from './helpers/pty';
 import type { PtySession, PtyEvent } from '../src/core/session/terminal';
 import { RunRefused } from '../src/core/session/terminal';
+import { SessionHost } from '../src/core/session/host';
 
 let env: TestEnv;
 let sh: PtySession | null = null;
@@ -191,5 +192,22 @@ describe('shell integration regressions (found by macOS CI)', () => {
     const r = await sh.runCommand('print -r -- "$HISTFILE"');
     expect(r.output).toBe(path.join(env.userHome, '.zsh_history'));
     expect(r.output).not.toContain('.jaffer');
+  });
+});
+
+describe('one session, ever', () => {
+  it('runs a single shell, drops extra panes an older version saved, and refuses to start another', async () => {
+    const host = new SessionHost(env.paths, env.config, 'test');
+    const pane = (id: string) => ({ id, cwd: env.userHome, cols: 100, rows: 30 });
+    fs.writeFileSync(env.paths.sessionState, JSON.stringify({ version: 1, startedAt: new Date().toISOString(), savedAt: new Date().toISOString(), panes: [pane('main'), pane('p9x1')] }));
+    await host.start();
+    try {
+      expect(host.list().map((p) => p.id)).toEqual(['main']);
+      await expect(host.spawn('p2')).rejects.toThrow(/only one session/);
+      expect(host.list()).toHaveLength(1);
+      expect('split' in host).toBe(false); // there is no API for it either
+    } finally {
+      host.dispose();
+    }
   });
 });

@@ -1,7 +1,6 @@
 import type { VNode } from 'preact';
-import { agentEngine, agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, agentReady, memPulse, memStats, overlay, panes, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
-import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconSplit, IconX } from './icons';
-import { splitPane } from './PaneTree';
+import { agentEngine, agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, agentReady, memPulse, memStats, overlay, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
+import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconX } from './icons';
 
 function shortPath(p: string): string {
   if (!p) return '';
@@ -46,9 +45,6 @@ export function TitleBar(): VNode {
         </span>
       </div>
       <div class="tb-right">
-        <button class="icon-btn" title="Split right (⌘D)" onClick={() => void splitPane('row')}>
-          <IconSplit size={16} />
-        </button>
         <div class="seg">
           <button class={`seg-btn ${side.value === 'agent' ? 'on' : ''}`} title="Claude (⌘J)" onClick={() => toggleSide('agent')}>
             <IconAgent size={14} /> Claude
@@ -70,12 +66,11 @@ export function StatusBar(): VNode {
   const last = i.lastCommand;
   const cost = agentUsage.value?.costUsd ?? 0;
   const claude = !!i.busy && /\bclaude\b/.test(i.busy);
-  const n = panes.value.length;
   return (
     <div class="statusbar">
       <span class="sb-item">
         <span class={`live ${daemonUp.value ? '' : 'off'}`} style={{ width: '6px', height: '6px' }} />
-        one session{n > 1 ? ` · ${n} panes` : ''}
+        one session
       </span>
       {last && (
         <span class={`sb-item cmd ${last.exit === 0 ? 'ok' : 'bad'}`} title={last.cmd}>

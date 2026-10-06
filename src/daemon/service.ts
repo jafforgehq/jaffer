@@ -361,8 +361,6 @@ export class JafferService {
       return true;
     });
     r.handle('pane.list', () => this.host.list());
-    r.handle('pane.split', async (p: { cwd?: string }) => ({ pane: await this.host.split(p?.cwd) }));
-    r.handle('pane.close', (p: { pane: string }) => this.host.close(p.pane));
     r.handle('session.restart', async () => {
       await this.host.restartMain();
       return true;

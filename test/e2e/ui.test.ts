@@ -124,7 +124,6 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.rail');
     const rail = (await page.textContent('.rail')) ?? '';
     expect(rail).toContain('Session live');
-    expect(rail).toContain('Main session');
     expect(await page.textContent('.rail .cmd-list')).toContain('hello-from-the-ui'); // from the daemon's record of the session
     await page.keyboard.press('Meta+b');
     await page.waitForSelector('.rail', { state: 'detached' });
@@ -229,29 +228,25 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
-  it('splits the terminal into a second pane that shares the session', async () => {
+  it('there is exactly one session: no split controls, the shortcuts do nothing, and the daemon refuses to open another', async () => {
     await page.keyboard.press('Escape');
-    await page.evaluate(() => (window as any).__menu('split-right'));
-    await page.waitForSelector('.split.dir-row');
-    await until(async () => (await page.$$('.term .xterm')).length === 2, 10_000, 'two terminals');
-    await shot('09-split');
-    // every terminal must fill its pane (no leftover bands above/below)
-    const boxes = await page.evaluate(() =>
-      [...document.querySelectorAll('.pane')].map((p) => {
-        const term = p.querySelector('.term') as HTMLElement;
-        const screen = p.querySelector('.xterm-screen') as HTMLElement;
-        const head = (p.querySelector('.pane-head') as HTMLElement | null)?.getBoundingClientRect().height ?? 0;
-        return { pane: p.getBoundingClientRect().height, head, term: term.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
-      }),
-    );
-    for (const b of boxes) {
-      expect(b.head).toBeGreaterThan(0); // split panes get a header (what, where, close)
-      expect(b.term).toBeGreaterThan(b.pane - b.head - 4);
-      expect(b.screen).toBeGreaterThan(b.term - 40); // within a couple of text lines of the pane height
-      expect(b.pane).toBeGreaterThan(600); // and the pane itself spans the window (it used to be centred and short)
-    }
-    const panes = await page.evaluate(() => window.jaffer.call('pane.list'));
-    expect(panes).toHaveLength(2);
+    expect(await page.$('button[title^="Split"]')).toBeNull();
+    expect((await page.textContent('.rail')) ?? '').not.toMatch(/Split|Panes/);
+    await page.evaluate(() => (window as any).__menu('split-right')); // what ⌘D used to do
+    await page.evaluate(() => (window as any).__menu('split-down'));
+    await sleep(500);
+    expect(await page.$$('.term .xterm')).toHaveLength(1);
+    expect(await page.$('.divider, .pane-head')).toBeNull();
+    await expect(page.evaluate(() => window.jaffer.call('pane.split'))).rejects.toThrow(/unknown method/);
+    expect(await page.evaluate(() => window.jaffer.call('pane.list'))).toHaveLength(1);
+    // the one terminal fills its area (no leftover bands above or below)
+    const box = await page.evaluate(() => {
+      const pane = document.querySelector('.pane') as HTMLElement;
+      const screen = pane.querySelector('.xterm-screen') as HTMLElement;
+      return { pane: pane.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
+    });
+    expect(box.pane).toBeGreaterThan(600);
+    expect(box.screen).toBeGreaterThan(box.pane - 60);
   }, 30_000);
 
   it.skipIf(!CLAUDE)('the Claude panel runs on a Claude Code login: it says so, asks in the UI, and runs commands in the terminal', async () => {

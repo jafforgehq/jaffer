@@ -17,7 +17,7 @@ export interface PaneInfo {
   alive: boolean;
 }
 
-export type HostEvent = { pane: string; event: PtyEvent } | { pane: string; lifecycle: 'spawned' | 'closed' | 'restarted' };
+export type HostEvent = { pane: string; event: PtyEvent } | { pane: string; lifecycle: 'spawned' | 'restarted' };
 
 interface SavedState {
   version: number;
@@ -33,8 +33,8 @@ interface SavedScreens {
 const MAIN = 'main';
 
 /**
- * Owns the one session: its terminal panes. The shell(s) live in the daemon, so closing the
- * app never kills them; on a cold start the previous screen and working directory are restored.
+ * Owns the one session: a single terminal. There is no way to open a second one, by design. The shell lives in the
+ * daemon, so closing the app never kills it; on a cold start the previous screen and working directory are restored.
  */
 export class SessionHost {
   readonly events = new Emitter<HostEvent>();
@@ -71,19 +71,17 @@ export class SessionHost {
   async start(): Promise<void> {
     const saved = readJson<SavedState | null>(this.paths.sessionState, null);
     const screens = readJson<SavedScreens>(this.paths.screenSnapshot, {});
-    const paneDefs = saved?.panes?.length ? saved.panes : [{ id: MAIN, cwd: os.homedir(), cols: 120, rows: 32 }];
-    if (!paneDefs.some((p) => p.id === MAIN)) paneDefs.unshift({ id: MAIN, cwd: os.homedir(), cols: 120, rows: 32 });
-    for (const def of paneDefs) {
-      const cwd = fs.existsSync(def.cwd) ? def.cwd : os.homedir();
-      const restoredScreen = screens[def.id]?.data;
-      await this.spawn(def.id, { cwd, cols: def.cols, rows: def.rows, restoreScreen: restoredScreen, restoredAt: saved?.savedAt });
-    }
+    // Only the one session is restored; any other pane an older version left in the state file is dropped.
+    const def = saved?.panes?.find((p) => p.id === MAIN) ?? { id: MAIN, cwd: os.homedir(), cols: 120, rows: 32 };
+    const cwd = fs.existsSync(def.cwd) ? def.cwd : os.homedir();
+    await this.spawn(MAIN, { cwd, cols: def.cols, rows: def.rows, restoreScreen: screens[MAIN]?.data, restoredAt: saved?.savedAt });
     this.persistTimer = setInterval(() => this.persistIfDirty(), 4000);
     this.persistTimer.unref?.();
     this.persist();
   }
 
   async spawn(id: string, o: { cwd?: string; cols?: number; rows?: number; restoreScreen?: string; restoredAt?: string; banner?: string } = {}): Promise<PtySession> {
+    if (id !== MAIN) throw new Error('There is only one session.');
     const cfg = this.config.get();
     const shell = cfg.shell.path && fs.existsSync(cfg.shell.path) ? cfg.shell.path : defaultShell();
     const spawn = buildShellSpawn({ shell, extraArgs: cfg.shell.args, paths: this.paths, baseEnv: process.env, version: this.version });
@@ -109,13 +107,6 @@ export class SessionHost {
 
   private async onExit(id: string, session: PtySession): Promise<void> {
     if (this.disposed || this.panes.get(id) !== session) return;
-    if (id !== MAIN) {
-      this.panes.delete(id);
-      session.dispose();
-      this.events.emit({ pane: id, lifecycle: 'closed' });
-      this.persist();
-      return;
-    }
     // The one session never goes away: start a fresh shell in the same place.
     if (this.restarting.has(id)) return;
     this.restarting.add(id);
@@ -127,22 +118,6 @@ export class SessionHost {
     await this.spawn(id, { cwd, cols, rows, restoreScreen: snap.data, banner: undefined });
     this.restarting.delete(id);
     this.events.emit({ pane: id, lifecycle: 'restarted' });
-  }
-
-  async split(cwd?: string): Promise<string> {
-    const id = `p${Math.random().toString(36).slice(2, 6)}`;
-    const base = this.mainPane;
-    await this.spawn(id, { cwd: cwd ?? base?.cwd, cols: base?.cols, rows: base?.rows });
-    this.persist();
-    return id;
-  }
-
-  close(id: string): boolean {
-    if (id === MAIN) return false;
-    const p = this.panes.get(id);
-    if (!p) return false;
-    p.kill();
-    return true;
   }
 
   async restartMain(): Promise<void> {

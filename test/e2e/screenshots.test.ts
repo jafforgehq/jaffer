@@ -358,7 +358,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.click('.tabs button:has-text("Learned")');
   }, 60_000);
 
-  it('command palette, themes, split panes, settings', async () => {
+  it('command palette, themes, settings', async () => {
     await clearToasts();
     await page.click('.seg-btn[title^="Claude"]').catch(() => undefined);
     await page.keyboard.press('Meta+p');
@@ -377,19 +377,8 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Enter');
     await sleep(600);
     await typeCommand('./bin/test');
-    await page.keyboard.press('Meta+j'); // give the panes the room
+    await page.keyboard.press('Meta+j'); // give the terminal the room
     await sleep(500);
-    await page.evaluate(() => (window as any).__menu('split-right'));
-    await page.waitForSelector('.split.dir-row');
-    await until(async () => (await page.$$('.term .xterm')).length === 2, 10_000, 'two terminals');
-    await sleep(1500);
-    await page.keyboard.type("git log --format='%h %s'", { delay: 12 });
-    await page.keyboard.press('Enter');
-    await sleep(500);
-    await page.keyboard.type('git diff --stat', { delay: 12 });
-    await page.keyboard.press('Enter');
-    await sleep(900);
-    await shot('09-split');
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await shot('10-settings');
@@ -413,11 +402,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Escape');
     fs.mkdirSync(path.join(userHome, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(userHome, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'default' }, apiKeyHelper: `echo ${key}` }));
-    // back to one pane: close the second one (Cmd+W closes the focused split pane)
-    if ((await page.$$('.term .xterm')).length > 1) {
-      await page.evaluate(() => (window as any).__menu('close-pane'));
-      await until(async () => (await page.$$('.term .xterm')).length === 1, 10_000, 'back to a single pane');
-    }
     await sleep(600);
     await page.click('.term');
     await page.keyboard.type('clear', { delay: 14 });

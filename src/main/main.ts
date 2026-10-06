@@ -245,9 +245,7 @@ function buildMenu(): void {
     {
       label: 'Shell',
       submenu: [
-        { label: 'Split Right', accelerator: 'Cmd+D', click: act('split-right') },
-        { label: 'Split Down', accelerator: 'Shift+Cmd+D', click: act('split-down') },
-        { label: 'Close Pane', accelerator: 'Cmd+W', click: act('close-pane') },
+        { label: 'Hide Window (session keeps running)', accelerator: 'Cmd+W', click: act('hide-window') },
         { type: 'separator' },
         { label: 'Clear Screen', accelerator: 'Cmd+K', click: act('clear') },
         { label: 'Find…', accelerator: 'Cmd+F', click: act('find') },

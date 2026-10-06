@@ -331,6 +331,14 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await waitUntil(() => cmds.some((x) => x.cmd === 'echo alive-again' && x.exit === 0), 10_000);
   }, 40_000);
 
+  it('there is only one session: no client can open a second shell or close the first', async () => {
+    const c = await connect();
+    await expect(c.call('pane.split', {})).rejects.toThrow(/unknown method/);
+    await expect(c.call('pane.close', { pane: 'main' })).rejects.toThrow(/unknown method/);
+    const panes = await c.call('pane.list', {});
+    expect(panes.map((p: any) => p.id)).toEqual(['main']);
+  });
+
   it('rejects unknown methods without dropping the connection', async () => {
     const c = await connect();
     await expect(c.call('nope.nothing', {})).rejects.toThrow(/unknown method/);

@@ -134,28 +134,7 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .terminal-area { flex: 1; min-width: 0; display: flex; }
 .panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
-.split { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.split.dir-row { flex-direction: row; }
-.split.dir-col { flex-direction: column; }
-.cell { min-width: 0; min-height: 0; display: flex; }
-.cell > * { flex: 1; min-width: 0; min-height: 0; }
-.divider { flex: none; background: var(--line); position: relative; z-index: 3; transition: background 0.12s; }
-.divider:hover { background: var(--accent-line); }
-.divider.dir-row { width: 1px; cursor: col-resize; }
-.divider.dir-col { height: 1px; cursor: row-resize; }
-.divider::after { content: ''; position: absolute; inset: -4px; }
-.divider.dir-row::after { left: -4px; right: -4px; top: 0; bottom: 0; }
-.divider.dir-col::after { top: -4px; bottom: -4px; left: 0; right: 0; }
 
-.pane-head { height: 28px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 92%, var(--chrome-solid)); color: var(--faint); font-size: 11.5px; position: relative; }
-.pane-head .ph-title { font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-head .ph-run { color: var(--accent); font-family: var(--font-mono); font-size: 10.5px; white-space: nowrap; }
-.pane-head .ph-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
-.pane.active .pane-head { color: var(--text); }
-.pane.active .pane-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); opacity: 0.85; }
-.pane.active .pane-head .ph-dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
-
-.panes.multi .pane:not(.active) .term { opacity: 0.6; }
 .term { transition: opacity 0.15s; }
 .term { flex: 1; min-width: 0; min-height: 0; padding: 10px 6px 6px 18px; user-select: text; -webkit-user-select: text; }
 .term.bell { animation: bell 0.16s; }
@@ -220,7 +199,6 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
 .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 550; color: var(--text); }
 .row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--faint); font-family: var(--font-mono); }
-.row-end { flex: none; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
 .cmd-list { display: flex; flex-direction: column; gap: 1px; }
 .cmd-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none; text-align: left; color: var(--muted); }
