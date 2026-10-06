@@ -1,0 +1,6 @@
+# Layered on top of electron-builder.yml by CI when Apple signing credentials are available.
+extends: ./electron-builder.yml
+mac:
+  notarize: true
+dmg:
+  sign: true

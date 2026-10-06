@@ -49,6 +49,9 @@ jobs:
   mac-app:
     name: Build macOS app
     runs-on: macos-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.sign }}
+      notarized: ${{ steps.sign.outputs.notarize }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -63,49 +66,217 @@ jobs:
           V=$(node -p "require('./node_modules/@lydell/node-pty/package.json').version")
           npm install --no-save --force --no-audit --no-fund "@lydell/node-pty-darwin-arm64@$V" "@lydell/node-pty-darwin-x64@$V"
       - run: npm run build
-      - name: Smoke test the real packaged app (Electron + daemon + shell + renderer)
+
+      - name: Signing preflight (reports which secrets exist; never prints values)
+        id: sign
+        env:
+          CERT: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CERT_PW: ${{ secrets.MAC_CERT_PASSWORD }}
+          AP_ID: ${{ secrets.APPLE_ID }}
+          AP_PW: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          AP_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          API_P8: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          have() { if [ -n "$1" ]; then echo present; else echo MISSING; fi; }
+          echo "MAC_CERT_P12_BASE64 ........ $(have "$CERT")"
+          echo "MAC_CERT_PASSWORD .......... $(have "$CERT_PW")"
+          echo "APPLE_ID ................... $(have "$AP_ID")"
+          echo "APPLE_APP_SPECIFIC_PASSWORD  $(have "$AP_PW")"
+          echo "APPLE_TEAM_ID .............. $(have "$AP_TEAM")"
+          echo "APPLE_API_KEY_P8_BASE64 .... $(have "$API_P8")"
+          echo "APPLE_API_KEY_ID ........... $(have "$API_KEY_ID")"
+          echo "APPLE_API_ISSUER ........... $(have "$API_ISSUER")"
+          sign=false; notarize=false; method=none
+          if [ -n "$CERT" ] && [ -n "$CERT_PW" ]; then sign=true; fi
+          if [ "$sign" = true ]; then
+            if [ -n "$AP_ID" ] && [ -n "$AP_PW" ] && [ -n "$AP_TEAM" ]; then notarize=true; method=apple-id
+            elif [ -n "$API_P8" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then notarize=true; method=api-key; fi
+          fi
+          echo "sign=$sign"         >> "$GITHUB_OUTPUT"
+          echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
+          echo "method=$method"     >> "$GITHUB_OUTPUT"
+          if [ "$sign" != true ]; then
+            echo "::warning title=Not signed::No Apple signing certificate is configured, so this build is NOT signed. Add the secrets described in docs/SIGNING.md."
+          elif [ "$notarize" != true ]; then
+            echo "::warning title=Not notarized::Certificate found but no notarization credentials: the app will be signed but not notarized, and Gatekeeper will still warn."
+          fi
+
+      - name: Refuse to publish an unsigned release (only when REQUIRE_SIGNED_RELEASE=true)
+        if: startsWith(github.ref, 'refs/tags/v') && steps.sign.outputs.sign != 'true' && vars.REQUIRE_SIGNED_RELEASE == 'true'
+        run: |
+          echo "::error title=Unsigned release blocked::REQUIRE_SIGNED_RELEASE is true but no signing certificate is configured. See docs/SIGNING.md."
+          exit 1
+
+      - name: Smoke test the unpacked app (real Electron + daemon + shell + renderer)
         run: |
           npx electron-builder --dir --arm64 --publish never
-          APP="release/mac-arm64/Jaffer.app"
-          codesign -dv "$APP" 2>&1 | head -5 || true
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
-          "$APP/Contents/MacOS/Jaffer" 2>&1 | tee smoke.log
+          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
           grep -q "SMOKE OK" smoke.log
-      - name: Package (dmg + zip, arm64 and x64)
+          rm -rf release
+
+      - name: Package (dmg + zip, arm64 and x64) — signed and notarized when credentials exist
         env:
-          # Secrets are optional. They are copied into the variables electron-builder reads only when set:
-          # an empty CSC_LINK is treated as a path and breaks the build.
+          SIGN: ${{ steps.sign.outputs.sign }}
+          NOTARIZE_METHOD: ${{ steps.sign.outputs.method }}
+          # Copied into the variables electron-builder reads only when set: an empty CSC_LINK is treated as a path.
           SECRET_CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
           SECRET_CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
           SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SECRET_API_P8: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          SECRET_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          SECRET_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          EXTRA=""
-          if [ -n "$SECRET_CSC_LINK" ]; then
+          CONFIG="electron-builder.yml"
+          if [ "$SIGN" = true ]; then
             export CSC_LINK="$SECRET_CSC_LINK" CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
+            CONFIG="electron-builder.signed.yml"   # adds dmg signing and, below, notarization
+            if [ "$NOTARIZE_METHOD" = apple-id ]; then
+              export APPLE_ID="$SECRET_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
+            elif [ "$NOTARIZE_METHOD" = api-key ]; then
+              echo "$SECRET_API_P8" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+              export APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8" APPLE_API_KEY_ID="$SECRET_API_KEY_ID" APPLE_API_ISSUER="$SECRET_API_ISSUER"
+            else
+              # signed but not notarized: drop the notarize flag from the layered config
+              sed -i '' 's/notarize: true/notarize: false/' electron-builder.signed.yml
+            fi
           else
             echo "No signing certificate configured: building ad-hoc signed apps."
           fi
-          if [ -n "$SECRET_APPLE_ID" ]; then
-            export APPLE_ID="$SECRET_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
-            EXTRA="-c.mac.notarize=true"
-          fi
-          npx electron-builder --mac --arm64 --x64 --publish never $EXTRA
+          npx electron-builder --mac --arm64 --x64 --publish never --config "$CONFIG"
           ls -la release
+
+      - name: Verify signatures, hardened runtime and notarization (when signed)
+        if: steps.sign.outputs.sign == 'true'
+        env:
+          NOTARIZED: ${{ steps.sign.outputs.notarize }}
+        run: |
+          set -e
+          for APP in release/mac-arm64/Jaffer.app release/mac/Jaffer.app; do
+            echo "=== $APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+            codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Authority|TeamIdentifier|flags|Timestamp|Runtime" || true
+            codesign -dv "$APP" 2>&1 | grep -q "runtime" || { echo "::error::$APP is missing the hardened runtime flag"; exit 1; }
+            if [ "$NOTARIZED" = true ]; then
+              spctl --assess --type execute --verbose=4 "$APP"
+              xcrun stapler validate "$APP"
+            fi
+          done
+          for DMG in release/*.dmg; do
+            echo "=== $DMG"
+            codesign --verify --verbose=2 "$DMG"
+          done
+
+      - name: Notarize and staple the disk images too (when notarization credentials exist)
+        if: steps.sign.outputs.notarize == 'true'
+        env:
+          NOTARIZE_METHOD: ${{ steps.sign.outputs.method }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SECRET_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          SECRET_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          for DMG in release/*.dmg; do
+            echo "=== notarizing $DMG"
+            if [ "$NOTARIZE_METHOD" = apple-id ]; then
+              xcrun notarytool submit "$DMG" --apple-id "$SECRET_APPLE_ID" --team-id "$SECRET_APPLE_TEAM_ID" --password "$SECRET_APPLE_APP_SPECIFIC_PASSWORD" --wait
+            else
+              xcrun notarytool submit "$DMG" --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$SECRET_API_KEY_ID" --issuer "$SECRET_API_ISSUER" --wait
+            fi
+            xcrun stapler staple "$DMG"
+            xcrun stapler validate "$DMG"
+          done
+
+      - name: Smoke test the packaged app that will actually ship (hardened runtime + entitlements)
+        run: |
+          export JAFFER_HOME="$(mktemp -d)/jaffer-home"
+          export JAFFER_SMOKE=1
+          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke-shipped.log
+          grep -q "SMOKE OK" smoke-shipped.log
+
+      - name: Checksums
+        run: cd release && shasum -a 256 *.dmg *.zip | tee SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: Jaffer-macOS
           path: |
             release/*.dmg
             release/*.zip
+            release/SHA256SUMS.txt
           if-no-files-found: error
+
+  # Proves the whole signing path (certificate import, nested binaries, hardened runtime, entitlements, dmg signing,
+  # and that the signed app still launches) with a throwaway self-signed certificate. It cannot prove Apple's trust or
+  # notarization, which need your real credentials, but it catches every configuration mistake before they are used.
+  signing-dry-run:
+    name: Signing dry run (self-signed)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
+      - run: npm run build
+      - name: Create a throwaway code-signing identity and trust it on this runner
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > cert.conf <<'EOF'
+          [req]
+          distinguished_name = dn
+          x509_extensions = ext
+          prompt = no
+          [dn]
+          CN = Developer ID Application: Jaffer CI Dry Run (TEST000000)
+          [ext]
+          basicConstraints = critical,CA:false
+          keyUsage = critical,digitalSignature
+          extendedKeyUsage = critical,codeSigning
+          EOF
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 -config cert.conf
+          /usr/bin/openssl pkcs12 -export -inkey key.pem -in cert.pem -out cert.p12 -passout pass:dryrun
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain cert.pem
+          echo "CSC_LINK=$(base64 -i cert.p12)" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=dryrun" >> "$GITHUB_ENV"
+      - name: Build with signing on (no notarization), layered config
+        run: |
+          sed 's/notarize: true/notarize: false/' electron-builder.signed.yml > electron-builder.dryrun.yml
+          npx electron-builder --mac --arm64 --publish never --config electron-builder.dryrun.yml
+      - name: Verify the result
+        run: |
+          APP=release/mac-arm64/Jaffer.app
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Authority|Identifier|flags|Runtime" || true
+          codesign -dv "$APP" 2>&1 | grep -q "runtime"
+          codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "allow-jit"
+          # every Mach-O inside the bundle (including the native pty addon) must carry a valid signature
+          BAD=0
+          while IFS= read -r f; do
+            if file "$f" | grep -q "Mach-O"; then codesign --verify --strict "$f" 2>/dev/null || { echo "unsigned: $f"; BAD=1; }; fi
+          done < <(find "$APP" -type f \( -perm -u+x -o -name "*.node" -o -name "*.dylib" \))
+          [ "$BAD" = 0 ]
+          for DMG in release/*.dmg; do codesign --verify --verbose=2 "$DMG"; done
+      - name: The signed app still launches (hardened runtime must not break the daemon or the pty addon)
+        run: |
+          export JAFFER_HOME="$(mktemp -d)/jaffer-home"
+          export JAFFER_SMOKE=1
+          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
 
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, mac-app]
+    needs: [test, mac-app, signing-dry-run]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,7 +285,27 @@ jobs:
         with:
           name: Jaffer-macOS
           path: dist
+      - name: Release notes
+        env:
+          SIGNED: ${{ needs.mac-app.outputs.signed }}
+          NOTARIZED: ${{ needs.mac-app.outputs.notarized }}
+        run: |
+          {
+            if [ "$SIGNED" = true ] && [ "$NOTARIZED" = true ]; then
+              echo "Signed with an Apple Developer ID and **notarized by Apple** — opens without Gatekeeper warnings."
+            elif [ "$SIGNED" = true ]; then
+              echo "Signed with an Apple Developer ID but **not notarized**. macOS may ask you to confirm the first launch."
+            else
+              echo "> **Unsigned preview build.** This build is not signed with an Apple Developer ID, so macOS Gatekeeper blocks it on first launch."
+              echo ">"
+              echo "> After copying **Jaffer.app** to /Applications, run once: \`xattr -dr com.apple.quarantine /Applications/Jaffer.app\`"
+            fi
+            echo
+            echo "**Which file?** Apple Silicon (M1 and later): \`arm64\`. Intel Macs: \`x64\`. Use the \`.dmg\` (drag to Applications) or the \`.zip\`. Verify downloads with \`SHA256SUMS.txt\`."
+          } > notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: notes.md
           generate_release_notes: true
+          prerelease: ${{ needs.mac-app.outputs.signed != 'true' }}
