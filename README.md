@@ -29,7 +29,7 @@ Every release also ships `SHA256SUMS.txt`. How releases get signed and notarized
 
 **Latest build from `main`:** every push builds both Macs in CI. Open the newest run under *Actions → CI* and download the `Jaffer-macOS` artifact.
 
-**Maintainers:** `git tag vX.Y.Z && git push origin vX.Y.Z` publishes a release, or use the button: *Actions → CI → Run workflow*, type the version (e.g. `v0.1.0`) in *release_tag*. Either way CI only publishes when its tests and the Mac build pass (a normal push to `main` skips the *Publish release* job on purpose). With Apple credentials configured it is signed and notarized; without them it is published as a clearly marked unsigned pre-release.
+**Releases are automatic.** When a push to `main` passes the tests and the Mac build, CI publishes a release for the `version` in `package.json` (skipping it if that version already has one). To ship a new version, bump `version` and push. With Apple credentials configured the release is signed and notarized; without them it is published as a clearly marked unsigned pre-release. (Pushing a `vX.Y.Z` tag, or *Actions → CI → Run workflow* with a *release_tag*, works too.)
 
 **Or build it yourself** (a locally built app opens with no warnings):
 

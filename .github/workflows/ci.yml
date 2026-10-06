@@ -314,18 +314,52 @@ jobs:
 
   release:
     name: Publish release
-    # Runs when a v* tag is pushed, or when CI is started by hand (Actions → CI → Run workflow) with a release_tag.
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    # Automatic: every push to main that passes the tests and the Mac build publishes the release for the `version` in
+    # package.json, unless that version already has one (bump the version to release again). Pushing a v* tag, or Actions →
+    # CI → Run workflow with a release_tag, also works. Pull requests never publish.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: [test, mac-app, signing-dry-run]
     runs-on: ubuntu-latest
+    concurrency:
+      group: release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Decide what to publish
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          SIGNED: ${{ needs.mac-app.outputs.signed }}
+          REQUIRE_SIGNED: ${{ vars.REQUIRE_SIGNED_RELEASE }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then TAG="$INPUT_TAG"
+          else TAG="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::$TAG is not a version like v0.1.0"; exit 1
+          fi
+          publish=true
+          if [ "$REQUIRE_SIGNED" = true ] && [ "$SIGNED" != true ]; then
+            echo "::warning::REQUIRE_SIGNED_RELEASE is on and this build is unsigned, so $TAG was not published."
+            publish=false
+          elif [ "$GITHUB_REF_TYPE" != tag ] && [ -z "$INPUT_TAG" ] && gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, nothing to publish. Bump the version in package.json to release again."
+            publish=false
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
+        if: steps.plan.outputs.publish == 'true'
         with:
           name: Jaffer-macOS
           path: dist
       - name: Release notes
+        if: steps.plan.outputs.publish == 'true'
         env:
           SIGNED: ${{ needs.mac-app.outputs.signed }}
           NOTARIZED: ${{ needs.mac-app.outputs.notarized }}
@@ -344,8 +378,9 @@ jobs:
             echo "**Which file?** Apple Silicon (M1 and later): \`arm64\`. Intel Macs: \`x64\`. Use the \`.dmg\` (drag to Applications) or the \`.zip\`. Verify downloads with \`SHA256SUMS.txt\`."
           } > notes.md
       - uses: softprops/action-gh-release@v2
+        if: steps.plan.outputs.publish == 'true'
         with:
-          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          tag_name: ${{ steps.plan.outputs.tag }}
           target_commitish: ${{ github.sha }} # when the tag does not exist yet, GitHub creates it on this commit
           files: dist/*
           body_path: notes.md

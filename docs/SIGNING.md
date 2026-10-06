@@ -72,7 +72,10 @@ afterwards. Then push a tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-No terminal? Open *Actions → CI → Run workflow*, pick `main`, and type `v0.2.0` in *release_tag*: CI builds that commit and creates the tag and the release itself.
+You do not have to: CI also releases by itself. A push to `main` that passes the tests and the Mac build publishes the
+release for the `version` in `package.json` (and does nothing if that version already has one), so bumping the version is
+the whole release step. *Actions → CI → Run workflow* with a *release_tag* is a third way. Set the repository variable
+`REQUIRE_SIGNED_RELEASE=true` to make CI refuse to publish anything that is not signed.
 
 The first step of the build job, **Signing preflight**, prints `present` or `MISSING` for every secret (never the value)
 and says whether this run will be unsigned, signed, or signed and notarized. The release is published as a
