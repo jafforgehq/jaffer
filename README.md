@@ -170,7 +170,7 @@ scripts/release-mac.sh # on your Mac: sign, notarize, verify and publish a relea
 | The MCP server works with Claude Code | `claude mcp add-json` + `claude mcp list` reports it connected |
 | One session survives the app | black-box tests restart clients and the daemon: same shell PID, same screen, same cwd, same conversation |
 | Memory evolves without being asked | the bundled daemon learns from shell activity, a Claude Code transcript and a (mock) model pass, then the run is undone |
-| zsh, bash 3.2 and bash 5 integration | tests run against real shells on Linux and on GitHub's macOS runners |
+| zsh, bash 3.2 and bash 5 integration | tests run against real shells on Linux (gates a release) and on GitHub's macOS runners (advisory: shown in every run, but a flaky timing test there does not block a release) |
 | The packaged `.app` boots on macOS | CI builds the `.app`, launches it (`JAFFER_SMOKE=1`) and checks daemon, shell, preload bridge and renderer |
 | The UI works | 14 Playwright tests drive the real UI against the real daemon |
 | The Claude panel runs on a Claude Code login | the real `claude` binary, driven through its streaming protocol against a mock API: Jaffer's approval gates writes, Deny and Cancel really stop them, the conversation survives a restart, and, through the bundled daemon, commands are typed into the shared terminal; the UI test clicks Allow in the browser |
