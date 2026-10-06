@@ -237,6 +237,46 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(((await c.call('memory.list', {})).items as any[]).some((i) => /linter before every commit/.test(i.text))).toBe(false);
   }, 40_000);
 
+  it('streams heavy output in order with no gaps, and the daemon stays responsive', async () => {
+    const c = await connect();
+    const cmds = collect(c, 'pty.command');
+    const seqs: number[] = [];
+    let text = '';
+    c.on('pty.data', (d) => (seqs.push(d.seq), (text += d.data)));
+    const att = await c.call('session.attach', { cols: 120, rows: 30 });
+    const base = att.snapshot.seq;
+    await c.call('pty.write', { data: 'seq 1 120000\r' });
+    await waitUntil(() => cmds.some((x) => x.cmd === 'seq 1 120000'), 30_000);
+    await waitUntil(() => text.includes('120000'), 10_000);
+    expect(seqs.length).toBeGreaterThan(5);
+    expect(seqs[0]).toBe(base + 1);
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBe(seqs[i - 1]! + 1); // strictly consecutive: nothing dropped or reordered
+    expect((await c.call('hello', {})).protocol).toBe(1);
+    // a late joiner sees the same end state
+    const late = await c.call('session.snapshot', {});
+    expect(late.data).toContain('120000');
+  }, 60_000);
+
+  it('typing `exit` does not end the session: a fresh shell appears in the same folder', async () => {
+    const c = await connect();
+    const events = collect(c, 'session.lifecycle');
+    const att = await c.call('session.attach', { cols: 100, rows: 30 });
+    const before = att.panes[0];
+    await c.call('pty.write', { data: 'exit\r' });
+    await waitUntil(() => events.some((e) => e.lifecycle === 'restarted'), 10_000);
+    await waitUntil(async () => {
+      const p = (await c.call('pane.list', {}))[0];
+      return p.alive && p.pid !== before.pid;
+    }, 10_000);
+    const info = await c.call('session.info', {});
+    expect(info.cwd).toBe(before.cwd);
+    // and it is a working, integrated shell again
+    const cmds = collect(c, 'pty.command');
+    await sleep(800);
+    await c.call('pty.write', { data: 'echo alive-again\r' });
+    await waitUntil(() => cmds.some((x) => x.cmd === 'echo alive-again' && x.exit === 0), 10_000);
+  }, 40_000);
+
   it('rejects unknown methods without dropping the connection', async () => {
     const c = await connect();
     await expect(c.call('nope.nothing', {})).rejects.toThrow(/unknown method/);
