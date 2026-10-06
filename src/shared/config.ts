@@ -43,7 +43,7 @@ export interface JafferConfig {
     retentionDays: number;
   };
   export: { targets: ('claude-code' | 'codex' | 'gemini')[]; claudeSkills: boolean };
-  ingest: { claudeCode: boolean; codex: boolean; backfillDays: number };
+  ingest: { claudeCode: boolean; backfillDays: number };
   hotkey: string;
 }
 
@@ -81,7 +81,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     retentionDays: 45,
   },
   export: { targets: [], claudeSkills: false },
-  ingest: { claudeCode: false, codex: false, backfillDays: 7 },
+  ingest: { claudeCode: false, backfillDays: 7 },
   hotkey: 'Control+`',
 };
 
