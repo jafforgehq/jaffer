@@ -212,7 +212,6 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .row-ico { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; background: var(--hover); color: var(--muted); }
 .row-item.on .row-ico { background: var(--accent-soft); color: var(--accent); }
 .row-ico.ico-agent { background: var(--accent-soft); color: var(--accent); }
-.row-ico.ico-claude { background: var(--violet-soft); color: var(--violet); }
 .row-sub.ui { font-family: var(--font-ui); font-size: 11px; }
 .row-sub.attn { color: var(--accent); font-family: var(--font-ui); font-weight: 600; }
 .row-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; }

@@ -1,6 +1,5 @@
 import type { VNode } from 'preact';
 import { activePane, agentEngine, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, agentReady, memItems, overlay, paneLabel, panes, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
-import { runClaude } from '../actions';
 import { splitPane } from './PaneTree';
 import { terminals } from './TerminalView';
 import { IconAgent, IconBolt, IconCheck, IconCommandKey, IconFolder, IconGear, IconBranch, IconPlus, IconSidebar, IconTerminal, IconX } from './icons';
@@ -67,9 +66,6 @@ export function SessionRail(): VNode {
         </section>
 
         <section>
-          <div class="rail-h">
-            <span>Agents</span>
-          </div>
           <button class={`row-item ${side.value === 'agent' ? 'on' : ''}`} onClick={() => (side.value === 'agent' ? setSide(null) : setSide('agent'))} title="Open the Claude panel (⌘J)">
             <span class="row-ico ico-agent">
               <IconAgent size={12} />
@@ -79,16 +75,6 @@ export function SessionRail(): VNode {
               <span class={`row-sub ui ${waiting ? 'attn' : ''}`}>{agentLine}</span>
             </span>
             {waiting ? <span class="row-dot attn" /> : t ? <span class="spinner" /> : null}
-          </button>
-          <button class="row-item" onClick={() => (claude ? terminals.get(activePane.value)?.focus() : void runClaude())} title={claude ? 'Claude Code is running in the terminal' : 'Start Claude Code in the terminal (⇧⌘C)'}>
-            <span class="row-ico ico-claude">
-              <IconBolt size={12} />
-            </span>
-            <span class="row-text">
-              <span class="row-title">Claude Code</span>
-              <span class="row-sub ui">{claude ? 'running in the terminal' : 'in the terminal · click to start'}</span>
-            </span>
-            {claude && <span class="row-dot live-v" />}
           </button>
         </section>
 

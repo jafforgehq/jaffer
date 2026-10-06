@@ -156,6 +156,22 @@ describe('Jaffer UI end to end', () => {
     await shot('03-agent');
   }, 40_000);
 
+  it('there is one Claude in the sidebar; the panel header opens the full Claude Code in the terminal', async () => {
+    const titles = await page.$$eval('.rail .row-title', (els) => els.map((e) => e.textContent));
+    expect(titles.filter((t) => t === 'Claude')).toHaveLength(1);
+    expect(titles).not.toContain('Claude Code'); // it used to be listed as a second "agent": it is the same Claude, just another place to use it
+    expect((await page.textContent('.rail')) ?? '').not.toContain('click to start');
+    // a stand-in `claude` (an alias is a plain command, so the shell reports it), so the test never starts the real program
+    await page.click('.term');
+    await page.keyboard.type("alias claude='echo opened-claude-code-from-panel'", { delay: 4 });
+    await page.keyboard.press('Enter');
+    await until(async () => /alias claude/.test((await page.textContent('.rail .cmd-list')) ?? ''), 10_000, 'the stand-in to be defined and the shell idle');
+    await page.click('.agent .panel-head button[title^="Open the full Claude Code"]');
+    await until(async () => (await termText()).split('\n').some((l) => l.trim() === 'opened-claude-code-from-panel'), 10_000, 'the header button to run claude in the terminal');
+    await page.keyboard.type('unalias claude', { delay: 4 });
+    await page.keyboard.press('Enter');
+  }, 40_000);
+
   it('asks for approval in the UI before writing a file, and obeys Allow', async () => {
     const target = path.join(env.userHome, 'ui-approved.txt');
     mock.reset().queue({ kind: 'tool', id: 'toolu_ui2', name: 'write_file', input: { path: target, content: 'written via approval' } }, { kind: 'text', text: 'File written.' });

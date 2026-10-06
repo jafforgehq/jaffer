@@ -99,7 +99,7 @@ export function StatusBar(): VNode {
       <button class="sb-item sb-btn" onClick={() => toggleSide('memory')} title="Open memory">
         <span class="mem-dot" key={memPulse.value} /> {st ? `${st.active} memories · ${st.skills} skills` : 'memory'}
       </button>
-      <span class="sb-item">{agentEngine.value === 'claude-code' ? 'Claude Code' : cfg.value?.agent.model}</span>
+      <span class="sb-item">{agentEngine.value === 'claude-code' ? cfg.value?.agent.cliModel || 'Claude login' : cfg.value?.agent.model}</span>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { signal } from '@preact/signals';
+import { runClaude } from '../actions';
 import { agentEngine, agentStatus, agentUsage, cfg, engines, fmtDuration, agentReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
 import { Markdown } from './Markdown';
 import { IconAgent, IconBolt, IconBranch, IconBrain, IconCheck, IconClock, IconEdit, IconFile, IconSearch, IconShield, IconStop, IconTerminal, IconWand, IconX, IconArrowUp, IconList } from './icons';
@@ -396,7 +397,7 @@ export function AgentPanel(): VNode {
   const lastIsAssistantStreaming = items.length > 0 && items[items.length - 1]!.kind === 'assistant';
   const auto = cfg.value?.agent.approvals === 'auto';
   const viaCli = agentEngine.value === 'claude-code';
-  const model = viaCli ? 'Claude Code' : (cfg.value?.agent.model ?? '').replace(/^claude-/, '');
+  const model = viaCli ? (cfg.value?.agent.cliModel || 'default model') : (cfg.value?.agent.model ?? '').replace(/^claude-/, '');
   const engineTitle = viaCli ? 'This panel runs on your Claude Code login: no API key, and your plan covers it.' : 'This panel runs on your Anthropic API key.';
 
   return (
@@ -413,6 +414,9 @@ export function AgentPanel(): VNode {
         </div>
         <div class="grow" />
         <ContextMeter />
+        <button class="icon-btn" title="Open the full Claude Code in your terminal (⇧⌘C)" onClick={() => void runClaude()}>
+          <IconTerminal size={15} />
+        </button>
         <button class="icon-btn" title="Close (⌘J)" onClick={() => setSide(null)}>
           <IconX size={15} />
         </button>

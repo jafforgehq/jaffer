@@ -28,6 +28,10 @@ function zoom(delta: number): void {
 export async function runClaude(): Promise<void> {
   const t = term();
   if (!t) return;
+  if (info.value.busy && /\bclaude\b/.test(info.value.busy)) {
+    t.focus(); // already running: take me to it
+    return;
+  }
   if (info.value.busy) {
     toast({ kind: 'info', text: `The terminal is busy running ${info.value.busy}.` });
     return;
