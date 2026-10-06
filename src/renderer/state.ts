@@ -115,6 +115,22 @@ export const agentReady = signal(true);
 export const agentEngine = signal<'api' | 'claude-code'>('api');
 export const engines = signal<{ api: boolean; claudeCode: boolean }>({ api: false, claudeCode: false });
 
+export interface ClaudeAuthState {
+  installed: boolean;
+  loggedIn: boolean;
+  loginRunning: boolean;
+  loginError?: string;
+}
+/** Where the Claude Code login stands, as last asked (null until the first answer). Asked at startup and after a failed turn, never on a timer. */
+export const claudeAuth = signal<ClaudeAuthState | null>(null);
+export async function checkClaudeAuth(): Promise<void> {
+  try {
+    claudeAuth.value = await jaffer().call('setup.claude.auth', {});
+  } catch {
+    /* keep the last answer */
+  }
+}
+
 let liveAssistant: { id: string; text: string } | null = null;
 let seq = 0;
 
@@ -171,7 +187,10 @@ export function applyAgentEvent(e: AgentEvent): void {
     case 'turn_end':
       liveAssistant = null;
       turn.value = null;
-      if (e.error) toast({ kind: 'error', text: e.error }, 9000);
+      if (e.error) {
+        toast({ kind: 'error', text: e.error }, 9000);
+        void checkClaudeAuth(); // an expired login looks like any other failed turn; ask, and show the banner if that is it
+      }
       // settle on what was actually persisted (drops live-only state, thinking, etc.)
       void loadThread().catch(() => undefined);
       break;
@@ -336,6 +355,7 @@ export async function bootstrap(): Promise<void> {
   await Promise.all([refreshInfo(), loadThread(), refreshKeyStatus()]);
   refreshMemory(0);
   ready.value = true;
+  if (config.onboarded) void checkClaudeAuth();
 }
 
 let infoTimer: ReturnType<typeof setTimeout> | null = null;

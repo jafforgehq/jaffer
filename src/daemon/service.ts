@@ -21,6 +21,7 @@ import type { ToolEnv } from '../core/agent/tools';
 import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
 import type { Decision } from '../core/agent/types';
@@ -52,6 +53,8 @@ export class JafferService {
   agent!: AgentHub;
   private claudeBin: string | null = null;
   private claudeProbe: Promise<void> | null = null;
+  private login: ClaudeLogin | null = null;
+  private loginError: string | undefined;
   private apiKey: string | null = null;
   private client: Anthropic | null = null;
   private startedAt = nowIso();
@@ -440,6 +443,29 @@ export class JafferService {
     r.handle('setup.claude.status', async () => {
       await this.probeClaude();
       return claudeStatus(this.userHome, this.userEnv());
+    });
+    // Signed in to Claude Code? Asked as the panel's own Claude Code would be (a login, never an API key). Re-detects
+    // the binary each time, so installing Claude Code while the first-run screen is open is noticed.
+    r.handle('setup.claude.auth', async () => {
+      await this.probeClaude();
+      const auth = await claudeAuth(this.claudeBin, this.claudeEnv());
+      return { ...auth, loginRunning: this.login?.running ?? false, ...(this.loginError ? { loginError: this.loginError } : {}) };
+    });
+    // Starts `claude auth login` (it opens the user's browser) and returns at once; the UI watches setup.claude.auth.
+    r.handle('setup.claude.login', async (p: { restart?: boolean } | undefined) => {
+      await this.probeClaude();
+      if (!this.claudeBin) throw new RpcError('Claude Code is not installed.', 'ENOENT');
+      if (p?.restart && this.login?.running) {
+        const old = this.login.start();
+        this.login.cancel();
+        await old;
+      }
+      this.login = this.login ?? new ClaudeLogin(this.claudeBin, this.claudeEnv());
+      this.loginError = undefined;
+      void this.login.start().then((r) => {
+        if (!r.ok && r.message !== 'cancelled') this.loginError = r.message;
+      });
+      return { started: true };
     });
     r.handle('setup.claude.install', async () => {
       const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv() });

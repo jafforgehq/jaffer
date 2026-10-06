@@ -7,7 +7,7 @@ import { parseOps } from '../src/core/memory/reflector';
 import { extractJson } from '../src/core/memory/llm';
 import { consolidateHeuristic } from '../src/core/memory/consolidate';
 import { buildContext } from '../src/core/memory/context';
-import { applyBlock, BEGIN, END, syncClaudeSkills, syncExports } from '../src/core/memory/exports';
+import { applyBlock, BEGIN, detectTargets, END, syncClaudeSkills, syncExports } from '../src/core/memory/exports';
 import { effectiveConfidence } from '../src/core/memory/ranking';
 
 let env: TestEnv;
@@ -315,18 +315,29 @@ describe('exports', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('# My own rules\n\nBe kind.\n');
   });
 
-  it('only writes to agents that are installed and enabled', () => {
+  it('writes the memory block to Claude Code only when it is installed and enabled', () => {
     const engine = makeEngine(env);
     engine.remember('Prefers pnpm over npm', { kind: 'preference' });
+    const claudeMd = path.join(env.userHome, '.claude', 'CLAUDE.md');
+    expect(syncExports(engine.store, ['claude-code'], env.userHome).find((r) => r.target === 'claude-code')!.status).toBe('skipped'); // ~/.claude absent
+    expect(fs.existsSync(path.join(env.userHome, '.claude'))).toBe(false);
     fs.mkdirSync(path.join(env.userHome, '.claude'));
-    const res = syncExports(engine.store, ['claude-code', 'codex'], env.userHome);
-    expect(res.find((r) => r.target === 'claude-code')!.status).toBe('written');
-    expect(res.find((r) => r.target === 'codex')!.status).toBe('skipped'); // ~/.codex absent
-    expect(fs.existsSync(path.join(env.userHome, '.codex'))).toBe(false);
-    expect(fs.readFileSync(path.join(env.userHome, '.claude', 'CLAUDE.md'), 'utf8')).toContain('pnpm');
+    expect(syncExports(engine.store, ['claude-code'], env.userHome).find((r) => r.target === 'claude-code')!.status).toBe('written');
+    expect(fs.readFileSync(claudeMd, 'utf8')).toContain('pnpm');
     // opting out removes the block again
     syncExports(engine.store, [], env.userHome);
-    expect(fs.readFileSync(path.join(env.userHome, '.claude', 'CLAUDE.md'), 'utf8')).not.toContain('pnpm');
+    expect(fs.readFileSync(claudeMd, 'utf8')).not.toContain('pnpm');
+  });
+
+  it('is Claude Code only: other agents are never written to, even if an old config still lists them', () => {
+    const engine = makeEngine(env);
+    engine.remember('Prefers pnpm over npm', { kind: 'preference' });
+    for (const d of ['.claude', '.codex', '.gemini']) fs.mkdirSync(path.join(env.userHome, d));
+    const res = syncExports(engine.store, ['claude-code', 'codex', 'gemini'] as never, env.userHome);
+    expect(res.map((r) => r.target)).toEqual(['claude-code']);
+    expect(fs.existsSync(path.join(env.userHome, '.codex', 'AGENTS.md'))).toBe(false);
+    expect(fs.existsSync(path.join(env.userHome, '.gemini', 'GEMINI.md'))).toBe(false);
+    expect(detectTargets(env.userHome).map((t) => t.target)).toEqual(['claude-code']);
   });
 
   it('turns learned skills into Claude Code skills and cleans up stale ones', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, engines, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast } from '../state';
+import { activePane, appVersion, cfg, engines, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast, type ClaudeAuthState } from '../state';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
@@ -449,8 +449,8 @@ export function Settings(): VNode {
 
           {section === 'integrations' && (
             <>
-              <h4>Claude Code &amp; other agents</h4>
-              <p class="lede">Share what Jaffer learns with the agents you already use, and learn from them in return.</p>
+              <h4>Claude Code</h4>
+              <p class="lede">Share what Jaffer learns with Claude Code, and learn from it in return.</p>
               <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.mcp ? 'MCP on' : 'MCP off'} · ${claude.hooks ? 'hooks on' : 'hooks off'}` : 'not found on PATH') : '…'}>
                 <span class="row">
                   <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
@@ -484,31 +484,114 @@ export function Settings(): VNode {
 
 // ------------------------------------------------------------------ onboarding
 
+const INSTALL_CMD = 'curl -fsSL https://claude.ai/install.sh | bash';
+
+/** First thing on a first run: is Claude Code installed and signed in? Nothing is typed into the terminal here. */
+function SignInStep({ onDone }: { onDone: () => void }): VNode {
+  const [auth, setAuth] = useState<ClaudeAuthState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const inflight = useRef(false);
+  const refresh = () => {
+    if (inflight.current) return;
+    inflight.current = true;
+    void call<ClaudeAuthState>('setup.claude.auth', {})
+      .then(setAuth)
+      .catch(() => undefined)
+      .finally(() => (inflight.current = false));
+  };
+  const running = auth?.loginRunning ?? false;
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, running ? 1000 : 2500);
+    return () => clearInterval(t);
+  }, [running]);
+  useEffect(() => {
+    if (!auth?.loggedIn) return;
+    const t = setTimeout(onDone, 700); // long enough to see the tick
+    return () => clearTimeout(t);
+  }, [auth?.loggedIn]);
+  const signIn = async (restart = false) => {
+    setBusy(true);
+    try {
+      await call('setup.claude.login', { restart });
+      refresh();
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = () => {
+    void navigator.clipboard?.writeText(INSTALL_CMD).then(() => setCopied(true)).catch(() => undefined);
+  };
+  const installState = !auth ? 'wait' : auth.installed ? 'ok' : 'bad';
+  const signedState = !auth ? 'wait' : auth.loggedIn ? 'ok' : auth.loginRunning ? 'wait' : auth.installed ? 'bad' : 'idle';
+  return (
+    <div class="ob-signin">
+      <ul class="ob-checks" aria-live="polite">
+        <li data-state={installState}>
+          <span class="ob-mark" />
+          Claude Code is installed
+        </li>
+        <li data-state={signedState}>
+          <span class="ob-mark" />
+          Signed in to Claude
+        </li>
+      </ul>
+      {auth && !auth.installed && (
+        <div class="ob-install">
+          <p>
+            Claude Code is not installed yet. Run this in any terminal (Terminal.app works), then come back: Jaffer notices by itself.
+          </p>
+          <div class="ob-cmdrow">
+            <code class="ob-cmd">{INSTALL_CMD}</code>
+            <button class="btn small" onClick={copy}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <div class="ob-actions">
+            <button class="btn primary big" onClick={refresh}>
+              Check again
+            </button>
+          </div>
+        </div>
+      )}
+      {auth && auth.installed && !auth.loggedIn && (
+        <div class="ob-actions">
+          <button class="btn primary big" disabled={busy || auth.loginRunning} onClick={() => void signIn()}>
+            {auth.loginRunning ? 'Waiting for your browser…' : 'Sign in with Claude'}
+          </button>
+          {auth.loginRunning && (
+            <button class="btn ghost" onClick={() => void signIn(true)}>
+              Try again
+            </button>
+          )}
+        </div>
+      )}
+      {auth?.loginError && <p class="ob-error">{auth.loginError}</p>}
+      <p class="faint ob-note">
+        Sign-in opens your browser. Claude Code needs a Claude Pro, Max, Team or Enterprise plan, or an Anthropic Console account. Nothing is typed into your terminal during setup.
+      </p>
+    </div>
+  );
+}
+
 export function Onboarding(): VNode {
+  const [stage, setStage] = useState<'signin' | 'choices'>('signin');
   const [learn, setLearn] = useState(true);
   const [curate, setCurate] = useState(true);
   const [claude, setClaude] = useState(true);
-  const [share, setShare] = useState(true);
-  const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
-  const [targets, setTargets] = useState<{ target: string; label: string; installed: boolean }[]>([]);
-  const [claudeFound, setClaudeFound] = useState(true);
-  useEffect(() => {
-    void call('setup.targets', {}).then(setTargets).catch(() => undefined);
-    void call('setup.claude.status', {}).then((s) => (setClaudeFound(s.claudeInstalled), s.claudeInstalled || setClaude(false))).catch(() => undefined);
-  }, []);
-  const others = targets.filter((t) => t.target !== 'claude-code' && t.installed);
   const go = async () => {
     setBusy(true);
     try {
-      if (key.trim()) await call('secrets.setAnthropicKey', { key: key.trim() }).catch((e) => toast({ kind: 'error', text: e.message }));
       await patchConfig({
         onboarded: true,
         memory: { enabled: learn, llm: curate && learn ? 'auto' : 'off' },
         ingest: { claudeCode: claude && learn },
-        export: { targets: share ? others.map((t) => t.target) : [] },
       });
-      if (claude && claudeFound) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message }));
+      if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message }));
       await refreshKeyStatus();
       overlay.value = null;
       setSide('agent');
@@ -518,81 +601,81 @@ export function Onboarding(): VNode {
   };
   return (
     <Modal onClose={() => undefined} xwide center>
-      <div class="onboard">
+      <div class="onboard" data-step={stage}>
         <div class="hero">
           <div class="logo-mark" aria-hidden="true">
             <span>❯</span>
             <i />
           </div>
           <h2>Welcome to Jaffer</h2>
-          <p>
-            A terminal with <b>one session that never ends</b> and a memory that <b>keeps learning from you</b>.
-          </p>
-        </div>
-        <div class="features">
-          <div class="feature">
-            <div class="f-ico">
-              <IconClock size={15} />
-            </div>
-            <b>Always the same session</b>
-            Quit the app, close the lid, come back tomorrow — your shell, your running processes and your conversation are exactly where you left them.
-          </div>
-          <div class="feature">
-            <div class="f-ico">
-              <IconBrain size={15} />
-            </div>
-            <b>Memory that evolves</b>
-            Jaffer notices your preferences, your projects' conventions and the fixes that worked, and lets stale things fade. See, edit, pin and undo all of it.
-          </div>
-          <div class="feature">
-            <div class="f-ico">
-              <IconBolt size={15} />
-            </div>
-            <b>Claude Code, supercharged</b>
-            Run <code>claude</code> right here. Jaffer feeds it what it has learned and learns from what you do together.
-          </div>
-        </div>
-        <div class="choices">
-          <label>
-            <Switch checked={learn} onChange={setLearn} />
-            <span class="t">
-              <b>Learn from my sessions</b>
-              <small>Commands and conversations are redacted for secrets and stay on this Mac.</small>
-            </span>
-          </label>
-          <label class={learn ? '' : 'off'}>
-            <Switch disabled={!learn} checked={curate && learn} onChange={setCurate} />
-            <span class="t">
-              <b>Let Claude curate memory</b>
-              <small>Sends redacted summaries of recent activity to Claude (your API key, or your Claude Code login if you have no key) for smarter notes. Otherwise Jaffer learns offline with simple rules.</small>
-            </span>
-          </label>
-          <label class={claudeFound ? '' : 'off'}>
-            <Switch disabled={!claudeFound} checked={claude && claudeFound} onChange={setClaude} />
-            <span class="t">
-              <b>Connect Claude Code</b>
-              <small>{claudeFound ? 'Adds an MCP server and start-up hooks, and learns from its local transcripts.' : 'Claude Code was not found on your PATH — install it, then connect from Settings.'}</small>
-            </span>
-          </label>
-          {others.length > 0 && (
-            <label>
-              <Switch checked={share} onChange={setShare} />
-              <span class="t">
-                <b>Share memory with {others.map((o) => o.label).join(' & ')}</b>
-                <small>Adds a clearly marked block to their global instructions file. Removable any time.</small>
-              </span>
-            </label>
+          {stage === 'signin' ? (
+            <p>
+              A terminal built for <b>Claude Code</b>. First, let’s make sure you are signed in to Claude.
+            </p>
+          ) : (
+            <p>
+              A terminal with <b>one session that never ends</b> and a memory that <b>keeps learning from you</b>.
+            </p>
           )}
         </div>
-        <div class="keybox">
-          <input type="password" placeholder="Optional: an Anthropic API key (not needed if you use Claude Code), stored in your Keychain" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
-        </div>
-        <div class="onboard-foot">
-          <button class="btn primary big" onClick={() => void go()} disabled={busy}>
-            {busy ? 'Setting up…' : 'Get started'}
-          </button>
-          <span class="faint">Everything here can be changed later in Settings.</span>
-        </div>
+        {stage === 'signin' ? (
+          <SignInStep onDone={() => setStage('choices')} />
+        ) : (
+          <>
+            <div class="features">
+              <div class="feature">
+                <div class="f-ico">
+                  <IconClock size={15} />
+                </div>
+                <b>Always the same session</b>
+                Quit the app, close the lid, come back tomorrow — your shell, your running processes and your conversation are exactly where you left them.
+              </div>
+              <div class="feature">
+                <div class="f-ico">
+                  <IconBrain size={15} />
+                </div>
+                <b>Memory that evolves</b>
+                Jaffer notices your preferences, your projects' conventions and the fixes that worked, and lets stale things fade. See, edit, pin and undo all of it.
+              </div>
+              <div class="feature">
+                <div class="f-ico">
+                  <IconBolt size={15} />
+                </div>
+                <b>Claude Code, supercharged</b>
+                Run <code>claude</code> right here. Jaffer feeds it what it has learned and learns from what you do together.
+              </div>
+            </div>
+            <div class="choices">
+              <label>
+                <Switch checked={learn} onChange={setLearn} />
+                <span class="t">
+                  <b>Learn from my sessions</b>
+                  <small>Commands and conversations are redacted for secrets and stay on this Mac.</small>
+                </span>
+              </label>
+              <label class={learn ? '' : 'off'}>
+                <Switch disabled={!learn} checked={curate && learn} onChange={setCurate} />
+                <span class="t">
+                  <b>Let Claude curate memory</b>
+                  <small>Sends redacted summaries of recent activity to Claude (through your Claude login) for smarter notes. Otherwise Jaffer learns offline with simple rules.</small>
+                </span>
+              </label>
+              <label>
+                <Switch checked={claude} onChange={setClaude} />
+                <span class="t">
+                  <b>Connect Claude Code</b>
+                  <small>Adds an MCP server and start-up hooks, and learns from its local transcripts.</small>
+                </span>
+              </label>
+            </div>
+            <div class="onboard-foot">
+              <button class="btn primary big" onClick={() => void go()} disabled={busy}>
+                {busy ? 'Setting up…' : 'Get started'}
+              </button>
+              <span class="faint">Everything here can be changed later in Settings.</span>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

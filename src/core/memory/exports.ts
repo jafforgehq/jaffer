@@ -8,7 +8,7 @@ import { writeFileAtomic } from '../../shared/util';
 export const BEGIN = '<!-- jaffer:memory:begin — managed by Jaffer; edits inside this block are overwritten -->';
 export const END = '<!-- jaffer:memory:end -->';
 
-export type ExportTarget = 'claude-code' | 'codex' | 'gemini';
+export type ExportTarget = 'claude-code';
 
 interface TargetDef {
   /** Directory that exists only if the user actually uses the tool. */
@@ -20,8 +20,6 @@ interface TargetDef {
 export function targetDefs(home: string = os.homedir()): Record<ExportTarget, TargetDef> {
   return {
     'claude-code': { dir: path.join(home, '.claude'), file: path.join(home, '.claude', 'CLAUDE.md'), label: 'Claude Code' },
-    codex: { dir: path.join(home, '.codex'), file: path.join(home, '.codex', 'AGENTS.md'), label: 'Codex' },
-    gemini: { dir: path.join(home, '.gemini'), file: path.join(home, '.gemini', 'GEMINI.md'), label: 'Gemini CLI' },
   };
 }
 

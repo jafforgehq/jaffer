@@ -5,7 +5,7 @@
 <h1 align="center">Jaffer</h1>
 <p align="center"><b>The terminal with one session that never ends — and a memory that keeps learning from you.</b></p>
 
-Jaffer is a macOS terminal built for working with AI agents — Claude Code above all. Two ideas set it apart from Ghostty, Orca and friends:
+Jaffer is a macOS terminal built for Claude Code. Two ideas set it apart from Ghostty, Orca and friends:
 
 1. **One session, always.** There are no tabs of throw-away shells and no "new chat". Your shell, its running processes, your scrollback and your agent conversation live in a background daemon. Quit the app, close the lid, reboot — you come back to exactly where you were (after a reboot: same folder, same screen, same conversation).
 2. **A memory that evolves by itself.** Jaffer watches what you do, distils what is worth keeping — your preferences, each project's conventions, fixes that cost you an hour, routines you repeat — merges what repeats, lets stale things fade, and hands the result to every agent you use. You can see all of it, edit it, pin it, and **undo any change**.
@@ -38,7 +38,7 @@ git clone https://github.com/jafforgehq/jaffer && cd jaffer
 ./scripts/install-mac.sh        # needs Node 22+; builds and copies Jaffer.app to /Applications
 ```
 
-On first launch Jaffer asks what it may do (learn from your sessions, connect Claude Code, share memory with other agents). Nothing is on until you say so.
+On first launch Jaffer asks what it may do (sign in to Claude, learn from your sessions, connect Claude Code). Nothing is on until you say so.
 
 ## What the window gives you
 
@@ -90,7 +90,7 @@ There is a single Claude in Jaffer. You can talk to it in two places, and both s
 | Approvals | Jaffer's cards: a diff for edits, the exact command for shell | Claude Code's own prompts |
 | Conversation | one that never resets, across app restarts | Claude Code's sessions |
 
-In **Settings → Claude** you choose what the panel runs on: *Automatic* (an API key if you added one, otherwise your Claude Code login), *My Claude Code login*, or *My Anthropic API key*. If Claude Code is not signed in, the panel says so and tells you to run `claude` and type `/login`.
+In **Settings → Claude** you choose what the panel runs on: *Automatic* (an API key if you added one, otherwise your Claude Code login), *My Claude Code login*, or *My Anthropic API key*. The first run starts with a **Sign in to Claude** step: it checks that Claude Code is installed and signed in (with `claude auth status`), opens your browser for the sign-in if not (`claude auth login`), and does not let you past until you are signed in. Nothing is typed into your terminal for it. If the login lapses later, the panel shows a banner with the same Sign-in button.
 
 Under the hood the panel keeps one long-lived `claude` process (resumed after a restart, so it stays one conversation). Jaffer answers every permission request Claude Code raises with its own approval UI and policy, and gives it one extra tool, `run_command`, that types into your terminal. Those terminal tools exist only for the panel's own process; a Claude Code you run yourself never gets them.
 
@@ -105,7 +105,7 @@ This is one reversible step (`jaffer setup claude --remove`) that wires Claude C
 - **MCP server** (`jaffer mcp`): `jaffer_context`, `jaffer_recall`, `jaffer_remember`, `jaffer_forget` — Claude can look things up and save lessons itself.
 - **SessionStart hook**: every Claude Code session — including after `/compact` — starts with what Jaffer knows about *this project* and *you*.
 - **Stop hook** + **transcript learning**: Jaffer reads Claude Code's local transcripts (read-only) and learns from them, whether you ran it in Jaffer or anywhere else.
-- **Optional exports**: a clearly-marked block in `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`), and learned routines published as real Claude Code **skills**.
+- **Optional exports**: a clearly-marked block in `~/.claude/CLAUDE.md`, and learned routines published as real Claude Code **skills**.
 
 Your own hooks and settings are never touched — only entries tagged `jaffer-managed` are added or removed.
 
@@ -176,7 +176,7 @@ scripts/release-mac.sh # on your Mac: sign, notarize, verify and publish a relea
 | The Claude panel runs on a Claude Code login | the real `claude` binary, driven through its streaming protocol against a mock API: Jaffer's approval gates writes, Deny and Cancel really stop them, the conversation survives a restart, and, through the bundled daemon, commands are typed into the shared terminal; the UI test clicks Allow in the browser |
 | Signing is configured correctly | CI's *Signing dry run* signs the app with a throwaway self-signed identity through the same electron-builder path as a release, then checks every nested binary (including the native terminal addon), the hardened runtime, the entitlements, the signed dmg, and that the signed app still starts its daemon and shell |
 
-Not verified here: **a real Claude sign-in** (the Claude Code tests use the real `claude` binary but a mock model API, so your plan's limits and the `/login` flow are untested), and **Apple trust and notarization**, which need your Developer ID certificate (see [docs/SIGNING.md](docs/SIGNING.md)). Also not verified (needs a person at a Mac): Keychain prompts, notifications, the global hotkey, vibrancy, and the look of the WebGL renderer on your GPU; and everything that needs a live Anthropic API key (the agent is tested against a mock Messages API through the real SDK).
+Not verified here: **a real Claude sign-in** (the Claude Code tests use the real `claude` binary but a mock model API, so your plan's limits are untested, and the first-run sign-in step is tested against a stand-in `claude` that answers `auth status` and `auth login`, not against Anthropic's real login page), and **Apple trust and notarization**, which need your Developer ID certificate (see [docs/SIGNING.md](docs/SIGNING.md)). Also not verified (needs a person at a Mac): Keychain prompts, notifications, the global hotkey, vibrancy, and the look of the WebGL renderer on your GPU; and everything that needs a live Anthropic API key (the agent is tested against a mock Messages API through the real SDK).
 
 ## Limitations
 

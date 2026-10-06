@@ -212,7 +212,7 @@ function Notes(): VNode {
   return (
     <div class="mem-list notes">
       <p class="faint" style={{ margin: '0 0 8px' }}>
-        Your own notes for every agent. Jaffer never edits this — it is shared with the built-in agent and exported alongside what it learns.
+        Your own notes for Claude. Jaffer never edits this — it is shared with the built-in agent and exported alongside what it learns.
       </p>
       <textarea value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} placeholder={'e.g. My staging server is called atlas.\nI review PRs on Fridays.'} spellcheck={false} />
     </div>

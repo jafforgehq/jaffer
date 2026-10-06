@@ -51,7 +51,7 @@ export interface JafferConfig {
     llmMinIntervalSec: number;
     retentionDays: number;
   };
-  export: { targets: ('claude-code' | 'codex' | 'gemini')[]; claudeSkills: boolean };
+  export: { targets: 'claude-code'[]; claudeSkills: boolean };
   ingest: { claudeCode: boolean; backfillDays: number };
   hotkey: string;
 }
@@ -110,12 +110,17 @@ function merge<T>(base: T, over: unknown): T {
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] };
 
+/** Jaffer is for Claude Code only. Targets saved by earlier builds for other agents are dropped when a config is loaded. */
+function supported(cfg: JafferConfig): JafferConfig {
+  return { ...cfg, export: { ...cfg.export, targets: cfg.export.targets.filter((t) => t === 'claude-code') } };
+}
+
 export class ConfigStore {
   readonly onChange = new Emitter<JafferConfig>();
   private cfg: JafferConfig;
 
   constructor(private paths: JafferPaths) {
-    this.cfg = merge(DEFAULT_CONFIG, readJson<unknown>(paths.config, {}));
+    this.cfg = supported(merge(DEFAULT_CONFIG, readJson<unknown>(paths.config, {})));
   }
 
   get(): JafferConfig {
@@ -123,14 +128,14 @@ export class ConfigStore {
   }
 
   patch(p: DeepPartial<JafferConfig>): JafferConfig {
-    this.cfg = merge(this.cfg, p);
+    this.cfg = supported(merge(this.cfg, p));
     writeJson(this.paths.config, this.cfg);
     this.onChange.emit(this.cfg);
     return this.cfg;
   }
 
   reload(): void {
-    this.cfg = merge(DEFAULT_CONFIG, readJson<unknown>(this.paths.config, {}));
+    this.cfg = supported(merge(DEFAULT_CONFIG, readJson<unknown>(this.paths.config, {})));
     this.onChange.emit(this.cfg);
   }
 }

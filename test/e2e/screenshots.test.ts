@@ -5,6 +5,7 @@ import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MockAnthropic } from '../helpers/mock-anthropic';
+import { fakeClaude } from '../helpers/fake-claude';
 import { makePaths } from '../../src/shared/paths';
 import { tryConnect } from '../../src/core/daemon-client';
 import { findClaude } from '../../src/core/integrations/claude';
@@ -255,8 +256,10 @@ describe.skipIf(!OUT)('README screenshots', () => {
     writeDemoProject();
     mock = new MockAnthropic();
     const mockUrl = await mock.listen();
+    // the demo person is signed in to Claude: first run passes the sign-in step by itself (everything but `claude auth` is the real claude)
+    const signedIn = fakeClaude(path.join(tmp, 'bin'), { loggedIn: true, passthrough: CLAUDE });
     bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-      env: { ...cleanEnv(), JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+      env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       stdio: ['ignore', 'pipe', 'inherit'],
       cwd: repo,
     });
@@ -285,7 +288,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('first run, then a real working session', async () => {
     await page.goto(`${url}?debug=1&renderer=dom`);
-    await page.waitForSelector('.onboard', { timeout: 20_000 });
+    await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 30_000 }); // sign-in passes by itself, then the consent choices
     await shot('01-welcome');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');

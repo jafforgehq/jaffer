@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
+import { fakeClaude } from './helpers/fake-claude';
 import { MockAnthropic } from './helpers/mock-anthropic';
 import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-client';
 import type { RpcClient } from '../src/core/rpc';
@@ -343,5 +344,58 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     const c = await connect();
     await expect(c.call('nope.nothing', {})).rejects.toThrow(/unknown method/);
     expect((await c.call('hello', {})).protocol).toBe(1);
+  });
+});
+
+describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
+  let env2: TestEnv;
+  let fake: ReturnType<typeof fakeClaude>;
+  let c: RpcClient;
+
+  beforeAll(async () => {
+    env2 = makeEnv();
+    fake = fakeClaude(path.join(env2.root, 'bin'), { loggedIn: false });
+    c = await ensureDaemon(env2.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env2.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ', PATH: `${fake.dir}:${process.env.PATH}` },
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    c?.close();
+    const last = await tryConnect(env2.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env2.cleanup();
+  });
+
+  it('reports whether Claude Code is installed and signed in, and nothing about the account', async () => {
+    expect(await c.call('setup.claude.auth', {})).toEqual({ installed: true, loggedIn: false, loginRunning: false });
+    fake.setLoggedIn(true);
+    const auth = await c.call('setup.claude.auth', {});
+    expect(auth).toMatchObject({ installed: true, loggedIn: true });
+    expect(JSON.stringify(auth)).not.toMatch(/someone@example\.com|Example Org/);
+  });
+
+  it('signs in through the CLI: the login starts at once and the status flips when the user is done', async () => {
+    fake.setLoggedIn(false);
+    expect(await c.call('setup.claude.login', {})).toEqual({ started: true });
+    await waitUntil(async () => (await c.call('setup.claude.auth', {})).loggedIn === true, 10_000);
+    expect(await c.call('setup.claude.auth', {})).toMatchObject({ loggedIn: true, loginRunning: false });
+    expect(fake.calls().some((l) => l.startsWith('auth login '))).toBe(true);
+  });
+
+  it('says why a login failed, and clears that when the user tries again', async () => {
+    fake.setLoggedIn(false);
+    fake.setMode('login-fail');
+    await c.call('setup.claude.login', {});
+    await waitUntil(async () => /login failed/.test((await c.call('setup.claude.auth', {})).loginError ?? ''), 10_000);
+    expect(await c.call('setup.claude.auth', {})).toMatchObject({ loggedIn: false, loginRunning: false });
+    fake.setMode('ok');
+    await c.call('setup.claude.login', {});
+    await waitUntil(async () => (await c.call('setup.claude.auth', {})).loggedIn === true, 10_000);
+    expect((await c.call('setup.claude.auth', {})).loginError).toBeUndefined();
   });
 });

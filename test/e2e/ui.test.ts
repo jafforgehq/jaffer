@@ -5,6 +5,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from '../helpers/env';
 import { MockAnthropic } from '../helpers/mock-anthropic';
+import { fakeClaude } from '../helpers/fake-claude';
 import { ensureDaemon, tryConnect } from '../../src/core/daemon-client';
 import { findClaude } from '../../src/core/integrations/claude';
 
@@ -18,6 +19,7 @@ const shots = process.env.JAFFER_SHOTS ?? path.join(process.env.TMPDIR ?? '/tmp'
 const CHROME = [process.env.JAFFER_CHROME, '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/opt/pw-browsers/chromium/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
 
 let env: TestEnv;
+let fake: ReturnType<typeof fakeClaude>;
 let mock: MockAnthropic;
 let bridge: ChildProcess;
 let browser: Browser;
@@ -58,10 +60,15 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(env.userHome, '.bashrc'), "PS1='\\[\\e[32m\\]\\w\\[\\e[0m\\] ❯ '\n");
   fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
   fs.writeFileSync(path.join(env.userHome, '.bash_profile'), '[ -f ~/.bashrc ] && . ~/.bashrc\n'); // login shells read this, as on a real Mac
+  // Other agents' config folders exist on this Mac; Jaffer is Claude Code only and must not offer to write to them.
+  fs.mkdirSync(path.join(env.userHome, '.codex'), { recursive: true });
+  fs.mkdirSync(path.join(env.userHome, '.gemini'), { recursive: true });
+  // `claude` as the app finds it: signed out at first, and the real binary for everything except `claude auth`.
+  fake = fakeClaude(path.join(env.root, 'bin'), { loggedIn: false, passthrough: CLAUDE });
   mock = new MockAnthropic();
   const mockUrl = await mock.listen();
   bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-    env: { ...process.env, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   url = await new Promise<string>((resolve, reject) => {
@@ -89,17 +96,41 @@ afterAll(async () => {
 });
 
 describe('Jaffer UI end to end', () => {
-  it('shows first-run consent, then the terminal', async () => {
+  it('first run: sign in to Claude comes first and gates everything, then consent, then the terminal', async () => {
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-    await page.waitForSelector('.onboard', { timeout: 20_000 });
+    await page.waitForSelector('.onboard[data-step="signin"]', { timeout: 20_000 });
+    // signed out: the screen says so, offers the sign-in, and offers nothing else
+    await until(async () => (await page.locator('.ob-checks li[data-state="ok"]').count()) >= 1, 15_000, 'Claude Code to be detected');
+    const text = (await page.textContent('.onboard')) ?? '';
+    expect(text).toContain('Sign in with Claude');
+    expect(text).not.toMatch(/skip/i);
+    expect(await page.locator('.onboard .choices').count()).toBe(0);
+    expect(await page.getByText('Get started').count()).toBe(0);
+    await page.keyboard.press('Escape');
+    expect(await page.locator('.onboard').count()).toBe(1); // it cannot be dismissed
+    await shot('01a-onboarding-signin');
+
+    // signing in (the stand-in `claude auth login` signs in a moment after it starts) moves on to the consent choices
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
+    const choices = (await page.textContent('.onboard')) ?? '';
+    expect(choices).not.toMatch(/codex|gemini|other agents/i);
+    expect(choices).toContain('Get started');
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
+
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
     await page.waitForSelector('.term .xterm');
     const cfg = await page.evaluate(() => window.jaffer.call('config.get'));
     expect(cfg.onboarded).toBe(true);
     expect(cfg.memory.enabled).toBe(true);
-  }, 60_000);
+    expect(cfg.export.targets).not.toContain('codex');
+    expect(fake.calls().some((l) => l.startsWith('auth login '))).toBe(true);
+    // Jaffer drove the sign-in itself: nothing was typed into the user's shell
+    await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
+    expect(await termText()).not.toMatch(/auth login/);
+  }, 90_000);
 
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
@@ -304,6 +335,34 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toMatch(/cat <<EOF\n.*\$ /);
     await page.keyboard.press('Control+c');
   });
+
+  it('a lapsed Claude login shows a lasting banner in the panel; signing in clears it and types nothing into the terminal', async () => {
+    fake.setLoggedIn(false); // as when the login expires
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // a fresh start of the app checks on boot
+    await page.waitForSelector('.panel-signin', { timeout: 20_000 });
+    expect(await page.textContent('.panel-signin')).toMatch(/signed out/i);
+    await shot('01b-panel-signed-out');
+    await page.click('.panel-signin .btn.primary');
+    await page.waitForSelector('.panel-signin', { state: 'detached', timeout: 20_000 });
+    expect(await termText()).not.toMatch(/auth login/);
+  }, 60_000);
+
+  it('a failed turn re-checks the login: if Claude turns out to be signed out, the banner comes back', async () => {
+    // Any failed turn triggers the re-check. The API engine fails fast on a 401 (Claude Code would retry it first).
+    await page.waitForSelector('.engine-chip');
+    expect(await page.locator('.panel-signin').count()).toBe(0); // signed in again after the previous test
+    fake.setLoggedIn(false);
+    const rejected = { kind: 'error' as const, status: 401, message: 'invalid x-api-key', when: (b: any) => JSON.stringify(b.messages ?? []).includes('hello') };
+    mock.reset().queue(rejected, rejected);
+    await page.fill('.composer textarea', 'hello');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.panel-signin', { timeout: 30_000 }).catch(async (e) => {
+      const t = await page.evaluate(() => window.jaffer.call('agent.thread', {}));
+      throw new Error(`${e.message}; thread: ${JSON.stringify(t.items.slice(-3))}; engine: ${t.status.engine}; toasts: ${JSON.stringify(await page.locator('.toast').allTextContents())}`);
+    });
+    await page.click('.panel-signin .btn.primary');
+    await page.waitForSelector('.panel-signin', { state: 'detached', timeout: 20_000 });
+  }, 90_000);
 });
 
 void ensureDaemon;

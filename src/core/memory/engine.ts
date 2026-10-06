@@ -41,7 +41,7 @@ export interface RecallResult {
 /**
  * The self-evolving memory. It watches the session (commands, agent turns, external agent
  * transcripts), reflects on it in the background — offline rules always, a model when
- * available — and keeps a small, ranked, decaying memory that every agent can read.
+ * available — and keeps a small, ranked, decaying memory that Claude Code and the panel can read.
  */
 export class MemoryEngine {
   readonly store: MemoryStore;
@@ -340,7 +340,7 @@ export class MemoryEngine {
     }
   }
 
-  /** Push memory to the agents the user opted into (CLAUDE.md / AGENTS.md / GEMINI.md blocks, Claude skills). */
+  /** Push memory to Claude Code if the user opted in (the CLAUDE.md block, Claude skills). */
   syncExports(): void {
     this.exportDirty = false;
     if (!this.cfg.onboarded) return;

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { signal } from '@preact/signals';
 import { runClaude } from '../actions';
-import { agentEngine, agentStatus, agentUsage, cfg, engines, fmtDuration, agentReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
+import { agentEngine, agentStatus, agentUsage, cfg, checkClaudeAuth, claudeAuth, engines, fmtDuration, agentReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
 import { Markdown } from './Markdown';
 import { IconAgent, IconBolt, IconBranch, IconBrain, IconCheck, IconClock, IconEdit, IconFile, IconSearch, IconShield, IconStop, IconTerminal, IconWand, IconX, IconArrowUp, IconList } from './icons';
 
@@ -245,6 +245,41 @@ function SetupBanner(): VNode {
   );
 }
 
+/** Claude Code is installed but its login is gone (expired, signed out): say so and offer the sign-in, right here. */
+function SignedOutBanner(): VNode | null {
+  const a = claudeAuth.value;
+  const [busy, setBusy] = useState(false);
+  const running = a?.loginRunning ?? false;
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => void checkClaudeAuth(), 1000); // only while a sign-in is open in the browser
+    return () => clearInterval(t);
+  }, [running]);
+  if (!a || !a.installed || a.loggedIn) return null;
+  const signIn = async () => {
+    setBusy(true);
+    try {
+      await window.jaffer.call('setup.claude.login', {});
+      await checkClaudeAuth();
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div class="banner panel-signin" role="alert">
+      <strong>Claude is signed out.</strong> Sign in to keep using this panel and Claude Code.
+      {a.loginError && <div class="panel-signin-err">{a.loginError}</div>}
+      <div class="row">
+        <button class="btn primary small" disabled={busy || running} onClick={() => void signIn()}>
+          {running ? 'Waiting for your browser…' : 'Sign in with Claude'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const HISTORY_KEY = 'jaffer.prompts';
 function loadHistory(): string[] {
   try {
@@ -424,6 +459,7 @@ export function AgentPanel(): VNode {
       {busy && <div class="progress-line" />}
 
       {!agentReady.value && <SetupBanner />}
+      <SignedOutBanner />
 
       <div
         class="thread"
