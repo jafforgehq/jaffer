@@ -20,6 +20,10 @@ And **Claude Code runs inside it like it would anywhere else**: real TTY, trueco
 xattr -dr com.apple.quarantine /Applications/Jaffer.app
 ```
 
+**Latest build from `main`:** every push builds both Macs in CI — open the newest run under *Actions → CI* and download the `Jaffer-macOS` artifact (`.dmg` and `.zip` for `arm64` and `x64`).
+
+**Maintainers:** `git tag v0.1.0 && git push --tags` publishes those files as a GitHub Release.
+
 **Or build it yourself** (a locally built app opens with no warnings):
 
 ```sh
