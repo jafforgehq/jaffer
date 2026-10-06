@@ -46,6 +46,7 @@ function wireClient(c: RpcClient): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
+    if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number; by: string });
     if (event === 'agent.event') onAgentEvent(data as { type: string; stopReason?: string; error?: string; name?: string; summary?: string });
   });
   c.onClose.on(() => void onDaemonDown());
@@ -97,6 +98,14 @@ async function offerRestart(oldVersion: string): Promise<void> {
 function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
   notify(n.title || 'Terminal', n.body);
+}
+
+/** A long command finished while you were looking at something else. */
+function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number; by: string }): void {
+  if (c.by === 'agent' || c.durMs < 30_000 || win?.isFocused() || !c.cmd.trim()) return;
+  const secs = Math.round(c.durMs / 1000);
+  const took = secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`;
+  notify(c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, `${c.cmd.slice(0, 120)} — ${took}`);
 }
 
 function notify(title: string, body: string): void {
