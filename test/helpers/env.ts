@@ -16,7 +16,7 @@ export interface TestEnv {
 }
 
 export function makeEnv(): TestEnv {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jaffer-test-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jaffer-test-')));
   const home = path.join(root, '.jaffer');
   const userHome = path.join(root, 'user');
   fs.mkdirSync(userHome, { recursive: true });

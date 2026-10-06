@@ -1,0 +1,46 @@
+appId: com.jafforge.jaffer
+productName: Jaffer
+copyright: Copyright © 2026 Jaffer
+asar: false
+npmRebuild: false
+buildDependenciesFromSource: false
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/main/**
+  - dist/daemon/**
+  - dist/cli/**
+  - dist/renderer/**
+  - "!dist/**/*.map"
+  - package.json
+  # the native pty addon is the only runtime dependency; keep both Mac architectures so one runner can build both
+  - node_modules/@lydell/node-pty/**
+  - node_modules/@lydell/node-pty-darwin-arm64/**
+  - node_modules/@lydell/node-pty-darwin-x64/**
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: "Programs you run in Jaffer may ask to use the microphone."
+    NSCameraUsageDescription: "Programs you run in Jaffer may ask to use the camera."
+    NSAppleEventsUsageDescription: "Programs you run in Jaffer may ask to control other apps."
+    NSDesktopFolderUsageDescription: "Programs you run in Jaffer may access your Desktop folder."
+    NSDocumentsFolderUsageDescription: "Programs you run in Jaffer may access your Documents folder."
+    NSDownloadsFolderUsageDescription: "Programs you run in Jaffer may access your Downloads folder."
+dmg:
+  title: "Jaffer ${version}"
+  contents:
+    - { x: 150, y: 190 }
+    - { x: 410, y: 190, type: link, path: /Applications }
+  window: { width: 560, height: 380 }
+artifactName: "${productName}-${version}-${arch}.${ext}"

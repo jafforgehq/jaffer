@@ -5,7 +5,7 @@ import type { IPty } from '@lydell/node-pty';
 import { Emitter, SerialQueue, sleep } from '../../shared/util';
 
 export type PtyEvent =
-  | { type: 'data'; data: string }
+  | { type: 'data'; data: string; seq: number }
   | { type: 'exit'; code: number | null; signal: number | null }
   | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number; output: string; by: 'user' | 'agent' }
   | { type: 'cwd'; cwd: string }
@@ -75,6 +75,8 @@ export class PtySession {
   private batchBytes = 0;
   private flushTimer: NodeJS.Timeout | null = null;
   private lastActivity = Date.now();
+  /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
+  private dataSeq = 0;
 
   constructor(private opts: PtyOptions) {
     this.cwd = opts.cwd;
@@ -150,7 +152,7 @@ export class PtySession {
     const data = this.batch.join('');
     this.batch = [];
     this.batchBytes = 0;
-    this.events.emit({ type: 'data', data });
+    this.events.emit({ type: 'data', data, seq: ++this.dataSeq });
   }
 
   write(data: string): void {
@@ -206,8 +208,8 @@ export class PtySession {
 
   // ------------------------------------------------------------------ state
 
-  snapshot(scrollback = 4000): { data: string; cols: number; rows: number; cwd: string; title: string; alt: boolean } {
-    return { data: this.serializer.serialize({ scrollback }), cols: this.term.cols, rows: this.term.rows, cwd: this.cwd, title: this.title, alt: this.altScreen };
+  snapshot(scrollback = 4000): { data: string; cols: number; rows: number; cwd: string; title: string; alt: boolean; seq: number } {
+    return { data: this.serializer.serialize({ scrollback }), cols: this.term.cols, rows: this.term.rows, cwd: this.cwd, title: this.title, alt: this.altScreen, seq: this.dataSeq };
   }
 
   /**

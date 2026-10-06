@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { Emitter } from './emitter';
+
+export { Emitter };
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -93,27 +96,6 @@ export function dayKey(ts: string | number | Date = Date.now()): string {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-/** Tiny typed event emitter; avoids pulling EventEmitter's loose typing into the core. */
-export class Emitter<T> {
-  private handlers = new Set<(v: T) => void>();
-  on(fn: (v: T) => void): () => void {
-    this.handlers.add(fn);
-    return () => this.handlers.delete(fn);
-  }
-  emit(v: T): void {
-    for (const h of [...this.handlers]) {
-      try {
-        h(v);
-      } catch {
-        /* a listener must never break the emitter */
-      }
-    }
-  }
-  get size(): number {
-    return this.handlers.size;
-  }
 }
 
 /** Serialises async work: each task starts after the previous settles. */

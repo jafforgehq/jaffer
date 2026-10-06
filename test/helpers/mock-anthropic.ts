@@ -72,7 +72,7 @@ export class MockAnthropic {
     });
   }
 
-  private message(reply: Reply, body: any) {
+  private message(reply: Reply, body: any): any {
     const base = { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model ?? 'claude-sonnet-5-5', stop_sequence: null, usage: { input_tokens: 120, output_tokens: 33, cache_read_input_tokens: 5, cache_creation_input_tokens: 7 } };
     if (reply.kind === 'text') return { ...base, content: [...(reply.thinking ? [{ type: 'thinking', thinking: reply.thinking }] : []), { type: 'text', text: reply.text }], stop_reason: 'end_turn' };
     if (reply.kind === 'tool') return { ...base, content: [...(reply.text ? [{ type: 'text', text: reply.text }] : []), { type: 'tool_use', id: reply.id, name: reply.name, input: reply.input }], stop_reason: 'tool_use' };

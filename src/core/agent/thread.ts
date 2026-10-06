@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { JafferPaths } from '../../shared/paths';
 import { ensureDir, readJsonl, uid, writeFileAtomic, writeJsonl } from '../../shared/util';
 import type { ContentBlock, Message, ThreadItem } from './types';
+import { toolSummary } from './tools';
 
 const CTX_OPEN = '<jaffer-context>';
 const TERM_OPEN = '<terminal>';
@@ -156,7 +157,7 @@ export class Thread {
               items.push({ kind: 'assistant', id: `${id}a`, text });
               text = '';
             }
-            const item: Extract<ThreadItem, { kind: 'tool' }> = { kind: 'tool', id: b.id, name: b.name, summary: '', input: b.input };
+            const item: Extract<ThreadItem, { kind: 'tool' }> = { kind: 'tool', id: b.id, name: b.name, summary: toolSummary(b.name, b.input), input: b.input };
             calls.set(b.id, item);
             items.push(item);
           }

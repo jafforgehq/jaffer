@@ -1,4 +1,6 @@
+import fs from 'node:fs';
 import type { MemoryEngine } from './memory/engine';
+import { writeFileAtomic } from '../shared/util';
 import type { MemoryItem, MemoryKind } from './memory/types';
 import { MEMORY_KINDS } from './memory/types';
 import { resolveProject } from './session/project';
@@ -73,16 +75,33 @@ export function makeMemoryApi(engine: MemoryEngine): MemoryApi {
       return { ok };
     },
 
+    'memory.notes.get': async () => {
+      try {
+        return { text: fs.readFileSync(engine.store.paths.memoryNotes, 'utf8') };
+      } catch {
+        return { text: '' };
+      }
+    },
+
+    'memory.notes.set': async (p: { text: string }) => {
+      writeFileAtomic(engine.store.paths.memoryNotes, String(p.text ?? '').slice(0, 20_000), 0o600);
+      return { ok: true };
+    },
+
     'memory.reflect': async (p: { force?: boolean }) => engine.reflect({ force: p.force ?? true }),
     'memory.consolidate': async () => engine.consolidate(),
     'memory.stats': async () => engine.stats(),
 
     'memory.log': async (p: { limit?: number }) => {
       const entries = engine.store.readJournal(p.limit ?? 100);
-      const runs = new Map<string, { runId: string; ts: string; source: string; reason?: string; ops: { op: string; id: string; text?: string }[] }>();
+      // A reflection run can mix sources (offline rules + model curation); label it by the most meaningful one.
+      const rank = ['user', 'reflector', 'consolidator', 'agent', 'heuristic', 'ingest'];
+      const runs = new Map<string, { runId: string; ts: string; source: string; sources: string[]; reason?: string; ops: { op: string; id: string; text?: string }[] }>();
       for (const e of entries) {
         const after = (e.after ?? e.before) as { text?: string; name?: string } | null;
-        const r = runs.get(e.runId) ?? { runId: e.runId, ts: e.ts, source: e.source, reason: e.reason, ops: [] };
+        const r = runs.get(e.runId) ?? { runId: e.runId, ts: e.ts, source: e.source, sources: [], reason: e.reason, ops: [] };
+        if (!r.sources.includes(e.source)) r.sources.push(e.source);
+        r.source = [...r.sources].sort((a, b) => rank.indexOf(a) - rank.indexOf(b))[0]!;
         r.ops.push({ op: e.op, id: e.id, text: after?.text ?? after?.name });
         runs.set(e.runId, r);
       }

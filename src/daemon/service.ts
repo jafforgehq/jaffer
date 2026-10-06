@@ -95,7 +95,7 @@ export class JafferService {
     this.registerMethods();
     await this.host.start();
     await this.rpc.listen(this.paths.socket);
-    this.memory.start(30_000);
+    this.memory.start(tickMs());
     this.startIngest();
     this.timers.push(setInterval(() => this.memory.syncExports(), 120_000));
     this.timers[this.timers.length - 1]!.unref?.();
@@ -231,7 +231,7 @@ export class JafferService {
           c.socket.once('drain', () => void this.resync(c, pane));
           continue;
         }
-        c.send({ event: 'pty.data', data: { ...base, data: event.data } });
+        c.send({ event: 'pty.data', data: { ...base, data: event.data, seq: event.seq } });
       }
       return;
     }
@@ -291,8 +291,8 @@ export class JafferService {
         this.log(`ingest error: ${errMsg(e)}`);
       }
     };
-    setTimeout(tick, 1500).unref?.();
-    const t = setInterval(tick, 20_000);
+    setTimeout(tick, Math.min(1500, tickMs())).unref?.();
+    const t = setInterval(tick, Math.max(300, tickMs() * 2 / 3));
     t.unref?.();
     this.timers.push(t);
   }
@@ -407,6 +407,21 @@ export class JafferService {
       return res;
     });
 
+    r.handle('setup.cli.install', () => {
+      // A symlink in ~/.local/bin lets `jaffer` work from any terminal, not just Jaffer's own.
+      const dir = path.join(this.userHome, '.local', 'bin');
+      ensureDir(dir, 0o755);
+      const link = path.join(dir, 'jaffer');
+      try {
+        fs.rmSync(link, { force: true });
+      } catch {
+        /* ignore */
+      }
+      fs.symlinkSync(this.cliWrapper, link);
+      const onPath = (process.env.PATH ?? '').split(path.delimiter).includes(dir);
+      return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
+    });
+
     r.handle('app.shutdown', () => {
       setTimeout(() => this.onShutdown.fn(), 50);
       return true;
@@ -416,6 +431,12 @@ export class JafferService {
   private userEnv(): NodeJS.ProcessEnv {
     return { ...process.env, HOME: this.userHome };
   }
+}
+
+/** Housekeeping cadence. Overridable so tests can watch memory evolve in seconds instead of minutes. */
+function tickMs(): number {
+  const v = Number(process.env.JAFFER_TICK_MS);
+  return Number.isFinite(v) && v >= 100 ? v : 30_000;
 }
 
 function shq(s: string): string {

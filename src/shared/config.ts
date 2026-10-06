@@ -17,6 +17,8 @@ export interface JafferConfig {
     cursorBlink: boolean;
     scrollback: number;
     optionAsMeta: boolean;
+    /** webgl is fastest; dom is the safe fallback for unusual GPU setups. */
+    renderer: 'webgl' | 'dom';
   };
   shell: { path: string; args: string[] };
   agent: {
@@ -59,6 +61,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     cursorBlink: false,
     scrollback: 20000,
     optionAsMeta: true,
+    renderer: 'webgl',
   },
   shell: { path: '', args: [] },
   agent: {

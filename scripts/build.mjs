@@ -28,6 +28,7 @@ const nodeCommon = {
 const targets = [
   { name: 'daemon', ...nodeCommon, entryPoints: [path.join(root, 'src/daemon/main.ts')], outfile: path.join(root, 'dist/daemon/jafferd.cjs') },
   { name: 'cli', ...nodeCommon, entryPoints: [path.join(root, 'src/cli/main.ts')], outfile: path.join(root, 'dist/cli/jaffer.cjs') },
+  { name: 'bridge', ...nodeCommon, entryPoints: [path.join(root, 'src/dev/bridge.ts')], outfile: path.join(root, 'dist/dev/bridge.cjs') },
   { name: 'main', ...nodeCommon, entryPoints: [path.join(root, 'src/main/main.ts')], outfile: path.join(root, 'dist/main/main.cjs') },
   { name: 'preload', ...nodeCommon, entryPoints: [path.join(root, 'src/main/preload.ts')], outfile: path.join(root, 'dist/main/preload.cjs') },
   {

@@ -8,7 +8,9 @@
   "type": "module",
   "main": "dist/main/main.cjs",
   "author": "Jaffer",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs && electron .",
@@ -21,23 +23,30 @@
     "dist:mac": "npm run build && electron-builder --mac",
     "install:mac": "bash scripts/install-mac.sh",
     "daemon": "node dist/daemon/jafferd.cjs",
-    "cli": "node dist/cli/jaffer.cjs"
+    "cli": "node dist/cli/jaffer.cjs",
+    "gen": "node scripts/gen-shell.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "smoke": "JAFFER_SMOKE=1 electron .",
+    "lint": "tsc --noEmit -p tsconfig.json --noUnusedLocals false",
+    "test:all": "npm run typecheck && vitest run && vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
-    "@lydell/node-pty": "1.2.0-beta.15",
-    "@xterm/addon-serialize": "^0.14.0",
-    "@xterm/headless": "^6.0.0",
-    "zod": "^4.6.5"
+    "@lydell/node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@preact/signals": "^2.11.3",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-image": "^0.9.0",
     "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
@@ -47,6 +56,6 @@
     "typescript": "^5.9.0",
     "vitest": "^3.2.0",
     "ws": "^8.18.0",
-    "@types/ws": "^8.5.0"
+    "zod": "^4.6.5"
   }
 }

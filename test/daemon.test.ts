@@ -28,7 +28,7 @@ beforeAll(async () => {
     execPath: process.execPath,
     daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
     cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
-    env: { HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: url, PS1: '$ ' },
+    env: { HOME: env.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: url, PS1: '$ ' },
   };
 }, 60_000);
 
@@ -193,6 +193,48 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect((await c2.call('memory.list', {})).items.length).toBeGreaterThan(0);
     void cmds;
   }, 30_000);
+
+  it('memory evolves on its own: rules, model curation and Claude Code transcripts, with no manual trigger', async () => {
+    const c = await connect();
+    const cmds = collect(c, 'pty.command');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    // consent given, aggressive cadence so the test does not wait minutes
+    await c.call('config.patch', { onboarded: true, memory: { llm: 'auto', reflectEveryN: 4, idleSeconds: 1, llmMinIntervalSec: 0 }, ingest: { claudeCode: true } });
+    // the model-curated memory the mock reflector will propose
+    mock.reset().queue({ kind: 'text', text: JSON.stringify({ ops: [{ op: 'add', kind: 'lesson', scope: 'global', text: 'Run the linter before every commit in this workspace', confidence: 0.8, why: 'repeated' }] }) });
+    const before = (await c.call('memory.list', {})).items.length;
+
+    // (1) a Claude Code session that happened elsewhere: the user told it a durable rule
+    const proj = path.join(env.userHome, '.claude', 'projects', '-work-app');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'sess.jsonl'), JSON.stringify({ type: 'user', message: { role: 'user', content: 'From now on always use tabs, never spaces, for indentation.' }, cwd: env.userHome, timestamp: new Date().toISOString(), sessionId: 's1' }) + '\n');
+
+    // (2) ordinary shell activity
+    for (let i = 0; i < 5; i++) {
+      await c.call('pty.write', { data: `pnpm test --run-${i}\r` });
+      await waitUntil(() => cmds.length > 0 && cmds.filter((x) => x.cmd.startsWith('pnpm test')).length > i, 8000);
+    }
+
+    // nobody calls memory.reflect: the daemon must do it by itself
+    await waitUntil(async () => {
+      const items = (await c.call('memory.list', {})).items as { text: string; source: string }[];
+      return items.some((i) => /tabs/i.test(i.text)) && items.some((i) => /linter before every commit/.test(i.text));
+    }, 15_000);
+    const items = (await c.call('memory.list', {})).items as { text: string; source: string; kind: string }[];
+    expect(items.length).toBeGreaterThan(before);
+    expect(items.find((i) => /tabs/i.test(i.text))!.source).toBe('user'); // learned from the Claude Code transcript
+    expect(items.find((i) => /linter before every commit/.test(i.text))!.source).toBe('reflector'); // curated by the model
+    // the reflection request was redacted and carried the activity
+    const sent = JSON.stringify(mock.requests.at(-1)!.body.messages);
+    expect(sent).toContain('pnpm test');
+    // and every change is journaled so it can be undone
+    const log = await c.call('memory.log', { limit: 100 });
+    expect(log.runs.some((r: any) => r.sources.includes('reflector'))).toBe(true);
+    const run = log.runs.find((r: any) => r.sources.includes('reflector') && r.ops.some((o: any) => /linter/.test(o.text ?? '')));
+    const rev = await c.call('memory.revert', { runId: run.runId });
+    expect(rev.reverted).toBeGreaterThan(0);
+    expect(((await c.call('memory.list', {})).items as any[]).some((i) => /linter before every commit/.test(i.text))).toBe(false);
+  }, 40_000);
 
   it('rejects unknown methods without dropping the connection', async () => {
     const c = await connect();

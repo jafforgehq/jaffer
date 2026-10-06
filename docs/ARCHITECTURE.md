@@ -1,0 +1,43 @@
+# Architecture
+
+```
+┌────────────────────────── Jaffer.app (Electron) ───────────────────────────┐
+│ main process: window, menu, dock, notifications, global hotkey, IPC relay   │
+│ renderer: Preact + xterm.js (WebGL) · agent panel · memory panel · palette  │
+└───────────────▲─────────────────────────────────────────────────────────────┘
+                │ unix socket (NDJSON RPC + events), ~/.jaffer/run/jafferd.sock
+┌───────────────┴────────── jafferd (detached, survives the app) ─────────────┐
+│ SessionHost ── PtySession ── node-pty ── your login shell (zsh/bash/fish)   │
+│     │             └ headless xterm: screen snapshots, OSC 133/633 parsing    │
+│ MemoryEngine ── EpisodeLog → heuristics / model reflector → MemoryStore     │
+│     │              (journal, decay, consolidate, skills, exports)            │
+│ AgentRuntime ── Thread (append-only, compaction) ── Anthropic provider      │
+│ ClaudeIngestor · secrets (Keychain) · config                                │
+└───────────────▲─────────────────────────────────────────────────────────────┘
+                │ same RPC
+   jaffer CLI ──┴── jaffer mcp (stdio MCP server for Claude Code) ── hooks
+```
+
+## Why a daemon
+
+The shell must outlive the window. `jafferd` is spawned detached by the app (the app's own binary with `ELECTRON_RUN_AS_NODE=1`, so no separate Node install is needed). The app, the CLI, the MCP server and Claude Code hooks are all just clients of one socket (mode 0600 in a 0700 directory).
+
+## Terminal fidelity and re-attach
+
+PTY output is parsed by a headless xterm.js in the daemon *before* it is emitted to clients. A client attaches with `session.attach`, which waits for the write queue to drain and returns `serialize()` output (screen + scrollback + alt-screen + modes) plus a sequence number; every later `pty.data` event carries `seq`, so the renderer drops anything already covered by the snapshot and re-attaches on any gap. Slow clients are resynchronised from a snapshot instead of buffering without bound.
+
+Shell integration scripts (`resources/shell`, embedded into `src/generated`) hook zsh (`ZDOTDIR` shim that sources your real dotfiles), bash (`--init-file`, bash 3.2 compatible) and fish. They emit OSC 133 (`A` prompt, `C` output start, `D;<exit>`) and OSC 633 (`E` command line, `P;Cwd=`). From those the daemon knows when the shell is idle, what ran, with what exit code and output, and can let the agent type a command into the live shell and wait for it.
+
+## Agent
+
+`AgentRuntime` drives the Messages API with streaming, adaptive thinking, eager tool-input streaming and server-side refusal fallback. History is **append-only**: the system prompt and tool list never change, memory arrives as `<jaffer-context>` deltas inside the new user turn, thinking blocks are dropped from completed turns, and compaction replaces the whole prefix with a briefing — so prompt caching and preserved-thinking checks keep working over months. Tools: `run_command` (in the live shell, falling back to an isolated subprocess), `read_terminal`, file read/write/edit, search, `recall`/`remember`/`forget`. Reads and read-only commands are automatic; everything else asks (or auto-approves in auto mode) — except `sudo`, force-push, recursive deletes, etc., which always ask, and catastrophic commands, which never run.
+
+## Memory
+
+See the README for the lifecycle. Storage is plain files under `~/.jaffer/memory`: `items.jsonl` (source of truth), `skills.jsonl`, `journal.jsonl` (every mutation with before/after), `episodes/YYYY-MM-DD.jsonl` (raw, pruned after 45 days), generated `MEMORY.md` and per-skill markdown, and your `NOTES.md` / `POLICY.md`.
+
+Ranking = confidence × time-decay (half-life per kind) × usage × scope relevance (global vs the project you are in) × BM25 match to the current request.
+
+## Process boundaries and trust
+
+The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. The agent's shell commands are classified (read-only / ordinary / risky / blocked) before they run, file writes to credentials and system paths always ask, and everything fed to memory or a model is redacted first.
