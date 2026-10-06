@@ -19,6 +19,8 @@ import { findClaude } from '../../src/core/integrations/claude';
  */
 const OUT = process.env.JAFFER_SCREENSHOTS;
 const root = path.resolve(__dirname, '../..');
+/** With the real `claude` binary present the demo conversation runs on the Claude Code engine (the real thing, with scripted replies). */
+const CLAUDE = await findClaude().catch(() => null);
 const CHROME = [process.env.JAFFER_CHROME, '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/opt/pw-browsers/chromium/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
 
 let tmp = '';
@@ -254,7 +256,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
     mock = new MockAnthropic();
     const mockUrl = await mock.listen();
     bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-      env: { ...cleanEnv(), JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok' },
+      env: { ...cleanEnv(), JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       stdio: ['ignore', 'pipe', 'inherit'],
       cwd: repo,
     });
@@ -287,6 +289,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await shot('01-welcome');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');
+    if (CLAUDE) await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'claude-code' } }));
     await until(async () => (await termLines()).some((l) => l.includes('❯')), 30_000, 'the shell prompt');
     // the daemon starts the shell in $HOME; go to the project like a person would
     await typeCommand('cd ~/code/acme-api');
@@ -305,8 +308,12 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('the agent investigates in the same terminal and asks before changing anything', async () => {
     const session = path.join(repo, 'src/auth/session.ts');
+    // Claude Code's own tool names when it is the engine; Jaffer's when the API is
+    const via = (claudeName: string, name: string) => (CLAUDE ? claudeName : name);
+    const pathKey = CLAUDE ? 'file_path' : 'path';
+    const main = CLAUDE ? { when: (b: any) => (b.tools?.length ?? 0) > 0 } : {};
     mock.reset().queue(
-      { kind: 'tool', id: 'toolu_d1', name: 'read_file', input: { path: session }, text: "That's the session expiry test. Let me look at the code it exercises." },
+      { kind: 'tool', id: 'toolu_d1', name: via('Read', 'read_file'), input: { [pathKey]: session }, text: "That's the session expiry test. Let me look at the code it exercises.", ...main },
       {
         kind: 'text',
         text:
@@ -314,22 +321,23 @@ describe.skipIf(!OUT)('README screenshots', () => {
           '```ts\nreturn session.expiresAt < now; // should be <=\n```\n\n' +
           'Making the check inclusive is the whole fix. Want me to apply it and re-run the tests?',
         thinking: 'The failing assertion is the boundary case. The comparison is strict.',
+        ...main,
       },
     );
     await ask("why is the auth test failing?");
-    await until(async () => /Found it/.test((await page.textContent('.thread')) ?? ''), 20_000, 'the diagnosis');
+    await until(async () => /Found it/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the diagnosis');
     await until(async () => !(await page.$('.working')), 15_000, 'turn to finish');
 
     mock.reset().queue(
-      { kind: 'tool', id: 'toolu_d2', name: 'edit_file', input: { path: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' }, text: 'Making the comparison inclusive.' },
-      { kind: 'tool', id: 'toolu_d3', name: 'run_command', input: { command: './bin/test' } },
-      { kind: 'text', text: 'Fixed: `isExpired()` now treats `expiresAt` itself as expired, and the suite passes (**16/16**).\n\n- `src/auth/session.ts:14`: `<` became `<=`\n- ran `./bin/test` in your terminal, so the output above is the real run' },
+      { kind: 'tool', id: 'toolu_d2', name: via('Edit', 'edit_file'), input: { [pathKey]: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' }, text: 'Making the comparison inclusive.', ...main },
+      { kind: 'tool', id: 'toolu_d3', name: via('mcp__jaffer-session__run_command', 'run_command'), input: { command: './bin/test' }, ...main },
+      { kind: 'text', text: 'Fixed: `isExpired()` now treats `expiresAt` itself as expired, and the suite passes (**16/16**).\n\n- `src/auth/session.ts:14`: `<` became `<=`\n- ran `./bin/test` in your terminal, so the output above is the real run', ...main },
     );
     await ask('yes, fix it and run the tests');
-    await page.waitForSelector('.approval');
+    await page.waitForSelector('.approval', { timeout: 60_000 });
     await shot('03-approval');
     await approveAll();
-    await until(async () => /Fixed:/.test((await page.textContent('.thread')) ?? ''), 30_000, 'the fix summary');
+    await until(async () => /Fixed:/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the fix summary');
     await until(async () => !(await page.$('.working')), 15_000, 'turn to finish');
     await until(async () => /16 passed/.test((await termLines()).join('\n')), 15_000, 'passing run in the terminal');
     expect(fs.readFileSync(path.join(repo, 'src/auth/session.ts'), 'utf8')).toContain('expiresAt <= now');
@@ -352,7 +360,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('command palette, themes, split panes, settings', async () => {
     await clearToasts();
-    await page.click('.seg-btn[title^="Agent"]').catch(() => undefined);
+    await page.click('.seg-btn[title^="Claude"]').catch(() => undefined);
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await shot('06-palette');
@@ -385,6 +393,9 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await shot('10-settings');
+    await page.click('.settings-nav button:text-is("Claude")');
+    await sleep(300);
+    await shot('12-claude-settings');
     await page.keyboard.press('Escape');
   }, 60_000);
 

@@ -112,7 +112,10 @@ export const thread = signal<LiveItem[]>([]);
 export const agentStatus = signal<AgentStatus | null>(null);
 export const turn = signal<{ id: string; started: number; thinking: string; notice?: string } | null>(null);
 export const agentUsage = signal<UsageTotals | null>(null);
-export const keyReady = signal(true);
+/** True when the panel can run: Claude Code is signed in/installed, or an API key exists. */
+export const agentReady = signal(true);
+export const agentEngine = signal<'api' | 'claude-code'>('api');
+export const engines = signal<{ api: boolean; claudeCode: boolean }>({ api: false, claudeCode: false });
 
 let liveAssistant: { id: string; text: string } | null = null;
 let seq = 0;
@@ -123,7 +126,9 @@ export async function loadThread(): Promise<void> {
     thread.value = r.items as LiveItem[];
     agentStatus.value = r.status;
     agentUsage.value = r.status.usage;
-    keyReady.value = r.status.ready;
+    agentReady.value = r.status.ready;
+    agentEngine.value = r.status.engine ?? 'api';
+    if (r.status.engines) engines.value = r.status.engines;
   });
 }
 
@@ -278,7 +283,12 @@ export async function refreshInfo(): Promise<void> {
 
 export async function refreshKeyStatus(): Promise<void> {
   try {
-    keyReady.value = (await jaffer().call('secrets.status', {})).ready;
+    const r = await jaffer().call('secrets.status', {});
+    batch(() => {
+      agentReady.value = r.ready;
+      agentEngine.value = r.engine ?? 'api';
+      engines.value = { api: !!r.apiKey, claudeCode: !!r.claudeCode };
+    });
   } catch {
     /* ignore */
   }
@@ -306,8 +316,9 @@ export async function bootstrap(): Promise<void> {
     } else if (event === 'agent.event') applyAgentEvent(data);
     else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') {
+      const before = cfg.value?.agent.engine;
       cfg.value = data;
-      void refreshKeyStatus();
+      void refreshKeyStatus().then(() => (before !== data.agent.engine ? loadThread() : undefined)); // another engine, another conversation
     } else if (event === 'session.lifecycle') void refreshInfo();
     else if (event === 'daemon.down') daemonUp.value = false;
     else if (event === 'daemon.up') {

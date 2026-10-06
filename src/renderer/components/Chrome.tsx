@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, keyReady, memPulse, memStats, overlay, panes, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
+import { agentEngine, agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, agentReady, memPulse, memStats, overlay, panes, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
 import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconSplit, IconX } from './icons';
 import { splitPane } from './PaneTree';
 
@@ -50,8 +50,8 @@ export function TitleBar(): VNode {
           <IconSplit size={16} />
         </button>
         <div class="seg">
-          <button class={`seg-btn ${side.value === 'agent' ? 'on' : ''}`} title="Agent (⌘J)" onClick={() => toggleSide('agent')}>
-            <IconAgent size={14} /> Agent
+          <button class={`seg-btn ${side.value === 'agent' ? 'on' : ''}`} title="Claude (⌘J)" onClick={() => toggleSide('agent')}>
+            <IconAgent size={14} /> Claude
             {busy && <span class="busy-dot" />}
           </button>
           <button class={`seg-btn seg-mem ${side.value === 'memory' ? 'on' : ''}`} title="Memory (⇧⌘M)" onClick={() => toggleSide('memory')}>
@@ -90,16 +90,16 @@ export function StatusBar(): VNode {
           <IconBolt size={11} /> Claude Code is running
         </span>
       )}
-      {!keyReady.value && (
-        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Add an Anthropic API key in Settings">
-          <IconInfo size={11} /> no API key
+      {!agentReady.value && (
+        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Sign in with Claude Code, or add an Anthropic API key, in Settings">
+          <IconInfo size={11} /> set up Claude
         </button>
       )}
-      {cost > 0 && <span class="sb-item">${cost.toFixed(2)}</span>}
+      {cost > 0 && agentEngine.value !== 'claude-code' && <span class="sb-item">${cost.toFixed(2)}</span>}
       <button class="sb-item sb-btn" onClick={() => toggleSide('memory')} title="Open memory">
         <span class="mem-dot" key={memPulse.value} /> {st ? `${st.active} memories · ${st.skills} skills` : 'memory'}
       </button>
-      <span class="sb-item">{cfg.value?.agent.model}</span>
+      <span class="sb-item">{agentEngine.value === 'claude-code' ? 'Claude Code' : cfg.value?.agent.model}</span>
     </div>
   );
 }

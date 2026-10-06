@@ -47,14 +47,14 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 
 export const actions: Action[] = [
   { id: 'toggle-rail', title: 'Toggle sidebar', section: 'View', keys: '⌘B', keywords: 'session rail', run: toggleRail },
-  { id: 'toggle-agent', title: 'Toggle agent panel', section: 'View', keys: '⌘J', run: () => toggleSide('agent') },
+  { id: 'toggle-agent', title: 'Toggle Claude panel', section: 'View', keys: '⌘J', run: () => toggleSide('agent') },
   { id: 'toggle-memory', title: 'Toggle memory panel', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
   {
     id: 'ask',
-    title: 'Ask the agent…',
-    section: 'Agent',
+    title: 'Ask Claude…',
+    section: 'Claude',
     keys: '⌘L',
-    keywords: 'chat prompt',
+    keywords: 'chat prompt agent',
     run: () => {
       setSide('agent');
       composerFocus.value++;
@@ -73,7 +73,7 @@ export const actions: Action[] = [
   { id: 'zoom-reset', title: 'Actual size', section: 'View', keys: '⌘0', run: () => zoom(0) },
   { id: 'reflect', title: 'Memory: learn from recent activity now', section: 'Memory', keywords: 'reflect evolve', run: () => guarded(async () => (toast({ kind: 'learn', text: (await call('memory.reflect', { force: true })).summary }), refreshMemory(0))) },
   { id: 'consolidate', title: 'Memory: tidy up (merge duplicates, fade stale)', section: 'Memory', keywords: 'consolidate dream cleanup', run: () => guarded(async () => (toast({ kind: 'info', text: (await call('memory.consolidate', {})).summary }), refreshMemory(0))) },
-  { id: 'compact', title: 'Agent: compact the conversation', section: 'Agent', run: () => guarded(async () => (await call('agent.compact', {}), undefined), 'Conversation compacted.') },
+  { id: 'compact', title: 'Claude: compact the conversation', section: 'Claude', run: () => guarded(async () => (await call('agent.compact', {}), undefined), 'Conversation compacted.') },
   { id: 'setup-claude', title: 'Connect Claude Code to Jaffer memory (MCP + hooks)', section: 'Integrations', keywords: 'claude mcp hooks', run: () => guarded(async () => (await call('setup.claude.install', {}), undefined), 'Claude Code now shares Jaffer’s memory.') },
   { id: 'install-cli', title: 'Install the `jaffer` command in ~/.local/bin', section: 'Integrations', keywords: 'cli path shell command', run: () => guarded(async () => { const r = await call('setup.cli.install', {}); toast({ kind: 'info', text: r.hint ?? `Installed ${r.link}` }, 9000); }) },
   { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: async () => void window.jaffer.reveal((await window.jaffer.appInfo()).home) },

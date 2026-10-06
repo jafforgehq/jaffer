@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
 import type { IPty } from '@lydell/node-pty';
+import path from 'node:path';
 import { Emitter, SerialQueue, sleep } from '../../shared/util';
 
 export type PtyEvent =
@@ -78,9 +79,11 @@ export class PtySession {
   private lastActivity = Date.now();
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
+  private shellName = '';
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
+    this.shellName = path.basename(opts.file);
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
@@ -380,7 +383,11 @@ export class PtySession {
         resolve({ cmd, exit: null, output: started ? this.partialOutput() : '', durMs: Date.now() - t0, timedOut: true, cwd: this.cwd });
       }, timeoutMs);
     });
-    this.write(payload);
+    // A lone Escape the user pressed earlier is still waiting for a key in bash's readline (\e is a Meta prefix), and would
+    // swallow the first byte of the command ("echo" -> "cho"). A NUL byte finishes any half-entered key sequence and is
+    // otherwise harmless (set-mark in readline and zsh). Shells we have not checked are left alone.
+    const neutralise = this.shellName === 'bash' || this.shellName === 'zsh' ? '\x00' : '';
+    this.write(neutralise + payload);
     // If the shell never starts the command (e.g. unfinished quote in the user's prompt), fail fast.
     const startedOk = await Promise.race([this.waitUntilStarted(5000), done.then(() => true)]);
     if (!startedOk) {

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, keyReady, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast } from '../state';
+import { activePane, appVersion, cfg, engines, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast } from '../state';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
@@ -42,10 +42,10 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (
 
 // ------------------------------------------------------------------ palette
 
-const SECTION_ORDER = ['View', 'Agent', 'Terminal', 'Memory', 'Integrations', 'Appearance', 'App'];
+const SECTION_ORDER = ['View', 'Claude', 'Terminal', 'Memory', 'Integrations', 'Appearance', 'App'];
 const SECTION_ICON: Record<string, (p: { size: number }) => VNode> = {
   View: IconLayout,
-  Agent: IconAgent,
+  Claude: IconAgent,
   Terminal: IconTerminal,
   Memory: IconBrain,
   Integrations: IconPlug,
@@ -132,7 +132,7 @@ export function Palette(): VNode {
           <IconSearch size={17} />
           <input
             ref={input}
-            placeholder="Type a command, or ask the agent anything…"
+            placeholder="Type a command, or ask Claude anything…"
             value={q}
             onInput={(e) => setQ((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => {
@@ -149,7 +149,7 @@ export function Palette(): VNode {
               <span class="pal-ico">
                 <IconWand size={13} />
               </span>
-              <span class="pal-title">Ask the agent: {q.trim()}</span>
+              <span class="pal-title">Ask Claude: {q.trim()}</span>
               <kbd>↵</kbd>
             </button>
           )}
@@ -258,7 +258,7 @@ export function Settings(): VNode {
 
   const nav: { id: Section; label: string; icon: VNode }[] = [
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
-    { id: 'agent', label: 'Agent', icon: <IconAgent size={14} /> },
+    { id: 'agent', label: 'Claude', icon: <IconAgent size={14} /> },
     { id: 'memory', label: 'Memory', icon: <IconBrain size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
   ];
@@ -334,11 +334,53 @@ export function Settings(): VNode {
 
           {section === 'agent' && (
             <>
-              <h4>Agent</h4>
-              <p class="lede">The built-in agent works in your own shell and asks before it changes anything.</p>
-              <Field label="Anthropic API key" hint={keyReady.value ? 'saved in your Keychain' : 'needed for the built-in agent'}>
+              <h4>Claude</h4>
+              <p class="lede">The Claude panel works in your own shell and asks before it changes anything.</p>
+              <Field label="Runs on" hint={`Claude Code: ${claude?.claudeInstalled ? 'found' : 'not found'} · API key: ${engines.value.api ? 'saved' : 'none'}`}>
+                <select value={c.agent.engine} onChange={(e) => set({ agent: { engine: (e.target as HTMLSelectElement).value } })}>
+                  <option value="auto">Automatic (API key if there is one, otherwise Claude Code)</option>
+                  <option value="claude-code">My Claude Code login (no API key needed)</option>
+                  <option value="api">My Anthropic API key</option>
+                </select>
+              </Field>
+              <Field label="Approvals" hint="risky commands always ask">
+                <select value={c.agent.approvals} onChange={(e) => set({ agent: { approvals: (e.target as HTMLSelectElement).value } })}>
+                  <option value="ask">Ask before changing anything</option>
+                  <option value="auto">Auto-approve (risky actions still ask)</option>
+                </select>
+              </Field>
+              <Field label="Run commands" hint="where Claude's commands execute (the Claude Code engine needs “in my terminal”)">
+                <select value={c.agent.runIn} onChange={(e) => set({ agent: { runIn: (e.target as HTMLSelectElement).value } })}>
+                  <option value="session">In my terminal session (visible, shared state)</option>
+                  <option value="subprocess">In an isolated background process</option>
+                </select>
+              </Field>
+              {c.agent.allow.length > 0 && (
+                <Field label="Always-allowed" hint={c.agent.allow.join(', ')}>
+                  <button class="btn" onClick={() => set({ agent: { allow: [] } })}>
+                    Reset
+                  </button>
+                </Field>
+              )}
+
+              <h4>Claude Code login</h4>
+              <p class="lede">Uses the account you are signed in with in Claude Code, so your plan covers it. Not signed in yet? Run <code>claude</code> in the terminal and type <code>/login</code>.</p>
+              <Field label="Model" hint="what Claude Code should use for this panel">
+                <select value={c.agent.cliModel} onChange={(e) => set({ agent: { cliModel: (e.target as HTMLSelectElement).value } })}>
+                  <option value="">Claude Code's default</option>
+                  {['sonnet', 'opus', 'fable', 'haiku'].map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <h4>Anthropic API key</h4>
+              <p class="lede">Optional. If you add a key, Automatic mode uses it instead.</p>
+              <Field label="API key" hint={engines.value.api ? 'saved in your Keychain' : 'stored in your Keychain'}>
                 <span class="row">
-                  <input type="password" placeholder={keyReady.value ? '•••••••• (saved)' : 'sk-ant-…'} value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
+                  <input type="password" placeholder={engines.value.api ? '•••••••• (saved)' : 'sk-ant-…'} value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
                   <button
                     class="btn"
                     disabled={!key || busy === 'key'}
@@ -349,6 +391,7 @@ export function Settings(): VNode {
                           await call('secrets.setAnthropicKey', { key });
                           setKey('');
                           await refreshKeyStatus();
+                          await loadThread();
                         },
                         'API key saved.',
                       )
@@ -356,8 +399,8 @@ export function Settings(): VNode {
                   >
                     Save
                   </button>
-                  {keyReady.value && (
-                    <button class="btn danger" onClick={() => void run('keyclear', async () => (await call('secrets.clearAnthropicKey', {}), await refreshKeyStatus()), 'API key removed.')}>
+                  {engines.value.api && (
+                    <button class="btn danger" onClick={() => void run('keyclear', async () => (await call('secrets.clearAnthropicKey', {}), await refreshKeyStatus(), await loadThread()), 'API key removed.')}>
                       Remove
                     </button>
                   )}
@@ -379,25 +422,6 @@ export function Settings(): VNode {
                   ))}
                 </select>
               </Field>
-              <Field label="Approvals" hint="risky commands always ask">
-                <select value={c.agent.approvals} onChange={(e) => set({ agent: { approvals: (e.target as HTMLSelectElement).value } })}>
-                  <option value="ask">Ask before changing anything</option>
-                  <option value="auto">Auto-approve (risky actions still ask)</option>
-                </select>
-              </Field>
-              <Field label="Run commands" hint="where the agent's commands execute">
-                <select value={c.agent.runIn} onChange={(e) => set({ agent: { runIn: (e.target as HTMLSelectElement).value } })}>
-                  <option value="session">In my terminal session (visible, shared state)</option>
-                  <option value="subprocess">In an isolated background process</option>
-                </select>
-              </Field>
-              {c.agent.allow.length > 0 && (
-                <Field label="Always-allowed" hint={c.agent.allow.join(', ')}>
-                  <button class="btn" onClick={() => set({ agent: { allow: [] } })}>
-                    Reset
-                  </button>
-                </Field>
-              )}
             </>
           )}
 
@@ -561,7 +585,7 @@ export function Onboarding(): VNode {
           )}
         </div>
         <div class="keybox">
-          <input type="password" placeholder="Anthropic API key for the built-in agent (optional — stored in your Keychain)" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
+          <input type="password" placeholder="Optional: an Anthropic API key (not needed if you use Claude Code), stored in your Keychain" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
         </div>
         <div class="onboard-foot">
           <button class="btn primary big" onClick={() => void go()} disabled={busy}>

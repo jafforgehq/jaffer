@@ -195,6 +195,22 @@ describe('MemoryEngine', () => {
     expect(engine.store.listItems().some((i) => i.text.includes('Run migrations before'))).toBe(false);
   });
 
+  it('learns an explicit instruction on the next tick, without waiting for more activity', async () => {
+    // an instruction given to an agent (here: in a Claude Code transcript) used to sit pending until three or four more
+    // events arrived, so a lone "from now on always use tabs" could go unlearned for a long time
+    env.config.patch({ onboarded: true, memory: { llm: 'off' } });
+    const engine = makeEngine(env);
+    engine.observe({ t: 'ext', agent: 'claude-code', role: 'user', text: 'From now on always use tabs, never spaces, for indentation.', cwd: '/work/app', correction: false });
+    expect(engine.store.listItems()).toHaveLength(0);
+    await engine.tick();
+    expect(engine.store.listItems().some((i) => /tabs/i.test(i.text))).toBe(true);
+    // while ordinary chatter alone still does not trigger a pass
+    const quiet = makeEngine(makeEnv());
+    quiet.observe({ t: 'ext', agent: 'claude-code', role: 'user', text: 'Can you look at the failing test?', cwd: '/work/app', correction: false });
+    await quiet.tick();
+    expect(quiet.store.listItems()).toHaveLength(0);
+  });
+
   it('never sends secrets to the model', async () => {
     env.config.patch({ onboarded: true });
     const llm = new FakeLlm(() => '{"ops":[]}');

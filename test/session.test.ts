@@ -97,6 +97,20 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect((await sh.runCommand('echo after')).output).toBe('after');
   });
 
+  it('an Escape the user pressed at the prompt does not eat the first byte of the next agent command', async () => {
+    // bash treats a pending \e as a Meta prefix, so "echo" used to arrive as "cho" (found by the Claude Code UI test)
+    sh = startShell(env, { shell, cols: 40 });
+    await untilReady(sh);
+    sh.write('\x1b');
+    await new Promise((r) => setTimeout(r, 1200));
+    const r = await sh.runCommand('echo survived-the-escape');
+    expect(r.output).toBe('survived-the-escape');
+    expect(r.exit).toBe(0);
+    sh.write('\x1b\x1b');
+    await new Promise((r2) => setTimeout(r2, 300));
+    expect((await sh.runCommand('echo and-twice')).output).toBe('and-twice');
+  });
+
   it('serialises the screen so a late client sees the same content', async () => {
     sh = startShell(env, { shell, cols: 60, rows: 12 });
     await untilReady(sh);

@@ -7,7 +7,7 @@ import { Emitter, SerialQueue, errMsg, nowIso, uid, writeFileAtomic } from '../.
 import { isSensitiveCommand, redactText } from '../../shared/redact';
 import { MemoryStore, type RunCtx } from './store';
 import { CursorFile, EpisodeLog, type CursorState } from './episodes';
-import { detectCorrection, runHeuristics, type HeuristicEnv } from './heuristics';
+import { detectCorrection, extractDirectives, runHeuristics, type HeuristicEnv } from './heuristics';
 import { applyOps, emptyCounts, type ApplyCounts } from './apply';
 import { consolidateHeuristic } from './consolidate';
 import { buildContext, writeViews, type BuiltContext, type ContextOptions } from './context';
@@ -98,7 +98,9 @@ export class MemoryEngine {
     if (ep) {
       this.lastEpisodeAt = this.clock();
       const corrected = ep.t === 'agent' || ep.t === 'ext' ? ep.correction : false;
-      if (corrected) this.pendingCorrection = true;
+      // Something the user explicitly told an agent to always/never do is worth learning now, not after more activity piles up.
+      const userText = ep.t === 'agent' ? ep.user : ep.t === 'ext' && ep.role === 'user' ? ep.text : '';
+      if (corrected || (userText && extractDirectives(userText).length > 0)) this.pendingCorrection = true;
     }
     return ep;
   }

@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { activePane, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, keyReady, memItems, overlay, paneLabel, panes, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
+import { activePane, agentEngine, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, agentReady, memItems, overlay, paneLabel, panes, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
 import { runClaude } from '../actions';
 import { splitPane } from './PaneTree';
 import { terminals } from './TerminalView';
@@ -17,7 +17,8 @@ export function SessionRail(): VNode {
   const cmds = commandLog.value.slice(-5).reverse();
   const t = turn.value;
   const waiting = thread.value.some((i) => i.kind === 'tool' && i.state === 'approval');
-  const agentLine = !keyReady.value ? 'add an API key to start' : waiting ? 'waiting for your approval' : t ? `working · ${fmtDuration(Math.max(1000, now - t.started))}` : 'idle';
+  const via = agentEngine.value === 'claude-code' ? 'Claude Code login' : 'API key';
+  const agentLine = !agentReady.value ? 'not set up yet' : waiting ? 'waiting for your approval' : t ? `working · ${fmtDuration(Math.max(1000, now - t.started))}` : `idle · ${via}`;
 
   const projectScope = i.project ? `project:${i.project}` : null;
   const peek = memItems.value
@@ -69,12 +70,12 @@ export function SessionRail(): VNode {
           <div class="rail-h">
             <span>Agents</span>
           </div>
-          <button class={`row-item ${side.value === 'agent' ? 'on' : ''}`} onClick={() => (side.value === 'agent' ? setSide(null) : setSide('agent'))} title="Open the agent panel (⌘J)">
+          <button class={`row-item ${side.value === 'agent' ? 'on' : ''}`} onClick={() => (side.value === 'agent' ? setSide(null) : setSide('agent'))} title="Open the Claude panel (⌘J)">
             <span class="row-ico ico-agent">
               <IconAgent size={12} />
             </span>
             <span class="row-text">
-              <span class="row-title">Jaffer agent</span>
+              <span class="row-title">Claude</span>
               <span class={`row-sub ui ${waiting ? 'attn' : ''}`}>{agentLine}</span>
             </span>
             {waiting ? <span class="row-dot attn" /> : t ? <span class="spinner" /> : null}
@@ -85,7 +86,7 @@ export function SessionRail(): VNode {
             </span>
             <span class="row-text">
               <span class="row-title">Claude Code</span>
-              <span class="row-sub ui">{claude ? 'running in the terminal' : 'not running · click to start'}</span>
+              <span class="row-sub ui">{claude ? 'running in the terminal' : 'in the terminal · click to start'}</span>
             </span>
             {claude && <span class="row-dot live-v" />}
           </button>

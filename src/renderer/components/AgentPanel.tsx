@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { signal } from '@preact/signals';
-import { agentStatus, agentUsage, cfg, fmtDuration, keyReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
+import { agentEngine, agentStatus, agentUsage, cfg, engines, fmtDuration, agentReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
 import { Markdown } from './Markdown';
 import { IconAgent, IconBolt, IconBranch, IconBrain, IconCheck, IconClock, IconEdit, IconFile, IconSearch, IconShield, IconStop, IconTerminal, IconWand, IconX, IconArrowUp, IconList } from './icons';
 
@@ -22,6 +22,8 @@ const KIND: Record<string, Kind> = {
   recall: 'memory',
   remember: 'memory',
   forget: 'memory',
+  WebFetch: 'search',
+  WebSearch: 'search',
 };
 
 function toolIcon(name: string): VNode {
@@ -35,6 +37,8 @@ function toolIcon(name: string): VNode {
     case 'forget':
       return <IconBrain size={12} />;
     case 'search_files':
+    case 'WebFetch':
+    case 'WebSearch':
       return <IconSearch size={12} />;
     case 'list_dir':
       return <IconList size={12} />;
@@ -58,6 +62,10 @@ const TOOL_LABEL: Record<string, string> = {
   recall: 'Recall',
   remember: 'Remember',
   forget: 'Forget',
+  WebFetch: 'Fetch',
+  WebSearch: 'Web',
+  Task: 'Task',
+  TodoWrite: 'Plan',
 };
 
 /** What the agent is about to do, shown before the user decides. */
@@ -205,7 +213,8 @@ function ContextMeter(): VNode | null {
   );
 }
 
-function KeyBanner(): VNode {
+/** Shown only when neither Claude Code nor an API key is available. */
+function SetupBanner(): VNode {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -224,7 +233,7 @@ function KeyBanner(): VNode {
   };
   return (
     <div class="banner">
-      <strong>Add an Anthropic API key</strong> to talk to the built-in agent. It is stored in your macOS Keychain. Claude Code in the terminal works without it.
+      <strong>Claude needs a way in.</strong> Install <b>Claude Code</b> and sign in with <code>/login</code>: this panel then works with your own Claude login, no API key needed. Or paste an Anthropic API key (kept in your macOS Keychain).
       <div class="row">
         <input type="password" placeholder="sk-ant-…" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && key && void save()} />
         <button class="btn primary" disabled={!key || busy} onClick={() => void save()}>
@@ -262,7 +271,7 @@ async function runSlash(text: string): Promise<boolean> {
       toast({ kind: 'info', text: 'Compacting the conversation…' });
       try {
         const r = await call('agent.compact', {});
-        toast({ kind: 'info', text: r.compacted ? 'Conversation compacted.' : 'Nothing to compact yet.' });
+        toast({ kind: 'info', text: r.compacted ? 'Conversation compacted.' : agentEngine.value === 'claude-code' ? 'Claude Code compacts its own context automatically.' : 'Nothing to compact yet.' });
         await loadThread();
       } catch (e) {
         toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
@@ -285,7 +294,7 @@ async function runSlash(text: string): Promise<boolean> {
       return true;
     case 'model':
       if (arg) {
-        await patchConfig({ agent: { model: arg } });
+        await patchConfig({ agent: agentEngine.value === 'claude-code' ? { cliModel: arg } : { model: arg } });
         toast({ kind: 'info', text: `Model set to ${arg}.` });
       }
       return true;
@@ -386,7 +395,9 @@ export function AgentPanel(): VNode {
   const t = turn.value;
   const lastIsAssistantStreaming = items.length > 0 && items[items.length - 1]!.kind === 'assistant';
   const auto = cfg.value?.agent.approvals === 'auto';
-  const model = (cfg.value?.agent.model ?? '').replace(/^claude-/, '');
+  const viaCli = agentEngine.value === 'claude-code';
+  const model = viaCli ? 'Claude Code' : (cfg.value?.agent.model ?? '').replace(/^claude-/, '');
+  const engineTitle = viaCli ? 'This panel runs on your Claude Code login: no API key, and your plan covers it.' : 'This panel runs on your Anthropic API key.';
 
   return (
     <div class="agent">
@@ -395,7 +406,10 @@ export function AgentPanel(): VNode {
           <span class="title-ico">
             <IconAgent size={13} />
           </span>
-          Agent
+          Claude
+          <span class="engine-chip" title={engineTitle}>
+            {agentEngine.value === 'claude-code' ? 'Claude Code login' : 'API key'}
+          </span>
         </div>
         <div class="grow" />
         <ContextMeter />
@@ -405,7 +419,7 @@ export function AgentPanel(): VNode {
       </div>
       {busy && <div class="progress-line" />}
 
-      {!keyReady.value && <KeyBanner />}
+      {!agentReady.value && <SetupBanner />}
 
       <div
         class="thread"
@@ -420,8 +434,8 @@ export function AgentPanel(): VNode {
             <div class="empty-mark">
               <IconAgent size={22} />
             </div>
-            <div class="empty-title">One continuous session</div>
-            <p>This conversation never resets. It shares your shell, remembers what it learns, and picks up where you left off — even after you quit the app.</p>
+            <div class="empty-title">Claude, in your terminal</div>
+            <p>One conversation that never resets. It works in your own shell, remembers what it learns, and picks up where you left off, even after you quit the app.{agentEngine.value === 'claude-code' ? ' It runs on your Claude Code login.' : ''}</p>
             <div class="suggests">
               {SUGGESTIONS.map((s) => (
                 <button key={s.text} class="suggest" onClick={() => void sendToAgent(s.text)}>
@@ -455,13 +469,13 @@ export function AgentPanel(): VNode {
           </div>
         )}
         <div class="composer-box">
-          <textarea ref={input} rows={1} placeholder={busy ? 'Working… (esc to stop)' : 'Ask, or tell it what to do…  (type / for commands)'} value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onKeyDown={onKey} spellcheck={false} />
+          <textarea ref={input} rows={1} placeholder={busy ? 'Working… (esc to stop)' : 'Ask Claude, or tell it what to do…  (type / for commands)'} value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onKeyDown={onKey} spellcheck={false} />
           <div class="composer-bar">
             <button class={`pill-btn ${auto ? 'auto' : ''}`} onClick={() => void patchConfig({ agent: { approvals: auto ? 'ask' : 'auto' } })} title="Whether changes need your approval">
               {auto ? <IconBolt size={11} /> : <IconShield size={11} />}
               {auto ? 'auto-approve' : 'asks first'}
             </button>
-            <button class="pill-btn" onClick={() => (overlay.value = 'settings')} title="Change model in Settings">
+            <button class="pill-btn" onClick={() => (overlay.value = 'settings')} title={viaCli ? `Runs on your Claude Code login${agentStatus.value?.model ? ` (${agentStatus.value.model})` : ''}. Change in Settings.` : 'Change model in Settings'}>
               {model}
             </button>
             <div class="grow" />
@@ -474,7 +488,7 @@ export function AgentPanel(): VNode {
       <div class="composer-foot">
         <span>↵ send · ⇧↵ new line</span>
         <div class="grow" />
-        {cost > 0 && <span>${cost.toFixed(cost < 1 ? 3 : 2)} this session</span>}
+        {cost > 0 && !viaCli && <span>${cost.toFixed(cost < 1 ? 3 : 2)} this session</span>}
       </div>
     </div>
   );

@@ -6,11 +6,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from '../helpers/env';
 import { MockAnthropic } from '../helpers/mock-anthropic';
 import { ensureDaemon, tryConnect } from '../../src/core/daemon-client';
+import { findClaude } from '../../src/core/integrations/claude';
 
 /**
  * Drives the real renderer in headless Chromium against the real daemon (through the dev bridge),
  * with a mock Anthropic API behind it. Screenshots land in $JAFFER_SHOTS (default: a temp dir).
  */
+const CLAUDE = await findClaude().catch(() => null);
 const root = path.resolve(__dirname, '../..');
 const shots = process.env.JAFFER_SHOTS ?? path.join(process.env.TMPDIR ?? '/tmp', 'jaffer-shots');
 const CHROME = [process.env.JAFFER_CHROME, '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/opt/pw-browsers/chromium/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
@@ -59,7 +61,7 @@ beforeAll(async () => {
   mock = new MockAnthropic();
   const mockUrl = await mock.listen();
   bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-    env: { ...process.env, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok' },
+    env: { ...process.env, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   url = await new Promise<string>((resolve, reject) => {
@@ -236,6 +238,37 @@ describe('Jaffer UI end to end', () => {
     expect(panes).toHaveLength(2);
   }, 30_000);
 
+  it.skipIf(!CLAUDE)('the Claude panel runs on a Claude Code login: it says so, asks in the UI, and runs commands in the terminal', async () => {
+    const target = path.join(env.userHome, 'claude-made.txt');
+    try {
+      await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'claude-code' } }));
+      if (!(await page.$('.composer textarea'))) await page.click('.seg-btn[title^="Claude"]');
+      await page.waitForSelector('.engine-chip');
+      await until(async () => (await page.textContent('.engine-chip'))?.includes('Claude Code login'), 10_000, 'the engine chip');
+      const main = (b: any) => (b.tools?.length ?? 0) > 0;
+      mock.reset().queue(
+        { kind: 'tool', id: 'toolu_cu1', name: 'mcp__jaffer-session__run_command', input: { command: `touch ${target}` }, text: 'Creating the file.', when: main },
+        { kind: 'text', text: 'Created **claude-made.txt** in your terminal.', when: main },
+      );
+      await page.fill('.composer textarea', 'create a file called claude-made.txt');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.approval', { timeout: 60_000 });
+      expect(await page.textContent('.approval')).toContain(`touch ${target}`); // the command, before it runs
+      expect(fs.existsSync(target)).toBe(false);
+      await shot('11-claude-code-engine');
+      await page.click('.approval .btn.primary');
+      await until(async () => /Created claude-made\.txt/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the answer');
+      await until(async () => fs.existsSync(target), 10_000, 'the file').catch(async (e) => {
+        const t = await page.evaluate(() => window.jaffer.call('agent.thread', {}));
+        throw new Error(`${e.message}; tool rows: ${JSON.stringify(t.items.filter((i: any) => i.kind === 'tool'))}; panes: ${JSON.stringify(await page.evaluate(() => window.jaffer.call('pane.list', {})))}`);
+      });
+      expect((await termText()).replace(/\n/g, '')).toContain(`touch ${target}`); // it ran in the user's own terminal (a narrow pane wraps the line)
+    } finally {
+      await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'auto' } }));
+      await until(async () => (await page.evaluate(() => window.jaffer.call('agent.thread', {}))).status.engine === 'api', 10_000, 'back to the API engine');
+    }
+  }, 150_000);
+
   it('reconnecting the page restores the same session (nothing was lost)', async () => {
     const before = await page.evaluate(() => window.jaffer.call('pane.list'));
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
@@ -244,7 +277,7 @@ describe('Jaffer UI end to end', () => {
     const after = await page.evaluate(() => window.jaffer.call('pane.list'));
     expect(after.map((p: any) => p.pid)).toEqual(before.map((p: any) => p.pid));
     // and the agent conversation is still there (open the agent panel if the memory panel was showing)
-    if (!(await page.$('.thread'))) await page.click('.seg-btn[title^="Agent"]');
+    if (!(await page.$('.thread'))) await page.click('.seg-btn[title^="Claude"]');
     await until(async () => /agent-ran-this/.test((await page.textContent('.thread')) ?? ''), 10_000, 'restored conversation');
     await shot('10-restored');
   }, 40_000);

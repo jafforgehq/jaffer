@@ -49,3 +49,14 @@ The renderer is three layers on a canvas: a **session rail** (left), the **termi
 - The rail reads `session.info` (project, branch, uptime, panes, and the daemon's ring of recent commands, which is redacted and omits sensitive commands) and keeps itself live from `pty.start`, `pty.command` and `pty.cwd` events. Because the daemon owns this state, the rail looks the same after you quit and reopen the app.
 - Command stripes are xterm decorations created from the OSC 133 sequences the shell integration already emits (`A` prompt, `C` output, `D;exit`). They live in the renderer only; the daemon's snapshots and the scrollback are untouched.
 - Approval cards preview what the agent is about to do (a diff for `edit_file`, the new contents for `write_file`, the command for `run_command`) from the tool input the daemon already sends.
+
+## Two engines behind one panel
+
+The panel's conversation is served by one of two engines, chosen per message by `AgentHub` (`agent.engine`: `auto` prefers an API key, otherwise Claude Code):
+
+- `AgentRuntime` (API key): Jaffer's own loop over the Anthropic Messages API. Append-only history, its own tools.
+- `ClaudeCodeEngine` (Claude Code login): one long-lived `claude -p --input-format stream-json --output-format stream-json --permission-mode manual --permission-prompt-tool stdio` process. It is started in a fixed directory (`~/.jaffer/agent`) so its session can always be resumed by id after a restart; stdout events (text, thinking, tool calls and results) are mapped onto the same `AgentEvent`s the UI already renders, and Claude Code's tool names are normalised (`Edit` → `edit_file`, …) so policy and previews are shared (`assess.ts`).
+
+Safety properties, both enforced in code and covered by tests: every `can_use_tool` request is answered by Jaffer (auto, ask the UI, or deny) and never by Claude Code's defaults; shell commands are not Claude Code's `Bash` (disallowed) but `run_command` from `jaffer mcp --session`, which calls the daemon's `agent.tool` and types into the user's own pane; those tools are only in the MCP config of the panel's own process.
+
+The panel engine keeps its own thread (`cli-thread.json`) for display; switching engines shows that engine's conversation. Learning from panel turns goes through `observeAgentTurn` with the real project, and the transcript ingestor skips the engine's working directory so nothing is learned twice or under the wrong project.
