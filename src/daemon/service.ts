@@ -15,6 +15,7 @@ import { AgentRuntime } from '../core/agent/runtime';
 import { AnthropicLlm, AnthropicProvider, makeClient, resolveCredentials, type Credentials } from '../core/agent/anthropic';
 import type { ToolEnv } from '../core/agent/tools';
 import { ClaudeIngestor } from '../core/ingest/claude';
+import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
@@ -52,6 +53,7 @@ export class JafferService {
   private timers: NodeJS.Timeout[] = [];
   private ingestor: ClaudeIngestor | null = null;
   private stopping = false;
+  private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
   private userHome: string;
@@ -73,12 +75,14 @@ export class JafferService {
   async start(): Promise<void> {
     this.apiKey = await this.secrets.get(KEY_NAME).catch(() => null);
     this.writeWrapper();
+    void ClaudeCliLlm.detect(this.userEnv()).then((l) => (this.cliLlm = l)).catch(() => undefined);
 
     this.memory = new MemoryEngine({
       paths: this.paths,
       config: this.config,
       home: this.userHome,
-      llm: () => (this.credentialsReady() ? new AnthropicLlm(() => this.getClient(), this.config.get().memory.reflectorModel) : null),
+      // An API key is preferred; otherwise curate through the user's own Claude Code login when it exists.
+      llm: () => (this.credentialsReady() ? new AnthropicLlm(() => this.getClient(), this.config.get().memory.reflectorModel) : this.cliLlm),
     });
     this.host = new SessionHost(this.paths, this.config, this.version);
     this.agent = new AgentRuntime({

@@ -180,3 +180,28 @@ describe.skipIf(!CLAUDE_PATH)('Claude Code CLI wiring (real claude binary)', () 
     void claudeStatus;
   }, 120_000);
 });
+
+// Memory curation through the user's own Claude Code login (no API key needed).
+describe.skipIf(!CLAUDE_PATH)('ClaudeCliLlm (real claude -p against a mock API)', () => {
+  it('returns the model text, sends the system+user prompt, and leaves no session files behind', async () => {
+    const { MockAnthropic } = await import('./helpers/mock-anthropic');
+    const { ClaudeCliLlm } = await import('../src/core/agent/claude-cli');
+    const mock = new MockAnthropic();
+    const url = await mock.listen();
+    // Claude Code sends a couple of small preliminary requests first; answer everything with the same JSON
+    for (let i = 0; i < 6; i++) mock.queue({ kind: 'text', text: '{"ops":[]}' });
+    const home = env.userHome;
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    const llm = new ClaudeCliLlm(CLAUDE_PATH!, { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' });
+    const out = await llm.complete({ system: 'You are the curator. Reply with JSON only.', user: 'Digest: user ran pnpm test five times.' });
+    expect(out).toContain('"ops"');
+    const sent = JSON.stringify(mock.requests.map((r) => r.body));
+    expect(sent).toContain('You are the curator');
+    expect(sent).toContain('pnpm test five times');
+    // nothing for transcript ingestion to pick up
+    const projects = path.join(home, '.claude', 'projects');
+    const files = fs.existsSync(projects) ? fs.readdirSync(projects, { recursive: true }).filter((f) => String(f).endsWith('.jsonl')) : [];
+    expect(files).toHaveLength(0);
+    await mock.close();
+  }, 90_000);
+});

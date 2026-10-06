@@ -297,7 +297,7 @@ export function Settings(): VNode {
           <Field label="Learn from my sessions" hint="commands, agent chats; secrets are redacted and everything stays on this Mac">
             <input type="checkbox" checked={c.memory.enabled} onChange={(e) => set({ memory: { enabled: (e.target as HTMLInputElement).checked } })} />
           </Field>
-          <Field label="Let Claude curate memory" hint="sends redacted summaries of recent activity to the Anthropic API">
+          <Field label="Let Claude curate memory" hint="sends redacted summaries to Claude: your API key, or your Claude Code login">
             <input type="checkbox" checked={c.memory.llm === 'auto'} onChange={(e) => set({ memory: { llm: (e.target as HTMLInputElement).checked ? 'auto' : 'off' } })} />
           </Field>
           <Field label="Keep raw activity for" hint="days; learned memory is kept regardless">
@@ -409,7 +409,7 @@ export function Onboarding(): VNode {
             <input type="checkbox" disabled={!learn} checked={curate && learn} onChange={(e) => setCurate((e.target as HTMLInputElement).checked)} />
             <span>
               <b>Let Claude curate memory</b>
-              <small>Sends redacted summaries of recent activity to the Anthropic API for smarter notes. Otherwise Jaffer learns offline with simple rules.</small>
+              <small>Sends redacted summaries of recent activity to Claude (your API key, or your Claude Code login if you have no key) for smarter notes. Otherwise Jaffer learns offline with simple rules.</small>
             </span>
           </label>
           <label class={claudeFound ? '' : 'off'}>

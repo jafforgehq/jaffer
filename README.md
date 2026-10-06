@@ -77,7 +77,7 @@ Your own hooks and settings are never touched — only entries tagged `jaffer-ma
 - **Inject** without wasting context: the built-in agent sees only memory it hasn't seen yet in the conversation (append-only, cache-friendly); Claude Code gets it via hooks/MCP.
 - **Stay in control.** Every mutation is journaled with before/after state. `jaffer memory log`, `jaffer memory revert <run>`, or the Undo button. `~/.jaffer/memory/NOTES.md` is yours and never rewritten.
 
-Privacy: memory lives in `~/.jaffer/memory` on your Mac. Secrets (API keys, tokens, private keys, passwords in flags/env/URLs, high-entropy blobs) are redacted before anything is stored or sent; commands like `env`, `cat ~/.ssh/…`, `security find-…` or lines starting with a space are never recorded. The only network traffic is the Anthropic API calls *you* enable (the agent, and optional model curation of redacted summaries). Your API key is stored in the macOS Keychain.
+Privacy: memory lives in `~/.jaffer/memory` on your Mac. Secrets (API keys, tokens, private keys, passwords in flags/env/URLs, high-entropy blobs) are redacted before anything is stored or sent; commands like `env`, `cat ~/.ssh/…`, `security find-…` or lines starting with a space are never recorded. The only network traffic is what *you* enable: the built-in agent (Anthropic API) and optional model curation of redacted summaries — done with your API key, or, if you only have Claude Code, through your own `claude -p` login. Your API key is stored in the macOS Keychain.
 
 ## One session, for real
 
@@ -127,7 +127,7 @@ Not verified (needs a person at a Mac): Keychain prompts, notifications, the glo
 
 - macOS is the target. Releases are unsigned unless the maintainer adds Apple credentials as repository secrets (`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`).
 - fish integration is experimental; zsh and bash are tested in CI.
-- The agent panel needs an Anthropic API key. Using Claude Code in the terminal needs none beyond your own Claude Code login.
+- The agent panel needs an Anthropic API key. Claude Code in the terminal needs none beyond your own login, and memory curation can use that login too.
 - Built on xterm.js (WebGL). It is fast, but not a native GPU terminal like Ghostty.
 
 MIT licensed.

@@ -117,6 +117,7 @@ async function main(): Promise<void> {
     case 'hook': {
       // Called by Claude Code; must be fast, silent on failure, and never block the session.
       const which = args[1];
+      if (process.env.JAFFER_NO_HOOKS) return; // Jaffer's own `claude -p` helper calls must not be primed with memory
       const input = await readStdin();
       let payload: { cwd?: string; source?: string } = {};
       try {
