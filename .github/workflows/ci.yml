@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release: the version to create on this commit, e.g. v0.1.0 (leave empty to only run the checks)'
+        required: false
+        default: ''
 
 env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # tests never launch Electron; the app job downloads it
@@ -17,6 +22,14 @@ jobs:
     name: Test (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
+      - name: Check the release version (manual release runs only)
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::release_tag must look like v0.1.0 (got: $TAG)"; exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -117,7 +130,7 @@ jobs:
           fi
 
       - name: Refuse to publish an unsigned release (only when REQUIRE_SIGNED_RELEASE=true)
-        if: startsWith(github.ref, 'refs/tags/v') && steps.sign.outputs.sign != 'true' && vars.REQUIRE_SIGNED_RELEASE == 'true'
+        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && steps.sign.outputs.sign != 'true' && vars.REQUIRE_SIGNED_RELEASE == 'true'
         run: |
           echo "::error title=Unsigned release blocked::REQUIRE_SIGNED_RELEASE is true but no signing certificate is configured. See docs/SIGNING.md."
           exit 1
@@ -301,7 +314,8 @@ jobs:
 
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Runs when a v* tag is pushed, or when CI is started by hand (Actions → CI → Run workflow) with a release_tag.
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: [test, mac-app, signing-dry-run]
     runs-on: ubuntu-latest
     permissions:
@@ -331,6 +345,8 @@ jobs:
           } > notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }} # when the tag does not exist yet, GitHub creates it on this commit
           files: dist/*
           body_path: notes.md
           generate_release_notes: true

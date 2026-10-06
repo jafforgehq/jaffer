@@ -72,6 +72,8 @@ afterwards. Then push a tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
+No terminal? Open *Actions → CI → Run workflow*, pick `main`, and type `v0.2.0` in *release_tag*: CI builds that commit and creates the tag and the release itself.
+
 The first step of the build job, **Signing preflight**, prints `present` or `MISSING` for every secret (never the value)
 and says whether this run will be unsigned, signed, or signed and notarized. The release is published as a
 **pre-release marked unsigned** when no certificate is available, so an unsigned build can never be mistaken for a
