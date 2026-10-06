@@ -8,7 +8,9 @@ export interface MockRequest {
   body: any;
 }
 
-type Reply = { kind: 'text'; text: string; thinking?: string } | { kind: 'tool'; id: string; name: string; input: unknown; text?: string } | { kind: 'error'; status: number; message: string } | { kind: 'refusal' };
+type ReplyBody = { kind: 'text'; text: string; thinking?: string } | { kind: 'tool'; id: string; name: string; input: unknown; text?: string } | { kind: 'error'; status: number; message: string } | { kind: 'refusal' };
+/** `when` makes a reply apply only to matching requests (a real client such as Claude Code also sends background requests). */
+type Reply = ReplyBody & { when?: (body: any) => boolean };
 
 export class MockAnthropic {
   requests: MockRequest[] = [];
@@ -33,7 +35,8 @@ export class MockAnthropic {
           res.end(JSON.stringify({ data: [{ id: 'claude-sonnet-5-5', type: 'model', display_name: 'x', created_at: '2026-01-01T00:00:00Z' }], has_more: false, first_id: 'a', last_id: 'a' }));
           return;
         }
-        const reply = this.replies.shift() ?? ({ kind: 'text', text: 'ok' } as Reply);
+        const at = this.replies.findIndex((r) => !r.when || r.when(body));
+        const reply = (at >= 0 ? this.replies.splice(at, 1)[0] : undefined) ?? ({ kind: 'text', text: 'ok' } as Reply);
         if (reply.kind === 'error') {
           res.writeHead(reply.status, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ type: 'error', error: { type: reply.status === 401 ? 'authentication_error' : 'invalid_request_error', message: reply.message } }));

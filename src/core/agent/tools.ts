@@ -113,6 +113,17 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
 ];
 
+/** A path as people say it: `~/code/app/src/a.ts`, and when still long, its tail (the file name matters most). */
+export function shortPath(p: string, home: string = os.homedir()): string {
+  let out = p;
+  if (home && home !== '/' && (out === home || out.startsWith(home + path.sep))) out = '~' + out.slice(home.length);
+  if (out.length > 56) {
+    const parts = out.split(path.sep).filter(Boolean);
+    if (parts.length > 3) out = '…/' + parts.slice(-3).join('/');
+  }
+  return out;
+}
+
 export function toolSummary(name: string, input: any): string {
   switch (name) {
     case 'run_command':
@@ -120,11 +131,11 @@ export function toolSummary(name: string, input: any): string {
     case 'read_file':
     case 'write_file':
     case 'edit_file':
-      return String(input?.path ?? '');
+      return shortPath(String(input?.path ?? ''));
     case 'list_dir':
-      return String(input?.path ?? '.');
+      return shortPath(String(input?.path ?? '.'));
     case 'search_files':
-      return `${input?.pattern ?? ''}${input?.path ? ` in ${input.path}` : ''}`;
+      return `${input?.pattern ?? ''}${input?.path ? ` in ${shortPath(String(input.path))}` : ''}`;
     case 'terminal_input':
       return JSON.stringify(String(input?.text ?? '')).slice(0, 80);
     case 'recall':

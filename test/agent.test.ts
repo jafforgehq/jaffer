@@ -313,3 +313,15 @@ describe('command classification', () => {
 });
 
 void AgentRuntime;
+
+describe('tool row paths', () => {
+  it('shows paths the way people say them, and keeps the file name visible when long', async () => {
+    const { shortPath, toolSummary } = await import('../src/core/agent/tools');
+    expect(shortPath('/Users/maya/code/api/src/a.ts', '/Users/maya')).toBe('~/code/api/src/a.ts');
+    expect(shortPath('/Users/mayanope/x.ts', '/Users/maya')).toBe('/Users/mayanope/x.ts'); // not a prefix match on a directory boundary
+    expect(shortPath('/opt/data/a.ts', '/Users/maya')).toBe('/opt/data/a.ts');
+    const long = shortPath('/Users/maya/projects/a-very-long-project-name/packages/service/src/auth/session.ts', '/Users/maya');
+    expect(long).toBe('…/src/auth/session.ts');
+    expect(toolSummary('read_file', { path: '/x/y.ts' })).toBe('/x/y.ts');
+  });
+});
