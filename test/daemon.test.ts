@@ -277,9 +277,11 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(items.length).toBeGreaterThan(before);
     expect(items.find((i) => /tabs/i.test(i.text))!.source).toBe('user'); // learned from the Claude Code transcript
     expect(items.find((i) => /linter before every commit/.test(i.text))!.source).toBe('reflector'); // curated by the model
-    // the reflection request was redacted and carried the activity
-    const sent = JSON.stringify(mock.requests.at(-1)!.body.messages);
-    expect(sent).toContain('pnpm test');
+    // A stated rule is reflected on at once (before the shell commands pile up), so the first request may carry only the
+    // transcript line; the commands go out in a later reflection. Some request must have carried them.
+    const sentTo = () => mock.requests.map((r) => JSON.stringify(r.body?.messages ?? ''));
+    await waitUntil(() => sentTo().some((s) => s.includes('pnpm test')), 20_000);
+    expect(sentTo().some((s) => s.includes('From now on always use tabs'))).toBe(true);
     // and every change is journaled so it can be undone
     const log = await c.call('memory.log', { limit: 100 });
     expect(log.runs.some((r: any) => r.sources.includes('reflector'))).toBe(true);

@@ -55,7 +55,8 @@ describe.skipIf(!CLAUDE)('Claude Code inside a Jaffer session', () => {
     sh.write('claude\r');
     await until(() => /Let's get started|Welcome to Claude Code/.test(sh!.readScreen(40)));
     await new Promise((r) => setTimeout(r, 1500));
-    const snap = sh.snapshot();
+    const snap = await sh.consistentSnapshot();
+    const liveCursorY = sh.term.buffer.active.cursorY; // read in the same tick: the TUI may redraw while the replica parses
     const replica = new Terminal({ cols: snap.cols, rows: snap.rows, scrollback: 5000, allowProposedApi: true });
     await new Promise<void>((r) => replica.write(snap.data, r));
     const b = replica.buffer.active;
@@ -64,7 +65,7 @@ describe.skipIf(!CLAUDE)('Claude Code inside a Jaffer session', () => {
     const text = lines.join('\n');
     expect(text).toMatch(/Welcome to Claude Code|Let's get started/);
     // Same cursor row => Ink's relative cursor movement keeps working after restore.
-    expect(replica.buffer.active.cursorY).toBe(sh.term.buffer.active.cursorY);
+    expect(replica.buffer.active.cursorY).toBe(liveCursorY);
     replica.dispose();
   }, 60_000);
 
