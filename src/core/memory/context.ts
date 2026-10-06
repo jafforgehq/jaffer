@@ -13,6 +13,8 @@ export interface ContextOptions {
   notes?: boolean;
   skills?: boolean;
   home?: string;
+  /** Restrict to these ids (used to inject only what the agent has not been shown yet). */
+  only?: { items: Set<string>; skills: Set<string> };
 }
 
 export interface BuiltContext {
@@ -58,15 +60,15 @@ function group(items: MemoryItem[]): string {
 export function buildContext(store: MemoryStore, opts: ContextOptions = {}): BuiltContext {
   const budget = opts.budgetChars ?? 6000;
   const home = opts.home;
-  const ranked = rankItems(store.listItems(), { cwd: opts.cwd, query: opts.query });
+  const ranked = rankItems(store.listItems(), { cwd: opts.cwd, query: opts.query }).filter((r) => !opts.only || opts.only.items.has(r.item.id));
 
   const globalPicked: MemoryItem[] = [];
   const projectPicked = new Map<string, MemoryItem[]>();
   let used = 0;
-  const notes = opts.notes === false ? '' : readNotes(store);
+  const notes = opts.notes === false || opts.only ? '' : readNotes(store);
   used += notes.length + 80;
 
-  const skills = opts.skills === false ? [] : rankSkills(store.listSkills(), { cwd: opts.cwd, query: opts.query }).filter((s) => s.score > 0.25).slice(0, 6);
+  const skills = opts.skills === false ? [] : rankSkills(store.listSkills(), { cwd: opts.cwd, query: opts.query }).filter((s) => s.score > 0.25 && (!opts.only || opts.only.skills.has(s.skill.id))).slice(0, 6);
   const skillBudget = skills.length ? Math.min(900, Math.floor(budget * 0.2)) : 0;
   const itemBudget = budget - skillBudget;
 

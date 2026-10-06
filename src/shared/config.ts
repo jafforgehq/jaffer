@@ -1,7 +1,8 @@
 import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
 
-export type ApprovalMode = 'ask' | 'auto-read' | 'auto';
+/** ask: reads are automatic, everything that changes state needs approval. auto: only risky actions ask. */
+export type ApprovalMode = 'ask' | 'auto';
 
 export interface JafferConfig {
   /** First-run consent flow completed. Until then nothing is exported and no model is called. */
@@ -22,6 +23,8 @@ export interface JafferConfig {
     model: string;
     effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     approvals: ApprovalMode;
+    /** Rules added by "always allow" decisions, e.g. "run_command:pnpm test" or "edit_file:*". */
+    allow: string[];
     /** "session": agent commands run visibly in your shell; "subprocess": isolated child process. */
     runIn: 'session' | 'subprocess';
     maxToolRounds: number;
@@ -62,6 +65,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     model: 'claude-sonnet-5-5',
     effort: 'medium',
     approvals: 'ask',
+    allow: [],
     runIn: 'session',
     maxToolRounds: 40,
     refusalFallback: true,
