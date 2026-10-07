@@ -20,6 +20,8 @@ export interface JafferConfig {
     renderer: 'webgl' | 'dom';
     /** Decorative motion (a live panel that looks alive). Off here, or macOS Reduce motion, and everything stands still. */
     animations: boolean;
+    /** A little mole in the sidebar that digs while something runs. */
+    pet: boolean;
   };
   shell: { path: string; args: string[] };
   memory: {
@@ -53,6 +55,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     optionAsMeta: true,
     renderer: 'webgl',
     animations: true,
+    pet: true,
   },
   shell: { path: '', args: [] },
   memory: {

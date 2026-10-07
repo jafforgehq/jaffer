@@ -46,6 +46,14 @@ describe('appearance.animations', () => {
   });
 });
 
+describe('appearance.pet', () => {
+  it('is on by default, also for a config file saved before the pet existed', () => {
+    expect(DEFAULT_CONFIG.appearance.pet).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'jaffer-light' } }));
+    expect(new ConfigStore(env.paths).get().appearance.pet).toBe(true);
+  });
+});
+
 describe('updates.auto', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.updates.auto).toBe(true);

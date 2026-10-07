@@ -1,6 +1,7 @@
 import type { VNode } from 'preact';
 import { activePane, baseName, claudeAuth, clock, commandLog, currentClaude, daemonUp, fmtUptime, fmtDuration, homeDir, info, memItems, overlay, safeCommand, setSide, side, tildePath, toggleRail, toggleSide } from '../state';
 import { processBadge } from '../../shared/process-badge';
+import { Pet } from './Pet';
 import { terminals } from './TerminalView';
 import { IconAgent, IconBolt, IconCheck, IconCommandKey, IconFolder, IconGear, IconBranch, IconPlus, IconSidebar, IconTerminal, IconX } from './icons';
 
@@ -118,6 +119,8 @@ export function SessionRail(): VNode {
           </div>
         </section>
       </div>
+
+      <Pet />
 
       <div class="rail-foot">
         <button class="kbd-btn" onClick={() => (overlay.value = 'palette')} title="Command palette (⌘P)">

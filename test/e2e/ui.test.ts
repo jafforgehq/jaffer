@@ -412,6 +412,58 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
+  it('the pet: asleep when nothing runs, digging while something does, up when Claude needs you, cheering after a turn, gone when switched off', async () => {
+    const pet = '.rail-pet .pet';
+    const mood = () => page.getAttribute(pet, 'data-mood');
+    const arm = `${pet} .pet-arm-l`;
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    if (!(await page.$('.rail'))) await page.keyboard.press('Meta+b');
+    await page.waitForSelector(pet);
+    // a clean slate: earlier tests left Claude sessions behind, and an open Claude Code (even idle) is not sleep
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await until(async () => (await mood()) === 'sleep', 8_000, 'the pet to be asleep');
+    await shot('14a-pet-sleep');
+    // something runs: it digs, and the claws move
+    await page.click('.term');
+    await page.keyboard.type('sleep 40', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await until(async () => (await mood()) === 'dig', 8_000, 'the pet to dig');
+    expect(await cs(arm, 'animationName')).toContain('pet-dig');
+    await sleep(250);
+    await shot('14b-pet-dig');
+    // Claude needs the person: it pops up
+    const bash = { session_id: 'pet-1', tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, tool_use_id: 'p1' };
+    await sendHook('PreToolUse', bash);
+    await sendHook('Notification', { session_id: 'pet-1', message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' });
+    await until(async () => (await mood()) === 'alert', 8_000, 'the pet to pop up');
+    await sleep(250);
+    await shot('14c-pet-alert');
+    // answered, works, finishes: it cheers for a moment, then goes back to what is still running
+    await sendHook('PostToolUse', bash);
+    await sendHook('Stop', { session_id: 'pet-1', last_assistant_message: 'done' });
+    await until(async () => (await mood()) === 'cheer', 8_000, 'the pet to cheer');
+    await sleep(150);
+    await shot('14d-pet-cheer');
+    await until(async () => (await mood()) === 'dig', 8_000, 'the pet to go back to digging (the command still runs)');
+    // Animations off: same pose, nothing moves
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+    expect(await mood()).toBe('dig');
+    expect(await cs(arm, 'animationName')).toBe('none');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+    await page.keyboard.press('Control+c');
+    await until(async () => (await mood()) === 'rest', 8_000, 'the pet to rest (Claude is open and idle)');
+    await shot('14e-pet-rest');
+    await sendHook('SessionEnd', { session_id: 'pet-1' });
+    await until(async () => (await mood()) === 'sleep', 8_000, 'the pet to sleep again');
+    // switched off in Settings: gone
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { pet: false } }));
+    await until(async () => (await page.locator(pet).count()) === 0, 8_000, 'the pet to leave');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { pet: true } }));
+    await page.waitForSelector(pet);
+    await sendHook('SessionStart'); // the tests after this one carry on with the session they had (a SessionStart revives an ended one)
+  }, 90_000);
+
   it('file paths in the panel are shown relative to where Claude is working', async () => {
     const file = '/work/app/src/auth/session.ts';
     await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });
