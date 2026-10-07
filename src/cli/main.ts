@@ -128,17 +128,22 @@ async function main(): Promise<void> {
       // Called by Claude Code; must be fast, silent on failure, and never block the session.
       const which = args[1];
       if (process.env.JAFFER_NO_HOOKS) return; // Jaffer's own `claude -p` helper calls must not be primed with memory
+      // Only a claude running inside Jaffer's terminal reports to the live panel; memory hooks work anywhere.
+      const inSession = process.env.JAFFER_SESSION === '1';
+      if (!inSession && which !== 'session-start' && which !== 'stop') return;
       const input = await readStdin();
-      let payload: { cwd?: string; source?: string } = {};
+      let payload: Record<string, unknown> = {};
       try {
-        payload = JSON.parse(input || '{}');
+        const parsed = JSON.parse(input || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed;
       } catch {
         /* no payload */
       }
       const client = await tryConnect(paths, 600);
       try {
+        if (inSession && Object.keys(payload).length) await client?.call('claude.event', payload, 800).catch(() => undefined);
         if (which === 'session-start') {
-          const text: string = await memoryCall('memory.context', { cwd: payload.cwd ?? process.cwd(), budget: 4500 }, client);
+          const text: string = await memoryCall('memory.context', { cwd: (payload.cwd as string | undefined) ?? process.cwd(), budget: 4500 }, client);
           if (text.trim()) process.stdout.write(`# Memory from Jaffer\nWhat the user's terminal has learned about them and this project. Background only; the user's instructions win.\n\n${text.trim()}\n`);
         } else if (which === 'stop') {
           await client?.call('ingest.now', {}, 1500).catch(() => undefined);

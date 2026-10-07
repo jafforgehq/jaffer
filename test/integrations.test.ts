@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEngine, makeEnv, type TestEnv } from './helpers/env';
 import { makeMemoryApi } from '../src/core/memory-api';
 import { runMcpServer } from '../src/core/mcp/server';
-import { claudeStatus, findClaude, hooksInstalled, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
+import { claudeStatus, findClaude, hooksConnected, hooksInstalled, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
 import { ClaudeIngestor, parseClaudeLine } from '../src/core/ingest/claude';
 
 let env: TestEnv;
@@ -96,6 +96,60 @@ describe('Claude Code hooks', () => {
     const after = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
     expect(after).toEqual({ model: 'opus', hooks: { Stop: [{ hooks: [mine] }] } });
     expect(hooksInstalled(env.userHome)).toBe(false);
+  });
+
+  const ALL_EVENTS: [string, string][] = [
+    ['SessionStart', 'session-start'],
+    ['Stop', 'stop'],
+    ['UserPromptSubmit', 'user-prompt-submit'],
+    ['PreToolUse', 'pre-tool-use'],
+    ['PostToolUse', 'post-tool-use'],
+    ['PostToolUseFailure', 'post-tool-use-failure'],
+    ['SubagentStart', 'subagent-start'],
+    ['SubagentStop', 'subagent-stop'],
+    ['Notification', 'notification'],
+    ['SessionEnd', 'session-end'],
+  ];
+  const settingsFile = () => path.join(env.userHome, '.claude', 'settings.json');
+  const readSettings = () => JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+  const oldTwoHooks = (cli: string) => ({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `'${cli}' hook session-start # jaffer-managed`, timeout: 8 }] }], Stop: [{ hooks: [{ type: 'command', command: `'${cli}' hook stop # jaffer-managed`, timeout: 5 }] }] } });
+
+  it('registers every event the companion needs, async for the new ones, keeping the user\'s own hooks', () => {
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    const mine = { type: 'command', command: 'echo mine' };
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [mine] }] } }));
+    expect(installHooks('/x/jaffer', env.userHome).changed).toBe(true);
+    const s = readSettings();
+    for (const [event, arg] of ALL_EVENTS) {
+      const ours = (s.hooks[event] as any[]).filter((e) => e.hooks.some((h: any) => String(h.command).includes('# jaffer-managed')));
+      expect(ours, event).toHaveLength(1);
+      const hook = ours[0].hooks[0];
+      expect(hook.command, event).toContain(`'/x/jaffer' hook ${arg} #`);
+      if (event === 'SessionStart' || event === 'Stop') expect(hook.async, event).toBeUndefined(); // they feed memory: Claude Code waits for them
+      else expect(hook.async, event).toBe(true); // everything else must never slow Claude Code down
+    }
+    expect(s.hooks.PreToolUse[0]).toEqual({ matcher: 'Bash', hooks: [mine] });
+    expect(installHooks('/x/jaffer', env.userHome).changed).toBe(false);
+    expect(removeHooks(env.userHome).changed).toBe(true);
+    expect(readSettings()).toEqual({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [mine] }] } });
+  });
+
+  it('an install with only SessionStart and Stop gets the new events, and hooksInstalled turns true', () => {
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify(oldTwoHooks('/x/jaffer')));
+    expect(hooksInstalled(env.userHome)).toBe(false); // the new events are missing
+    expect(installHooks('/x/jaffer', env.userHome).changed).toBe(true);
+    expect(hooksInstalled(env.userHome)).toBe(true);
+    expect(Object.keys(readSettings().hooks).sort()).toEqual(ALL_EVENTS.map(([e]) => e).sort());
+  });
+
+  it('hooksConnected is true for an old two-hook install, and false for none or for the user\'s own hooks only', () => {
+    expect(hooksConnected(env.userHome)).toBe(false); // no settings file
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+    expect(hooksConnected(env.userHome)).toBe(false);
+    fs.writeFileSync(settingsFile(), JSON.stringify(oldTwoHooks('/x/jaffer')));
+    expect(hooksConnected(env.userHome)).toBe(true);
   });
 
   it('refuses to touch a settings file it cannot parse', () => {

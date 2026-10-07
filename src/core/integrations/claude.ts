@@ -30,9 +30,21 @@ interface HookEntry {
   [k: string]: unknown;
 }
 
-const EVENTS: { event: 'SessionStart' | 'Stop'; arg: string; timeout: number }[] = [
+/**
+ * SessionStart and Stop feed memory, so Claude Code waits for them. Every other event only reports to the live
+ * companion panel and is `async`, so it can never slow Claude Code down.
+ */
+const EVENTS: { event: string; arg: string; timeout: number; async?: boolean }[] = [
   { event: 'SessionStart', arg: 'hook session-start', timeout: 8 },
   { event: 'Stop', arg: 'hook stop', timeout: 5 },
+  { event: 'UserPromptSubmit', arg: 'hook user-prompt-submit', timeout: 5, async: true },
+  { event: 'PreToolUse', arg: 'hook pre-tool-use', timeout: 5, async: true },
+  { event: 'PostToolUse', arg: 'hook post-tool-use', timeout: 5, async: true },
+  { event: 'PostToolUseFailure', arg: 'hook post-tool-use-failure', timeout: 5, async: true },
+  { event: 'SubagentStart', arg: 'hook subagent-start', timeout: 5, async: true },
+  { event: 'SubagentStop', arg: 'hook subagent-stop', timeout: 5, async: true },
+  { event: 'Notification', arg: 'hook notification', timeout: 5, async: true },
+  { event: 'SessionEnd', arg: 'hook session-end', timeout: 5, async: true },
 ];
 
 function shellQuote(s: string): string {
@@ -74,7 +86,7 @@ export function installHooks(cliPath: string, home: string = os.homedir()): { ch
   for (const ev of EVENTS) {
     const list: HookEntry[] = Array.isArray(data.hooks[ev.event]) ? data.hooks[ev.event] : [];
     const rest = list.filter((h) => !isOurs(h));
-    rest.push({ hooks: [{ type: 'command', command: `${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: ev.timeout }] });
+    rest.push({ hooks: [{ type: 'command', command: `${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: ev.timeout, ...(ev.async ? { async: true } : {}) }] });
     data.hooks[ev.event] = rest;
   }
   if (JSON.stringify(data) === before) return { changed: false };
@@ -101,6 +113,13 @@ export function removeHooks(home: string = os.homedir()): { changed: boolean; er
   if (data.hooks && Object.keys(data.hooks).length === 0) delete data.hooks;
   if (changed) writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644);
   return { changed };
+}
+
+/** True if Jaffer has any hook in the user's Claude Code settings, even an older install that lacks the newest events. */
+export function hooksConnected(home: string = os.homedir()): boolean {
+  const { data, ok } = readSettings(settingsPath(home));
+  if (!ok || !data.hooks || typeof data.hooks !== 'object') return false;
+  return Object.values(data.hooks).some((list) => Array.isArray(list) && (list as HookEntry[]).some(isOurs));
 }
 
 export function hooksInstalled(home: string = os.homedir()): boolean {
