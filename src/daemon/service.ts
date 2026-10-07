@@ -12,7 +12,7 @@ import { MemoryEngine } from '../core/memory/engine';
 import { makeMemoryApi } from '../core/memory-api';
 import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
-import { claudeStatus, findClaude, hooksConnected, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { watchRejection } from '../core/claude/transcript-watch';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
@@ -76,8 +76,9 @@ export class JafferService {
   async start(): Promise<void> {
     this.writeWrapper();
     try {
-      // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own entries).
-      if (hooksConnected(this.userHome)) installHooks(this.cliWrapper, this.userHome);
+      // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own
+      // entries). Only when they already run THIS daemon's wrapper: another Jaffer home's hooks are not ours to rewrite.
+      if (hooksPointAt(this.cliWrapper, this.userHome)) installHooks(this.cliWrapper, this.userHome);
     } catch {
       /* the user's settings are theirs: never fail startup over them */
     }

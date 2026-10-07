@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEngine, makeEnv, type TestEnv } from './helpers/env';
 import { makeMemoryApi } from '../src/core/memory-api';
 import { runMcpServer } from '../src/core/mcp/server';
-import { claudeStatus, findClaude, hooksConnected, hooksInstalled, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
+import { claudeStatus, findClaude, hooksConnected, hooksInstalled, hooksPointAt, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
 import { ClaudeIngestor, parseClaudeLine } from '../src/core/ingest/claude';
 
 let env: TestEnv;
@@ -150,6 +150,16 @@ describe('Claude Code hooks', () => {
     expect(hooksConnected(env.userHome)).toBe(false);
     fs.writeFileSync(settingsFile(), JSON.stringify(oldTwoHooks('/x/jaffer')));
     expect(hooksConnected(env.userHome)).toBe(true);
+  });
+
+  it('hooksPointAt: true only when every Jaffer hook already runs this wrapper (another Jaffer home\'s hooks are not ours to rewrite)', () => {
+    expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(false); // nothing installed: nothing to migrate
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify(oldTwoHooks('/x/jaffer')));
+    expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(true);
+    expect(hooksPointAt('/somewhere/else/jaffer', env.userHome)).toBe(false);
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+    expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(false); // only the user's own hook
   });
 
   it('refuses to touch a settings file it cannot parse', () => {

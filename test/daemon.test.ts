@@ -479,17 +479,47 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await sleep(400);
     await c.call('pty.write', { data: 'claude -p "read notes.txt and tell me what it says"\r' });
     const real = async () => (await states()).find((s) => /notes\.txt/.test(s.prompt ?? ''));
-    // the turn ends with Claude exiting: the shell reports it and the session ends, keeping what it saw
+    // `claude -p` exits right after its last event, and a hook process started a moment before can die with it, so only
+    // what comes early is guaranteed: the prompt (UserPromptSubmit) and the tool call (PreToolUse). The later events
+    // (PostToolUse, Stop) are covered by the synthetic tests above, and by every interactive session, where Stop comes
+    // seconds before Claude exits.
     await waitUntil(async () => {
       const r = await real();
-      // async hooks can land in any order, so wait for all of what it should have seen
-      return r?.state === 'ended' && !!r.lastReply && r.activity.some((a) => a.status === 'done');
+      return r?.state === 'ended' && r.activity.some((a) => a.name === 'Read');
     }, 60_000).catch(async (e) => {
       throw new Error(`${e.message}; sessions=${JSON.stringify(await states())}; mock saw ${mock3.requests.length} requests`);
     });
     const r = (await real())!;
     expect(r.prompt).toContain('read notes.txt'); // what the user asked, from the real UserPromptSubmit
-    expect(r.activity.some((a) => a.name === 'Read' && a.status === 'done' && /notes\.txt/.test(a.summary))).toBe(true);
-    expect(r.lastReply).toContain('deploy script is release.sh');
+    expect(r.activity.some((a) => a.name === 'Read' && /notes\.txt/.test(a.summary))).toBe(true); // the tool call, from the real PreToolUse
   }, 90_000);
+});
+
+describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {
+  it('leaves hooks that point at a different wrapper exactly as they were', async () => {
+    const env4 = makeEnv();
+    try {
+      const file = path.join(env4.userHome, '.claude', 'settings.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      // the user's real install, pointing at their real ~/.jaffer; this daemon runs with a different (temporary) Jaffer home
+      const theirs = (arg: string) => [{ hooks: [{ type: 'command', command: `'/Users/someone/.jaffer/bin/jaffer' hook ${arg} # jaffer-managed`, timeout: 5 }] }];
+      const before = JSON.stringify({ hooks: { SessionStart: theirs('session-start'), Stop: theirs('stop') } });
+      fs.writeFileSync(file, before);
+      const c4 = await ensureDaemon(env4.paths, {
+        execPath: process.execPath,
+        daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+        cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+        env: { HOME: env4.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ' },
+      });
+      await c4.call('hello', {});
+      await sleep(300);
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+      c4.close();
+      const last = await tryConnect(env4.paths);
+      await last?.call('app.shutdown', {}).catch(() => undefined);
+      await sleep(300);
+    } finally {
+      env4.cleanup();
+    }
+  }, 30_000);
 });

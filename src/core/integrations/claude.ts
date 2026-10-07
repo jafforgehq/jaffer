@@ -122,6 +122,18 @@ export function hooksConnected(home: string = os.homedir()): boolean {
   return Object.values(data.hooks).some((list) => Array.isArray(list) && (list as HookEntry[]).some(isOurs));
 }
 
+/**
+ * True if Jaffer's hooks exist and every one of them already runs `cliPath`. A daemon started with another Jaffer home
+ * (a release smoke test, a dev build) must not re-point the user's real hooks at its own, temporary wrapper.
+ */
+export function hooksPointAt(cliPath: string, home: string = os.homedir()): boolean {
+  const { data, ok } = readSettings(settingsPath(home));
+  if (!ok || !data.hooks || typeof data.hooks !== 'object') return false;
+  const ours = Object.values(data.hooks).flatMap((list) => (Array.isArray(list) ? (list as HookEntry[]) : [])).filter(isOurs);
+  const quoted = shellQuote(cliPath);
+  return ours.length > 0 && ours.every((h) => h.hooks.filter((x) => typeof x.command === 'string' && x.command.includes(`# ${MARK}`)).every((x) => x.command.includes(quoted)));
+}
+
 export function hooksInstalled(home: string = os.homedir()): boolean {
   const { data, ok } = readSettings(settingsPath(home));
   if (!ok || !data.hooks) return false;
