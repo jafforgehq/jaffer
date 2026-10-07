@@ -430,6 +430,8 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect((await states())[0]).toMatchObject({ id: 'sess-1', state: 'working' });
     await hookCli('stop', ev('Stop', { last_assistant_message: 'done' }));
     await waitUntil(async () => (await states())[0]?.state === 'idle');
+    // the push is throttled (at most one per 100 ms, the last one carries the newest state): wait for it
+    await waitUntil(() => pushed.length > 0 && pushed[pushed.length - 1].sessions[0]?.state === 'idle');
     expect(pushed.length).toBeGreaterThanOrEqual(2);
     expect(pushed[pushed.length - 1].sessions[0]).toMatchObject({ id: 'sess-1', state: 'idle' });
   });
@@ -449,6 +451,36 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect((await states()).find((s) => s.id === 'sess-2')).toMatchObject({ state: 'needs-you', notice: 'Claude needs your permission to use Bash' });
     fs.appendFileSync(transcript, '{"type":"user","toolUseResult":"User rejected tool use"}\n');
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-2')?.state === 'idle', 5_000);
+  });
+
+  it('typing in the terminal while Claude waits takes "Needs you" back to working, and a decline is still noticed afterwards', async () => {
+    const transcript = path.join(env3.root, 'sess-ans.jsonl');
+    fs.writeFileSync(transcript, '{"type":"user","message":"hi"}\n');
+    const base = { session_id: 'sess-ans', transcript_path: transcript };
+    await c.call('claude.event', ev('PreToolUse', { ...base, tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'toolu_a1' }));
+    await c.call('claude.event', ev('Notification', { ...base, message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }));
+    expect((await states()).find((s) => s.id === 'sess-ans')?.state).toBe('needs-you');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await c.call('pty.write', { data: 'y' }); // the user answers in the terminal
+    await c.call('pty.write', { data: '\x15' }); // (and the shell's line is cleared: a lone Esc here would swallow the next keystroke)
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-ans')?.state === 'working', 5_000);
+    fs.appendFileSync(transcript, '{"type":"user","toolUseResult":"User rejected tool use"}\n');
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-ans')?.state === 'idle', 5_000);
+  });
+
+  it('a stopped claude (Ctrl+Z: the shell reports exit 148) does not end the session', async () => {
+    await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-susp', prompt: 'a long task' }));
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await sleep(500);
+    const cmds = collect(c, 'pty.command');
+    await c.call('pty.write', { data: 'claude() { return 148; }\r' });
+    await sleep(300);
+    await c.call('pty.write', { data: 'claude --resume\r' });
+    await waitUntil(() => cmds.some((x) => /^claude --resume/.test(x.cmd) && x.exit === 148), 8_000);
+    await sleep(200);
+    expect((await states()).find((s) => s.id === 'sess-susp')?.state).toBe('working');
   });
 
   it('running claude in the shell and leaving it ends every session (it also covers a crashed Claude Code)', async () => {

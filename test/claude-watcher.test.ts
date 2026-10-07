@@ -145,6 +145,29 @@ describe('ClaudeWatcher', () => {
     expect(only().state).toBe('idle');
   });
 
+  it('userAnswered: input while Claude waits means the user is answering, so it is working again (tool kept); other states are untouched', () => {
+    w.handle(fx('PreToolUse', bash('rm -rf build')));
+    w.handle(fx('Notification'));
+    expect(only().state).toBe('needs-you');
+    w.userAnswered();
+    expect(only()).toMatchObject({ state: 'working', notice: undefined, tool: { name: 'Bash', summary: 'rm -rf build' } });
+    w.handle(fx('Stop'));
+    w.userAnswered(); // nothing is waiting: nothing changes
+    expect(only().state).toBe('idle');
+  });
+
+  it('retractNotice also works after the user answered: a declined prompt is noticed even though the panel already shows working', () => {
+    w.handle(fx('PreToolUse', bash('rm -rf build')));
+    w.handle(fx('Notification'));
+    w.userAnswered();
+    expect(only().state).toBe('working');
+    w.retractNotice('sess-1'); // the transcript shows the user declined
+    expect(only()).toMatchObject({ state: 'idle', tool: undefined });
+    w.handle(fx('UserPromptSubmit'));
+    w.retractNotice('sess-1'); // no tool pending: a stray call changes nothing
+    expect(only().state).toBe('working');
+  });
+
   it('endAll ends every session', () => {
     w.handle(fx('UserPromptSubmit', { session_id: 'a' }));
     w.handle(fx('Stop', { session_id: 'b' }));

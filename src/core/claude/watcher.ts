@@ -102,9 +102,24 @@ export class ClaudeWatcher {
     if (JSON.stringify(this.snapshot()) !== before) this.changes.emit(this.sessions());
   }
 
+  /**
+   * The user typed in the terminal while Claude waited for them: they are answering. Back to working, tool kept (an approval
+   * is followed by PostToolUse; a decline fires no hook and is noticed from the transcript, see retractNotice).
+   */
+  userAnswered(): void {
+    const before = JSON.stringify(this.snapshot());
+    for (const { s } of this.map.values()) {
+      if (s.state !== 'needs-you') continue;
+      this.setState(s, 'working');
+      s.notice = undefined;
+    }
+    if (JSON.stringify(this.snapshot()) !== before) this.changes.emit(this.sessions());
+  }
+
+  /** The user declined a prompt in the terminal: back to idle. Works while waiting and after they answered (a tool still pending). */
   retractNotice(sessionId: string): void {
     const e = this.map.get(sessionId);
-    if (!e || e.s.state !== 'needs-you') return;
+    if (!e || !(e.s.state === 'needs-you' || (e.s.state === 'working' && e.s.tool))) return;
     this.setState(e.s, 'idle');
     e.s.notice = undefined;
     e.s.tool = undefined;

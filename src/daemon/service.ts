@@ -208,8 +208,10 @@ export class JafferService {
           this.recentCommands.push({ cmd: redactText(ev.cmd).slice(0, 300), exit: ev.exit, durMs: ev.durMs, cwd: ev.cwd, at: Date.now(), by: ev.by });
           if (this.recentCommands.length > 40) this.recentCommands.splice(0, this.recentCommands.length - 40);
         }
-        // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over.
-        if (/^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(ev.cmd)) this.claudeWatcher.endAll();
+        // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
+        // stopped (Ctrl+Z reports 128 + a stop signal): it comes back with `fg`.
+        const stopped = ev.exit != null && ev.exit >= 145 && ev.exit <= 150;
+        if (!stopped && /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(ev.cmd)) this.claudeWatcher.endAll();
         const proj = resolveProject(ev.cwd, this.userHome);
         if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output, by: ev.by });
       }
@@ -244,10 +246,12 @@ export class JafferService {
   }
 
   /** Declining a prompt in the terminal fires no hook: while a session waits for the user, read its transcript for that. */
-  private watchForRejections(sessions: { id: string; state: string; transcriptPath?: string }[]): void {
+  private watchForRejections(sessions: { id: string; state: string; transcriptPath?: string; tool?: unknown }[]): void {
     for (const s of sessions) {
-      const waiting = s.state === 'needs-you' && !!s.transcriptPath;
       const watching = this.rejectionWatches.has(s.id);
+      // from the moment Claude waits until the tool is settled: after the user typed an answer the panel already says working,
+      // but a decline still fires no hook and only the transcript shows it
+      const waiting = !!s.transcriptPath && (s.state === 'needs-you' || (watching && s.state === 'working' && !!s.tool));
       if (waiting && !watching) {
         const stop = watchRejection(s.transcriptPath!, () => {
           this.rejectionWatches.delete(s.id);
@@ -317,6 +321,7 @@ export class JafferService {
     r.handle('session.snapshot', async (p: { pane?: string }) => pane(p).consistentSnapshot());
     r.handle('pty.write', (p: { pane?: string; data: string }) => {
       pane(p).write(String(p.data));
+      this.claudeWatcher.userAnswered(); // typing while Claude waits for them means they are answering
       return true;
     });
     r.handle('pty.resize', (p: { pane?: string; cols: number; rows: number }) => {
