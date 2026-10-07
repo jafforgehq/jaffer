@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, overlay, patchConfig, setSide, toast, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, checkClaudeSetup, overlay, patchConfig, setSide, toast, type ClaudeAuthState } from '../state';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
@@ -225,6 +225,7 @@ export function Settings(): VNode {
   const refresh = () => {
     void call('setup.claude.status', {}).then(setClaude).catch(() => undefined);
     void call('setup.targets', {}).then(setTargets).catch(() => undefined);
+    void checkClaudeSetup(); // the panel's "not connected" message follows what Settings just did
   };
   useEffect(refresh, []);
   const set = (p: object) => void patchConfig(p);
@@ -544,7 +545,7 @@ export function Onboarding(): VNode {
                 <Switch checked={claude} onChange={setClaude} />
                 <span class="t">
                   <b>Connect Claude Code</b>
-                  <small>Adds an MCP server and start-up hooks, and learns from its local transcripts.</small>
+                  <small>Adds an MCP server and hooks. The hooks tell Jaffer what Claude Code does in this terminal (your prompts, its tool calls and replies) so the panel can show it; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts.</small>
                 </span>
               </label>
             </div>

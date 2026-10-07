@@ -119,6 +119,8 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
     const choices = (await page.textContent('.onboard')) ?? '';
     expect(choices).not.toMatch(/codex|gemini|other agents|api key/i);
+    expect(choices).toMatch(/hooks/i); // what connecting Claude Code does is said plainly: the hooks see its prompts and tool calls
+    expect(choices).toMatch(/your prompts, its tool calls and replies/i);
     expect(choices).toContain('Get started');
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
@@ -255,6 +257,19 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.live-pill[data-state="none"]');
     expect(await page.textContent('.live-pill')).toBe('No session');
   });
+
+  it('with Claude Code not connected the empty panel says so, instead of claiming Claude is not running, and Connect fixes it', async () => {
+    await page.evaluate(() => window.jaffer.call('setup.claude.remove', {}));
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
+    await until(async () => /not connected/i.test((await page.textContent('.live-empty')) ?? ''), 15_000, 'the not-connected message');
+    expect(await page.textContent('.live-empty')).not.toMatch(/isn't running/);
+    await shot('03c-not-connected');
+    await page.click('.live-empty .btn.primary');
+    await until(async () => /isn't running/.test((await page.textContent('.live-empty')) ?? ''), 20_000, 'the panel after connecting');
+    const status = await page.evaluate(() => window.jaffer.call('setup.claude.status', {}));
+    expect(status.hooks).toBe(true);
+  }, 60_000);
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');

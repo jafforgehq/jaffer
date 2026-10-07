@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -132,6 +132,28 @@ describe('Claude Code hooks', () => {
     expect(installHooks('/x/jaffer', env.userHome).changed).toBe(false);
     expect(removeHooks(env.userHome).changed).toBe(true);
     expect(readSettings()).toEqual({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [mine] }] } });
+  });
+
+  it('the companion hooks start nothing outside a Jaffer session: a shell guard sits in front of the command (the memory hooks still run anywhere)', () => {
+    const marker = path.join(env.root, 'ran');
+    const wrapper = path.join(env.root, 'wrapper');
+    fs.writeFileSync(wrapper, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    installHooks(wrapper, env.userHome);
+    const hooks = readSettings().hooks;
+    const command = (event: string): string => (hooks[event] as any[]).flatMap((e) => e.hooks).find((h: any) => String(h.command).includes('# jaffer-managed')).command;
+    const run = (event: string, extra: Record<string, string>) => spawnSync('sh', ['-c', command(event)], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...extra }, timeout: 10_000 });
+    for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Notification', 'SessionEnd']) {
+      fs.rmSync(marker, { force: true });
+      expect(run(event, {}).status, event).toBe(0);
+      expect(fs.existsSync(marker), `${event} outside Jaffer must not start the Jaffer binary`).toBe(false);
+      run(event, { JAFFER_SESSION: '1' });
+      expect(fs.existsSync(marker), `${event} inside Jaffer must run it`).toBe(true);
+    }
+    for (const event of ['SessionStart', 'Stop']) {
+      fs.rmSync(marker, { force: true });
+      run(event, {});
+      expect(fs.existsSync(marker), `${event} feeds memory and runs anywhere`).toBe(true);
+    }
   });
 
   it('an install with only SessionStart and Stop gets the new events, and hooksInstalled turns true', () => {

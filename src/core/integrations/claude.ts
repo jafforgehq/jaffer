@@ -86,7 +86,10 @@ export function installHooks(cliPath: string, home: string = os.homedir()): { ch
   for (const ev of EVENTS) {
     const list: HookEntry[] = Array.isArray(data.hooks[ev.event]) ? data.hooks[ev.event] : [];
     const rest = list.filter((h) => !isOurs(h));
-    rest.push({ hooks: [{ type: 'command', command: `${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: ev.timeout, ...(ev.async ? { async: true } : {}) }] });
+    // The companion-only hooks run for every Claude Code on the machine, so a shell guard keeps them from starting the Jaffer
+    // binary at all outside a Jaffer session. The memory hooks (SessionStart, Stop) are meant to work anywhere.
+    const guard = ev.async ? '[ "$JAFFER_SESSION" = 1 ] || exit 0; ' : '';
+    rest.push({ hooks: [{ type: 'command', command: `${guard}${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: ev.timeout, ...(ev.async ? { async: true } : {}) }] });
     data.hooks[ev.event] = rest;
   }
   if (JSON.stringify(data) === before) return { changed: false };

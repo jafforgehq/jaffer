@@ -112,6 +112,21 @@ export interface ClaudeAuthState {
 }
 /** Where the Claude Code login stands, as last asked (null until the first answer). Asked at startup and when the window comes back to the front, never on a timer. */
 export const claudeAuth = signal<ClaudeAuthState | null>(null);
+/** Whether Jaffer is connected to Claude Code (its hooks and MCP server are installed), as last asked. */
+export interface ClaudeSetupState {
+  claudeInstalled: boolean;
+  hooks: boolean;
+  mcp: boolean;
+}
+export const claudeSetup = signal<ClaudeSetupState | null>(null);
+export async function checkClaudeSetup(): Promise<void> {
+  try {
+    claudeSetup.value = await jaffer().call('setup.claude.status', {});
+  } catch {
+    /* keep the last answer */
+  }
+}
+
 let lastAuthCheck = 0;
 export async function checkClaudeAuth(): Promise<void> {
   lastAuthCheck = Date.now();
@@ -275,7 +290,10 @@ export async function bootstrap(): Promise<void> {
   await Promise.all([refreshInfo(), loadClaudeState()]);
   refreshMemory(0);
   ready.value = true;
-  if (config.onboarded) void checkClaudeAuth();
+  if (config.onboarded) {
+    void checkClaudeAuth();
+    void checkClaudeSetup();
+  }
 }
 
 let infoTimer: ReturnType<typeof setTimeout> | null = null;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { runClaude } from '../actions';
-import { checkClaudeAuth, claudeAuth, currentClaude, fmtDuration, setSide, toast } from '../state';
+import { checkClaudeAuth, checkClaudeSetup, claudeAuth, claudeSetup, currentClaude, fmtDuration, setSide, toast } from '../state';
 import type { ClaudeSession } from '../../core/claude/watcher';
 import { shortToolPath } from '../../shared/short-path';
 import { InstallCommand } from './ClaudeInstall';
@@ -140,6 +140,20 @@ function Live({ s }: { s: ClaudeSession }): VNode {
 export function ClaudePanel(): VNode {
   const s = currentClaude();
   const a = claudeAuth.value;
+  const setup = claudeSetup.value;
+  const notConnected = !!setup && setup.claudeInstalled && !setup.hooks;
+  const [connecting, setConnecting] = useState(false);
+  const connect = async () => {
+    setConnecting(true);
+    try {
+      await window.jaffer.call('setup.claude.install', {});
+      await checkClaudeSetup();
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setConnecting(false);
+    }
+  };
   return (
     <div class="agent">
       <div class="panel-head">
@@ -166,6 +180,14 @@ export function ClaudePanel(): VNode {
       <div class="live-body">
         {s ? (
           <Live s={s} />
+        ) : notConnected ? (
+          <div class="live-empty">
+            <b>Jaffer is not connected to Claude Code</b>
+            <span>Connect it and this panel shows what Claude does in your terminal. The hooks only listen to a Claude Code running in Jaffer's own terminal.</span>
+            <button class="btn primary" disabled={connecting} onClick={() => void connect()}>
+              {connecting ? 'Connecting…' : 'Connect Claude Code'}
+            </button>
+          </div>
         ) : (
           <div class="live-empty">
             <b>Claude Code isn't running</b>
