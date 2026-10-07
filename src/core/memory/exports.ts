@@ -137,9 +137,16 @@ export function syncClaudeSkills(store: MemoryStore, enabled: boolean, home: str
       written++;
     }
   }
+  removed += pruneSkills(root, new Set(want.keys()));
+  return { written, removed };
+}
+
+/** Delete every `jaffer-*` skill directory except those in `keep`. Returns how many went. */
+function pruneSkills(root: string, keep: Set<string>): number {
+  let removed = 0;
   try {
     for (const d of fs.readdirSync(root)) {
-      if (d.startsWith('jaffer-') && !want.has(d)) {
+      if (d.startsWith('jaffer-') && !keep.has(d)) {
         fs.rmSync(path.join(root, d), { recursive: true, force: true });
         removed++;
       }
@@ -147,5 +154,10 @@ export function syncClaudeSkills(store: MemoryStore, enabled: boolean, home: str
   } catch {
     /* no skills dir */
   }
-  return { written, removed };
+  return removed;
+}
+
+/** Take back every skill Jaffer published to Claude Code (used when Jaffer is reset). */
+export function removeClaudeSkills(home: string = os.homedir()): number {
+  return pruneSkills(path.join(home, '.claude', 'skills'), new Set());
 }

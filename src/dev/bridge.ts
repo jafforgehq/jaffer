@@ -38,6 +38,7 @@ const SHIM = `(() => {
     notify: async () => {}, openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
     appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
+    reset: async () => { window.__resetCalled = (window.__resetCalled || 0) + 1; return { cancelled: true }; }, // the real app asks first; this stand-in is a person saying no
     updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
     setLoginItem: async () => {}, pathForFile: () => '', platform: 'darwin',
   };

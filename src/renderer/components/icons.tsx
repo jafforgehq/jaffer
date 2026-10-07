@@ -150,6 +150,12 @@ export const IconDownload = ({ size, class: c }: P): VNode => (
     <path d="M5 19h14" />
   </svg>
 );
+export const IconReset = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M4 12a8 8 0 108-8 8 8 0 00-5.7 2.4L4 8.5" />
+    <path d="M4 3.5v5h5" />
+  </svg>
+);
 export const IconBolt = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M13 3L5 13.5h6L10 21l8-10.5h-6L13 3z" />

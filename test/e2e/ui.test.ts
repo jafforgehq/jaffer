@@ -397,6 +397,21 @@ describe('Jaffer UI end to end', () => {
     await sendHook('SessionEnd', { session_id: 'spin-1' });
   }, 60_000);
 
+  it('Settings → Reset: says what it does, and only asks the app (which asks the person) before anything is touched', async () => {
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Reset' }).click();
+    const text = (await page.textContent('.settings')) ?? '';
+    expect(text).toMatch(/Claude Code itself/i); // what is NOT touched is said too
+    expect(text).toMatch(/backup/i);
+    await page.locator('button', { hasText: 'Reset…' }).click();
+    await until(async () => (await page.evaluate(() => (window as any).__resetCalled)) === 1, 5_000, 'the app to be asked to reset');
+    // the stand-in app answers "cancelled": nothing changed
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(true);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  });
+
   it('file paths in the panel are shown relative to where Claude is working', async () => {
     const file = '/work/app/src/auth/session.ts';
     await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });
@@ -481,7 +496,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code', 'Updates']);
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code', 'Updates', 'Reset']);
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
     for (const section of ['Memory', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);

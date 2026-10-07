@@ -146,9 +146,18 @@ jaffer recall linter          jaffer forget linter          jaffer context
 jaffer memory [list|log|reflect|consolidate]    jaffer memory revert <runId>
 jaffer status | doctor
 jaffer setup claude [--remove|--status]
+jaffer reset [--yes] [--delete]       # start over, see below
 ```
 
 Inside Jaffer, `jaffer` is on your `PATH` automatically; elsewhere, run *Install the `jaffer` command* from the palette.
+
+## Start over (a clean install)
+
+**In the app:** *Settings → Reset → Reset…*. It asks first, then ends the session, removes what Jaffer put on your Mac and restarts as if freshly installed.
+
+**From a terminal** (not Jaffer's own, the session would end under it): `jaffer reset` explains what it will do and asks you to type `reset`; `--yes` skips the question, `--delete` skips the backup. In a checkout without the app installed: `node dist/cli/jaffer.cjs reset`.
+
+What goes: Jaffer's folder `~/.jaffer` (memory, settings, session; moved aside as `~/.jaffer.backup-<time>` unless you delete it), its hooks and memory tools in Claude Code, the block it wrote into `~/.claude/CLAUDE.md`, the skills it published, the `jaffer` command link in `~/.local/bin`, the update cache, and the app's own data. What stays: Claude Code itself, its login, your own hooks and settings, and everything else on your Mac. To finish a clean install, drag Jaffer.app to the Trash and install the latest release. (An old version may have left a Keychain item: `security delete-generic-password -s Jaffer -a anthropic-api-key`.)
 
 ## Development
 

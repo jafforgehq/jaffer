@@ -6,7 +6,7 @@ import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock, IconDownload } from './icons';
+import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -215,7 +215,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-type Section = 'appearance' | 'memory' | 'integrations' | 'updates';
+type Section = 'appearance' | 'memory' | 'integrations' | 'updates' | 'reset';
 
 export function Settings(): VNode {
   const c = cfg.value!;
@@ -249,6 +249,7 @@ export function Settings(): VNode {
     { id: 'memory', label: 'Memory', icon: <IconBrain size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
     { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
+    { id: 'reset', label: 'Reset', icon: <IconReset size={14} /> },
   ];
 
   return (
@@ -375,10 +376,37 @@ export function Settings(): VNode {
             </>
           )}
 
+          {section === 'reset' && <ResetSection />}
           {section === 'updates' && <UpdatesSection auto={c.updates?.auto !== false} onAuto={(v) => set({ updates: { auto: v } })} />}
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** Start from scratch. The app asks again in a dialog of its own (and offers to keep a backup) before it touches anything. */
+function ResetSection(): VNode {
+  const [busy, setBusy] = useState(false);
+  const reset = async () => {
+    setBusy(true);
+    try {
+      await window.jaffer.reset();
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <h4>Reset</h4>
+      <p class="lede">Start from scratch, for a clean install. This ends your terminal session and removes Jaffer's memory, settings, hooks and memory tools from this Mac. Claude Code itself, its login and your own Claude settings are not touched. Unless you choose to delete it, a backup of ~/.jaffer is kept next to it.</p>
+      <Field label="Reset Jaffer" hint="asks first; the app restarts as if it were freshly installed">
+        <button class="btn danger" disabled={busy} onClick={() => void reset()}>
+          Reset…
+        </button>
+      </Field>
+    </>
   );
 }
 

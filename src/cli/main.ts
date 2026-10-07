@@ -8,6 +8,7 @@ import { tryConnect, ensureDaemon, launchDaemon } from '../core/daemon-client';
 import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { resetJaffer } from '../core/reset';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
 
@@ -234,6 +235,34 @@ async function main(): Promise<void> {
       for (const m of res.messages) console.log(m);
       console.log(dim(`claude: ${res.status.claudeInstalled ? res.status.claudePath : 'not found'} · hooks: ${res.status.hooks ? 'on' : 'off'} · mcp: ${res.status.mcp ? 'on' : 'off'}`));
       if (!flag('remove')) console.log(dim('Open a new Claude Code session; it will start with your memory and can recall/remember on demand.'));
+      return;
+    }
+
+    // Start over: take Jaffer off this Mac (see core/reset.ts). Run from another terminal, never from Jaffer's own: the session ends.
+    case 'reset': {
+      if (process.env.JAFFER_SESSION) throw new Error("This shell is Jaffer's own session, and resetting ends it. Run `jaffer reset` from another terminal (Terminal.app), or use Settings → Reset in the app.");
+      const del = !!flag('delete');
+      if (!flag('yes')) {
+        if (!process.stdin.isTTY) throw new Error(`This ends your Jaffer session and removes its memory, settings, hooks and memory tools${del ? '' : ' (a backup of ' + paths.home + ' is kept)'}. Run again with --yes to confirm.`);
+        console.log(`${bold('Reset Jaffer')}: ends the session and removes Jaffer's memory, settings and hooks (Claude Code and its login are not touched).`);
+        console.log(del ? 'Nothing is kept.' : `A copy of ${paths.home} is kept next to it as a backup.`);
+        const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await rl.question('Type reset to continue: ');
+        rl.close();
+        if (answer.trim().toLowerCase() !== 'reset') {
+          console.log('Cancelled. Nothing was changed.');
+          return;
+        }
+      }
+      const running = await tryConnect(paths);
+      if (running) {
+        await running.call('app.shutdown', {}).catch(() => undefined);
+        running.close();
+        for (let i = 0; i < 40 && (await tryConnect(paths, 300).then((c) => (c?.close(), !!c))); i++) await new Promise((r) => setTimeout(r, 150));
+      }
+      const res = await resetJaffer({ home: paths.home, backup: !del });
+      for (const m of res.messages) console.log(m);
+      console.log(green('Done.') + dim(' If the Jaffer app is open, quit it (⌘Q); it starts a new session straight away. To finish a clean install, drag Jaffer.app to the Trash and install the latest release.'));
       return;
     }
 

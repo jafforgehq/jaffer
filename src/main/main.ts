@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, nativeTheme, screen, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, nativeTheme, screen, session, shell, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { autoUpdater } from 'electron-updater';
@@ -13,6 +14,7 @@ import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
+import { resetJaffer } from '../core/reset';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
@@ -451,6 +453,40 @@ ipcMain.handle('jaffer:update-state', (e) => {
 ipcMain.handle('jaffer:update-check', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   return updates ? await updates.checkNow() : idleUpdateState();
+});
+ipcMain.handle('jaffer:reset', async (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  const ask = {
+    type: 'warning' as const,
+    message: 'Reset Jaffer and start from scratch?',
+    detail: `This ends your terminal session and removes Jaffer's memory, settings, hooks and memory tools from this Mac. Claude Code itself, its login and your own Claude settings are not touched.\n\n“Reset and keep a backup” moves ${paths.home.replace(os.homedir(), '~')} aside (as ${paths.home.replace(os.homedir(), '~')}.backup-…) so you can get it back; “Reset and delete everything” does not.`,
+    buttons: ['Cancel', 'Reset and keep a backup', 'Reset and delete everything'],
+    defaultId: 0,
+    cancelId: 0,
+  };
+  const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+  if (r.response === 0) return { cancelled: true };
+  quitting = true; // from here the app is on its way out and must not reconnect to the session it is ending
+  updates?.stop();
+  await client?.call('setup.claude.remove', {}).catch(() => undefined); // the daemon finds `claude` the way the terminal does
+  await client?.call('app.shutdown', {}).catch(() => undefined);
+  client?.close();
+  for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);
+  try {
+    await resetJaffer({ home: paths.home, backup: r.response === 1, appData: false });
+    await session.defaultSession.clearStorageData();
+    await session.defaultSession.clearCache();
+    app.setLoginItemSettings({ openAtLogin: false });
+  } catch (err) {
+    quitting = false;
+    await dialog.showMessageBox({ type: 'error', message: 'Reset did not finish', detail: String(err instanceof Error ? err.message : err).slice(0, 400) });
+    app.relaunch();
+    app.exit(0);
+    return { cancelled: false };
+  }
+  app.relaunch();
+  app.exit(0);
+  return { cancelled: false };
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });
