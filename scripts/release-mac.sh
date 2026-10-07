@@ -129,7 +129,9 @@ for DMG in release/*.dmg; do codesign --verify --verbose=2 "$DMG"; done
 # ---- 5. run it --------------------------------------------------------------------------------------------------
 if [ "$(uname -m)" = arm64 ] && [ -d release/mac-arm64/Jaffer.app ]; then
   say "Launching the signed app once (self-test: daemon, shell, renderer)"
-  JAFFER_HOME="$(mktemp -d)/jaffer-home" JAFFER_SMOKE=1 release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee release/smoke.log
+  # its own user-data dir, so a Jaffer you have open (Electron allows one instance per data dir) cannot make the self-test fail silently
+  SMOKE_DIR="$(mktemp -d)"
+  JAFFER_HOME="$SMOKE_DIR/jaffer-home" JAFFER_SMOKE=1 release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer --user-data-dir="$SMOKE_DIR/userdata" 2>&1 | tee release/smoke.log
   grep -q "SMOKE OK" release/smoke.log || die "the signed app failed its self-test"
   rm -f release/smoke.log
 fi
@@ -161,6 +163,10 @@ if [ "$PUBLISH" = 1 ]; then
   NOTES="Signed with an Apple Developer ID and **notarized by Apple**: opens without Gatekeeper warnings.
 
 **Which file?** Apple Silicon (M1 and later): \`arm64\`. Intel Macs: \`x64\`. Use the \`.dmg\` (drag to Applications) or the \`.zip\`. Verify downloads with \`SHA256SUMS.txt\`."
+  # what is new in this version, written by hand in docs/releases/vX.Y.Z.md (optional)
+  [ -f "docs/releases/$TAG.md" ] && NOTES="$(cat "docs/releases/$TAG.md")
+
+$NOTES"
   FILES=(release/*.dmg release/*.zip release/*.zip.blockmap release/SHA256SUMS.txt)
   # A release that does not exist yet starts as a pre-release, which installed apps ignore, until the manifest is there.
   gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "Jaffer $VERSION" --notes "$NOTES" --generate-notes
