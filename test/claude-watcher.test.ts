@@ -129,6 +129,22 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions()).toHaveLength(0);
   });
 
+  it('hooks still in flight when the session ended still record what happened, but never bring it back; SessionStart does', () => {
+    w.handle(fx('PreToolUse', bash('npm test')));
+    w.endAll(); // the shell reported that the claude command finished
+    expect(only().state).toBe('ended');
+    const endedAt = only().since;
+    t += 50;
+    w.handle(fx('PostToolUse', { ...bash('npm test'), duration_ms: 5 }));
+    w.handle(fx('Stop', { last_assistant_message: 'the last reply arrived late' }));
+    w.handle(fx('UserPromptSubmit', { prompt: 'late too' }));
+    expect(only()).toMatchObject({ state: 'ended', since: endedAt, tool: undefined, notice: undefined });
+    expect(only().lastReply).toBe('the last reply arrived late'); // the data is kept
+    expect(only().activity[0]).toMatchObject({ status: 'done', durMs: 5 });
+    w.handle(fx('SessionStart')); // a resumed session
+    expect(only().state).toBe('idle');
+  });
+
   it('endAll ends every session', () => {
     w.handle(fx('UserPromptSubmit', { session_id: 'a' }));
     w.handle(fx('Stop', { session_id: 'b' }));

@@ -160,6 +160,14 @@ export class ClaudeWatcher {
     if (!id || !KNOWN.has(ev)) return;
     if (ev === 'UserPromptSubmit' && str(o.prompt).trimStart().startsWith('<task-notification>')) return; // Claude Code's own background notices
 
+    // Hooks are async: some are still in flight when the session ends or the shell sees `claude` exit. They may still
+    // record what happened (the last reply, a finished tool), but only a SessionStart (a resumed session) brings an
+    // ended session back to life.
+    const prior = this.map.get(id)?.s;
+    const stayEnded = prior?.state === 'ended' && ev !== 'SessionStart';
+    const endedSince = prior?.since ?? 0;
+    if (stayEnded && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Notification')) return; // things that start something cannot be late
+
     const s = this.session(id, clip(o.cwd, 300));
     if (str(o.cwd) && !s.cwd) s.cwd = clip(o.cwd, 300);
     if (str(o.transcript_path)) s.transcriptPath = str(o.transcript_path).slice(0, 400);
@@ -232,6 +240,12 @@ export class ClaudeWatcher {
       case 'SessionEnd':
         this.end(s);
         break;
+    }
+    if (stayEnded) {
+      s.state = 'ended';
+      s.since = endedSince;
+      s.tool = undefined;
+      s.notice = undefined;
     }
   }
 }

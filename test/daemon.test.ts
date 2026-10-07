@@ -9,6 +9,7 @@ import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-clie
 import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
 import { findClaude } from '../src/core/integrations/claude';
+import type { ClaudeSession } from '../src/core/claude/watcher';
 
 const CLAUDE = await findClaude().catch(() => null);
 
@@ -360,6 +361,7 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
 describe('the terminal Claude, live (bundled daemon, hooks through the real jaffer CLI)', () => {
   let env3: TestEnv;
   let c: RpcClient;
+  let mock3: MockAnthropic; // the model behind the real `claude` used by the last test
   const userHook = { type: 'command', command: 'echo my own hook' };
   const settings = () => path.join(env3.userHome, '.claude', 'settings.json');
 
@@ -372,10 +374,12 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
       child.stdin.end(JSON.stringify(payload));
     });
   const ev = (name: string, over: object = {}) => ({ session_id: 'sess-1', hook_event_name: name, cwd: '/work/app', ...over });
-  const states = async () => (await c.call('claude.state', {})).sessions as { id: string; state: string; tool?: { name: string }; notice?: string }[];
+  const states = async () => (await c.call('claude.state', {})).sessions as ClaudeSession[];
 
   beforeAll(async () => {
     env3 = makeEnv();
+    mock3 = new MockAnthropic();
+    const mockUrl3 = await mock3.listen();
     // an install from before this feature (only the two memory hooks) next to the user's own hook
     fs.mkdirSync(path.dirname(settings()), { recursive: true });
     const old = (arg: string, timeout: number) => [{ hooks: [{ type: 'command', command: `'${env3.home}/bin/jaffer' hook ${arg} # jaffer-managed`, timeout }] }];
@@ -384,7 +388,19 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
       execPath: process.execPath,
       daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
       cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
-      env: { HOME: env3.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ' },
+      env: {
+        HOME: env3.userHome,
+        SHELL: '/bin/bash',
+        JAFFER_TICK_MS: '400',
+        PS1: '$ ',
+        // what the real `claude` of the last test (started from this daemon's shell) needs: a mock API and an isolated profile
+        CLAUDE_CONFIG_DIR: path.join(env3.userHome, '.claude'),
+        ANTHROPIC_BASE_URL: mockUrl3,
+        ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000',
+        DISABLE_AUTOUPDATER: '1',
+        DISABLE_TELEMETRY: '1',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      },
     });
   }, 30_000);
 
@@ -393,6 +409,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     const last = await tryConnect(env3.paths);
     await last?.call('app.shutdown', {}).catch(() => undefined);
     await sleep(300);
+    await mock3.close();
     env3.cleanup();
   });
 
@@ -445,4 +462,34 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await c.call('pty.write', { data: 'claude --resume\r' });
     await waitUntil(async () => (await states()).every((s) => s.state === 'ended'), 8_000);
   });
+
+  // The real thing end to end: Claude Code fires its real hooks, the real `jaffer hook` reports from inside the daemon's shell
+  // (JAFFER_SESSION is exported by Jaffer's shell integration), and the daemon ends up knowing what Claude did.
+  it.skipIf(!CLAUDE)('a real Claude Code turn, run in the shell, reaches the live state through its real hooks', async () => {
+    fs.writeFileSync(path.join(env3.userHome, 'notes.txt'), 'the deploy script is release.sh\n');
+    const main = (b: any) => (b.tools?.length ?? 0) > 0; // the main request carries tools; background requests do not
+    mock3.reset().queue(
+      { kind: 'tool', id: 'toolu_real1', name: 'Read', input: { file_path: path.join(env3.userHome, 'notes.txt') }, text: 'Reading it.', when: main },
+      { kind: 'text', text: 'The notes say the deploy script is release.sh.', when: main },
+    );
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await sleep(800);
+    await c.call('pty.write', { data: 'unset -f claude\r' }); // the stand-in function an earlier test left in this shell
+    await sleep(400);
+    await c.call('pty.write', { data: 'claude -p "read notes.txt and tell me what it says"\r' });
+    const real = async () => (await states()).find((s) => /notes\.txt/.test(s.prompt ?? ''));
+    // the turn ends with Claude exiting: the shell reports it and the session ends, keeping what it saw
+    await waitUntil(async () => {
+      const r = await real();
+      // async hooks can land in any order, so wait for all of what it should have seen
+      return r?.state === 'ended' && !!r.lastReply && r.activity.some((a) => a.status === 'done');
+    }, 60_000).catch(async (e) => {
+      throw new Error(`${e.message}; sessions=${JSON.stringify(await states())}; mock saw ${mock3.requests.length} requests`);
+    });
+    const r = (await real())!;
+    expect(r.prompt).toContain('read notes.txt'); // what the user asked, from the real UserPromptSubmit
+    expect(r.activity.some((a) => a.name === 'Read' && a.status === 'done' && /notes\.txt/.test(a.summary))).toBe(true);
+    expect(r.lastReply).toContain('deploy script is release.sh');
+  }, 90_000);
 });
