@@ -354,6 +354,49 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
+  it('the running-process spinner: an ordinary command spins, Claude Code spins only while it works, and Animations off stops it', async () => {
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    const bar = '.session-pill .running';
+    const chip = '.session-card .tag.claude';
+    if (!(await page.$('.rail'))) await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.rail');
+    await page.click('.term');
+    // an ordinary command is working until it ends: it spins
+    await page.keyboard.type('sleep 40', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector(`${bar} .spinner`);
+    expect(await cs(`${bar} .spinner`, 'animationName')).toContain('spin');
+    await page.keyboard.press('Control+c');
+    await until(async () => !(await page.$(bar)), 10_000, 'the command to end');
+    // Claude Code is a program you sit in: running is not working. (A command line that names claude stands in for it.)
+    await page.keyboard.type('sleep 40 # claude', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector(`${bar}[data-kind="claude"]`);
+    await page.waitForSelector(chip);
+    expect(await page.locator(`${bar} .spinner`).count()).toBe(0);
+    expect(await page.locator(`${bar} .run-dot`).count()).toBe(1);
+    expect(await page.locator(`${chip} .spinner`).count()).toBe(0);
+    // it starts working: now it moves
+    await sendHook('UserPromptSubmit', { session_id: 'spin-1', prompt: 'go' });
+    await page.waitForSelector(`${bar} .spinner`);
+    await page.waitForSelector(`${chip} .spinner`);
+    expect(await cs(`${bar} .spinner`, 'animationName')).toContain('spin');
+    // Animations off: the ring stands still, still visible
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+    expect(await cs(`${bar} .spinner`, 'animationName')).toBe('none');
+    expect(await cs(`${chip} .spinner`, 'animationName')).toBe('none');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'on', 8_000, 'motion to be on again');
+    // the turn ends: calm again, though the program is still running
+    await sendHook('Stop', { session_id: 'spin-1', last_assistant_message: 'done' });
+    await until(async () => (await page.locator(`${bar} .spinner`).count()) === 0 && (await page.locator(`${chip} .spinner`).count()) === 0, 8_000, 'the spinners to stop');
+    expect(await page.locator(`${bar} .run-dot`).count()).toBe(1);
+    await page.keyboard.press('Control+c');
+    await until(async () => !(await page.$(bar)), 10_000, 'the command to end');
+    await sendHook('SessionEnd', { session_id: 'spin-1' });
+  }, 60_000);
+
   it('file paths in the panel are shown relative to where Claude is working', async () => {
     const file = '/work/app/src/auth/session.ts';
     await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });

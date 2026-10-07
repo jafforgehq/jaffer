@@ -1,5 +1,6 @@
 import type { VNode } from 'preact';
 import { activePane, baseName, claudeAuth, clock, commandLog, currentClaude, daemonUp, fmtUptime, fmtDuration, homeDir, info, memItems, overlay, safeCommand, setSide, side, tildePath, toggleRail, toggleSide } from '../state';
+import { processBadge } from '../../shared/process-badge';
 import { terminals } from './TerminalView';
 import { IconAgent, IconBolt, IconCheck, IconCommandKey, IconFolder, IconGear, IconBranch, IconPlus, IconSidebar, IconTerminal, IconX } from './icons';
 
@@ -12,6 +13,7 @@ export function SessionRail(): VNode {
   const name = atHome ? 'Home' : baseName(i.project || i.cwd);
   const busy = i.busy ?? null;
   const claude = !!busy && /\bclaude\b/.test(busy);
+  const badge = processBadge(busy, currentClaude()?.state);
   const cmds = commandLog.value.slice(-5).reverse();
   const live = currentClaude();
   const waiting = live?.state === 'needs-you';
@@ -50,7 +52,7 @@ export function SessionRail(): VNode {
             )}
             {busy && (
               <span class={`tag ${claude ? 'claude' : 'busy'}`} title={busy}>
-                <span class="spinner" /> {claude ? 'Claude Code' : safeCommand(busy).slice(0, 22)}
+                <span class={badge.spin ? 'spinner' : 'run-dot'} /> {claude ? 'Claude Code' : safeCommand(busy).slice(0, 22)}
               </span>
             )}
             {!busy && i.lastCommand && (

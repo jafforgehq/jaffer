@@ -1,5 +1,6 @@
 import type { VNode } from 'preact';
 import { claudeAuth, currentClaude, daemonUp, dismissToast, fmtDuration, info, memPulse, memStats, overlay, railOpen, safeCommand, setSide, side, tildePath, toasts, toggleRail, toggleSide } from '../state';
+import { processBadge } from '../../shared/process-badge';
 import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconX } from './icons';
 
 function shortPath(p: string): string {
@@ -13,6 +14,7 @@ export function TitleBar(): VNode {
   const i = info.value;
   const busy = currentClaude()?.state === 'working'; // a dot on the Claude button while Claude works
   const running = i.busy ?? null;
+  const badge = processBadge(running, currentClaude()?.state);
   return (
     <div class="titlebar">
       <div class="tb-left">
@@ -37,8 +39,8 @@ export function TitleBar(): VNode {
           {running && (
             <>
               <span class="sep" />
-              <span class="running">
-                <span class="spinner" /> {safeCommand(running).slice(0, 28)}
+              <span class="running" data-kind={badge.kind}>
+                <span class={badge.spin ? 'spinner' : 'run-dot'} /> {safeCommand(running).slice(0, 28)}
               </span>
             </>
           )}
