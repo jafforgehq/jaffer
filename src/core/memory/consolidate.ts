@@ -1,6 +1,6 @@
 import type { MemoryStore, RunCtx } from './store';
 import { similarity } from './text';
-import { effectiveConfidence, strength } from './ranking';
+import { strength } from './ranking';
 import type { MemoryItem } from './types';
 
 export interface ConsolidationCounts {
@@ -67,10 +67,4 @@ export function consolidateHeuristic(store: MemoryStore, run: RunCtx): Consolida
   }
   store.flush();
   return counts;
-}
-
-/** Confidence lost to time alone, for display ("fading"). */
-export function fadeRatio(item: MemoryItem, now: number): number {
-  if (item.pinned || item.confidence === 0) return 0;
-  return 1 - effectiveConfidence(item, now) / item.confidence;
 }

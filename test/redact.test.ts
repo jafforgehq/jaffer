@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasSecret, isSensitiveCommand, redact, redactText } from '../src/shared/redact';
+import { isSensitiveCommand, redact, redactText } from '../src/shared/redact';
 
 describe('redact', () => {
   it('masks well-known token formats', () => {
@@ -58,7 +58,7 @@ describe('redact', () => {
     const twice = redact(once.text);
     expect(twice.text).toBe(once.text);
     expect(once.kinds).toContain('assignment');
-    expect(hasSecret('nothing to see')).toBe(false);
+    expect(redact('nothing to see').count).toBe(0);
   });
 });
 

@@ -9,8 +9,7 @@ import { SHELL_SCRIPTS } from '../../generated/shell-scripts';
  * dotfiles) that emit standard terminal marks —
  *   OSC 133;A  prompt start      OSC 133;C  command output start      OSC 133;D;<exit>  command finished
  *   OSC 633;E;<cmd>  the command line      OSC 633;P;Cwd=<dir>  working directory
- * The session host turns them into command events for memory and lets the agent run
- * commands in the same shell the user is looking at.
+ * The session host turns them into command events (for memory, and for the "something is running" cues).
  */
 
 export interface ShellSpawn {

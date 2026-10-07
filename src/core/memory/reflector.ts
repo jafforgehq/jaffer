@@ -99,17 +99,11 @@ export function buildDigest(episodes: Episode[], budgetChars = 22_000): string {
     switch (e.t) {
       case 'cmd': {
         const status = e.exit === 0 ? 'ok' : `exit ${e.exit}`;
-        let l = `[${time}] (${where}) $ ${truncate(e.cmd, 200)} → ${status}${e.by === 'agent' ? ' (run by agent)' : ''}`;
+        let l = `[${time}] (${where}) $ ${truncate(e.cmd, 200)} → ${status}`;
         if (e.exit !== 0 && e.out) l += `\n    output tail: ${truncate(e.out.replace(/\s+/g, ' '), 300)}`;
         lines.push({ prio: e.exit !== 0 ? 2 : 1, text: l });
         break;
       }
-      case 'agent':
-        lines.push({
-          prio: e.correction ? 5 : 4,
-          text: `[${time}] (${where}) ${e.correction ? '[USER CORRECTED THE AGENT] ' : ''}USER: ${truncate(e.user, 500)}\n    AGENT: ${truncate(e.reply, 500)}${e.tools.length ? `\n    tools: ${[...new Set(e.tools)].join(', ')}` : ''}${e.error ? `\n    error: ${truncate(e.error, 200)}` : ''}`,
-        });
-        break;
       case 'ext':
         lines.push({ prio: e.correction ? 5 : e.role === 'user' ? 3 : 1, text: `[${time}] (${where}) ${e.agent} ${e.role.toUpperCase()}${e.correction ? ' [CORRECTION]' : ''}: ${truncate(e.text, 400)}` });
         break;
@@ -157,7 +151,7 @@ Principles:
 - Prefer reinforce/update/merge over add. Never add something already covered by an existing item.
 - Each item is one self-contained sentence, under 220 characters, written so a stranger could act on it.
 - Use scope "project:<path>" for repo-specific knowledge (use the exact project path shown in the digest), "global" for personal/tooling preferences.
-- Moments marked USER CORRECTED THE AGENT are the strongest signal: extract the rule the user was enforcing.
+- Moments marked [CORRECTION] are the strongest signal: extract the rule the user was enforcing.
 - Never store secrets, tokens, credentials or personal data. Never store transient state.
 - Respect the policy and do not touch pinned items except to reinforce them.`;
 

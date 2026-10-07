@@ -50,12 +50,11 @@ describe('MemoryStore', () => {
     store.contradict(run, a.id);
     store.contradict(run, a.id);
     expect(store.getItem(a.id)!.status).toBe('archived');
-    store.restore(run, a.id);
-    expect(store.getItem(a.id)!.status).toBe('active');
+    const x = store.add(run, { kind: 'convention', scope: 'global', text: 'Indent every file with tabs, not spaces' })!.item;
     const b = store.add(run, { kind: 'convention', scope: 'global', text: 'Code style requires two-space indentation' })!.item;
-    const merged = store.merge(run, [a.id, b.id], 'Indent with two spaces, never tabs')!;
-    expect(store.getItem(a.id)!.status).toBe('superseded');
-    expect(store.getItem(a.id)!.supersededBy).toBe(merged.id);
+    const merged = store.merge(run, [x.id, b.id], 'Indent with two spaces, never tabs')!;
+    expect(store.getItem(x.id)!.status).toBe('superseded');
+    expect(store.getItem(x.id)!.supersededBy).toBe(merged.id);
     expect(store.listItems()).toHaveLength(1);
   });
 
@@ -184,11 +183,11 @@ describe('MemoryEngine', () => {
     env.config.patch({ onboarded: true });
     const llm = new FakeLlm(() => JSON.stringify({ ops: [{ op: 'add', kind: 'lesson', scope: 'project:/work/app', text: 'Run migrations before starting the dev server or it crashes on boot', confidence: 0.8, why: 'user corrected' }] }));
     const engine = makeEngine(env, llm);
-    engine.observeAgentTurn({ user: 'No, run the migrations first', reply: 'Ok', tools: ['run_command'], cwd: '/work/app', project: '/work/app', previousAssistant: true });
+    engine.observe({ t: 'ext', agent: 'claude-code', role: 'user', text: 'No, run the migrations first', correction: true, cwd: '/work/app', project: '/work/app' });
     const res = await engine.reflect({ force: true });
     expect(res.mode).toBe('both');
     expect(llm.calls).toHaveLength(1);
-    expect(llm.calls[0]!.user).toContain('USER CORRECTED THE AGENT');
+    expect(llm.calls[0]!.user).toContain('[CORRECTION]');
     expect(engine.store.listItems().some((i) => i.text.includes('migrations'))).toBe(true);
     const n = engine.store.revertRun(res.runId);
     expect(n).toBeGreaterThan(0);
@@ -344,14 +343,13 @@ describe('exports', () => {
     const engine = makeEngine(env);
     fs.mkdirSync(path.join(env.userHome, '.claude'));
     const run = engine.store.newRun('reflector');
-    const s = engine.store.addSkill(run, { name: 'Ship a release', description: 'Tag and publish', whenToUse: 'When cutting a release', steps: ['git tag v1', 'git push --tags'], confidence: 0.8 })!;
+    engine.store.addSkill(run, { name: 'Ship a release', description: 'Tag and publish', whenToUse: 'When cutting a release', steps: ['git tag v1', 'git push --tags'], confidence: 0.8 });
     const out = syncClaudeSkills(engine.store, true, env.userHome);
     expect(out.written).toBe(1);
     const dir = fs.readdirSync(path.join(env.userHome, '.claude', 'skills')).find((d) => d.startsWith('jaffer-'))!;
     const md = fs.readFileSync(path.join(env.userHome, '.claude', 'skills', dir, 'SKILL.md'), 'utf8');
     expect(md).toMatch(/^---\nname: jaffer-/);
     expect(md).toContain('git push --tags');
-    engine.store.archiveSkill(run, s.id);
-    expect(syncClaudeSkills(engine.store, true, env.userHome).removed).toBe(1);
+    expect(syncClaudeSkills(engine.store, false, env.userHome).removed).toBe(1); // switched off: what Jaffer published is taken back
   });
 });

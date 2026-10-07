@@ -21,12 +21,6 @@ export const IconTerminal = ({ size, class: c }: P): VNode => (
     <path d="M12 19h8" />
   </svg>
 );
-export const IconFile = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" />
-    <path d="M14 3v5h5" />
-  </svg>
-);
 export const IconSearch = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <circle cx="11" cy="11" r="6" />
@@ -44,42 +38,16 @@ export const IconX = ({ size, class: c }: P): VNode => (
     <path d="M6 6l12 12M18 6L6 18" />
   </svg>
 );
-export const IconCheck = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M5 12l5 5L20 7" />
-  </svg>
-);
-export const IconSend = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M5 12h14" />
-    <path d="M13 6l6 6-6 6" />
-  </svg>
-);
-export const IconStop = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-  </svg>
-);
 export const IconGear = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" />
   </svg>
 );
-export const IconChevron = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M9 6l6 6-6 6" />
-  </svg>
-);
 export const IconRefresh = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M20 11a8 8 0 10-2.3 5.7" />
     <path d="M20 4v7h-7" />
-  </svg>
-);
-export const IconPlus = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M12 5v14M5 12h14" />
   </svg>
 );
 export const IconUndo = ({ size, class: c }: P): VNode => (
@@ -89,7 +57,6 @@ export const IconUndo = ({ size, class: c }: P): VNode => (
   </svg>
 );
 
-// ---- second set (session rail, cards, palette)
 export const IconFolder = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
@@ -112,29 +79,6 @@ export const IconClock = ({ size, class: c }: P): VNode => (
 export const IconPlay = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M7 5l12 7-12 7V5z" fill="currentColor" />
-  </svg>
-);
-export const IconCheckCircle = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M8 12.5l2.7 2.7L16 9.8" />
-  </svg>
-);
-export const IconXCircle = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M9 9l6 6M15 9l-6 6" />
-  </svg>
-);
-export const IconChevronDown = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M6 9l6 6 6-6" />
-  </svg>
-);
-export const IconShield = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z" />
-    <path d="M9 12l2.2 2.2L15.5 10" />
   </svg>
 );
 export const IconDownload = ({ size, class: c }: P): VNode => (
@@ -200,23 +144,6 @@ export const IconUser = ({ size, class: c }: P): VNode => (
     <path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5" />
   </svg>
 );
-export const IconCopy = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <rect x="8" y="8" width="12" height="12" rx="2" />
-    <path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" />
-  </svg>
-);
-export const IconEdit = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M4 20h4L19 9l-4-4L4 16v4z" />
-    <path d="M13.5 6.5l4 4" />
-  </svg>
-);
-export const IconList = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />
-  </svg>
-);
 export const IconLightbulb = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M9 18h6M10 21h4" />
@@ -232,16 +159,6 @@ export const IconLayout = ({ size, class: c }: P): VNode => (
 export const IconCommandKey = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M9 9V7a3 3 0 10-3 3h12a3 3 0 10-3-3v10a3 3 0 103-3H6a3 3 0 103 3V9" />
-  </svg>
-);
-export const IconDot = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
-  </svg>
-);
-export const IconArrowUp = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M12 19V5M5 12l7-7 7 7" />
   </svg>
 );
 export const IconWand = ({ size, class: c }: P): VNode => (

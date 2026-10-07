@@ -3,18 +3,18 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { JafferPaths } from '../../shared/paths';
 import type { ConfigStore } from '../../shared/config';
-import { Emitter, SerialQueue, errMsg, nowIso, uid, writeFileAtomic } from '../../shared/util';
+import { Emitter, SerialQueue, errMsg, nowIso, writeFileAtomic } from '../../shared/util';
 import { isSensitiveCommand, redactText } from '../../shared/redact';
 import { MemoryStore, type RunCtx } from './store';
 import { CursorFile, EpisodeLog, type CursorState } from './episodes';
-import { detectCorrection, extractDirectives, runHeuristics, type HeuristicEnv } from './heuristics';
+import { extractDirectives, runHeuristics, type HeuristicEnv } from './heuristics';
 import { applyOps, emptyCounts, type ApplyCounts } from './apply';
 import { consolidateHeuristic } from './consolidate';
 import { buildContext, writeViews, type BuiltContext, type ContextOptions } from './context';
 import { DEFAULT_POLICY, reflectWithLlm } from './reflector';
 import type { LlmClient } from './llm';
 import { syncClaudeSkills, syncExports } from './exports';
-import type { CommandEpisode, Episode, EpisodeInput, MemoryItem, MemoryKind, MemoryScope, MemoryStats, ProposedOp, ReflectionResult, SkillItem } from './types';
+import type { CommandEpisode, Episode, EpisodeInput, MemoryItem, MemoryKind, MemoryScope, MemoryStats, ReflectionResult, SkillItem } from './types';
 import { MEMORY_KINDS } from './types';
 import { rankItems, rankSkills } from './ranking';
 
@@ -97,25 +97,20 @@ export class MemoryEngine {
     const ep = this.episodes.append(input);
     if (ep) {
       this.lastEpisodeAt = this.clock();
-      const corrected = ep.t === 'agent' || ep.t === 'ext' ? ep.correction : false;
+      const corrected = ep.t === 'ext' ? ep.correction : false;
       // Something the user explicitly told an agent to always/never do is worth learning now, not after more activity piles up.
-      const userText = ep.t === 'agent' ? ep.user : ep.t === 'ext' && ep.role === 'user' ? ep.text : '';
+      const userText = ep.t === 'ext' && ep.role === 'user' ? ep.text : '';
       if (corrected || (userText && extractDirectives(userText).length > 0)) this.pendingCorrection = true;
     }
     return ep;
   }
 
-  observeCommand(c: { cmd: string; exit: number | null; cwd?: string; project?: string; durMs?: number; branch?: string; out?: string; by?: 'user' | 'agent' }): Episode | null {
+  observeCommand(c: { cmd: string; exit: number | null; cwd?: string; project?: string; durMs?: number; branch?: string; out?: string }): Episode | null {
     if (isSensitiveCommand(c.cmd)) return null;
-    // Only failures and agent-run commands keep an output tail.
-    const keepOut = c.exit !== 0 || c.by === 'agent';
-    const ep: Omit<CommandEpisode, 'seq' | 'id' | 'ts'> = { t: 'cmd', cmd: c.cmd, exit: c.exit, cwd: c.cwd, project: c.project, durMs: c.durMs, branch: c.branch, by: c.by ?? 'user', out: keepOut ? c.out : undefined };
+    // Only failures keep an output tail.
+    const keepOut = c.exit !== 0;
+    const ep: Omit<CommandEpisode, 'seq' | 'id' | 'ts'> = { t: 'cmd', cmd: c.cmd, exit: c.exit, cwd: c.cwd, project: c.project, durMs: c.durMs, branch: c.branch, out: keepOut ? c.out : undefined };
     return this.observe(ep);
-  }
-
-  observeAgentTurn(t: { user: string; reply: string; tools: string[]; cwd?: string; project?: string; error?: string; previousAssistant?: boolean }): Episode | null {
-    const correction = !!t.previousAssistant && detectCorrection(t.user);
-    return this.observe({ t: 'agent', user: t.user, reply: t.reply, tools: t.tools, cwd: t.cwd, project: t.project, error: t.error, correction });
   }
 
   // ------------------------------------------------------------ explicit memory (user / agents)
@@ -371,17 +366,6 @@ export class MemoryEngine {
 
   updateCursor(fn: (c: CursorState) => void): void {
     this.cursor.update(fn);
-  }
-
-  newRunId(): string {
-    return uid('run');
-  }
-
-  /** Test seam: apply a list of ops as if a reflector proposed them. */
-  applyProposed(ops: ProposedOp[], source: RunCtx['source'] = 'reflector'): ApplyCounts {
-    const c = applyOps(this.store, this.store.newRun(source, 'proposed'), ops);
-    this.refreshViews();
-    return c;
   }
 
   redact(text: string): string {

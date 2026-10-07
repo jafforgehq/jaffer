@@ -27,8 +27,6 @@
     "gen": "node scripts/gen-shell.mjs",
     "icon": "node scripts/make-icon.mjs",
     "smoke": "JAFFER_SMOKE=1 electron .",
-    "lint": "tsc --noEmit -p tsconfig.json --noUnusedLocals false",
-    "test:all": "npm run typecheck && vitest run && vitest run --config vitest.e2e.config.ts",
     "screenshots": "JAFFER_SCREENSHOTS=docs/screenshots vitest run --config vitest.e2e.config.ts test/e2e/screenshots.test.ts"
   },
   "dependencies": {

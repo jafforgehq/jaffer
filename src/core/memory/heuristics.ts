@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { CursorState } from './episodes';
-import type { AgentTurnEpisode, CommandEpisode, Episode, ExternalAgentEpisode, MemoryKind, NoteEpisode, ProposedOp } from './types';
+import type { CommandEpisode, Episode, ExternalAgentEpisode, MemoryKind, NoteEpisode, ProposedOp } from './types';
 
 /**
  * Offline reflection: deterministic rules that turn raw episodes into memory proposals.
@@ -128,7 +128,7 @@ export function runHeuristics(input: HeuristicInput): HeuristicOutput {
   const home = input.env?.home ?? os.homedir();
 
   const cmds = input.episodes.filter(isCmd);
-  const userCmds = cmds.filter((c) => c.by !== 'agent');
+  const userCmds = cmds;
 
   // ---- environment ------------------------------------------------------
   if (input.env && (input.env.platform || input.env.shell)) {
@@ -381,8 +381,7 @@ export function runHeuristics(input: HeuristicInput): HeuristicOutput {
   // ---- explicit statements from the user -------------------------------
   for (const e of input.episodes) {
     let text: string | null = null;
-    if (e.t === 'agent') text = (e as AgentTurnEpisode).user;
-    else if (e.t === 'ext' && (e as ExternalAgentEpisode).role === 'user') text = (e as ExternalAgentEpisode).text;
+    if (e.t === 'ext' && (e as ExternalAgentEpisode).role === 'user') text = (e as ExternalAgentEpisode).text;
     else if (e.t === 'note') text = (e as NoteEpisode).text;
     if (!text) continue;
     for (const d of extractDirectives(text)) {

@@ -151,10 +151,6 @@ export class MemoryStore {
     return this.items.get(id);
   }
 
-  getSkill(id: string): SkillItem | undefined {
-    return this.skills.get(id);
-  }
-
   findByKey(key: string): MemoryItem | undefined {
     for (const i of this.items.values()) if (i.key === key) return i;
     return undefined;
@@ -328,27 +324,6 @@ export class MemoryStore {
     return next;
   }
 
-  restore(run: RunCtx, id: string): MemoryItem | null {
-    const cur = this.items.get(id);
-    if (!cur) return null;
-    const before = { ...cur };
-    const next: MemoryItem = { ...cur, status: 'active', lastSeenAt: new Date(this.clock()).toISOString(), updatedAt: new Date(this.clock()).toISOString() };
-    this.items.set(id, next);
-    this.journal(run, 'restore', 'item', id, before, next);
-    this.dirty.items = true;
-    return next;
-  }
-
-  /** Hard delete (user action). Archive is the normal way for the system to let go of something. */
-  delete(run: RunCtx, id: string): boolean {
-    const cur = this.items.get(id);
-    if (!cur) return false;
-    this.items.delete(id);
-    this.journal(run, 'delete', 'item', id, cur, null);
-    this.dirty.items = true;
-    return true;
-  }
-
   pin(run: RunCtx, id: string, pinned: boolean): MemoryItem | null {
     const cur = this.items.get(id);
     if (!cur) return null;
@@ -464,16 +439,6 @@ export class MemoryStore {
     this.journal(run, 'skill-add', 'skill', skill.id, null, skill);
     this.dirty.skills = true;
     return skill;
-  }
-
-  archiveSkill(run: RunCtx, id: string): boolean {
-    const cur = this.skills.get(id);
-    if (!cur || cur.status === 'archived') return false;
-    const next: SkillItem = { ...cur, status: 'archived', updatedAt: new Date(this.clock()).toISOString() };
-    this.skills.set(id, next);
-    this.journal(run, 'skill-archive', 'skill', id, cur, next);
-    this.dirty.skills = true;
-    return true;
   }
 
   markSkillUsed(id: string): void {

@@ -4,7 +4,6 @@ import path from 'node:path';
 import { ConfigStore, type DeepPartial, type JafferConfig } from '../shared/config';
 import { makePaths, type JafferPaths } from '../shared/paths';
 import { ensureDir, errMsg, nowIso, writeFileAtomic } from '../shared/util';
-import { isSensitiveCommand, redactText } from '../shared/redact';
 import { RpcError, RpcServer, type ServerConn } from '../core/rpc';
 import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
@@ -44,9 +43,6 @@ export class JafferService {
   private login: ClaudeLogin | null = null;
   private loginError: string | undefined;
   private startedAt = nowIso();
-  private lastCommand: { cmd: string; exit: number | null } | undefined;
-  /** The last commands of the session, for the app's session rail. Redacted; sensitive commands are left out entirely. */
-  private recentCommands: { cmd: string; exit: number | null; durMs: number; cwd: string; at: number; by: 'user' | 'agent' }[] = [];
   private timers: NodeJS.Timeout[] = [];
   private ingestor: ClaudeIngestor | null = null;
   /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
@@ -163,7 +159,7 @@ export class JafferService {
     const pane = this.host.mainPane;
     const cwd = pane?.cwd ?? this.userHome;
     const proj = resolveProject(cwd, this.userHome);
-    return { cwd, project: proj.root, branch: proj.branch, lastCommand: this.lastCommand, busy: pane?.runningCommand ?? null };
+    return { cwd, project: proj.root, branch: proj.branch, busy: pane?.runningCommand ?? null };
   }
 
   // ------------------------------------------------------------------ events
@@ -206,17 +202,12 @@ export class JafferService {
       this.sendPty(e.pane, e.event);
       if (e.event.type === 'command') {
         const ev = e.event;
-        this.lastCommand = { cmd: ev.cmd, exit: ev.exit };
-        if (ev.cmd.trim() && !isSensitiveCommand(ev.cmd)) {
-          this.recentCommands.push({ cmd: redactText(ev.cmd).slice(0, 300), exit: ev.exit, durMs: ev.durMs, cwd: ev.cwd, at: Date.now(), by: ev.by });
-          if (this.recentCommands.length > 40) this.recentCommands.splice(0, this.recentCommands.length - 40);
-        }
         // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
         // stopped (Ctrl+Z reports 128 + a stop signal): it comes back with `fg`.
         const stopped = ev.exit != null && ev.exit >= 145 && ev.exit <= 150;
         if (!stopped && /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(ev.cmd)) this.claudeWatcher.endAll();
         const proj = resolveProject(ev.cwd, this.userHome);
-        if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output, by: ev.by });
+        if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output });
       }
     });
     this.claudeWatcher.changes.on((sessions) => {
@@ -280,7 +271,6 @@ export class JafferService {
       home: this.userHome,
       backfillDays: this.config.get().ingest.backfillDays,
       offsets: this.memory.cursorState().ingest,
-      skipCwds: [this.paths.agentDir],
       emit: (e) => void this.memory.observe(e),
       save: (offsets) => this.memory.updateCursor((c) => (c.ingest = offsets)),
     });
@@ -337,7 +327,7 @@ export class JafferService {
       await this.host.restartMain();
       return true;
     });
-    r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version, recentCommands: this.recentCommands }));
+    r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version }));
 
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {

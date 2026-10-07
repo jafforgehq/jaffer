@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEngine, makeEnv, type TestEnv } from './helpers/env';
 import { makeMemoryApi } from '../src/core/memory-api';
 import { runMcpServer } from '../src/core/mcp/server';
-import { claudeStatus, findClaude, hooksConnected, hooksInstalled, hooksPointAt, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
+import { claudeStatus, findClaude, hooksInstalled, hooksPointAt, installHooks, removeHooks, setupClaude, teardownClaude } from '../src/core/integrations/claude';
 import { ClaudeIngestor, parseClaudeLine } from '../src/core/ingest/claude';
 
 let env: TestEnv;
@@ -163,15 +163,6 @@ describe('Claude Code hooks', () => {
     expect(installHooks('/x/jaffer', env.userHome).changed).toBe(true);
     expect(hooksInstalled(env.userHome)).toBe(true);
     expect(Object.keys(readSettings().hooks).sort()).toEqual(ALL_EVENTS.map(([e]) => e).sort());
-  });
-
-  it('hooksConnected is true for an old two-hook install, and false for none or for the user\'s own hooks only', () => {
-    expect(hooksConnected(env.userHome)).toBe(false); // no settings file
-    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
-    expect(hooksConnected(env.userHome)).toBe(false);
-    fs.writeFileSync(settingsFile(), JSON.stringify(oldTwoHooks('/x/jaffer')));
-    expect(hooksConnected(env.userHome)).toBe(true);
   });
 
   it('hooksPointAt: true only when every Jaffer hook already runs this wrapper (another Jaffer home\'s hooks are not ours to rewrite)', () => {

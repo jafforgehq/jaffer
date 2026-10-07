@@ -60,21 +60,6 @@ export function makeMemoryApi(engine: MemoryEngine): MemoryApi {
       return view(it);
     },
 
-    'memory.restore': async (p: { id: string }) => {
-      const it = engine.store.restore(engine.store.newRun('user', 'restore'), p.id);
-      engine.store.flush();
-      engine.refreshViews();
-      if (!it) throw new Error('No such memory.');
-      return view(it);
-    },
-
-    'memory.delete': async (p: { id: string }) => {
-      const ok = engine.store.delete(engine.store.newRun('user', 'delete'), p.id);
-      engine.store.flush();
-      engine.refreshViews();
-      return { ok };
-    },
-
     'memory.notes.get': async () => {
       try {
         return { text: fs.readFileSync(engine.store.paths.memoryNotes, 'utf8') };

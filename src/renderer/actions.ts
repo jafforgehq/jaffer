@@ -1,4 +1,4 @@
-import { activePane, cfg, info, overlay, patchConfig, refreshMemory, side, toast, toggleSide } from './state';
+import { activePane, cfg, info, overlay, patchConfig, refreshMemory, toast, toggleSide } from './state';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -81,4 +81,3 @@ export function onMenu(id: string): void {
   runAction(alias[id] ?? id);
 }
 
-void side;

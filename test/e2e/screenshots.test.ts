@@ -365,7 +365,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await sleep(500);
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
-    await shot('10-settings');
     await page.click('.settings-nav button:text-is("Claude Code")');
     await sleep(300);
     await shot('12-claude-code-settings');

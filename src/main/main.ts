@@ -55,7 +55,7 @@ function wireClient(c: RpcClient): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
-    if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number; by: string });
+    if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
   });
   c.onClose.on(() => void onDaemonDown());
@@ -123,8 +123,8 @@ function onClaudeState(sessions: ClaudeSession[]): void {
 }
 
 /** A long command finished while you were looking at something else. */
-function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number; by: string }): void {
-  if (c.by === 'agent' || c.durMs < 30_000 || win?.isFocused() || !c.cmd.trim()) return;
+function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number }): void {
+  if (c.durMs < 30_000 || win?.isFocused() || !c.cmd.trim()) return;
   const secs = Math.round(c.durMs / 1000);
   const took = secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`;
   notify(c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, `${c.cmd.slice(0, 120)} — ${took}`);
@@ -570,4 +570,4 @@ function debounce<T extends (...a: never[]) => void>(fn: T, ms: number): T {
   }) as T;
 }
 
-void fs;
+

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { startShell, stopShell, untilReady } from './helpers/pty';
+import { runInShell, startShell, stopShell, untilReady } from './helpers/pty';
 import type { PtySession } from '../src/core/session/terminal';
 
 function hasClaude(): boolean {
@@ -69,10 +69,10 @@ describe.skipIf(!CLAUDE)('Claude Code inside a Jaffer session', () => {
     replica.dispose();
   }, 60_000);
 
-  it('can be used while the agent shares the same shell afterwards', async () => {
+  it('the shell is still usable afterwards', async () => {
     sh = startShell(env, { shell: '/bin/bash' });
     await untilReady(sh);
-    const v = await sh.runCommand('claude --version');
+    const v = await runInShell(sh, 'claude --version');
     expect(v.output).toMatch(/Claude Code/);
     expect(v.exit).toBe(0);
   });

@@ -6,7 +6,7 @@ import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
+import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -330,7 +330,7 @@ export function Settings(): VNode {
             <>
               <h4>Memory</h4>
               <p class="lede">What Jaffer learns, how, and for how long. Everything stays on this Mac.</p>
-              <Field label="Learn from my sessions" hint="commands and agent chats; secrets are redacted first">
+              <Field label="Learn from my sessions" hint="commands and what you tell Claude Code; secrets are redacted first">
                 <Switch checked={c.memory.enabled} onChange={(v) => set({ memory: { enabled: v } })} />
               </Field>
               <Field label="Let Claude curate memory" hint="sends redacted summaries to Claude, through your Claude login">
@@ -692,5 +692,3 @@ export function Onboarding(): VNode {
   );
 }
 
-void IconGear;
-void IconShield;

@@ -105,8 +105,6 @@ export class EpisodeLog {
         if (input.out) out.out = redactText(input.out).slice(-1500);
         return out;
       }
-      case 'agent':
-        return { ...input, user: redactText(input.user).slice(0, MAX_TEXT), reply: redactText(input.reply).slice(0, MAX_TEXT) };
       case 'ext':
         return { ...input, text: redactText(input.text).slice(0, MAX_TEXT) };
       case 'note':

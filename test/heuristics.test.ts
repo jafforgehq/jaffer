@@ -79,8 +79,8 @@ describe('heuristics', () => {
     expect(detectCorrection('Please add a test for the parser')).toBe(false);
   });
 
-  it('turns agent-turn directives into memory ops with the right scope', () => {
-    const ep: Episode = { t: 'agent', seq: 1, id: 'a', ts: new Date().toISOString(), project: '/work/app', cwd: '/work/app', user: 'I prefer tabs over spaces. We use vitest for tests in this repo.', reply: 'ok', tools: [] };
+  it('turns directives given to an agent into memory ops with the right scope', () => {
+    const ep: Episode = { t: 'ext', agent: 'claude-code', role: 'user', seq: 1, id: 'a', ts: new Date().toISOString(), project: '/work/app', cwd: '/work/app', text: 'I prefer tabs over spaces. We use vitest for tests in this repo.' };
     const { ops } = runHeuristics({ episodes: [ep], candidates: {} });
     const adds = ops.filter((o) => o.op === 'add');
     expect(adds.find((o) => o.op === 'add' && o.text.includes('tabs'))).toMatchObject({ scope: 'global', source: 'user' });

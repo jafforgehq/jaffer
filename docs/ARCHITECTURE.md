@@ -50,7 +50,7 @@ Ranking = confidence × time-decay (half-life per kind) × usage × scope releva
 
 ## Process boundaries and trust
 
-The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. Hook payloads and everything fed to memory or a model are redacted first. `permissions.ts` keeps the command and path risk rules (read-only / ordinary / risky / blocked) for the approval cards of a later release.
+The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. Hook payloads and everything fed to memory or a model are redacted first.
 
 ## Updates
 

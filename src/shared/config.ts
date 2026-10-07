@@ -1,8 +1,6 @@
 import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
 
-/** ask: reads are automatic, everything that changes state needs approval. auto: only risky actions ask. */
-
 export interface JafferConfig {
   /** First-run consent flow completed. Until then nothing is exported and no model is called. */
   onboarded: boolean;

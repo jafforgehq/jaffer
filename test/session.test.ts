@@ -3,9 +3,8 @@ import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { startShell, stopShell, untilReady, waitFor } from './helpers/pty';
+import { runInShell, startShell, stopShell, untilReady, waitFor } from './helpers/pty';
 import type { PtySession, PtyEvent } from '../src/core/session/terminal';
-import { RunRefused } from '../src/core/session/terminal';
 import { SessionHost } from '../src/core/session/host';
 
 let env: TestEnv;
@@ -35,7 +34,6 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(ev.cmd).toBe('echo "hello; world"');
     expect(ev.exit).toBe(0);
     expect(ev.output).toBe('hello; world');
-    expect(ev.by).toBe('user');
   });
 
   it('reports failing exit codes', async () => {
@@ -59,57 +57,15 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(sh.cwd).toBe(sub);
   });
 
-  it('lets the agent run a command in the live shell and read its output', async () => {
+  it('carries the shell state from one command to the next, and shows the output on the screen', async () => {
     sh = startShell(env, { shell });
     await untilReady(sh);
-    sh.write('export JAFFER_TEST_VAR=carried-over\r');
-    await waitFor(sh, isCmd);
-    await untilReady(sh);
-    const res = await sh.runCommand('echo $JAFFER_TEST_VAR && pwd');
+    await runInShell(sh, 'export JAFFER_TEST_VAR=carried-over');
+    const res = await runInShell(sh, 'echo $JAFFER_TEST_VAR && pwd');
     expect(res.exit).toBe(0);
-    expect(res.timedOut).toBe(false);
-    expect(res.output).toContain('carried-over'); // shell state is shared with the user's session
+    expect(res.output).toContain('carried-over');
     expect(res.output).toContain(env.userHome);
-    // and it is visible on the screen the user watches
     expect(sh.readScreen(10)).toContain('carried-over');
-  });
-
-  it('tags agent commands as such and serialises concurrent runs', async () => {
-    sh = startShell(env, { shell });
-    await untilReady(sh);
-    const events: CommandEvent[] = [];
-    sh.events.on((e) => {
-      if (e.type === 'command') events.push(e);
-    });
-    const [a, b] = await Promise.all([sh.runCommand('echo one'), sh.runCommand('echo two')]);
-    expect(a.output).toBe('one');
-    expect(b.output).toBe('two');
-    expect(events.map((e) => e.by)).toEqual(['agent', 'agent']);
-  });
-
-  it('refuses to inject while a command is running and times out long ones without killing them', async () => {
-    sh = startShell(env, { shell });
-    await untilReady(sh);
-    const slow = await sh.runCommand('sleep 2; echo late', { timeoutMs: 300 });
-    expect(slow.timedOut).toBe(true);
-    await expect(sh.runCommand('echo nope')).rejects.toBeInstanceOf(RunRefused);
-    await waitFor(sh, isCmd, 5000);
-    await untilReady(sh);
-    expect((await sh.runCommand('echo after')).output).toBe('after');
-  });
-
-  it('an Escape the user pressed at the prompt does not eat the first byte of the next agent command', async () => {
-    // bash treats a pending \e as a Meta prefix, so "echo" used to arrive as "cho" (found by the Claude Code UI test)
-    sh = startShell(env, { shell, cols: 40 });
-    await untilReady(sh);
-    sh.write('\x1b');
-    await new Promise((r) => setTimeout(r, 1200));
-    const r = await sh.runCommand('echo survived-the-escape');
-    expect(r.output).toBe('survived-the-escape');
-    expect(r.exit).toBe(0);
-    sh.write('\x1b\x1b');
-    await new Promise((r2) => setTimeout(r2, 300));
-    expect((await sh.runCommand('echo and-twice')).output).toBe('and-twice');
   });
 
   it('serialises the screen so a late client sees the same content', async () => {
@@ -147,7 +103,6 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(replica.modes.bracketedPasteMode).toBe(true);
     expect(replica.modes.mouseTrackingMode).not.toBe('none');
     expect(replica.buffer.active.getLine(0)!.translateToString(true)).toContain('full screen app');
-    await expect(sh.runCommand('echo x')).rejects.toBeInstanceOf(RunRefused);
     replica.dispose();
   });
 
@@ -163,7 +118,7 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
   it('does not leak daemon-only environment into the shell', async () => {
     sh = startShell(env, { shell });
     await untilReady(sh);
-    const res = await sh.runCommand('echo "[${ELECTRON_RUN_AS_NODE-unset}] [$TERM] [$COLORTERM] [$TERM_PROGRAM] [$JAFFER_SESSION]"');
+    const res = await runInShell(sh, 'echo "[${ELECTRON_RUN_AS_NODE-unset}] [$TERM] [$COLORTERM] [$TERM_PROGRAM] [$JAFFER_SESSION]"');
     expect(res.output).toBe('[unset] [xterm-256color] [truecolor] [Jaffer] [1]');
   });
 });
@@ -181,7 +136,7 @@ describe('shell integration regressions (found by macOS CI)', () => {
     await untilReady(sh);
     await new Promise((r) => setTimeout(r, 300));
     expect(seen).toEqual(['echo typed-by-user']); // neither startup lines nor the hook itself show up as commands
-    expect((await sh.runCommand('echo $__user_hook')).output).toBe('ran'); // and the user's own hook still ran
+    expect((await runInShell(sh, 'echo $__user_hook')).output).toBe('ran'); // and the user's own hook still ran
   });
 
   it('zsh: history stays in the user\'s home, never in the integration shim directory', async () => {
@@ -189,7 +144,7 @@ describe('shell integration regressions (found by macOS CI)', () => {
     if (!zsh) return;
     sh = startShell(env, { shell: zsh });
     await untilReady(sh);
-    const r = await sh.runCommand('print -r -- "$HISTFILE"');
+    const r = await runInShell(sh, 'print -r -- "$HISTFILE"');
     expect(r.output).toBe(path.join(env.userHome, '.zsh_history'));
     expect(r.output).not.toContain('.jaffer');
   });

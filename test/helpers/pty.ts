@@ -38,6 +38,16 @@ export function waitFor<T>(session: PtySession, pred: (e: PtyEvent) => T | false
   });
 }
 
+/** Type a command at a ready prompt and wait for it to finish, as a person would: how a test runs something and reads its output. */
+export async function runInShell(session: PtySession, cmd: string, ms = 15_000): Promise<Extract<PtyEvent, { type: 'command' }>> {
+  await untilReady(session);
+  const done = waitFor(session, (e) => (e.type === 'command' ? e : false), ms);
+  session.write(cmd + '\r');
+  const e = await done;
+  await untilReady(session);
+  return e;
+}
+
 export async function untilReady(session: PtySession, ms = 8000): Promise<void> {
   const t0 = Date.now();
   while (!session.promptReady) {

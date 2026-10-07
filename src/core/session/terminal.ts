@@ -2,14 +2,13 @@ import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
 import type { IPty } from '@lydell/node-pty';
-import path from 'node:path';
-import { Emitter, SerialQueue, sleep } from '../../shared/util';
+import { Emitter } from '../../shared/util';
 
 export type PtyEvent =
   | { type: 'data'; data: string; seq: number }
   | { type: 'exit'; code: number | null; signal: number | null }
-  | { type: 'start'; cmd: string; by: 'user' | 'agent' }
-  | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number; output: string; by: 'user' | 'agent' }
+  | { type: 'start'; cmd: string }
+  | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number; output: string }
   | { type: 'cwd'; cwd: string }
   | { type: 'title'; title: string }
   | { type: 'prompt' }
@@ -24,24 +23,6 @@ export interface PtyOptions {
   cols: number;
   rows: number;
   scrollback?: number;
-}
-
-export interface RunResult {
-  cmd: string;
-  exit: number | null;
-  output: string;
-  durMs: number;
-  timedOut: boolean;
-  cwd: string;
-}
-
-export class RunRefused extends Error {
-  constructor(
-    message: string,
-    readonly reason: 'busy' | 'no-integration' | 'not-started' | 'exited',
-  ) {
-    super(message);
-  }
 }
 
 const MAX_OUTPUT_LINES = 400;
@@ -69,21 +50,16 @@ export class PtySession {
   promptReady = false;
   lastExit: number | null = null;
   private pendingCmd = '';
-  private running: { cmd: string; startedAt: number; marker: ReturnType<Terminal['registerMarker']>; by: 'user' | 'agent' } | null = null;
-  private nextBy: 'user' | 'agent' = 'user';
-  private injecting = false;
-  private runQueue = new SerialQueue();
+  private running: { cmd: string; startedAt: number; marker: ReturnType<Terminal['registerMarker']> } | null = null;
   private batch: string[] = [];
   private batchBytes = 0;
   private flushTimer: NodeJS.Timeout | null = null;
   private lastActivity = Date.now();
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
-  private shellName = '';
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
-    this.shellName = path.basename(opts.file);
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
@@ -266,16 +242,13 @@ export class PtySession {
       if (kind === 'A') {
         this.integrated = true;
         this.promptReady = true;
-        this.injecting = false;
         this.events.emit({ type: 'prompt' });
       } else if (kind === 'C') {
         this.integrated = true;
         this.promptReady = false;
-        this.injecting = false;
         if (!this.running) {
-          this.running = { cmd: this.pendingCmd, startedAt: Date.now(), marker: this.term.registerMarker(0), by: this.nextBy };
-          this.nextBy = 'user';
-          this.events.emit({ type: 'start', cmd: this.running.cmd, by: this.running.by });
+          this.running = { cmd: this.pendingCmd, startedAt: Date.now(), marker: this.term.registerMarker(0) };
+          this.events.emit({ type: 'start', cmd: this.running.cmd });
         }
         this.pendingCmd = '';
       } else if (kind === 'D') {
@@ -341,87 +314,6 @@ export class PtySession {
     const endLine = normal.baseY + normal.cursorY;
     const output = startLine <= endLine ? this.linesToText(normal, startLine, endLine) : '';
     run.marker?.dispose();
-    this.events.emit({ type: 'command', cmd: run.cmd, exit, cwd: this.cwd, durMs: Date.now() - run.startedAt, output, by: run.by });
-  }
-
-  // ------------------------------------------------------------------ agent-driven commands
-
-  /**
-   * Type a command into the live shell and wait for it to finish, exactly as a user would.
-   * The command shows up in the terminal the user is watching and shares its cwd/env/venv.
-   */
-  runCommand(cmd: string, opts: { timeoutMs?: number } = {}): Promise<RunResult> {
-    return this.runQueue.run(() => this.doRun(cmd, opts.timeoutMs ?? 120_000));
-  }
-
-  private async doRun(cmd: string, timeoutMs: number): Promise<RunResult> {
-    if (!this._alive) throw new RunRefused('The shell has exited.', 'exited');
-    if (!this.integrated) throw new RunRefused('Shell integration is not active in this session.', 'no-integration');
-    const busy = () => new RunRefused(`The terminal is busy${this.running ? ` running \`${this.running.cmd}\`` : ''}.`, 'busy');
-    if (this.running || this.altScreen) throw busy();
-    // Between a command finishing and the next prompt being drawn there is a short gap; wait it out.
-    if (!this.promptReady && !(await this.waitUntilPrompt(2000))) throw busy();
-    if (this.running || this.altScreen) throw busy();
-    this.nextBy = 'agent';
-    this.injecting = true;
-    const multiline = cmd.includes('\n');
-    const payload = multiline && this.term.modes.bracketedPasteMode ? `\x1b[200~${cmd}\x1b[201~\r` : multiline ? cmd.replace(/\n+/g, '; ') + '\r' : cmd + '\r';
-    const done = new Promise<RunResult>((resolve) => {
-      let timer: NodeJS.Timeout | null = null;
-      let started = false;
-      const t0 = Date.now();
-      const off = this.events.on((e) => {
-        if (e.type === 'command' && e.by === 'agent') {
-          if (timer) clearTimeout(timer);
-          off();
-          resolve({ cmd: e.cmd || cmd, exit: e.exit, output: e.output, durMs: e.durMs, timedOut: false, cwd: e.cwd });
-        }
-      });
-      timer = setTimeout(() => {
-        off();
-        started = this.running !== null;
-        resolve({ cmd, exit: null, output: started ? this.partialOutput() : '', durMs: Date.now() - t0, timedOut: true, cwd: this.cwd });
-      }, timeoutMs);
-    });
-    // A lone Escape the user pressed earlier is still waiting for a key in bash's readline (\e is a Meta prefix), and would
-    // swallow the first byte of the command ("echo" -> "cho"). A NUL byte finishes any half-entered key sequence and is
-    // otherwise harmless (set-mark in readline and zsh). Shells we have not checked are left alone.
-    const neutralise = this.shellName === 'bash' || this.shellName === 'zsh' ? '\x00' : '';
-    this.write(neutralise + payload);
-    // If the shell never starts the command (e.g. unfinished quote in the user's prompt), fail fast.
-    const startedOk = await Promise.race([this.waitUntilStarted(5000), done.then(() => true)]);
-    if (!startedOk) {
-      this.nextBy = 'user';
-      this.injecting = false;
-      throw new RunRefused('The shell did not start the command (is something half-typed at the prompt?).', 'not-started');
-    }
-    return done;
-  }
-
-  private async waitUntilPrompt(ms: number): Promise<boolean> {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-      if (this.promptReady) return true;
-      if (this.running || !this._alive) return false;
-      await sleep(10);
-    }
-    return this.promptReady;
-  }
-
-  private async waitUntilStarted(ms: number): Promise<boolean> {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-      if (this.running || !this.injecting) return true;
-      await sleep(15);
-    }
-    return false;
-  }
-
-  private partialOutput(): string {
-    const run = this.running;
-    if (!run) return '';
-    const normal = this.term.buffer.normal;
-    const start = run.marker && run.marker.line >= 0 ? run.marker.line : 0;
-    return this.linesToText(normal, start, normal.baseY + normal.cursorY);
+    this.events.emit({ type: 'command', cmd: run.cmd, exit, cwd: this.cwd, durMs: Date.now() - run.startedAt, output });
   }
 }

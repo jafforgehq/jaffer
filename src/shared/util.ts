@@ -66,10 +66,6 @@ export function writeJsonl(file: string, rows: unknown[]): void {
   writeFileAtomic(file, rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
 }
 
-export function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, n));
-}
-
 export function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, Math.max(0, max - 1)) + '…';
@@ -79,15 +75,6 @@ export function truncate(s: string, max: number): string {
 export function tail(s: string, max: number): string {
   if (s.length <= max) return s;
   return '…' + s.slice(s.length - max + 1);
-}
-
-export function slugify(s: string): string {
-  const slug = s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return slug || 'untitled';
 }
 
 export function dayKey(ts: string | number | Date = Date.now()): string {

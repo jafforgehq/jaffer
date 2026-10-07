@@ -76,19 +76,8 @@ export interface CommandEpisode extends BaseEpisode {
   exit: number | null;
   durMs?: number;
   branch?: string;
-  /** Redacted tail of output; only kept for failed commands and agent-run commands. */
+  /** Redacted tail of output; only kept for failed commands. */
   out?: string;
-  by?: 'user' | 'agent';
-}
-
-export interface AgentTurnEpisode extends BaseEpisode {
-  t: 'agent';
-  user: string;
-  reply: string;
-  tools: string[];
-  /** The user pushed back on the previous turn ("no, use pnpm"). */
-  correction?: boolean;
-  error?: string;
 }
 
 export interface ExternalAgentEpisode extends BaseEpisode {
@@ -104,7 +93,7 @@ export interface NoteEpisode extends BaseEpisode {
   text: string;
 }
 
-export type Episode = CommandEpisode | AgentTurnEpisode | ExternalAgentEpisode | NoteEpisode;
+export type Episode = CommandEpisode | ExternalAgentEpisode | NoteEpisode;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type EpisodeInput = DistributiveOmit<Episode, 'seq' | 'id' | 'ts'> & { ts?: string };
 

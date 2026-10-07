@@ -118,13 +118,6 @@ export function removeHooks(home: string = os.homedir()): { changed: boolean; er
   return { changed };
 }
 
-/** True if Jaffer has any hook in the user's Claude Code settings, even an older install that lacks the newest events. */
-export function hooksConnected(home: string = os.homedir()): boolean {
-  const { data, ok } = readSettings(settingsPath(home));
-  if (!ok || !data.hooks || typeof data.hooks !== 'object') return false;
-  return Object.values(data.hooks).some((list) => Array.isArray(list) && (list as HookEntry[]).some(isOurs));
-}
-
 /**
  * True if Jaffer's hooks exist and every one of them already runs `cliPath`. A daemon started with another Jaffer home
  * (a release smoke test, a dev build) must not re-point the user's real hooks at its own, temporary wrapper.

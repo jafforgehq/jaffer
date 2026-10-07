@@ -93,10 +93,6 @@ export function redactText(input: string): string {
   return redact(input).text;
 }
 
-export function hasSecret(input: string): boolean {
-  return redact(input).count > 0;
-}
-
 /**
  * Commands whose invocation or output should never reach memory at all.
  * (A leading space follows the HISTCONTROL=ignorespace convention.)

@@ -96,7 +96,7 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await c.call('pty.write', { data: 'echo persisted-marker-42\r' });
     await waitUntil(() => cmds.length > 0);
     expect(data.map((d) => d.data).join('')).toContain('persisted-marker-42');
-    expect(cmds[0]).toMatchObject({ cmd: 'echo persisted-marker-42', exit: 0, by: 'user' });
+    expect(cmds[0]).toMatchObject({ cmd: 'echo persisted-marker-42', exit: 0 });
   });
 
   it('keeps the session alive across client disconnects (single always-on session)', async () => {

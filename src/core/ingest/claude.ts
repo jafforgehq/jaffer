@@ -54,8 +54,6 @@ export interface IngestOptions {
   /** Called with the new offsets after each scan. */
   save: (offsets: Record<string, number>) => void;
   maxInitialBytes?: number;
-  /** Transcripts whose working directory is under one of these are not ingested (the panel engine's own sessions: it records them itself, with the real project). */
-  skipCwds?: string[];
 }
 
 export interface ScanResult {
@@ -146,7 +144,6 @@ export class ClaudeIngestor {
       if (!line) continue;
       const t = parseClaudeLine(line);
       if (!t) continue;
-      if (t.cwd && this.o.skipCwds?.some((d) => t.cwd === d || t.cwd!.startsWith(d + path.sep))) continue;
       const project = t.cwd ? resolveProject(t.cwd, this.home).root : undefined;
       this.o.emit({
         t: 'ext',

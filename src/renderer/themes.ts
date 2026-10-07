@@ -121,7 +121,6 @@ export function cssVars(theme: JafferTheme, opacity: number): Record<string, str
     '--chrome-solid': chrome,
     '--surface': withAlpha(bg, Math.min(1, opacity + 0.02)),
     '--bg-solid': bg,
-    '--bg': withAlpha(bg, opacity),
     '--raised': raised,
     '--raised-2': raised2,
     '--hover': dark ? 'rgba(255,255,255,0.055)' : 'rgba(0,0,0,0.05)',
