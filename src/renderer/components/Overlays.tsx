@@ -306,6 +306,9 @@ export function Settings(): VNode {
               <Field label="Option key acts as Meta" hint="word movement and Claude Code shortcuts">
                 <Switch checked={c.appearance.optionAsMeta} onChange={(v) => set({ appearance: { optionAsMeta: v } })} />
               </Field>
+              <Field label="Animations" hint="a little life while Claude works. Also off when macOS Reduce motion is on">
+                <Switch checked={c.appearance.animations !== false} onChange={(v) => set({ appearance: { animations: v } })} />
+              </Field>
               <Field label="GPU rendering" hint="turn off if text looks wrong (needs a new pane to apply)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>

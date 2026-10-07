@@ -19,6 +19,7 @@ function applyTheme(): void {
   const root = document.documentElement;
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.dataset.theme = th.dark ? 'dark' : 'light';
+  root.dataset.motion = c.appearance.animations === false ? 'off' : 'on';
 }
 
 function SideResizer(): VNode {

@@ -61,7 +61,7 @@ export function SessionRail(): VNode {
 
         <section>
           <button class={`row-item ${side.value === 'agent' ? 'on' : ''}`} onClick={() => (side.value === 'agent' ? setSide(null) : setSide('agent'))} title="Open the Claude panel (⌘J)">
-            <span class="row-ico ico-agent">
+            <span class="row-ico ico-agent" data-live={working ? 'working' : undefined}>
               <IconAgent size={12} />
             </span>
             <span class="row-text">

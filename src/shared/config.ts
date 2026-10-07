@@ -18,6 +18,8 @@ export interface JafferConfig {
     optionAsMeta: boolean;
     /** webgl is fastest; dom is the safe fallback for unusual GPU setups. */
     renderer: 'webgl' | 'dom';
+    /** Decorative motion (a live panel that looks alive). Off here, or macOS Reduce motion, and everything stands still. */
+    animations: boolean;
   };
   shell: { path: string; args: string[] };
   memory: {
@@ -48,6 +50,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     scrollback: 20000,
     optionAsMeta: true,
     renderer: 'webgl',
+    animations: true,
   },
   shell: { path: '', args: [] },
   memory: {

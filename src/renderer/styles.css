@@ -155,6 +155,38 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .panel-head { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); flex: none; }
 .panel-sub { padding: 7px 14px 0; font-size: 11.5px; line-height: 1.45; color: var(--faint); flex: none; }
 .panel-sub code { color: var(--muted); }
+/* Motion. All of it is decoration, so it is scoped to :root:not([data-motion='off']) (Settings → Appearance → Animations) and
+   stands still under macOS Reduce motion (the global rule at the end of this file). Transform and opacity only. */
+@keyframes fx-breathe { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); } }
+@keyframes fx-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes fx-spin { to { transform: rotate(360deg); } }
+@keyframes fx-slide-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes fx-scan { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes fx-pop { 0% { transform: scale(0.4); } 60% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@keyframes fx-flash { from { background-color: var(--ok-soft); } to { background-color: transparent; } }
+@keyframes fx-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+@keyframes fx-attn { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 45%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes fx-bar { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+@keyframes fx-dot { 0%, 100% { transform: scale(0.7); opacity: 0.55; } 50% { transform: scale(1.15); opacity: 1; } }
+.fx-eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; margin-left: 4px; }
+.fx-eq i { width: 2px; height: 100%; border-radius: 1px; background: var(--accent); transform-origin: bottom; }
+.fx-agents { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; }
+.fx-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+:root:not([data-motion='off']) .live-pill[data-state='working'] { animation: fx-breathe 2.2s ease-in-out infinite; }
+:root:not([data-motion='off']) .agent[data-live='working'] .panel-head { position: relative; overflow: hidden; }
+:root:not([data-motion='off']) .agent[data-live='working'] .panel-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: fx-sweep 1.6s linear infinite; }
+:root:not([data-motion='off']) .row-ico[data-live='working'] { position: relative; }
+:root:not([data-motion='off']) .row-ico[data-live='working']::after { content: ''; position: absolute; inset: -3px; border-radius: 9px; border: 1.5px solid transparent; border-top-color: var(--accent); animation: fx-spin 1.8s linear infinite; }
+:root:not([data-motion='off']) .fx-eq i { animation: fx-bar 0.9s ease-in-out infinite; }
+:root:not([data-motion='off']) .fx-eq i:nth-child(2) { animation-delay: 0.15s; }
+:root:not([data-motion='off']) .fx-eq i:nth-child(3) { animation-delay: 0.3s; }
+:root:not([data-motion='off']) .fx-dot { animation: fx-dot 1.2s ease-in-out infinite; }
+:root:not([data-motion='off']) .live-activity .live-row { animation: fx-slide-in 0.28s ease-out; }
+:root:not([data-motion='off']) .live-activity .live-row[data-status='running'] { background-image: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent) 14%, transparent) 50%, transparent 100%); background-size: 200% 100%; animation: fx-slide-in 0.28s ease-out, fx-scan 1.8s linear infinite; }
+:root:not([data-motion='off']) .live-activity .live-row[data-status='done'] { animation: fx-slide-in 0.28s ease-out, fx-flash 0.9s ease-out; }
+:root:not([data-motion='off']) .live-activity .live-row[data-status='done'] .live-mark { animation: fx-pop 0.35s ease-out; }
+:root:not([data-motion='off']) .live-activity .live-row[data-status='failed'] { animation: fx-slide-in 0.28s ease-out, fx-shake 0.35s ease-in-out 0.28s; }
+:root:not([data-motion='off']) .live-needs { animation: fx-attn 1.4s ease-out 3; }
 .live-pill { margin-left: 2px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); color: var(--muted); background: var(--raised); }
 .live-pill[data-state='working'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: var(--accent-soft); }
 .live-pill[data-state='needs-you'] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }

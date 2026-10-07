@@ -236,6 +236,50 @@ describe('Jaffer UI end to end', () => {
     await shot('03-agent');
   }, 40_000);
 
+  it('animations: Claude at work looks alive, the Settings switch turns them off, and macOS Reduce motion is respected', async () => {
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
+    await sendHook('UserPromptSubmit', { prompt: 'work on it' });
+    await sendHook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'm1' });
+    await sendHook('SubagentStart', { agent_id: 'm-agent-1', agent_type: 'general-purpose' });
+    await page.waitForSelector('.live-pill[data-state="working"]');
+    await page.waitForSelector('.live-activity .live-row');
+    // on by default
+    expect(await page.evaluate(() => document.documentElement.dataset.motion)).toBe('on');
+    expect(await cs('.live-pill', 'animationName')).toContain('fx-breathe');
+    expect(await cs('.live-activity .live-row', 'animationName')).toContain('fx-slide-in');
+    expect(await page.locator('.fx-eq').count()).toBe(1); // the little equaliser beside the status
+    expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // one pulsing dot per running subagent
+    await shot('03d-working');
+    // off from Settings → Appearance
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('label.field', { hasText: 'Animations' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.animations === false, 8_000, 'the setting to be saved');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    expect(await page.evaluate(() => document.documentElement.dataset.motion)).toBe('off');
+    expect(await cs('.live-pill', 'animationName')).toBe('none');
+    expect(await cs('.live-activity .live-row', 'animationName')).toBe('none');
+    expect(await page.locator('.fx-eq').count()).toBe(0);
+    expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // the count itself stays: it is information, only the pulsing is decoration
+    expect(await cs('.fx-agents .fx-dot', 'animationName')).toBe('none');
+    // and on again
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('label.field', { hasText: 'Animations' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.animations === true, 8_000, 'the setting to be saved again');
+    await page.keyboard.press('Escape');
+    expect(await cs('.live-pill', 'animationName')).toContain('fx-breathe');
+    // macOS "Reduce motion": everything stands still even though the setting is on
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const dur = parseFloat(String(await cs('.live-pill', 'animationDuration')));
+    expect(dur).toBeLessThan(0.001);
+    await page.emulateMedia({ reducedMotion: null });
+    await sendHook('SubagentStop', { agent_id: 'm-agent-1', agent_type: 'general-purpose' });
+    await sendHook('Stop', { last_assistant_message: 'done' });
+  }, 60_000);
+
   it('file paths in the panel are shown relative to where Claude is working', async () => {
     const file = '/work/app/src/auth/session.ts';
     await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });

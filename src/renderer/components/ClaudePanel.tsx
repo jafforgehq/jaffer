@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { runClaude } from '../actions';
-import { checkClaudeAuth, checkClaudeSetup, claudeAuth, claudeSetup, currentClaude, fmtDuration, setSide, toast } from '../state';
+import { cfg, checkClaudeAuth, checkClaudeSetup, claudeAuth, claudeSetup, currentClaude, fmtDuration, setSide, toast } from '../state';
 import type { ClaudeSession } from '../../core/claude/watcher';
 import { shortToolPath } from '../../shared/short-path';
 import { InstallCommand } from './ClaudeInstall';
@@ -142,6 +142,8 @@ export function ClaudePanel(): VNode {
   const a = claudeAuth.value;
   const setup = claudeSetup.value;
   const notConnected = !!setup && setup.claudeInstalled && !setup.hooks;
+  const motion = cfg.value?.appearance.animations !== false;
+  const runningAgents = s ? s.subagents.filter((a) => a.status === 'running').length : 0;
   const [connecting, setConnecting] = useState(false);
   const connect = async () => {
     setConnecting(true);
@@ -155,7 +157,7 @@ export function ClaudePanel(): VNode {
     }
   };
   return (
-    <div class="agent">
+    <div class="agent" data-live={s?.state ?? 'none'}>
       <div class="panel-head">
         <div class="title">
           <span class="title-ico">
@@ -165,6 +167,20 @@ export function ClaudePanel(): VNode {
           <span class="live-pill" data-state={s?.state ?? 'none'}>
             {s ? LABEL[s.state] : 'No session'}
           </span>
+          {motion && s?.state === 'working' && (
+            <span class="fx-eq" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
+          {runningAgents > 0 && (
+            <span class="fx-agents" title={`${runningAgents} subagent${runningAgents === 1 ? '' : 's'} working`}>
+              {Array.from({ length: Math.min(runningAgents, 5) }, (_, i) => (
+                <i class="fx-dot" key={i} style={{ animationDelay: `${i * 0.18}s` }} />
+              ))}
+            </span>
+          )}
         </div>
         <div class="grow" />
         <button class="icon-btn" title="Open the full Claude Code in your terminal (⇧⌘C)" onClick={() => void runClaude()}>
