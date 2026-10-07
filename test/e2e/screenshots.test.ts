@@ -355,7 +355,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.click('.tabs button:has-text("Activity")');
     await page.waitForSelector('.run');
     await clearToasts();
-    await shot('05-memory-activity');
     await page.click('.tabs button:has-text("Learned")');
   }, 60_000);
 
@@ -364,14 +363,14 @@ describe.skipIf(!OUT)('README screenshots', () => {
     if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // the memory drawer was open: the terminal gets the room back
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
-    await shot('06-palette');
+    await sleep(300); // an Escape sent the instant it appears can be lost
     await page.keyboard.press('Escape');
+    await page.waitForSelector('.palette input', { state: 'detached' });
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-light' } }));
     await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#fdfcfa', 8000, 'light theme');
     await shot('07-light');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-midnight' } }));
     await until(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim())) === '#0d1020', 8000, 'midnight');
-    await shot('08-midnight');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-dark' } }));
     await page.click('.term');
     await page.keyboard.type('clear', { delay: 14 });
@@ -448,7 +447,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await until(async () => /Ready in/.test((await termLines()).join('\n')) && /GET\s+\/v1\/invoices\/9f2/.test((await termLines()).join('\n')), 20_000, 'dev server output');
     await until(async () => !!(await page.$('.session-pill .running')), 10_000, 'the running process in the toolbar');
     await sleep(1800);
-    await shot('11-running');
     await page.keyboard.press('Control+c');
   }, 60_000);
 });

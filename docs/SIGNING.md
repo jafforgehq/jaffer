@@ -76,7 +76,10 @@ git tag v0.2.0 && git push origin v0.2.0
 
 You do not have to: CI also releases by itself. A push to `main` that passes the tests and the Mac build publishes the
 release for the `version` in `package.json` (and does nothing if that version already has one), so bumping the version is
-the whole release step. *Actions → CI → Run workflow* with a *release_tag* is a third way. Set the repository variable
+the whole release step. *Actions → CI → Run workflow* with a *release_tag* is a third way. A release made by CI is never
+marked *Latest* (installed apps follow the Latest release): `scripts/release-mac.sh --publish` sets it after it has uploaded the
+signed files and the update manifest. The newest unreleased build of `main` is the `Jaffer-macOS` artifact of the latest
+*Actions → CI* run. Set the repository variable
 `REQUIRE_SIGNED_RELEASE=true` to make CI refuse to publish anything that is not signed.
 
 The first step of the build job, **Signing preflight**, prints `present` or `MISSING` for every secret (never the value)
