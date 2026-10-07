@@ -10,7 +10,7 @@ import { needsYouNotification } from '../shared/notify-policy';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
-import { manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 
@@ -166,8 +166,32 @@ async function whenWindowFocused(version: string): Promise<void> {
   });
 }
 
+let installWatchdog: NodeJS.Timeout | undefined;
+
+/** The installer failed or never restarted us after the session was ended: keep running, with a fresh session, and say so. */
+function recoverFromFailedInstall(why: string): void {
+  if (!installing) return;
+  installing = false;
+  quitting = false;
+  clearTimeout(installWatchdog);
+  updates?.start();
+  void dialog.showMessageBox({ type: 'error', message: 'The update could not be installed', detail: `${why.slice(0, 300)}\n\nJaffer is still running, with a fresh session. You can download the latest version from GitHub.`, buttons: ['Open releases page', 'OK'], defaultId: 1 }).then((r) => {
+    if (r.response === 0) void shell.openExternal(RELEASES_URL);
+  });
+  void onDaemonDown();
+}
+
 async function setupUpdates(): Promise<void> {
-  const eligible = app.isPackaged && !process.env.JAFFER_SMOKE && (await bundleSigner()) === 'developer-id';
+  const bundle = path.resolve(process.execPath, '..', '..', '..');
+  let writable = true;
+  try {
+    fs.accessSync(path.dirname(bundle), fs.constants.W_OK);
+  } catch {
+    writable = false;
+  }
+  const signed = app.isPackaged && !process.env.JAFFER_SMOKE && (await bundleSigner()) === 'developer-id';
+  const problem = signed ? bundleProblem(bundle, writable) : null; // an install that is bound to fail must not end the session first
+  const eligible = signed && !problem;
   if (eligible) {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = false; // quitting must never replace the app behind a running session
@@ -175,27 +199,21 @@ async function setupUpdates(): Promise<void> {
     autoUpdater.allowDowngrade = false;
     autoUpdater.logger = { info: (m: unknown) => updateLog(String(m)), warn: (m: unknown) => updateLog(`warn ${m}`), error: (m: unknown) => updateLog(`error ${m}`), debug: () => undefined };
     const feed = process.env.JAFFER_UPDATE_URL;
-    if (feed && /^https?:\/\//.test(feed)) autoUpdater.setFeedURL({ provider: 'generic', url: feed }); // for testing the flow against a local server
-    autoUpdater.on('error', (e: Error) => {
-      if (!installing) return;
-      // the installer failed after we had ended the session: keep running, with a fresh session
-      installing = false;
-      quitting = false;
-      void dialog.showMessageBox({ type: 'error', message: 'The update could not be installed', detail: `${e.message.slice(0, 300)}\n\nJaffer is still running. You can download the latest version from GitHub.`, buttons: ['Open releases page', 'OK'], defaultId: 1 }).then((r) => {
-        if (r.response === 0) void shell.openExternal(RELEASES_URL);
-      });
-      void onDaemonDown();
-    });
+    if (feed && isAllowedFeedUrl(feed)) autoUpdater.setFeedURL({ provider: 'generic', url: feed }); // for testing the flow against a local server
+    autoUpdater.on('error', (e: Error) => recoverFromFailedInstall(e.message));
   }
   updates = new UpdateController({
     updater: eligible ? autoUpdater : noUpdater, // electron-updater is not even touched in builds that cannot update
     current: VERSION,
     enabled: eligible,
+    unavailableReason: problem ?? undefined,
     auto: () => autoUpdates,
-    ask: async (text, version) => {
-      await whenWindowFocused(version);
+    ask: async (text, version, manual) => {
+      if (manual) showWindow();
+      else await whenWindowFocused(version);
+      const t = text(); // built now, not when the update arrived: the Claude warning has to be current
       const parent = win && !win.isDestroyed() ? win : undefined;
-      const opts = { type: 'info' as const, message: text.message, detail: text.detail, buttons: [...text.buttons], defaultId: 0, cancelId: 1 };
+      const opts = { type: 'info' as const, message: t.message, detail: t.detail, buttons: [...t.buttons], defaultId: t.defaultId, cancelId: t.cancelId };
       const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
       return r.response === 0;
     },
@@ -203,6 +221,9 @@ async function setupUpdates(): Promise<void> {
     prepareInstall: async () => {
       installing = true;
       quitting = true;
+      updates?.stop(); // a background tick must not be mistaken for an install failure
+      installWatchdog = setTimeout(() => recoverFromFailedInstall('Jaffer did not restart in time.'), 60_000);
+      installWatchdog.unref();
       await client?.call('app.shutdown', {}).catch(() => undefined);
       client?.close();
     },

@@ -292,7 +292,7 @@ export async function bootstrap(): Promise<void> {
     overlay.value = config.onboarded ? null : 'onboarding';
   });
   await Promise.all([refreshInfo(), loadClaudeState()]);
-  void j.updates.state().then((s) => (updateState.value = s)).catch(() => undefined);
+  void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   refreshMemory(0);
   ready.value = true;
   if (config.onboarded) {

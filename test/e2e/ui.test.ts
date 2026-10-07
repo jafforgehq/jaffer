@@ -249,6 +249,8 @@ describe('Jaffer UI end to end', () => {
     expect(await cs('.live-pill', 'animationName')).toContain('fx-breathe');
     expect(await cs('.live-activity .live-row', 'animationName')).toContain('fx-slide-in');
     expect(await page.locator('.fx-eq').count()).toBe(1); // the little equaliser beside the status
+    const mark = '.live-activity .live-row[data-status="running"] .live-mark';
+    expect(await cs(mark, 'animationName')).toContain('blink');
     expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // one pulsing dot per running subagent
     await shot('03d-working');
     // off from Settings → Appearance
@@ -262,6 +264,7 @@ describe('Jaffer UI end to end', () => {
     expect(await cs('.live-pill', 'animationName')).toBe('none');
     expect(await cs('.live-activity .live-row', 'animationName')).toBe('none');
     expect(await page.locator('.fx-eq').count()).toBe(0);
+    expect(await cs(mark, 'animationName')).toBe('none'); // the existing blinking mark is decoration too, so the switch stops it
     expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // the count itself stays: it is information, only the pulsing is decoration
     expect(await cs('.fx-agents .fx-dot', 'animationName')).toBe('none');
     // and on again

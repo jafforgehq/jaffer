@@ -156,7 +156,8 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .panel-sub { padding: 7px 14px 0; font-size: 11.5px; line-height: 1.45; color: var(--faint); flex: none; }
 .panel-sub code { color: var(--muted); }
 /* Motion. All of it is decoration, so it is scoped to :root:not([data-motion='off']) (Settings → Appearance → Animations) and
-   stands still under macOS Reduce motion (the global rule at the end of this file). Transform and opacity only. */
+   stands still under macOS Reduce motion (the global rule at the end of this file). Cheap by design: small elements only, and the
+   looping ones run only while Claude is working. */
 @keyframes fx-breathe { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); } }
 @keyframes fx-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 @keyframes fx-spin { to { transform: rotate(360deg); } }
@@ -172,6 +173,8 @@ body.mac .app:not(.rail-open) .titlebar { padding-left: 88px; }
 .fx-eq i { width: 2px; height: 100%; border-radius: 1px; background: var(--accent); transform-origin: bottom; }
 .fx-agents { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; }
 .fx-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+/* the blinking dots that already existed are decoration too: the switch stops them, they stay visible */
+:root[data-motion='off'] .busy-dot, :root[data-motion='off'] .row-dot.attn, :root[data-motion='off'] .live-row[data-status='running'] .live-mark { animation: none; }
 :root:not([data-motion='off']) .live-pill[data-state='working'] { animation: fx-breathe 2.2s ease-in-out infinite; }
 :root:not([data-motion='off']) .agent[data-live='working'] .panel-head { position: relative; overflow: hidden; }
 :root:not([data-motion='off']) .agent[data-live='working'] .panel-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: fx-sweep 1.6s linear infinite; }

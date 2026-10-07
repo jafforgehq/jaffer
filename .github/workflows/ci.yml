@@ -386,3 +386,6 @@ jobs:
           body_path: notes.md
           generate_release_notes: true
           prerelease: ${{ needs.mac-app.outputs.signed != 'true' }}
+          # Installed apps update from the release marked Latest, and only scripts/release-mac.sh uploads the update manifest
+          # (latest-mac.yml) and then promotes the release. A release made here must never become Latest on its own.
+          make_latest: false

@@ -33,6 +33,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$ARCH" in arm64|x64|both) ;; *) echo "--arch must be arm64, x64 or both" >&2; exit 2 ;; esac
+# One manifest serves both Macs: a one-architecture release would send the other architecture to the wrong build.
+if [ "$PUBLISH" = 1 ] && [ "$ARCH" != both ]; then echo "--publish needs both architectures (drop --arch): installed apps on the other kind of Mac would update to the wrong build." >&2; exit 2; fi
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
