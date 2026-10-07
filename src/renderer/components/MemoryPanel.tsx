@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { clock, fmtAgo, memItems, memLog, memPulse, memSkills, memStats, refreshMemory, setSide, toast, type MemItemView } from '../state';
 import { IconBolt, IconBook, IconBrain, IconCpu, IconFolder, IconInfo, IconLightbulb, IconPin, IconPlay, IconRefresh, IconSliders, IconUndo, IconUser, IconWand, IconX } from './icons';
@@ -66,10 +66,10 @@ function ItemRow({ item }: { item: MemItemView }): VNode {
         </div>
       </div>
       <div class="mem-actions">
-        <button class={`icon-btn sm ${item.pinned ? 'on' : ''}`} title={item.pinned ? 'Unpin' : 'Pin (never fades)'} onClick={() => void call('memory.pin', { id: item.id, pinned: !item.pinned }).then(() => refreshMemory(0))}>
+        <button class={`icon-btn sm ${item.pinned ? 'on' : ''}`} aria-label={item.pinned ? 'Unpin' : 'Pin'} title={item.pinned ? 'Unpin' : 'Pin (never fades)'} onClick={() => void call('memory.pin', { id: item.id, pinned: !item.pinned }).then(() => refreshMemory(0))}>
           <IconPin size={13} />
         </button>
-        <button class="icon-btn sm" title="Forget" onClick={() => void call('memory.forget', { id: item.id }).then(() => refreshMemory(0))}>
+        <button class="icon-btn sm" aria-label="Forget" title="Forget" onClick={() => void call('memory.forget', { id: item.id }).then(() => refreshMemory(0))}>
           <IconX size={13} />
         </button>
       </div>
@@ -198,23 +198,51 @@ function Activity(): VNode {
   );
 }
 
+const NOTES_MAX = 20_000;
+
 function Notes(): VNode {
   const [text, setText] = useState('');
-  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  /** What is in the file now: the text is saved only when it differs, so opening the tab never rewrites NOTES.md. */
+  const saved = useRef<string | null>(null);
+  const latest = useRef('');
+  /** The person typed before the file arrived: what they typed wins over what was there. */
+  const typed = useRef(false);
+  const save = () => {
+    const now = latest.current;
+    if (saved.current === null || now === saved.current) return;
+    saved.current = now;
+    void call('memory.notes.set', { text: now })
+      .then(() => setError(''))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
   useEffect(() => {
-    void call('memory.notes.get', {}).then((r) => (setText(r.text), setLoaded(true)));
+    void call('memory.notes.get', {})
+      .then((r) => {
+        saved.current = r.text;
+        if (typed.current) return;
+        latest.current = r.text;
+        setText(r.text);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    return save; // leaving the tab (or closing the drawer) saves what was typed in the last half second too
   }, []);
   useEffect(() => {
-    if (!loaded) return;
-    const t = setTimeout(() => void call('memory.notes.set', { text }), 500);
+    latest.current = text;
+    const t = setTimeout(save, 500);
     return () => clearTimeout(t);
-  }, [text, loaded]);
+  }, [text]);
   return (
     <div class="mem-list notes">
       <p class="faint" style={{ margin: '0 0 8px' }}>
         Your own notes for Claude. Jaffer never edits this — it is shared with the built-in agent and exported alongside what it learns.
       </p>
-      <textarea value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} placeholder={'e.g. My staging server is called atlas.\nI review PRs on Fridays.'} spellcheck={false} />
+      <textarea value={text} maxLength={NOTES_MAX} onInput={(e) => {
+          typed.current = true;
+          latest.current = (e.target as HTMLTextAreaElement).value; // at once: closing the drawer right after typing still saves it
+          setText(latest.current);
+        }} placeholder={'e.g. My staging server is called atlas.\nI review PRs on Fridays.'} spellcheck={false} aria-label="Your notes for Claude" />
+      {error && <p class="faint" style={{ margin: '6px 0 0', color: 'var(--danger)' }}>Could not save: {error}</p>}
     </div>
   );
 }

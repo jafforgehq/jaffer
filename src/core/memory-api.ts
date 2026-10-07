@@ -36,7 +36,10 @@ export function makeMemoryApi(engine: MemoryEngine): MemoryApi {
       return { item: view(r.item), deduped: r.deduped };
     },
 
-    'memory.forget': async (p: { id: string }) => ({ archived: engine.forget(p.id).archived.map(view) }),
+    'memory.forget': async (p: { id: string; agent?: boolean }) => {
+      const r = engine.forget(p.id, { agent: !!p.agent });
+      return { archived: r.archived.map(view), refused: r.refused };
+    },
 
     'memory.list': async (p: { status?: 'active' | 'archived' | 'all'; scope?: string; kind?: MemoryKind }) => ({
       items: engine.store.listItems({ status: p.status ?? 'active', scope: p.scope, kind: p.kind }).map(view),

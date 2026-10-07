@@ -8,6 +8,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
 import { activePane, cfg, overlay, ptyBus, windowFocused, daemonUp } from '../state';
 import { themeById, xtermTheme } from '../themes';
@@ -64,7 +65,8 @@ export function TerminalView({ pane }: { pane: string }) {
         if (event.metaKey) void window.jaffer.openExternal(uri);
       }),
     );
-    term.loadAddon(new ClipboardAddon());
+    // OSC 52: a program (ssh, a script) may put text on the clipboard but never read back what you copied
+    term.loadAddon(new ClipboardAddon(undefined, osc52Provider((text) => navigator.clipboard.writeText(text))));
     try {
       term.loadAddon(new ImageAddon());
     } catch {
@@ -164,7 +166,7 @@ export function TerminalView({ pane }: { pane: string }) {
       if (ev.type !== 'keydown') return true;
       if (ev.metaKey && !ev.ctrlKey && !ev.altKey) {
         const send = (s: string) => {
-          void call('pty.write', { pane, data: s });
+          void call('pty.write', { pane, data: s }).catch(() => undefined);
           return false;
         };
         if (ev.key === 'Backspace') return send('\x15'); // delete to line start
@@ -174,7 +176,7 @@ export function TerminalView({ pane }: { pane: string }) {
         return false; // let menu accelerators (copy, paste, split…) win
       }
       if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-        void call('pty.write', { pane, data: '\x1b\r' }); // newline in Claude Code, shell prompts and editors alike
+        void call('pty.write', { pane, data: '\x1b\r' }).catch(() => undefined); // newline in Claude Code, shell prompts and editors alike
         return false;
       }
       return true;
@@ -203,11 +205,11 @@ export function TerminalView({ pane }: { pane: string }) {
       search,
       focus: () => term.focus(),
       clear: () => {
-        void call('pty.write', { pane, data: '\x0c' });
+        void call('pty.write', { pane, data: '\x0c' }).catch(() => undefined);
         term.clear();
       },
       paste: (t) => term.paste(t),
-      type: (t) => void call('pty.write', { pane, data: t }),
+      type: (t) => void call('pty.write', { pane, data: t }).catch(() => undefined),
     };
     terminals.set(pane, handle);
 

@@ -39,12 +39,15 @@ export function applyOps(store: MemoryStore, run: RunCtx, ops: ProposedOp[], opt
     let ok = false;
     switch (op.op) {
       case 'add': {
+        const existed = !!op.key && !!store.findByKey(op.key); // a rule re-run that changes its own item updates it, it does not add one
         const r = op.key
           ? store.upsertByKey(ctx, op.key, { kind: validKind(op.kind), scope: validScope(op.scope), text: op.text, tags: op.tags, confidence: op.confidence })
           : store.add(ctx, { kind: validKind(op.kind), scope: validScope(op.scope), text: op.text, tags: op.tags, confidence: op.confidence });
+        if (r?.unchanged) break; // a rule saw its own item again: nothing to do, nothing to count
         if (r) {
           ok = true;
           if (r.deduped) counts.reinforced++;
+          else if (existed) counts.updated++;
           else counts.added++;
         }
         break;
@@ -63,9 +66,11 @@ export function applyOps(store: MemoryStore, run: RunCtx, ops: ProposedOp[], opt
         break;
       }
       case 'merge': {
-        const parts = op.ids.map((id) => store.getItem(id));
-        if (parts.every((p) => p && !(p.pinned && automated))) {
-          ok = !!store.merge(ctx, op.ids, op.text, { kind: op.kind ? validKind(op.kind) : undefined, scope: op.scope ? validScope(op.scope) : undefined });
+        const parts = [...new Set(op.ids)].map((id) => store.getItem(id));
+        // one scope only: merging a project's note with a global one would move the project's note into every project
+        const oneScope = new Set(parts.map((p) => p?.scope)).size === 1;
+        if (parts.length >= 2 && oneScope && parts.every((p) => p && !(p.pinned && automated))) {
+          ok = !!store.merge(ctx, [...new Set(op.ids)], op.text, { kind: op.kind ? validKind(op.kind) : undefined, scope: op.scope ? validScope(op.scope) : undefined });
           if (ok) counts.updated++;
         }
         break;

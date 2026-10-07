@@ -10,7 +10,6 @@ export interface JafferPaths {
   config: string;
   runDir: string;
   socket: string;
-  pidFile: string;
   logFile: string;
   sessionDir: string;
   sessionState: string;
@@ -46,7 +45,6 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     runDir,
     // Unix socket paths are limited to ~104 bytes on macOS; keep the name short.
     socket: path.join(runDir, 'jafferd.sock'),
-    pidFile: path.join(runDir, 'jafferd.pid'),
     logFile: path.join(runDir, 'jafferd.log'),
     sessionDir,
     sessionState: path.join(sessionDir, 'state.json'),

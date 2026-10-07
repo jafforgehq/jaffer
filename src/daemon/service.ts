@@ -14,6 +14,7 @@ import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
+import { isTerminalReport } from '../shared/terminal-reports';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
@@ -52,6 +53,8 @@ export class JafferService {
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
   private costTimers = new Set<NodeJS.Timeout>();
+  /** The scan timers of Claude Code transcript ingest: kept so that switching it off stops them (and on again does not stack them). */
+  private ingestTimers: NodeJS.Timeout[] = [];
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
@@ -74,6 +77,7 @@ export class JafferService {
   // ------------------------------------------------------------------ lifecycle
 
   async start(): Promise<void> {
+    await this.rpc.assertFree(this.paths.socket); // before a shell is spawned for a daemon that cannot take the socket
     this.writeWrapper();
     try {
       // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own
@@ -82,8 +86,6 @@ export class JafferService {
     } catch {
       /* the user's settings are theirs: never fail startup over them */
     }
-    void ClaudeCliLlm.detect(this.userEnv()).then((l) => (this.cliLlm = l)).catch(() => undefined);
-
     this.memory = new MemoryEngine({
       paths: this.paths,
       config: this.config,
@@ -116,7 +118,10 @@ export class JafferService {
     this.rejectionWatches.clear();
     for (const t of this.costTimers) clearTimeout(t);
     this.costTimers.clear();
+    for (const t of this.ingestTimers) clearTimeout(t);
+    this.ingestTimers = [];
     this.memory?.stop();
+    this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
     try {
       // Learn from whatever is pending before going away.
       await Promise.race([this.memory?.reflect({ force: false, llm: false }), new Promise((r) => setTimeout(r, 3000))]);
@@ -127,9 +132,8 @@ export class JafferService {
     await this.rpc.close();
     try {
       fs.unlinkSync(this.paths.socket);
-      fs.unlinkSync(this.paths.pidFile);
     } catch {
-      /* gone */
+      /* gone: closing the server already removes it */
     }
   }
 
@@ -234,7 +238,7 @@ export class JafferService {
       this.claudePushPending = true;
       return;
     }
-    this.rpc.broadcast('claude.state', { sessions: this.claudeWatcher.sessions() });
+    this.rpc.broadcast('claude.state', { sessions: this.claudeWatcher.view() });
     this.claudePushTimer = setTimeout(() => {
       this.claudePushTimer = null;
       if (this.claudePushPending) {
@@ -314,6 +318,8 @@ export class JafferService {
     const on = this.config.get().ingest.claudeCode && this.config.get().onboarded;
     if (!on) {
       this.ingestor = null;
+      for (const t of this.ingestTimers) clearTimeout(t);
+      this.ingestTimers = [];
       return;
     }
     if (this.ingestor) return;
@@ -331,10 +337,11 @@ export class JafferService {
         this.log(`ingest error: ${errMsg(e)}`);
       }
     };
-    setTimeout(tick, Math.min(1500, tickMs())).unref?.();
-    const t = setInterval(tick, Math.max(300, tickMs() * 2 / 3));
-    t.unref?.();
-    this.timers.push(t);
+    const first = setTimeout(tick, Math.min(1500, tickMs()));
+    const every = setInterval(tick, Math.max(300, tickMs() * 2 / 3));
+    first.unref?.();
+    every.unref?.();
+    this.ingestTimers = [first, every];
   }
 
   // ------------------------------------------------------------------ rpc
@@ -365,7 +372,8 @@ export class JafferService {
     r.handle('session.snapshot', async (p: { pane?: string }) => pane(p).consistentSnapshot());
     r.handle('pty.write', (p: { pane?: string; data: string }) => {
       pane(p).write(String(p.data));
-      this.claudeWatcher.userAnswered(); // typing while Claude waits for them means they are answering
+      // typing while Claude waits for them means they are answering; the terminal's own replies and focus reports do not
+      if (!isTerminalReport(String(p.data))) this.claudeWatcher.userAnswered();
       return true;
     });
     r.handle('pty.resize', (p: { pane?: string; cols: number; rows: number }) => {
@@ -385,7 +393,7 @@ export class JafferService {
       this.trackCost(p);
       return { ok: true };
     });
-    r.handle('claude.state', () => ({ sessions: this.claudeWatcher.sessions() }));
+    r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
 
     // ---- memory
     const api = makeMemoryApi(this.memory);
@@ -442,11 +450,9 @@ export class JafferService {
       const dir = path.join(this.userHome, '.local', 'bin');
       ensureDir(dir, 0o755);
       const link = path.join(dir, 'jaffer');
-      try {
-        fs.rmSync(link, { force: true });
-      } catch {
-        /* ignore */
-      }
+      const there = fs.lstatSync(link, { throwIfNoEntry: false });
+      if (there && !there.isSymbolicLink()) throw new RpcError('~/.local/bin/jaffer is a file of yours, not a link Jaffer made. Move it away and try again.', 'EEXIST');
+      if (there) fs.rmSync(link, { force: true });
       fs.symlinkSync(this.cliWrapper, link);
       const onPath = (process.env.PATH ?? '').split(path.delimiter).includes(dir);
       return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
@@ -477,7 +483,11 @@ export class JafferService {
   private probeClaude(): Promise<void> {
     if (!this.claudeProbe) {
       this.claudeProbe = findClaude(this.userEnv())
-        .then((p) => void (this.claudeBin = p))
+        .then((p) => {
+          this.claudeBin = p;
+          // memory is curated through `claude -p` on the person's login, never an API key; picked up whenever Claude Code turns up
+          if (p && !this.cliLlm) this.cliLlm = new ClaudeCliLlm(p, this.claudeEnv());
+        })
         .catch(() => void (this.claudeBin = null))
         .finally(() => {
           this.claudeProbe = null;

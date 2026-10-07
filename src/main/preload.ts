@@ -18,9 +18,8 @@ contextBridge.exposeInMainWorld('jaffer', {
     ipcRenderer.on('jaffer:focus', h);
     return () => ipcRenderer.removeListener('jaffer:focus', h);
   },
-  notify: (title: string, body: string) => ipcRenderer.invoke('jaffer:notify', title, body),
   openExternal: (url: string) => ipcRenderer.invoke('jaffer:open-external', url),
-  reveal: (p: string) => ipcRenderer.invoke('jaffer:reveal', p),
+  reveal: () => ipcRenderer.invoke('jaffer:reveal'),
   appInfo: () => ipcRenderer.invoke('jaffer:app-info'),
   setLoginItem: (on: boolean) => ipcRenderer.invoke('jaffer:set-login-item', on),
   reset: () => ipcRenderer.invoke('jaffer:reset'),

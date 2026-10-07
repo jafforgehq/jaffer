@@ -10,12 +10,11 @@ export interface ParsedLine {
   text: string;
   cwd?: string;
   ts?: string;
-  sessionId?: string;
 }
 
 const NOISE_PREFIXES = ['<command-name>', '<command-message>', '<command-args>', '<local-command-stdout>', '<local-command-caveat>', '<system-reminder>', '<user-prompt-submit-hook>', '[Request interrupted', 'Caveat:', '<bash-input>', '<bash-stdout>', '<bash-stderr>'];
 
-function textOf(content: unknown, role: 'user' | 'assistant'): string {
+function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   const parts: string[] = [];
@@ -25,7 +24,6 @@ function textOf(content: unknown, role: 'user' | 'assistant'): string {
     // user turns that only carry tool results are plumbing, and thinking is private
     if (blk.type === 'text' && typeof blk.text === 'string') parts.push(blk.text);
   }
-  void role;
   return parts.join('\n');
 }
 
@@ -40,10 +38,10 @@ export function parseClaudeLine(line: string): ParsedLine | null {
   if (!d || (d.type !== 'user' && d.type !== 'assistant')) return null;
   if (d.isSidechain === true || d.isMeta === true) return null; // sub-agent chatter and injected context
   const role = d.type as 'user' | 'assistant';
-  const raw = textOf(d.message?.content, role).trim();
+  const raw = textOf(d.message?.content).trim();
   if (!raw) return null;
   if (NOISE_PREFIXES.some((p) => raw.startsWith(p))) return null;
-  return { role, text: raw, cwd: typeof d.cwd === 'string' ? d.cwd : undefined, ts: typeof d.timestamp === 'string' ? d.timestamp : undefined, sessionId: typeof d.sessionId === 'string' ? d.sessionId : undefined };
+  return { role, text: raw, cwd: typeof d.cwd === 'string' ? d.cwd : undefined, ts: typeof d.timestamp === 'string' ? d.timestamp : undefined };
 }
 
 export interface IngestOptions {

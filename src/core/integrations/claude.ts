@@ -94,7 +94,7 @@ export function installHooks(cliPath: string, home: string = os.homedir()): { ch
   }
   if (JSON.stringify(data) === before) return { changed: false };
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644);
+  writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644, { preserve: true });
   return { changed: true };
 }
 
@@ -114,7 +114,7 @@ export function removeHooks(home: string = os.homedir()): { changed: boolean; er
     }
   }
   if (data.hooks && Object.keys(data.hooks).length === 0) delete data.hooks;
-  if (changed) writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644);
+  if (changed) writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644, { preserve: true });
   return { changed };
 }
 
@@ -174,19 +174,19 @@ export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<
   return null;
 }
 
-export async function mcpInstalled(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+async function mcpInstalled(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   const r = await run(claude, ['mcp', 'get', 'jaffer'], env, 15_000);
   return r.code === 0 && /jaffer/i.test(r.out);
 }
 
-export async function installMcp(claude: string, cliPath: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
+async function installMcp(claude: string, cliPath: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
   await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], env, 15_000); // refresh if present
   const json = JSON.stringify({ type: 'stdio', command: cliPath, args: ['mcp'] });
   const r = await run(claude, ['mcp', 'add-json', '--scope', 'user', 'jaffer', json], env, 20_000);
   return { ok: r.code === 0, message: r.out.trim() };
 }
 
-export async function removeMcp(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
+async function removeMcp(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
   const r = await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], env, 15_000);
   return { ok: r.code === 0, message: r.out.trim() };
 }

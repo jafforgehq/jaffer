@@ -394,7 +394,7 @@ export function runHeuristics(input: HeuristicInput): HeuristicOutput {
 }
 
 /** Keep the candidate table from growing without bound: forget one-off sightings after 30 days. */
-export function pruneCandidates(c: Candidates, now: number): Candidates {
+function pruneCandidates(c: Candidates, now: number): Candidates {
   const out: Candidates = {};
   for (const [k, v] of Object.entries(c)) {
     const age = (now - Date.parse(v.last)) / 86_400_000;

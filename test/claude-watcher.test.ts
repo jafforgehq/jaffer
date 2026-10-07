@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ClaudeWatcher, summarizeTool, type ClaudeSession } from '../src/core/claude/watcher';
+import { ClaudeWatcher, type ClaudeSession, type TrackedSession } from '../src/core/claude/watcher';
 
 const FX = path.resolve(__dirname, 'fixtures/claude-hooks');
 /** A real (scrubbed) hook payload, with fields overridden. */
@@ -15,49 +15,56 @@ beforeEach(() => {
   t = 1_000;
   w = new ClaudeWatcher({ now: () => t });
 });
-const only = (): ClaudeSession => {
+const only = (): TrackedSession => {
   const s = w.sessions();
   expect(s).toHaveLength(1);
   return s[0]!;
 };
 
 describe('ClaudeWatcher', () => {
-  it('SessionStart creates an idle session with the model', () => {
+  it('SessionStart creates an idle session that knows where its transcript is', () => {
     w.handle(fx('SessionStart'));
-    expect(only()).toMatchObject({ id: 'sess-1', state: 'idle', model: 'claude-opus-5-5', cwd: '/work/app', transcriptPath: expect.stringContaining('sess-1.jsonl'), activity: [], subagents: [] });
+    expect(only()).toEqual({ id: 'sess-1', state: 'idle', since: 1_000, subagents: [], transcriptPath: expect.stringContaining('sess-1.jsonl') });
   });
 
   it('an event for a session it has not seen creates it (hooks installed mid-session)', () => {
     w.handle(fx('UserPromptSubmit', { prompt: 'fix the build' }));
-    expect(only()).toMatchObject({ id: 'sess-1', state: 'working', prompt: 'fix the build' });
+    expect(only()).toMatchObject({ id: 'sess-1', state: 'working' });
   });
 
-  it('UserPromptSubmit → working with a ≤120 char redacted prompt, and ignores <task-notification> prompts', () => {
+  it('UserPromptSubmit → working, and ignores <task-notification> prompts', () => {
     w.handle(fx('SessionStart'));
-    w.handle(fx('UserPromptSubmit', { prompt: `${'explain this '.repeat(30)}${TOKEN}` }));
+    w.handle(fx('UserPromptSubmit', { prompt: 'explain this' }));
     expect(only().state).toBe('working');
-    expect(only().prompt!.length).toBeLessThanOrEqual(120);
     w.handle(fx('Stop'));
     w.handle(fx('UserPromptSubmit', { prompt: '<task-notification>agent done</task-notification>' }));
     expect(only().state).toBe('idle');
   });
 
-  it('PreToolUse sets the tool and adds a running activity; PostToolUse completes it with the duration and keeps working', () => {
+  it('PreToolUse sets the tool (its name and call id, nothing else); PostToolUse clears it and keeps working', () => {
     w.handle(fx('UserPromptSubmit'));
-    t = 2_000;
     w.handle(fx('PreToolUse', bash('npm test')));
-    expect(only().tool).toEqual({ name: 'Bash', summary: 'npm test' });
-    expect(only().activity).toEqual([{ id: 'toolu_2', name: 'Bash', summary: 'npm test', status: 'running', startedAt: 2_000 }]);
+    expect(only().tool).toEqual({ name: 'Bash', id: 'toolu_2' });
     w.handle(fx('PostToolUse', { ...bash('npm test'), duration_ms: 1234, tool_response: { stdout: 'ok' } }));
     expect(only().tool).toBeUndefined();
     expect(only().state).toBe('working');
-    expect(only().activity[0]).toMatchObject({ status: 'done', durMs: 1234 });
   });
 
-  it('PostToolUseFailure marks the entry failed', () => {
+  it('PostToolUseFailure clears the tool too', () => {
     w.handle(fx('PreToolUse', bash('false', 'toolu_3')));
     w.handle(fx('PostToolUseFailure', { tool_use_id: 'toolu_3' }));
-    expect(only().activity[0]).toMatchObject({ id: 'toolu_3', status: 'failed' });
+    expect(only().tool).toBeUndefined();
+  });
+
+  it('overlapping calls: the late result of an earlier call does not clear the tool of a later one; without ids it does', () => {
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+    w.handle(fx('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: '/x' }, tool_use_id: 'toolu_b' }));
+    w.handle(fx('PostToolUse', { ...bash('npm test', 'toolu_a') }));
+    expect(only().tool).toEqual({ name: 'Edit', id: 'toolu_b' });
+    w.handle(fx('PostToolUse', { tool_name: 'Edit', tool_use_id: 'toolu_b' }));
+    expect(only().tool).toBeUndefined();
+    w.handle(fx('PreToolUse', { tool_name: 'Read', tool_use_id: 'toolu_c' }));
+    w.handle(fx('PostToolUse', { tool_name: 'Read', tool_use_id: undefined })); // an older Claude Code that sends no call id
     expect(only().tool).toBeUndefined();
   });
 
@@ -77,7 +84,6 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Stop')); // Stop overtakes the last PostToolUse
     w.handle(fx('PostToolUse', { ...bash('npm test'), duration_ms: 50 }));
     expect(only().state).toBe('idle');
-    expect(only().activity[0]).toMatchObject({ status: 'done', durMs: 50 });
     w.handle(fx('Notification')); // a permission nudge for a prompt that was already answered
     expect(only()).toMatchObject({ state: 'idle', notice: undefined });
   });
@@ -103,20 +109,18 @@ describe('ClaudeWatcher', () => {
     expect(only()).toMatchObject({ state: 'idle', notice: undefined, tool: undefined });
   });
 
-  it('Stop → idle with the trimmed redacted last reply', () => {
+  it('Stop → idle', () => {
     w.handle(fx('UserPromptSubmit'));
-    w.handle(fx('Stop', { last_assistant_message: `  All done. Your key ${TOKEN} is in the file. ${'x'.repeat(400)}  ` }));
-    expect(only().state).toBe('idle');
-    expect(only().lastReply!.length).toBeLessThanOrEqual(240);
-    expect(only().lastReply).toContain('All done.');
-    expect(only().lastReply).not.toContain('sk-ant-api03');
+    w.handle(fx('PreToolUse', bash('npm test')));
+    w.handle(fx('Stop', { last_assistant_message: 'All done.' }));
+    expect(only()).toMatchObject({ state: 'idle', tool: undefined, notice: undefined });
   });
 
   it('SubagentStart/Stop track subagents', () => {
     w.handle(fx('SubagentStart'));
-    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'running', startedAt: 1_000 }]);
+    expect(only().subagents).toEqual([{ id: 'agent-1', status: 'running', startedAt: 1_000 }]);
     w.handle(fx('SubagentStop'));
-    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'done', startedAt: 1_000 }]);
+    expect(only().subagents).toEqual([{ id: 'agent-1', status: 'done', startedAt: 1_000 }]);
   });
 
   it('SessionEnd → ended, and ended sessions are dropped after 5 minutes', () => {
@@ -129,7 +133,7 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions()).toHaveLength(0);
   });
 
-  it('hooks still in flight when the session ended still record what happened, but never bring it back; SessionStart does', () => {
+  it('hooks still in flight when the session ended never bring it back; only SessionStart does', () => {
     w.handle(fx('PreToolUse', bash('npm test')));
     w.endAll(); // the shell reported that the claude command finished
     expect(only().state).toBe('ended');
@@ -139,8 +143,6 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Stop', { last_assistant_message: 'the last reply arrived late' }));
     w.handle(fx('UserPromptSubmit', { prompt: 'late too' }));
     expect(only()).toMatchObject({ state: 'ended', since: endedAt, tool: undefined, notice: undefined });
-    expect(only().lastReply).toBe('the last reply arrived late'); // the data is kept
-    expect(only().activity[0]).toMatchObject({ status: 'done', durMs: 5 });
     w.handle(fx('SessionStart')); // a resumed session
     expect(only().state).toBe('idle');
   });
@@ -150,7 +152,7 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Notification'));
     expect(only().state).toBe('needs-you');
     w.userAnswered();
-    expect(only()).toMatchObject({ state: 'working', notice: undefined, tool: { name: 'Bash', summary: 'rm -rf build' } });
+    expect(only()).toMatchObject({ state: 'working', notice: undefined, tool: { name: 'Bash', id: 'toolu_2' } });
     w.handle(fx('Stop'));
     w.userAnswered(); // nothing is waiting: nothing changes
     expect(only().state).toBe('idle');
@@ -165,27 +167,19 @@ describe('ClaudeWatcher', () => {
     expect(only()).toMatchObject({ state: 'idle', tool: undefined });
   });
 
-  it('interrupted: Esc while Claude works fires no Stop hook, so the transcript is what ends the turn: idle, the tool gone, its row failed', () => {
+  it('interrupted: Esc while Claude works fires no Stop hook, so the transcript is what ends the turn: idle and the tool gone', () => {
     w.handle(fx('UserPromptSubmit'));
     w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
     w.handle(fx('PreToolUse', bash('npm run lint', 'toolu_b')));
     w.handle(fx('PostToolUse', bash('npm run lint', 'toolu_b')));
     w.interrupted('sess-1');
     expect(only()).toMatchObject({ state: 'idle', tool: undefined });
-    expect(only().activity.map((a) => [a.id, a.status])).toEqual([['toolu_a', 'failed'], ['toolu_b', 'done']]);
     w.interrupted('sess-1'); // nothing is happening: nothing changes
     expect(only().state).toBe('idle');
     w.handle(fx('UserPromptSubmit', { session_id: 'plain' }));
     w.interrupted('plain'); // Esc during plain generation, no tool at all
     expect(w.sessions().find((x) => x.id === 'plain')!.state).toBe('idle');
     w.interrupted('nobody'); // an unknown session is ignored
-  });
-
-  it('Stop settles rows whose PostToolUse never arrived: the turn is over, so nothing is still running', () => {
-    w.handle(fx('UserPromptSubmit'));
-    w.handle(fx('PreToolUse', bash('sleep 1', 'toolu_lost')));
-    w.handle(fx('Stop'));
-    expect(only().activity.map((a) => a.status)).toEqual(['done']);
   });
 
   it('sweep: a turn that went silent (no hook for minutes, transcript not growing) is not working any more', () => {
@@ -204,11 +198,10 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('PreToolUse', bash('npm run build', 'toolu_long')));
     t = 1_000 + 29 * 60_000;
     w.sweep(() => false);
-    expect(only()).toMatchObject({ state: 'working', tool: { name: 'Bash', summary: 'npm run build' } }); // a long build is not silence
+    expect(only()).toMatchObject({ state: 'working', tool: { name: 'Bash', id: 'toolu_long' } }); // a long build is not silence
     t = 1_000 + 31 * 60_000;
     w.sweep(() => false);
     expect(only()).toMatchObject({ state: 'idle', tool: undefined });
-    expect(only().activity[0]!.status).toBe('failed');
     w.handle(fx('PreToolUse', bash('npm test', 'toolu_n')));
     w.handle(fx('Notification'));
     t += 3 * 3600_000;
@@ -273,26 +266,40 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions().map((s) => s.state)).toEqual(['ended', 'ended']);
   });
 
-  it('a secret in a prompt or in a Bash command is redacted (sk-ant-… token)', () => {
-    w.handle(fx('UserPromptSubmit', { prompt: `use ${TOKEN} for the call` }));
-    w.handle(fx('PreToolUse', bash(`curl -H "Authorization: Bearer ${TOKEN}" https://api.example.com`)));
-    const s = only();
-    expect(JSON.stringify(s)).not.toContain('sk-ant-api03');
-    expect(s.tool!.summary).toContain('curl');
+  it('keeps nothing the person wrote or Claude answered: no prompt, command, file name, reply or folder, and only a name and an id of the tool', () => {
+    const home = '/home/me/secret-project';
+    const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist'];
+    w.handle(fx('SessionStart', { cwd: home, model: 'claude-opus-5-5' }));
+    w.handle(fx('UserPromptSubmit', { prompt: `PROMPT-SECRET-WORDS ${TOKEN}`, cwd: home }));
+    w.handle(fx('PreToolUse', bash('cat /home/me/.ssh/id_rsa')));
+    w.handle(fx('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: `${home}/a.ts`, old_string: 'plan-the-heist' }, tool_use_id: 'toolu_e' }));
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'plan-the-heist' }));
+    w.handle(fx('PostToolUse', { ...bash('cat /home/me/.ssh/id_rsa'), tool_response: { stdout: 'PROMPT-SECRET-WORDS' } }));
+    w.handle(fx('Stop', { last_assistant_message: `REPLY-SECRET-WORDS ${TOKEN}` }));
+    const state = JSON.stringify(w.sessions());
+    for (const word of words) expect(state, word).not.toContain(word);
+    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['id', 'since', 'state', 'subagents', 'transcriptPath']); // what is set at all (JSON drops the undefined)
+    expect(only().subagents).toEqual([{ id: 'bg-1', status: 'running', startedAt: 1_000 }]);
   });
 
-  it('a sensitive command (cat ~/.ssh/id_rsa) shows only "Bash"', () => {
-    w.handle(fx('PreToolUse', bash('cat ~/.ssh/id_rsa')));
-    expect(only().tool).toEqual({ name: 'Bash', summary: '' });
-    expect(only().activity[0]).toMatchObject({ name: 'Bash', summary: '' });
-    expect(JSON.stringify(only())).not.toContain('id_rsa');
+  it('what leaves the daemon (view) is the same sessions without the transcript path', () => {
+    w.handle(fx('PreToolUse', bash('npm test')));
+    expect(w.sessions()[0]!.transcriptPath).toContain('sess-1.jsonl');
+    const out = w.view();
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({ id: 'sess-1', state: 'working', since: 1_000, tool: { name: 'Bash', id: 'toolu_2' }, subagents: [] });
+    expect(JSON.stringify(out)).not.toContain('.jsonl');
   });
 
-  it('activity is capped at 30 and sessions at 5', () => {
-    for (let i = 1; i <= 35; i++) w.handle(fx('PreToolUse', bash(`echo ${i}`, `toolu_${i}`)));
-    expect(only().activity).toHaveLength(30);
-    expect(only().activity[0]!.id).toBe('toolu_6');
-    expect(only().activity[29]!.id).toBe('toolu_35');
+  it('a notice is the wording Claude Code itself uses, redacted and cut', () => {
+    w.handle(fx('PreToolUse', bash('x')));
+    w.handle(fx('Notification', { message: `Claude needs your permission to use Bash with ${TOKEN} ${'y'.repeat(500)}`, notification_type: 'permission_prompt' }));
+    expect(only().state).toBe('needs-you');
+    expect(only().notice).not.toContain('sk-ant-api03');
+    expect(only().notice!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('sessions are capped at 5, newest first', () => {
     for (let i = 1; i <= 7; i++) {
       t += 10;
       w.handle(fx('SessionStart', { session_id: `s${i}` }));
@@ -308,7 +315,8 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions().every((s) => s.state === 'idle')).toBe(true); // unknown events never move state
     expect(() => w.handle(fx('PreToolUse', { tool_name: 'Bash', tool_input: 'ls', tool_use_id: 'x' }))).not.toThrow();
     w.handle(fx('UserPromptSubmit', { session_id: 'big', prompt: 'a'.repeat(1_000_000) }));
-    expect(w.sessions().find((s) => s.id === 'big')!.prompt!.length).toBeLessThanOrEqual(120);
+    expect(w.sessions().find((s) => s.id === 'big')!.state).toBe('working');
+    expect(JSON.stringify(w.sessions()).length).toBeLessThan(2_000); // the megabyte is not kept
   });
 
   it('changes emits the new snapshot only when something changed', () => {
@@ -355,18 +363,5 @@ describe('ClaudeWatcher cost', () => {
     expect(seen).toHaveLength(1);
     only().cost!.last.output = 999;
     expect(only().cost!.last.output).toBe(20);
-  });
-});
-
-describe('summarizeTool', () => {
-  it('picks the one field that says what the tool is doing', () => {
-    expect(summarizeTool('Bash', { command: 'ls -la' })).toBe('ls -la');
-    expect(summarizeTool('Edit', { file_path: '/work/app/a.ts', old_string: 'x' })).toBe('/work/app/a.ts');
-    expect(summarizeTool('Write', { file_path: '/work/app/b.ts' })).toBe('/work/app/b.ts');
-    expect(summarizeTool('Read', { file_path: '/work/app/c.ts' })).toBe('/work/app/c.ts');
-    expect(summarizeTool('Agent', { description: 'mock sub task' })).toBe('mock sub task');
-    expect(summarizeTool('Grep', { pattern: 'TODO' })).toBe('TODO');
-    expect(summarizeTool('mcp__x__y', { anything: 1 })).toBe('');
-    expect(summarizeTool('Bash', 'not an object')).toBe('');
   });
 });

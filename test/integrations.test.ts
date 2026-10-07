@@ -284,6 +284,7 @@ describe.skipIf(!CLAUDE_PATH)('ClaudeCliLlm (real claude -p against a mock API)'
     for (let i = 0; i < 6; i++) mock.queue({ kind: 'text', text: '{"ops":[]}' });
     const home = env.userHome;
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    process.env.JAFFER_KEEP_ANTHROPIC_ENV = '1'; // the mock API needs the test key; real runs never pass one on
     const llm = new ClaudeCliLlm(CLAUDE_PATH!, { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude'), ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' });
     const out = await llm.complete({ system: 'You are the curator. Reply with JSON only.', user: 'Digest: user ran pnpm test five times.' });
     expect(out).toContain('"ops"');
@@ -295,5 +296,6 @@ describe.skipIf(!CLAUDE_PATH)('ClaudeCliLlm (real claude -p against a mock API)'
     const files = fs.existsSync(projects) ? fs.readdirSync(projects, { recursive: true }).filter((f) => String(f).endsWith('.jsonl')) : [];
     expect(files).toHaveLength(0);
     await mock.close();
+    delete process.env.JAFFER_KEEP_ANTHROPIC_ENV;
   }, 90_000);
 });

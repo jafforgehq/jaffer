@@ -33,6 +33,24 @@ describe('redact', () => {
     expect(redactText('git clone https://bob:pw123@github.com/x/y.git')).toBe('git clone https://bob:[REDACTED]@github.com/x/y.git');
   });
 
+  it('masks a password glued to -p for the programs that take it that way, and leaves -p alone elsewhere', () => {
+    expect(redactText('mysql -u root -pHunter2 -e "select 1"')).toBe('mysql -u root -p[REDACTED] -e "select 1"');
+    expect(redactText('mysqldump -h db -pS3cret mydb > dump.sql')).toBe('mysqldump -h db -p[REDACTED] mydb > dump.sql');
+    expect(redactText('7z a -pTopSecret archive.7z files')).toBe('7z a -p[REDACTED] archive.7z files');
+    expect(redactText('mysql -p -u root')).toBe('mysql -p -u root'); // asks for it: nothing to hide
+    for (const harmless of ['docker run -p8080:80 nginx', 'lsof -p1234', 'gcc -pthread main.c', 'mkdir -p build/out', 'ssh -p2222 host', 'psql -p5432 -U me']) expect(redactText(harmless), harmless).toBe(harmless);
+  });
+
+  it('masks passwords given to sshpass, docker login, curl and openssl on the command line', () => {
+    expect(redactText('sshpass -p hunter2 ssh me@host')).toBe('sshpass -p [REDACTED] ssh me@host');
+    expect(redactText('docker login -u me -p s3cretvalue registry.example.com')).toBe('docker login -u me -p [REDACTED] registry.example.com');
+    expect(redactText('curl -u alice:hunter2 https://api.example.com/x')).toBe('curl -u alice:[REDACTED] https://api.example.com/x');
+    expect(redactText('curl https://api.example.com/x --user bob:p@ss')).toBe('curl https://api.example.com/x --user bob:[REDACTED]');
+    expect(redactText('curl -u alice https://api.example.com/x')).toBe('curl -u alice https://api.example.com/x'); // no password in it
+    expect(redactText('openssl enc -aes-256-cbc -pass pass:hunter2 -in a')).not.toContain('hunter2');
+    expect(redactText('openssl rsa -passin pass:hunter2')).toBe('openssl rsa -passin pass:[REDACTED]');
+  });
+
   it('masks bearer headers', () => {
     expect(redactText('curl -H "Authorization: Bearer abcdefghijklmnop1234"')).toContain('Bearer [REDACTED]');
   });
@@ -62,6 +80,54 @@ describe('redact', () => {
   });
 });
 
+describe('redact on hostile or merely large input', () => {
+  const quick = (what: string, input: string) => {
+    const t0 = Date.now();
+    redactText(input);
+    expect(Date.now() - t0, what).toBeLessThan(250); // it runs on the daemon's main thread, which also relays the terminal
+  };
+
+  it('stays fast on long runs that almost look like a key (a failing command can print 24 KB, a transcript far more)', () => {
+    quick('password. repeated', 'password.'.repeat(3000));
+    quick('dotted run', 'a.'.repeat(15_000));
+    quick('dashed run', 'a-'.repeat(15_000));
+    quick('underscored key', 'my_token_'.repeat(4000));
+    quick('url scheme run', 'a.'.repeat(12_000) + '://user:pw@host');
+    quick('one long word', 'x'.repeat(100_000));
+    quick('key with no value', 'API_KEY'.repeat(5000));
+    quick('lots of BEGIN markers', '-----BEGIN PRIVATE KEY-----\n'.repeat(2000));
+  });
+
+  it('still masks a secret that sits in the middle of such a run', () => {
+    expect(redactText(`${'a.'.repeat(5000)} DB_PASSWORD=Sup3rS3cret ${'b.'.repeat(5000)}`)).not.toContain('Sup3rS3cret');
+    expect(redactText('x'.repeat(30) + '_api_key=abcd1234efgh' + 'y'.repeat(30))).toContain('[REDACTED]');
+  });
+});
+
+describe('redact: values with spaces and odd characters', () => {
+  it('masks a quoted value whole, spaces and all, for flags and for assignments', () => {
+    expect(redactText('deploy --password "correct horse battery" --env prod')).toBe('deploy --password=[REDACTED] --env prod');
+    expect(redactText("deploy --token 'a b c d' now")).toBe('deploy --token=[REDACTED] now');
+    expect(redactText('password: "hunter two three"')).toBe('password: "[REDACTED]"');
+    expect(redactText("export SECRET_KEY='two words here'")).toBe("export SECRET_KEY='[REDACTED]'");
+    expect(redactText('{"api_key": "abc def ghi", "other": 1}')).toBe('{"api_key": "[REDACTED]", "other": 1}');
+    expect(redactText('{"password":"hunter2hunter2","user":"me"}')).toBe('{"password":"[REDACTED]","user":"me"}'); // JSON: the key is quoted too
+    expect(redactText("{'client_secret': 'xyz 123'}")).toBe("{'client_secret': '[REDACTED]'}");
+  });
+
+  it('masks an unquoted value up to the next space, with commas, semicolons and ampersands in it', () => {
+    expect(redactText('PASSWORD=pass,word,secret99 next')).toBe('PASSWORD=[REDACTED] next');
+    expect(redactText('TOKEN=ab;cd&ef next')).toBe('TOKEN=[REDACTED] next');
+  });
+
+  it('leaves ordinary text and short or empty values alone', () => {
+    expect(redactText('the password field is optional')).toBe('the password field is optional');
+    expect(redactText('token: ')).toBe('token: ');
+    expect(redactText('secret=no')).toBe('secret=no'); // too short to be one
+    expect(redactText('--password')).toBe('--password');
+  });
+});
+
 describe('isSensitiveCommand', () => {
   it('flags commands that must never be recorded', () => {
     for (const c of [
@@ -75,6 +141,12 @@ describe('isSensitiveCommand', () => {
       'aws secretsmanager get-secret-value --secret-id x',
       'echo $OPENAI_API_KEY',
       'gh auth token',
+      'cat .env',
+      'cat apps/api/.env.local',
+      'less ./.env.production',
+      'source .env',
+      'printenv OPENAI_API_KEY',
+      'sudo printenv HOME',
     ]) {
       expect(isSensitiveCommand(c), c).toBe(true);
     }

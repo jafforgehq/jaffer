@@ -23,14 +23,28 @@ export interface ResetResult {
 
 const BUNDLE_ID = 'com.jafforge.jaffer';
 
-/** Only ever remove a folder that is clearly Jaffer's: never the home folder, a parent of it, or something without "jaffer" in its name. */
+/** What Jaffer keeps in its folder: a folder that is neither empty nor holds at least one of these is not Jaffer's. */
+const OWN_ENTRIES = ['config.json', 'memory', 'run', 'session', 'shell', 'bin'];
+
+/**
+ * Only ever remove a folder that is clearly Jaffer's: never the home folder or a parent of it, never something without "jaffer"
+ * in its name, never a code checkout (a `.git` or `package.json` in it), and a folder that exists must hold Jaffer's own files
+ * (or nothing at all). JAFFER_HOME pointed at the wrong place must not cost anyone a project.
+ */
 function assertJafferHome(home: string, userHome: string): string {
   const h = path.resolve(home);
   const u = path.resolve(userHome);
   const inside = (parent: string, child: string) => child === parent || child.startsWith(parent + path.sep);
-  if (h === path.parse(h).root || inside(h, u) || path.dirname(h) === path.parse(h).root || !/jaffer/i.test(path.basename(h))) {
-    throw new Error(`Refusing to reset ${h}: it is not clearly Jaffer's own folder.`);
+  const refuse = () => new Error(`Refusing to reset ${h}: it is not clearly Jaffer's own folder.`);
+  if (h === path.parse(h).root || inside(h, u) || path.dirname(h) === path.parse(h).root || !/jaffer/i.test(path.basename(h))) throw refuse();
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(h);
+  } catch {
+    return h; // not there: nothing to remove
   }
+  if (entries.includes('.git') || entries.includes('package.json')) throw refuse();
+  if (entries.length > 0 && !entries.some((e) => OWN_ENTRIES.includes(e))) throw refuse();
   return h;
 }
 

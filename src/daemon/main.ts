@@ -53,7 +53,6 @@ async function main(): Promise<void> {
   process.on('SIGHUP', () => undefined); // survive the launching terminal closing
 
   await service.start();
-  fs.writeFileSync(paths.pidFile, String(process.pid), { mode: 0o600 });
   log(`ready pid=${process.pid}`);
 }
 

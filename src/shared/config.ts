@@ -114,9 +114,4 @@ export class ConfigStore {
     this.onChange.emit(this.cfg);
     return this.cfg;
   }
-
-  reload(): void {
-    this.cfg = supported(merge(DEFAULT_CONFIG, readJson<unknown>(this.paths.config, {})));
-    this.onChange.emit(this.cfg);
-  }
 }

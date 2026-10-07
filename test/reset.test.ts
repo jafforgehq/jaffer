@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
-import { applyBlock, BEGIN, END } from '../src/core/memory/exports';
+import { applyBlock, BEGIN, END, SKILL_MARKER } from '../src/core/memory/exports';
 
 let env: TestEnv;
 beforeEach(() => (env = makeEnv()));
@@ -32,7 +32,8 @@ function lived(): { wrapper: string } {
   fs.writeFileSync(settings, JSON.stringify(s));
   mk(path.join(env.userHome, '.claude', 'CLAUDE.md'), '# My rules\n\nBe brief.\n');
   applyBlock(path.join(env.userHome, '.claude', 'CLAUDE.md'), `${BEGIN}\n- Prefer pnpm\n${END}`);
-  mk(path.join(env.userHome, '.claude', 'skills', 'jaffer-release', 'SKILL.md'));
+  mk(path.join(env.userHome, '.claude', 'skills', 'jaffer-release', 'SKILL.md'), `# Release\n\n${SKILL_MARKER}\n`); // one Jaffer published
+  mk(path.join(env.userHome, '.claude', 'skills', 'jaffer-handwritten', 'SKILL.md'), '# A skill of the person, whose name starts the same way\n');
   mk(path.join(env.userHome, '.claude', 'skills', 'my-own-skill', 'SKILL.md'));
   fs.mkdirSync(path.join(env.userHome, '.local', 'bin'), { recursive: true });
   fs.symlinkSync(wrapper, path.join(env.userHome, '.local', 'bin', 'jaffer'));
@@ -63,6 +64,7 @@ describe('resetJaffer', () => {
     expect(md).not.toContain('Prefer pnpm');
     expect(fs.existsSync(path.join(env.userHome, '.claude', 'skills', 'jaffer-release'))).toBe(false);
     expect(fs.existsSync(path.join(env.userHome, '.claude', 'skills', 'my-own-skill', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(env.userHome, '.claude', 'skills', 'jaffer-handwritten', 'SKILL.md'))).toBe(true); // theirs, though it starts with jaffer-
     // the command-line link, the update cache and the app's own data
     expect(fs.existsSync(path.join(env.userHome, '.local', 'bin', 'jaffer'))).toBe(false);
     expect(fs.existsSync(path.join(env.userHome, 'Library', 'Caches', 'jaffer-updater'))).toBe(false);
@@ -104,6 +106,23 @@ describe('resetJaffer', () => {
     }
     expect(fs.existsSync(path.join(env.home, 'config.json'))).toBe(true);
     expect(hooksInstalled(env.userHome)).toBe(true);
+  });
+
+  it('refuses a folder with jaffer in its name that is a code checkout or holds none of Jaffer\'s own files (JAFFER_HOME pointing at the wrong place)', async () => {
+    lived();
+    const checkout = path.join(env.root, 'code', 'jaffer');
+    fs.mkdirSync(path.join(checkout, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(checkout, 'package.json'), '{"name":"jaffer"}');
+    fs.mkdirSync(path.join(checkout, 'memory'), { recursive: true }); // even with a folder that looks like Jaffer's
+    const stranger = path.join(env.root, 'documents', 'jaffer-notes');
+    fs.mkdirSync(stranger, { recursive: true });
+    fs.writeFileSync(path.join(stranger, 'todo.txt'), 'buy milk');
+    for (const home of [checkout, stranger]) {
+      await expect(resetJaffer({ home, userHome: env.userHome, env: claudeEnv(), backup: true })).rejects.toThrow(/refus/i);
+      expect(fs.readdirSync(home).length).toBeGreaterThan(0); // nothing was moved
+    }
+    expect(fs.existsSync(path.join(checkout, 'package.json'))).toBe(true);
+    expect(hooksInstalled(env.userHome)).toBe(true); // and nothing outside was touched either
   });
 
   it('on a Mac that never ran Jaffer there is nothing to do, and that is fine', async () => {

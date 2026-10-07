@@ -78,7 +78,7 @@ function hexToRgb(hex: string): [number, number, number] {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
-export function withAlpha(hex: string, a: number): string {
+function withAlpha(hex: string, a: number): string {
   const [r, g, b] = hexToRgb(hex);
   return `rgba(${r},${g},${b},${a})`;
 }
@@ -150,6 +150,5 @@ export function cssVars(theme: JafferTheme, opacity: number): Record<string, str
     '--shadow': dark ? '0 18px 60px rgba(0,0,0,0.55)' : '0 18px 60px rgba(30,30,50,0.2)',
     '--ring': dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.05)',
     '--shadow-sm': dark ? '0 1px 2px rgba(0,0,0,0.35)' : '0 1px 2px rgba(30,30,50,0.1)',
-    colorScheme: dark ? 'dark' : 'light',
   };
 }

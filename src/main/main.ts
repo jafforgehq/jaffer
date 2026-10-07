@@ -2,12 +2,14 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { ensureDaemon, tryConnect, type Launcher } from '../core/daemon-client';
-import { needsYouNotification } from '../shared/notify-policy';
+import { commandNotification, needsYouNotification } from '../shared/notify-policy';
+import { isAppUrl, isWebUrl } from '../shared/window-policy';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
@@ -24,6 +26,8 @@ import { resetJaffer } from '../core/reset';
 
 const paths = makePaths();
 const distRoot = path.join(__dirname, '..');
+/** The one page the window may show. Anything else (a file dropped on it, a link) is not given the daemon bridge. */
+const indexUrl = pathToFileURL(path.join(distRoot, 'renderer', 'index.html')).href;
 const launcher: Launcher = {
   execPath: process.execPath,
   daemonScript: path.join(distRoot, 'daemon', 'jafferd.cjs'),
@@ -124,10 +128,8 @@ function onClaudeState(sessions: ClaudeSession[]): void {
 
 /** A long command finished while you were looking at something else. */
 function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number }): void {
-  if (c.durMs < 30_000 || win?.isFocused() || !c.cmd.trim()) return;
-  const secs = Math.round(c.durMs / 1000);
-  const took = secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`;
-  notify(c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, `${c.cmd.slice(0, 120)} — ${took}`);
+  const n = commandNotification(c, { windowFocused: !!win?.isFocused() });
+  if (n) notify(n.title, n.body);
 }
 
 function notify(title: string, body: string): void {
@@ -298,14 +300,15 @@ function createWindow(): void {
     }
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    if (isWebUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
+  // Only the app's own page. A file dropped on the window would otherwise navigate it to that file, which would then have the
+  // preload and so the daemon bridge (and a shell to type into).
   win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith('file://')) {
-      e.preventDefault();
-      if (/^https?:\/\//.test(url)) void shell.openExternal(url);
-    }
+    if (isAppUrl(url, indexUrl)) return;
+    e.preventDefault();
+    if (isWebUrl(url)) void shell.openExternal(url);
   });
   void win.loadFile(path.join(distRoot, 'renderer', 'index.html'));
 }
@@ -416,8 +419,7 @@ function buildMenu(): void {
 // ---------------------------------------------------------------- ipc
 
 function trusted(e: Electron.IpcMainInvokeEvent): boolean {
-  const url = e.senderFrame?.url ?? '';
-  return url.startsWith('file://') && !!win && e.sender === win.webContents;
+  return isAppUrl(e.senderFrame?.url, indexUrl) && !!win && e.sender === win.webContents;
 }
 
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
@@ -431,18 +433,15 @@ ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   }
   return r;
 });
-ipcMain.handle('jaffer:notify', (e, title: string, body: string) => {
-  if (trusted(e)) notify(String(title), String(body));
-});
 ipcMain.handle('jaffer:open-external', (e, url: string) => {
   if (trusted(e) && /^https?:\/\//.test(url)) void shell.openExternal(url);
 });
-ipcMain.handle('jaffer:reveal', (e, p: string) => {
-  if (trusted(e)) void shell.openPath(String(p));
+ipcMain.handle('jaffer:reveal', (e) => {
+  if (trusted(e)) void shell.openPath(paths.home); // Jaffer's own folder only, never a path the page names
 });
 ipcMain.handle('jaffer:app-info', (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
-  return { version: VERSION, platform: process.platform, dark: nativeTheme.shouldUseDarkColors, home: paths.home, packaged: app.isPackaged };
+  return { version: VERSION, platform: process.platform, dark: nativeTheme.shouldUseDarkColors, home: paths.home, packaged: app.isPackaged, openAtLogin: app.getLoginItemSettings().openAtLogin };
 });
 ipcMain.handle('jaffer:update-state', (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');

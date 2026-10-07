@@ -8,8 +8,9 @@ import { MEMORY_KINDS } from './types';
 import { similarity } from './text';
 import { effectiveConfidence, strength } from './ranking';
 
-export const MAX_ITEM_CHARS = 320;
-export const DEDUPE_THRESHOLD = 0.72;
+const MAX_ITEM_CHARS = 320;
+const DEDUPE_THRESHOLD = 0.72;
+const MASKED = '[REDACTED]';
 
 export interface AddInput {
   kind: MemoryKind;
@@ -42,6 +43,8 @@ export interface AddResult {
   item: MemoryItem;
   /** True when an equivalent item already existed and was reinforced instead of duplicated. */
   deduped: boolean;
+  /** True when a rule saw its own item again and nothing changed (so nothing was journaled or counted). */
+  unchanged?: boolean;
 }
 
 export type StoreChange = { type: 'items' | 'skills' };
@@ -53,8 +56,17 @@ export type StoreChange = { type: 'items' | 'skills' };
 function sanitize(text: string): string | null {
   const flat = text.replace(/\s+/g, ' ').trim().slice(0, MAX_ITEM_CHARS);
   if (flat.length < 6) return null;
-  if (redact(flat).count > 0) return null;
+  if (flat.includes(MASKED) || redact(flat).count > 0) return null; // already masked counts too: "use [REDACTED] for the API" is worthless
   return flat;
+}
+
+const ITEM_FIELDS = ['text', 'kind', 'scope', 'tags', 'pinned', 'status', 'key', 'supersededBy'];
+const SKILL_FIELDS = ['name', 'description', 'whenToUse', 'steps', 'scope', 'pinned', 'status', 'key'];
+
+function sameVisibly(a: unknown, b: unknown, fields: string[]): boolean {
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  return fields.every((f) => JSON.stringify(x[f]) === JSON.stringify(y[f]));
 }
 
 /** For names/steps of skills, where masking (rather than rejecting) is acceptable. */
@@ -176,16 +188,12 @@ export class MemoryStore {
     return [...this.skills.values()].filter((s) => status === 'all' || s.status === status);
   }
 
-  scopes(): MemoryScope[] {
-    return [...new Set(this.listItems().map((i) => i.scope))];
-  }
-
   /** Best near-duplicate of `text` among active items of the same scope. */
-  findSimilar(text: string, scope: MemoryScope, threshold = DEDUPE_THRESHOLD, excludeId?: string): MemoryItem | undefined {
+  findSimilar(text: string, scope: MemoryScope): MemoryItem | undefined {
     let best: MemoryItem | undefined;
-    let bestSim = threshold;
+    let bestSim = DEDUPE_THRESHOLD;
     for (const i of this.items.values()) {
-      if (i.status !== 'active' || i.scope !== scope || i.id === excludeId) continue;
+      if (i.status !== 'active' || i.scope !== scope) continue;
       const s = similarity(i.text, text);
       if (s >= bestSim) {
         best = i;
@@ -249,12 +257,19 @@ export class MemoryStore {
     const existing = this.findByKey(key);
     if (!existing) return this.add(run, { ...input, key });
     if (existing.status !== 'active') return null;
+    if (existing.pinned) return { item: existing, deduped: true, unchanged: true }; // what the person pinned is theirs
     const text = sanitize(input.text);
     if (!text) return null;
     if (text !== existing.text) {
       return { item: this.update(run, existing.id, { text }) ?? existing, deduped: false };
     }
-    return { item: this.reinforce(run, existing.id) ?? existing, deduped: true };
+    // The rule that owns it saw it again: still true, so fresh for decay, but nothing changed. No journal line (the undo log is
+    // for changes) and no extra evidence (one rule re-reading the same machine is not an independent observation).
+    const seen = new Date(this.clock()).toISOString();
+    const next = { ...existing, lastSeenAt: seen };
+    this.items.set(existing.id, next);
+    this.dirty.items = true;
+    return { item: next, deduped: true, unchanged: true };
   }
 
   update(run: RunCtx, id: string, patch: Partial<Pick<MemoryItem, 'text' | 'kind' | 'scope' | 'tags' | 'confidence'>>): MemoryItem | null {
@@ -266,6 +281,7 @@ export class MemoryStore {
       const t = sanitize(patch.text);
       if (!t) return null;
       next.text = t;
+      if (run.source === 'user' && next.key && t !== cur.text) next.key = undefined; // the person reworded it: it is theirs now, no rule rewrites it
     }
     if (patch.kind && MEMORY_KINDS.includes(patch.kind)) next.kind = patch.kind;
     if (patch.scope) next.scope = patch.scope;
@@ -390,7 +406,7 @@ export class MemoryStore {
     const steps = input.steps.map((s) => clean(s).slice(0, 240)).filter(Boolean).slice(0, 12);
     if (!name || steps.length === 0) return null;
     // A skill whose commands needed masking is useless and risky: drop it.
-    if (input.steps.some((s) => redact(s).count > 0)) return null;
+    if (input.steps.some((s) => s.includes(MASKED) || redact(s).count > 0)) return null;
     const description = clean(input.description).slice(0, 240);
     const whenToUse = clean(input.whenToUse).slice(0, 240);
     const scope = input.scope ?? 'global';
@@ -461,6 +477,9 @@ export class MemoryStore {
     for (const e of entries.reverse()) {
       const map = (e.target === 'item' ? this.items : this.skills) as Map<string, MemoryItem | SkillItem>;
       const cur = map.get(e.id) ?? null;
+      // What a person did since (pinned it, reworded it, forgot it) is not undone by undoing an older run: only an entry whose
+      // result is still what is there is taken back. Counters and times (evidence, uses, last seen) are not what a person edits.
+      if (cur && e.after !== null && !sameVisibly(cur, e.after, e.target === 'item' ? ITEM_FIELDS : SKILL_FIELDS)) continue;
       if (e.before === null) {
         if (cur) {
           map.delete(e.id);

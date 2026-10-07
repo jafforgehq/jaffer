@@ -26,18 +26,44 @@ const RULES: Rule[] = [
   { name: 'npm-token', re: /\bnpm_[A-Za-z0-9]{30,}/g, replace: `${MASK}:npm-token` },
   { name: 'jwt', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replace: `${MASK}:jwt` },
   { name: 'bearer', re: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{16,}/gi, replace: (_m, scheme) => `${scheme} ${MASK}` },
-  { name: 'url-credentials', re: /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi, replace: (_m, scheme, user) => `${scheme}${user}:${MASK}@` },
+  { name: 'url-credentials', re: /\b([a-z][a-z0-9+.-]{0,19}:\/\/)([^\s/:@]{1,128}):([^\s/@]{1,512})@/gi, replace: (_m, scheme, user) => `${scheme}${user}:${MASK}@` },
   {
-    // --password=hunter2, --token abc, --api-key=...
+    // --password=hunter2, --token abc, --api-key=..., --password "two words"
     name: 'cli-flag',
-    re: /(--?(?:password|passwd|pass|token|secret|api[-_]?key|access[-_]?key|auth[-_]?token|client[-_]?secret))(?:=|\s+)(?!-)(['"]?)[^\s'"]+\2/gi,
+    re: /(--?(?:password|passwd|pass|token|secret|api[-_]?key|access[-_]?key|auth[-_]?token|client[-_]?secret))(?:=|\s+)(?!-)(?:"[^"\n]{1,256}"|'[^'\n]{1,256}'|[^\s'"]+)/gi,
     replace: (_m, flag) => `${flag}=${MASK}`,
   },
   {
-    // FOO_API_KEY=abc, password: "abc", export TOKEN='abc'
+    // mysql -u root -pHunter2, 7z a -pSecret x.7z: the value is glued to -p, so only for the programs that take it that way
+    // (anywhere else, -p8080 or -pthread is a port or a compiler flag)
+    name: 'attached-password-flag',
+    re: /\b(mysql|mysqldump|mysqladmin|mysqlcheck|mariadb|mycli|7za?|7zz|unrar|rar)\b([^|;&\n]*?\s)(-p)(?!-)\S+/g,
+    replace: (_m, cmd, mid, flag) => `${cmd}${mid}${flag}${MASK}`,
+  },
+  {
+    // sshpass -p secret, docker login -u me -p secret
+    name: 'password-flag-after-command',
+    re: /\b(sshpass\s+(?:-e\s+)?-p\s*|docker\s+login\b[^|;&\n]*?\s-p\s+)(?!-)(['"]?)[^\s'"]+\2/g,
+    replace: (_m, pre) => `${pre}${MASK}`,
+  },
+  {
+    // curl -u user:password, wget --user=me ... (the password half of user:password)
+    name: 'basic-auth-flag',
+    re: /(\b(?:curl|wget|http|https|xh)\b[^|;&\n]*?\s(?:-u|--user|--proxy-user)(?:=|\s+)['"]?[^\s:'"]+:)[^\s'"]+/g,
+    replace: (_m, pre) => `${pre}${MASK}`,
+  },
+  {
+    // openssl rsa -passin pass:secret, -passout pass:secret (plain -pass is a cli-flag above)
+    name: 'openssl-pass',
+    re: /(-pass(?:in|out)\s+pass:)\S+/g,
+    replace: (_m, pre) => `${pre}${MASK}`,
+  },
+  {
+    // FOO_API_KEY=abc, password: "two words", export TOKEN='abc'. The key is bounded on both sides: an unbounded run of key
+    // characters made this rule quadratic (seconds for a few KB of dots) on the daemon's main thread.
     name: 'assignment',
-    re: /\b([A-Za-z0-9_.-]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|authorization|auth[_-]?(?:token|key))[A-Za-z0-9_.-]*)(\s*[=:]\s*)(['"]?)(?!(?:Bearer|Basic|Token)\b)([^\s'",;&]{4,})\3/gi,
-    replace: (_m, key, sep, quote) => `${key}${sep}${quote}${MASK}${quote}`,
+    re: /\b([A-Za-z0-9_.-]{0,64}(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|authorization|auth[_-]?(?:token|key))[A-Za-z0-9_.-]{0,64})(["']?\s*[=:]\s*)(?:(")[^"\n]{1,256}"|(')[^'\n]{1,256}'|(?!(?:Bearer|Basic|Token)\b)[^\s'"]{4,})/gi,
+    replace: (_m, key, sep, quote = '') => `${key}${sep}${quote}${MASK}${quote}`,
   },
   { name: 'aws-secret', re: /\b(aws_secret_access_key\s*[=:]\s*)['"]?[A-Za-z0-9/+=]{30,}['"]?/gi, replace: (_m, pre) => `${pre}${MASK}` },
 ];
@@ -100,6 +126,8 @@ export function redactText(input: string): string {
 const SENSITIVE_CMD: RegExp[] = [
   /^\s/,
   /^\s*(?:sudo\s+)?(?:printenv|env)\s*$/,
+  /^\s*(?:sudo\s+)?printenv\s+\S/,
+  /\b(?:cat|less|more|bat|head|tail|cp|scp|rsync|source)\b[^|;&\n]*(?:^|[\s/])\.env(?:\.[\w-]+)?(?=\s|$)/,
   /^\s*(?:sudo\s+)?security\s+(?:find|dump|export|import|add)-/,
   /\b(?:cat|less|more|bat|head|tail|cp|scp|rsync)\b[^|;&]*(?:~|\$HOME|\/Users\/[^/\s]+|\/home\/[^/\s]+)?\/?\.(?:ssh|gnupg|aws|kube|docker\/config|netrc|npmrc|pypirc)\b/,
   /\bgpg2?\b.*--(?:export-secret|decrypt)/,

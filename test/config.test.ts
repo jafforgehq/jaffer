@@ -19,10 +19,9 @@ describe('ConfigStore', () => {
     expect(cfg.onboarded).toBe(true);
   });
 
-  it('applies the same rule on reload and when a patch brings an old value back', () => {
-    const store = new ConfigStore(env.paths);
+  it('applies the same rule when the file is read and when a patch brings an old value back', () => {
     fs.writeFileSync(env.paths.config, JSON.stringify({ export: { targets: ['codex'] } }));
-    store.reload();
+    const store = new ConfigStore(env.paths);
     expect(store.get().export.targets).toEqual([]);
     store.patch({ export: { targets: ['claude-code', 'gemini'] as never } });
     expect(store.get().export.targets).toEqual(['claude-code']);

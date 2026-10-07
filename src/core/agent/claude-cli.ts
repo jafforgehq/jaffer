@@ -22,6 +22,16 @@ export class ClaudeCliLlm implements LlmClient {
     return p ? new ClaudeCliLlm(p, env) : null;
   }
 
+  /** Curation runs on the person's own Claude login, so an API key or token in the environment is dropped: it would bill the key instead. */
+  private spawnEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.env, JAFFER_NO_HOOKS: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+    if (process.env.JAFFER_KEEP_ANTHROPIC_ENV !== '1') {
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+    }
+    return env;
+  }
+
   complete(req: { system: string; user: string; maxTokens?: number; model?: string }): Promise<string> {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'jaffer-curate-'));
     const model = req.model && !req.model.startsWith('claude-') ? req.model : this.model;
@@ -30,7 +40,7 @@ export class ClaudeCliLlm implements LlmClient {
       const child = spawn(this.claudePath, args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...this.env, JAFFER_NO_HOOKS: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+        env: this.spawnEnv(),
       });
       let out = '';
       let err = '';

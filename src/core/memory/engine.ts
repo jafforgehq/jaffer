@@ -1,11 +1,11 @@
 import os from 'node:os';
-import path from 'node:path';
 import fs from 'node:fs';
 import type { JafferPaths } from '../../shared/paths';
 import type { ConfigStore } from '../../shared/config';
 import { Emitter, SerialQueue, errMsg, nowIso, writeFileAtomic } from '../../shared/util';
-import { isSensitiveCommand, redactText } from '../../shared/redact';
+import { isSensitiveCommand } from '../../shared/redact';
 import { MemoryStore, type RunCtx } from './store';
+import { similarity } from './text';
 import { CursorFile, EpisodeLog, type CursorState } from './episodes';
 import { extractDirectives, runHeuristics, type HeuristicEnv } from './heuristics';
 import { applyOps, emptyCounts, type ApplyCounts } from './apply';
@@ -62,8 +62,8 @@ export class MemoryEngine {
     this.clock = deps.clock ?? Date.now;
     this.home = deps.home ?? os.homedir();
     this.store = new MemoryStore(deps.paths, this.clock);
-    this.episodes = new EpisodeLog(deps.paths, this.clock);
     this.cursor = new CursorFile(deps.paths.memoryCursor);
+    this.episodes = new EpisodeLog(deps.paths, this.clock, this.cursor.read().reflectedSeq);
     if (!fs.existsSync(deps.paths.memoryPolicy)) writeFileAtomic(deps.paths.memoryPolicy, DEFAULT_POLICY, 0o600);
     this.store.onChange.on(() => {
       this.exportDirty = true;
@@ -122,7 +122,6 @@ export class MemoryEngine {
     const res = this.store.add(run, { kind, scope: opts.scope ?? 'global', text, tags: opts.tags, confidence: source === 'user' ? 0.9 : 0.7, pinned: opts.pinned });
     if (!res) return { error: 'Could not store that (too short, or it looks like it contains a secret).' };
     this.store.flush();
-    this.observe({ t: 'note', text, cwd: undefined });
     this.refreshViews();
     this.events.emit({ type: 'learned', items: [res.item] });
     this.events.emit({ type: 'updated', reason: 'remember' });
@@ -137,24 +136,31 @@ export class MemoryEngine {
     return 'fact';
   }
 
-  forget(idOrQuery: string): { archived: MemoryItem[] } {
-    const run = this.store.newRun('user', 'forget');
+  /**
+   * Forget a memory by its id, or by describing it. A description only counts when the best match really reads like it (a ranking's
+   * best hit is always "100 %" of itself, so ranking alone proves nothing), and never matches a pinned memory. An agent
+   * (the MCP tool) may not forget a pinned memory even by its id: that is the person's call.
+   */
+  forget(idOrQuery: string, opts: { agent?: boolean } = {}): { archived: MemoryItem[]; refused?: 'pinned' } {
+    const agent = !!opts.agent;
+    const run = this.store.newRun(agent ? 'agent' : 'user', 'forget');
     const direct = this.store.getItem(idOrQuery);
-    const targets: MemoryItem[] = [];
-    if (direct) targets.push(direct);
-    else {
-      const ranked = rankItems(this.store.listItems(), { query: idOrQuery }).filter((r) => r.relevance > 0.6);
-      if (ranked[0]) targets.push(ranked[0].item);
+    let target: MemoryItem | undefined;
+    let refused: 'pinned' | undefined;
+    if (direct) {
+      if (direct.pinned && agent) refused = 'pinned';
+      else target = direct;
+    } else {
+      const best = rankItems(this.store.listItems().filter((i) => !i.pinned), { query: idOrQuery })[0];
+      if (best && best.relevance > 0 && similarity(idOrQuery, best.item.text) >= 0.5) target = best.item;
     }
     const archived: MemoryItem[] = [];
-    for (const t of targets) {
-      const a = this.store.archive(run, t.id);
-      if (a) archived.push(a);
-    }
+    const a = target && this.store.archive(run, target.id);
+    if (a) archived.push(a);
     this.store.flush();
     this.refreshViews();
     if (archived.length) this.events.emit({ type: 'updated', reason: 'forget' });
-    return { archived };
+    return refused ? { archived, refused } : { archived };
   }
 
   recall(query: string, opts: { cwd?: string; limit?: number } = {}): RecallResult {
@@ -366,14 +372,6 @@ export class MemoryEngine {
 
   updateCursor(fn: (c: CursorState) => void): void {
     this.cursor.update(fn);
-  }
-
-  redact(text: string): string {
-    return redactText(text);
-  }
-
-  projectName(p: string): string {
-    return path.basename(p);
   }
 }
 

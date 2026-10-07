@@ -35,12 +35,12 @@ const SHIM = `(() => {
     onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     onMenu: (cb) => { menu.add(cb); window.__menu = (id) => menu.forEach((f) => f(id)); return () => menu.delete(cb); },
     onFocus: (cb) => { const on = () => cb(true), off = () => cb(false); window.addEventListener('focus', on); window.addEventListener('blur', off); return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); }; },
-    notify: async () => {}, openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
-    appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
+    openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
+    appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false, openAtLogin: !!window.__loginItem }),
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
     reset: async () => { window.__resetCalled = (window.__resetCalled || 0) + 1; return { cancelled: true }; }, // the real app asks first; this stand-in is a person saying no
     updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
-    setLoginItem: async () => {}, pathForFile: () => '', platform: 'darwin',
+    setLoginItem: async (on) => { window.__loginItem = on; }, pathForFile: () => '', platform: 'darwin',
   };
 })();`;
 

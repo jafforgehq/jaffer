@@ -215,7 +215,6 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 
 /* ============================================================== agent */
 .memory { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
-@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
 
 /* tool steps */
 
@@ -264,7 +263,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .conf { width: 28px; height: 4px; border-radius: 2px; background: var(--active); overflow: hidden; display: inline-block; }
 .conf-fill { display: block; height: 100%; background: var(--memory); border-radius: 2px; }
 .mem-actions { display: flex; flex: none; opacity: 0; transition: opacity 0.12s; }
-.mem:hover .mem-actions, .mem.pinned .mem-actions { opacity: 1; }
+.mem:hover .mem-actions, .mem.pinned .mem-actions, .mem-actions:focus-within { opacity: 1; } /* reachable from the keyboard too */
 .mem.pinned .mem-actions .icon-btn:not(.on) { opacity: 0; }
 .mem.pinned:hover .mem-actions .icon-btn { opacity: 1; }
 .mem-actions .icon-btn.on { color: var(--accent); background: var(--accent-soft); }
@@ -300,6 +299,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .scrim.center { align-items: center; padding-top: 0; }
 @keyframes fade { from { opacity: 0; } }
 .modal { width: min(580px, 92vw); max-height: 78vh; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: var(--shadow), 0 0 0 0.5px rgba(0, 0, 0, 0.5); overflow: hidden; animation: pop 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.1); }
+.modal:focus, .modal:focus-visible { outline: none; } /* the dialog takes the keyboard when it opens; the box itself needs no ring */
 @keyframes pop { from { transform: translateY(-6px) scale(0.985); opacity: 0; } }
 .modal.wide { width: min(760px, 94vw); }
 .modal.xwide { width: min(860px, 95vw); }

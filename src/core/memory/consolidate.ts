@@ -9,7 +9,7 @@ export interface ConsolidationCounts {
   capped: number;
 }
 
-export const CAPS = { perScope: 60, global: 160 };
+const CAPS = { perScope: 60, global: 160 };
 
 /**
  * "Sleep" pass: merge near-duplicates, let faded memories go, and enforce size caps so the
@@ -32,6 +32,7 @@ export function consolidateHeuristic(store: MemoryStore, run: RunCtx): Consolida
       for (const other of sorted) {
         if (other.id === base.id || consumed.has(other.id)) continue;
         if (base.key && other.key && base.key !== other.key) continue; // distinct rule-derived facts stay distinct
+        if (other.pinned && cluster.some((c) => c.pinned)) continue; // two things the person pinned are two things
         if (similarity(base.text, other.text) >= 0.62) cluster.push(other);
       }
       if (cluster.length < 2) continue;

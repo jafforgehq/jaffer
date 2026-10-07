@@ -22,15 +22,24 @@ export type RpcMessage = RpcRequest | RpcResponse | RpcEvent;
 
 export class LineDecoder {
   private buf = '';
+  /** Where the next search for a newline starts: what was searched already holds none, so a long line is not scanned again for every chunk. */
+  private scanned = 0;
+  /** `maxPending`: the most a peer may send without ending a line before it is taken for runaway and dropped. */
+  constructor(private maxPending = 64 * 1024 * 1024) {}
   push(chunk: string, onLine: (line: string) => void): void {
     this.buf += chunk;
     let i: number;
-    while ((i = this.buf.indexOf('\n')) >= 0) {
+    while ((i = this.buf.indexOf('\n', this.scanned)) >= 0) {
       const line = this.buf.slice(0, i);
       this.buf = this.buf.slice(i + 1);
+      this.scanned = 0;
       if (line.trim()) onLine(line);
     }
-    if (this.buf.length > 256 * 1024 * 1024) this.buf = ''; // runaway peer
+    this.scanned = this.buf.length;
+    if (this.buf.length > this.maxPending) {
+      this.buf = ''; // runaway peer
+      this.scanned = 0;
+    }
   }
 }
 
@@ -71,7 +80,6 @@ export class RpcServer {
   private server: net.Server | null = null;
   private handlers = new Map<string, Handler>();
   readonly conns = new Set<ServerConn>();
-  readonly onConnect = new Emitter<ServerConn>();
   private nextId = 1;
 
   handle(method: string, fn: Handler): void {
@@ -83,9 +91,28 @@ export class RpcServer {
     for (const c of this.conns) if (!filter || filter(c)) c.send(msg);
   }
 
+  /**
+   * Throws EADDRINUSE when something answers on the socket. A second daemon starting at the same moment as the first would
+   * otherwise delete the first one's socket file and leave it running, unreachable, with a live shell.
+   */
+  async assertFree(socketPath: string): Promise<void> {
+    const live = await new Promise<boolean>((resolve) => {
+      const probe = net.createConnection(socketPath);
+      const done = (v: boolean) => {
+        probe.destroy();
+        resolve(v);
+      };
+      probe.once('connect', () => done(true));
+      probe.once('error', () => done(false));
+      probe.setTimeout(500, () => done(false));
+    });
+    if (live) throw new RpcError(`Something is already listening on ${socketPath}.`, 'EADDRINUSE');
+  }
+
   async listen(socketPath: string): Promise<void> {
+    await this.assertFree(socketPath);
     try {
-      fs.unlinkSync(socketPath);
+      fs.unlinkSync(socketPath); // what is left is a dead daemon's file
     } catch {
       /* none */
     }
@@ -116,7 +143,7 @@ export class RpcServer {
         } catch {
           return;
         }
-        if (typeof msg.id !== 'number' || typeof msg.method !== 'string') return;
+        if (!msg || typeof msg !== 'object' || typeof msg.id !== 'number' || typeof msg.method !== 'string') return;
         void this.dispatch(conn, msg);
       }),
     );
@@ -128,7 +155,6 @@ export class RpcServer {
     };
     socket.on('close', close);
     socket.on('error', close);
-    this.onConnect.emit(conn);
   }
 
   private async dispatch(conn: ServerConn, req: RpcRequest): Promise<void> {
@@ -203,6 +229,7 @@ export class RpcClient {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     if (typeof msg.id === 'number') {
       const p = this.pending.get(msg.id);
       if (!p) return;

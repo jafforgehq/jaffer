@@ -48,7 +48,7 @@ describe('shouldAsk', () => {
 
 describe('signerKind', () => {
   it('recognises a Developer ID signature', () => {
-    const out = 'Executable=/Applications/Jaffer.app/Contents/MacOS/Jaffer\nIdentifier=com.jafforge.jaffer\nAuthority=Developer ID Application: Fedja H (R9QFVTDHY5)\nAuthority=Developer ID Certification Authority\nTeamIdentifier=R9QFVTDHY5\n';
+    const out = 'Executable=/Applications/Jaffer.app/Contents/MacOS/Jaffer\nIdentifier=com.jafforge.jaffer\nAuthority=Developer ID Application: Example Developer (ABCDE12345)\nAuthority=Developer ID Certification Authority\nTeamIdentifier=ABCDE12345\n';
     expect(signerKind(out)).toBe('developer-id');
   });
   it('tells ad-hoc from unsigned', () => {

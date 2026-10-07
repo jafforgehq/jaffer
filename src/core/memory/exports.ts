@@ -27,7 +27,7 @@ export function detectTargets(home: string = os.homedir()): { target: ExportTarg
   return (Object.entries(targetDefs(home)) as [ExportTarget, TargetDef][]).map(([target, d]) => ({ target, label: d.label, installed: fs.existsSync(d.dir) }));
 }
 
-export function renderBlock(store: MemoryStore, home?: string): string {
+function renderBlock(store: MemoryStore, home?: string): string {
   const ctx = buildContext(store, { budgetChars: 4500, notes: false, skills: true, home });
   const body = ctx.text || '_Nothing learned yet._';
   return [
@@ -55,13 +55,13 @@ export function applyBlock(file: string, block: string | null): 'written' | 'unc
   if (block === null) {
     if (!exists || !re.test(cur)) return 'skipped';
     next = cur.replace(re, '').replace(/\n{3,}/g, '\n\n').trimEnd() + (cur.trim() ? '\n' : '');
-    writeFileAtomic(file, next, 0o644);
+    writeFileAtomic(file, next, 0o644, { preserve: true });
     return 'removed';
   }
-  if (re.test(cur)) next = cur.replace(re, block + '\n');
+  if (re.test(cur)) next = cur.replace(re, () => block + '\n'); // a function: $& $` $' in the memory text are not replacement patterns
   else next = (cur.trimEnd() ? cur.trimEnd() + '\n\n' : '') + block + '\n';
   if (next === cur) return 'unchanged';
-  writeFileAtomic(file, next, 0o644);
+  writeFileAtomic(file, next, 0o644, { preserve: true });
   return 'written';
 }
 
@@ -94,6 +94,9 @@ export function syncExports(store: MemoryStore, enabled: ExportTarget[], home: s
   return results;
 }
 
+/** The line every skill Jaffer publishes carries: how Jaffer tells its own skills from a `jaffer-…` directory of the user's. */
+export const SKILL_MARKER = '_Learned by Jaffer from repeated use in this terminal._';
+
 /** Learned skills become real Claude Code skills (under ~/.claude/skills, one jaffer-NAME directory each). */
 export function syncClaudeSkills(store: MemoryStore, enabled: boolean, home: string = os.homedir()): { written: number; removed: number } {
   const root = path.join(home, '.claude', 'skills');
@@ -115,7 +118,7 @@ export function syncClaudeSkills(store: MemoryStore, enabled: boolean, home: str
         '',
         s.description,
         '',
-        '_Learned by Jaffer from repeated use in this terminal._',
+        SKILL_MARKER,
         '',
         '## Steps',
         ...s.steps.map((st, i) => `${i + 1}. \`${st}\``),
@@ -141,15 +144,21 @@ export function syncClaudeSkills(store: MemoryStore, enabled: boolean, home: str
   return { written, removed };
 }
 
-/** Delete every `jaffer-*` skill directory except those in `keep`. Returns how many went. */
+/** Delete the skills Jaffer published (a `jaffer-*` directory whose SKILL.md carries Jaffer's marker) except those in `keep`; the user's own are left alone. Returns how many went. */
 function pruneSkills(root: string, keep: Set<string>): number {
   let removed = 0;
   try {
     for (const d of fs.readdirSync(root)) {
-      if (d.startsWith('jaffer-') && !keep.has(d)) {
-        fs.rmSync(path.join(root, d), { recursive: true, force: true });
-        removed++;
+      if (!d.startsWith('jaffer-') || keep.has(d)) continue;
+      let ours = false;
+      try {
+        ours = fs.readFileSync(path.join(root, d, 'SKILL.md'), 'utf8').includes(SKILL_MARKER);
+      } catch {
+        /* no SKILL.md: not one of ours */
       }
+      if (!ours) continue;
+      fs.rmSync(path.join(root, d), { recursive: true, force: true });
+      removed++;
     }
   } catch {
     /* no skills dir */

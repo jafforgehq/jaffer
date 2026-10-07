@@ -11,14 +11,24 @@ import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
 function Modal({ title, onClose, children, wide, xwide, center }: { title?: string; onClose: () => void; children: preact.ComponentChildren; wide?: boolean; xwide?: boolean; center?: boolean }): VNode {
+  const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && (e.stopPropagation(), onClose());
     window.addEventListener('keydown', k, true);
-    return () => window.removeEventListener('keydown', k, true);
+    // keyboard focus goes into the dialog (the terminal keeps it otherwise, and Tab and typing would go to the shell behind it)
+    const el = dialog.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
+    return () => {
+      window.removeEventListener('keydown', k, true);
+      // and back to the terminal when the dialog goes, unless something else has taken it
+      requestAnimationFrame(() => {
+        if (!document.activeElement || document.activeElement === document.body) terminals.get(activePane.value)?.focus();
+      });
+    };
   }, []);
   return (
     <div class={`scrim ${center ? 'center' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div class={`modal ${wide ? 'wide' : ''} ${xwide ? 'xwide' : ''}`} role="dialog" aria-label={title}>
+      <div ref={dialog} tabIndex={-1} class={`modal ${wide ? 'wide' : ''} ${xwide ? 'xwide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         {title && (
           <div class="modal-head">
             <h3>{title}</h3>
@@ -188,13 +198,13 @@ export function FindBar(): VNode {
           else if (e.key === 'Escape') close();
         }}
       />
-      <button class="icon-btn" onClick={() => h()?.search.findPrevious(q, opts)} title="Previous (⇧↵)">
+      <button class="icon-btn" onClick={() => h()?.search.findPrevious(q, opts)} title="Previous (⇧↵)" aria-label="Previous match">
         ↑
       </button>
-      <button class="icon-btn" onClick={() => h()?.search.findNext(q, opts)} title="Next (↵)">
+      <button class="icon-btn" onClick={() => h()?.search.findNext(q, opts)} title="Next (↵)" aria-label="Next match">
         ↓
       </button>
-      <button class="icon-btn" onClick={close}>
+      <button class="icon-btn" onClick={close} aria-label="Close search">
         <IconX size={14} />
       </button>
     </div>
@@ -203,16 +213,18 @@ export function FindBar(): VNode {
 
 // ------------------------------------------------------------------ settings
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: preact.ComponentChildren }): VNode {
-  return (
-    <label class="field">
+function Field({ label, hint, children, buttons }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean }): VNode {
+  const body = (
+    <>
       <span class="field-label">
         {label}
         {hint && <small>{hint}</small>}
       </span>
       <span class="field-ctl">{children}</span>
-    </label>
+    </>
   );
+  // A <label> forwards a click on its words to its first button, which would press "Add memory tools" or "Reset…" for a stray click.
+  return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
 type Section = 'appearance' | 'memory' | 'integrations' | 'updates' | 'reset';
@@ -228,7 +240,9 @@ export function Settings(): VNode {
     void call('setup.targets', {}).then(setTargets).catch(() => undefined);
   };
   useEffect(refresh, []);
-  const set = (p: object) => void patchConfig(p);
+  const set = (p: object) => void patchConfig(p).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }));
+  const [openAtLogin, setOpenAtLogin] = useState(false);
+  useEffect(() => void window.jaffer.appInfo().then((i) => setOpenAtLogin(!!i.openAtLogin)).catch(() => undefined), []);
   const run = async (name: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(name);
     try {
@@ -290,7 +304,7 @@ export function Settings(): VNode {
                 ))}
               </div>
               <Field label="Font size">
-                <input type="number" min={8} max={28} value={c.appearance.fontSize} onChange={(e) => set({ appearance: { fontSize: Number((e.target as HTMLInputElement).value) } })} />
+                <input type="number" min={8} max={28} value={c.appearance.fontSize} onChange={(e) => set({ appearance: { fontSize: Math.min(28, Math.max(8, Math.round(Number((e.target as HTMLInputElement).value)) || c.appearance.fontSize)) } })} />
               </Field>
               <Field label="Font family">
                 <input type="text" value={c.appearance.fontFamily} onChange={(e) => set({ appearance: { fontFamily: (e.target as HTMLInputElement).value } })} />
@@ -314,14 +328,20 @@ export function Settings(): VNode {
               <Field label="Pet" hint="a little mole in a corner of the terminal: it digs while something runs">
                 <Switch checked={c.appearance.pet !== false} onChange={(v) => set({ appearance: { pet: v } })} />
               </Field>
-              <Field label="GPU rendering" hint="turn off if text looks wrong (needs a new pane to apply)">
+              <Field label="GPU rendering" hint="turn off if text looks wrong (applies the next time you open Jaffer)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>
               <Field label="Global hotkey" hint="summons Jaffer from anywhere">
                 <input type="text" value={c.hotkey} onChange={(e) => set({ hotkey: (e.target as HTMLInputElement).value })} />
               </Field>
               <Field label="Open at login" hint="so your session is always one keystroke away">
-                <Switch checked={false} onChange={(v) => void window.jaffer.setLoginItem(v)} />
+                <Switch
+                  checked={openAtLogin}
+                  onChange={(v) => {
+                    setOpenAtLogin(v);
+                    void window.jaffer.setLoginItem(v).catch(() => setOpenAtLogin(!v));
+                  }}
+                />
               </Field>
             </>
           )}
@@ -341,7 +361,7 @@ export function Settings(): VNode {
               </Field>
               <div class="settings-foot">
                 Session data lives in{' '}
-                <button class="linkish" onClick={async () => void window.jaffer.reveal((await window.jaffer.appInfo()).home)}>
+                <button class="linkish" onClick={() => void window.jaffer.reveal()}>
                   ~/.jaffer
                 </button>
               </div>
@@ -353,7 +373,7 @@ export function Settings(): VNode {
               <h4>Claude Code</h4>
               <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. Install and sign-in help is right here too; Claude is optional.</p>
               <SignInStep onDone={refresh} />
-              <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.hooks ? 'hooks on' : 'hooks off'} · ${claude.mcp ? 'memory tools (MCP) on' : 'memory tools (MCP) off'}` : 'not found on PATH') : '…'}>
+              <Field buttons label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.hooks ? 'hooks on' : 'hooks off'} · ${claude.mcp ? 'memory tools (MCP) on' : 'memory tools (MCP) off'}` : 'not found on PATH') : '…'}>
                 <span class="row">
                   <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
                     {claude?.mcp && claude.hooks ? 'Reinstall' : claude?.hooks ? 'Add memory tools' : 'Connect'}
@@ -407,7 +427,7 @@ function ResetSection(): VNode {
     <>
       <h4>Reset</h4>
       <p class="lede">Start from scratch, for a clean install. This ends your terminal session and removes Jaffer's memory, settings, hooks and memory tools from this Mac. Claude Code itself, its login and your own Claude settings are not touched. Unless you choose to delete it, a backup of ~/.jaffer is kept next to it.</p>
-      <Field label="Reset Jaffer" hint="asks first; the app restarts as if it were freshly installed">
+      <Field buttons label="Reset Jaffer" hint="asks first; the app restarts as if it were freshly installed">
         <button class="btn danger" disabled={busy} onClick={() => void reset()}>
           Reset…
         </button>
@@ -488,11 +508,13 @@ function SignInStep({ onDone, onSkip }: { onDone: () => void; onSkip?: () => voi
       .finally(() => (inflight.current = false));
   };
   const running = auth?.loginRunning ?? false;
+  const signedIn = auth?.loggedIn ?? false;
   useEffect(() => {
     refresh();
+    if (signedIn) return; // signed in: nothing to wait for (each check starts `claude auth status`)
     const t = setInterval(refresh, running ? 1000 : 2500);
     return () => clearInterval(t);
-  }, [running]);
+  }, [running, signedIn]);
   useEffect(() => {
     if (!auth?.loggedIn) return;
     const t = setTimeout(onDone, 700); // long enough to see the tick
@@ -597,6 +619,8 @@ export function Onboarding(): VNode {
       overlay.value = null;
       setSide(null); // just the terminal at first
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
+    } catch (e) {
+      toast({ kind: 'error', text: `Could not save your choices: ${e instanceof Error ? e.message : String(e)}` });
     } finally {
       setBusy(false);
     }

@@ -1,5 +1,5 @@
 import { Emitter } from '../../shared/emitter';
-import { isSensitiveCommand, redactText } from '../../shared/redact';
+import { redactText } from '../../shared/redact';
 import type { TurnCost } from '../../shared/claude-cost';
 
 /**
@@ -9,8 +9,7 @@ import type { TurnCost } from '../../shared/claude-cost';
  */
 
 export type ClaudeState = 'idle' | 'working' | 'needs-you' | 'ended';
-export interface ClaudeActivity { id: string; name: string; summary: string; status: 'running' | 'done' | 'failed'; startedAt: number; durMs?: number }
-export interface ClaudeSubagent { id: string; type: string; status: 'running' | 'done'; startedAt: number }
+export interface ClaudeSubagent { id: string; status: 'running' | 'done'; startedAt: number }
 /** What the answers of one session cost, estimated from their token counts (see shared/claude-cost). */
 export interface ClaudeCost {
   last: TurnCost;
@@ -21,23 +20,27 @@ export interface ClaudeCost {
   partial: boolean;
   at: number;
 }
+/**
+ * What the rest of Jaffer may know about a Claude Code session: whether it works, waits or is done, its background agents and
+ * what its answers cost. Nothing the person wrote or Claude answered is kept, not even redacted (no prompts, replies, commands
+ * or file names): nothing shows it, so nothing holds it.
+ */
 export interface ClaudeSession {
   id: string;
-  cwd: string;
-  model?: string;
   state: ClaudeState;
   since: number;
-  prompt?: string;
-  tool?: { name: string; summary: string };
-  activity: ClaudeActivity[];
-  subagents: ClaudeSubagent[];
-  lastReply?: string;
+  /** The tool call Claude is running or asking about: its name and id, never its arguments. */
+  tool?: { name: string; id: string };
+  /** Claude Code's own words for what it waits for ("Claude needs your permission to use Bash"), redacted. */
   notice?: string;
-  transcriptPath?: string;
+  subagents: ClaudeSubagent[];
   cost?: ClaudeCost;
 }
+/** The daemon's own view: where the transcript lives is for the daemon only and never goes out with the state. */
+export interface TrackedSession extends ClaudeSession {
+  transcriptPath?: string;
+}
 
-const MAX_ACTIVITY = 30;
 const MAX_SUBAGENTS = 20;
 const MAX_SESSIONS = 5;
 const ENDED_TTL_MS = 5 * 60_000;
@@ -45,9 +48,6 @@ const ENDED_TTL_MS = 5 * 60_000;
 const STALE_MS = 5 * 60_000;
 /** With a tool running there is nothing to hear for as long as the tool takes (a build), so be patient. */
 const STALE_TOOL_MS = 30 * 60_000;
-const MAX_PROMPT = 120;
-const MAX_REPLY = 240;
-const MAX_SUMMARY = 160;
 const MAX_NOTICE = 200;
 const KNOWN = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd']);
 
@@ -59,42 +59,11 @@ function clip(v: unknown, max: number): string {
 }
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-/** The one field of a tool call that says what it is doing (raw: callers redact). */
-export function summarizeTool(name: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const i = input as Record<string, unknown>;
-  switch (name) {
-    case 'Bash':
-      return str(i.command);
-    case 'Edit':
-    case 'Write':
-    case 'Read':
-      return str(i.file_path);
-    case 'NotebookEdit':
-      return str(i.notebook_path) || str(i.file_path);
-    case 'Agent':
-    case 'Task':
-      return str(i.description);
-    case 'Grep':
-    case 'Glob':
-      return str(i.pattern);
-    default:
-      return '';
-  }
-}
-
-function safeSummary(name: string, input: unknown): string {
-  const raw = summarizeTool(name, input);
-  if (name === 'Bash' && isSensitiveCommand(raw)) return '';
-  return clip(raw, MAX_SUMMARY);
-}
-
-interface Entry { s: ClaudeSession; touched: number }
+interface Entry { s: TrackedSession; touched: number }
 
 export class ClaudeWatcher {
-  readonly changes = new Emitter<ClaudeSession[]>();
+  readonly changes = new Emitter<TrackedSession[]>();
   private map = new Map<string, Entry>();
-  private seq = 0;
   private now: () => number;
 
   constructor(opts: { now?: () => number } = {}) {
@@ -139,7 +108,6 @@ export class ClaudeWatcher {
   interrupted(sessionId: string): void {
     const e = this.map.get(sessionId);
     if (!e || !(e.s.state === 'working' || e.s.state === 'needs-you')) return;
-    this.settle(e.s, 'failed');
     this.setState(e.s, 'idle');
     e.s.notice = undefined;
     e.s.tool = undefined;
@@ -151,14 +119,13 @@ export class ClaudeWatcher {
    * `working` with no hook for minutes, and `alive` (is the transcript still growing?) saying no, becomes idle. `needs-you` is
    * never swept: waiting for a person takes as long as it takes.
    */
-  sweep(alive: (s: ClaudeSession) => boolean): void {
+  sweep(alive: (s: TrackedSession) => boolean): void {
     const t = this.now();
     let changed = false;
     for (const e of this.map.values()) {
       const s = e.s;
       const quiet = t - e.touched;
       if (s.state === 'working' && quiet >= (s.tool ? STALE_TOOL_MS : STALE_MS) && !alive({ ...s })) {
-        this.settle(s, 'failed');
         this.setState(s, 'idle');
         s.tool = undefined;
         changed = true;
@@ -181,22 +148,22 @@ export class ClaudeWatcher {
     this.changes.emit(this.sessions());
   }
 
-  /** Rows still `running` when the turn is over (their PostToolUse never came) are finished one way or the other. */
-  private settle(s: ClaudeSession, as: 'done' | 'failed'): void {
-    for (const a of s.activity) if (a.status === 'running') a.status = as;
-  }
-
-  /** Newest change first; ended sessions older than five minutes are dropped. */
-  sessions(): ClaudeSession[] {
+  /** Newest change first; ended sessions older than five minutes are dropped. For the daemon itself: the transcript path is in it. */
+  sessions(): TrackedSession[] {
     const t = this.now();
     for (const [id, { s }] of this.map) if (s.state === 'ended' && t - s.since > ENDED_TTL_MS) this.map.delete(id);
     return this.snapshot();
   }
 
-  private snapshot(): ClaudeSession[] {
+  /** What may leave the daemon (to the window, over RPC): the same sessions without anything about files. */
+  view(): ClaudeSession[] {
+    return this.sessions().map(({ transcriptPath: _file, ...rest }) => rest);
+  }
+
+  private snapshot(): TrackedSession[] {
     return [...this.map.values()]
       .sort((a, b) => b.touched - a.touched)
-      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, activity: s.activity.map((a) => ({ ...a })), subagents: s.subagents.map((a) => ({ ...a })) }));
+      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, subagents: s.subagents.map((a) => ({ ...a })) }));
   }
 
   private setState(s: ClaudeSession, state: ClaudeState): void {
@@ -213,7 +180,7 @@ export class ClaudeWatcher {
     s.notice = undefined;
   }
 
-  private session(id: string, cwd: string): ClaudeSession {
+  private session(id: string): TrackedSession {
     const hit = this.map.get(id);
     if (hit) {
       hit.touched = this.now();
@@ -223,7 +190,7 @@ export class ClaudeWatcher {
       const victim = [...this.map.entries()].sort((a, b) => Number(b[1].s.state === 'ended') - Number(a[1].s.state === 'ended') || a[1].touched - b[1].touched)[0];
       if (victim) this.map.delete(victim[0]);
     }
-    const s: ClaudeSession = { id, cwd, state: 'idle', since: this.now(), activity: [], subagents: [] };
+    const s: TrackedSession = { id, state: 'idle', since: this.now(), subagents: [] };
     this.map.set(id, { s, touched: this.now() });
     return s;
   }
@@ -244,42 +211,30 @@ export class ClaudeWatcher {
     const endedSince = prior?.since ?? 0;
     if (stayEnded && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Notification')) return; // things that start something cannot be late
 
-    const s = this.session(id, clip(o.cwd, 300));
-    if (str(o.cwd) && !s.cwd) s.cwd = clip(o.cwd, 300);
+    const s = this.session(id);
     if (str(o.transcript_path)) s.transcriptPath = str(o.transcript_path).slice(0, 400);
 
     switch (ev) {
       case 'SessionStart':
-        s.model = clip(o.model, 80) || s.model;
         this.setState(s, 'idle');
         s.tool = undefined;
         s.notice = undefined;
         break;
       case 'UserPromptSubmit':
         this.setState(s, 'working');
-        s.prompt = clip(o.prompt, MAX_PROMPT);
         s.notice = undefined;
-        s.activity = [];
         s.subagents = s.subagents.filter((a) => a.status === 'running');
         break;
-      case 'PreToolUse': {
-        const name = clip(o.tool_name, 60);
-        const summary = safeSummary(name, o.tool_input);
+      case 'PreToolUse':
         this.setState(s, 'working');
         s.notice = undefined;
-        s.tool = { name, summary };
-        s.activity.push({ id: str(o.tool_use_id) || `t${++this.seq}`, name, summary, status: 'running', startedAt: this.now() });
-        if (s.activity.length > MAX_ACTIVITY) s.activity.splice(0, s.activity.length - MAX_ACTIVITY);
+        s.tool = { name: clip(o.tool_name, 60), id: str(o.tool_use_id).slice(0, 80) };
         break;
-      }
       case 'PostToolUse':
       case 'PostToolUseFailure': {
-        const entry = s.activity.find((a) => a.id === str(o.tool_use_id)) ?? [...s.activity].reverse().find((a) => a.status === 'running' && a.name === str(o.tool_name));
-        if (entry) {
-          entry.status = ev === 'PostToolUse' ? 'done' : 'failed';
-          if (typeof o.duration_ms === 'number' && Number.isFinite(o.duration_ms)) entry.durMs = Math.max(0, Math.round(o.duration_ms));
-        }
-        if (s.tool && (!entry || s.tool.name === entry.name)) s.tool = undefined;
+        // calls can overlap: a late result of an earlier call must not clear the tool of a later one (without ids, it does)
+        const finished = str(o.tool_use_id).slice(0, 80);
+        if (s.tool && (!finished || !s.tool.id || s.tool.id === finished)) s.tool = undefined;
         s.notice = undefined;
         if (s.state === 'needs-you') this.setState(s, 'working'); // answered; never idle → working (see the note on ordering above)
         break;
@@ -304,17 +259,15 @@ export class ClaudeWatcher {
           if (status === 'running' && hit.status !== 'running') hit.startedAt = this.now(); // the same id working again is a new run
           hit.status = status;
         } else {
-          s.subagents.push({ id: agentId, type: clip(o.agent_type, 60) || 'agent', status, startedAt: this.now() });
+          s.subagents.push({ id: agentId, status, startedAt: this.now() });
           if (s.subagents.length > MAX_SUBAGENTS) s.subagents.splice(0, s.subagents.length - MAX_SUBAGENTS);
         }
         break;
       }
       case 'Stop':
-        this.settle(s, 'done');
         this.setState(s, 'idle');
         s.tool = undefined;
         s.notice = undefined;
-        s.lastReply = clip(o.last_assistant_message, MAX_REPLY) || s.lastReply;
         break;
       case 'SessionEnd':
         this.end(s);

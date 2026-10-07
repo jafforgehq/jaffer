@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { processBadge } from '../src/shared/process-badge';
+import { isClaudeCommand, processBadge } from '../src/shared/process-badge';
 
 describe('processBadge: the "something is running" indicator in the toolbar and the sidebar', () => {
   it('shows nothing when no command is running', () => {
@@ -28,3 +28,19 @@ describe('processBadge: the "something is running" indicator in the toolbar and 
     expect(processBadge('claudette --serve', 'working')).toEqual({ kind: 'command', spin: true });
   });
 });
+
+describe('isClaudeCommand', () => {
+  it('is Claude Code when the command is claude, with its arguments, a prefix of variables, `command`, or a path', () => {
+    for (const c of ['claude', 'claude --resume', 'claude -p "fix it"', 'FOO=1 BAR=x claude -c', 'command claude', '/usr/local/bin/claude', '~/.local/bin/claude --model opus', '  claude']) expect(isClaudeCommand(c), c).toBe(true);
+  });
+
+  it('is not Claude Code when a line merely mentions it', () => {
+    for (const c of ['git log --grep claude', 'tail -f ~/.claude/debug.log', 'npm run claude-lint', 'claudette --serve', 'echo claude', 'cat claude.md', 'ls ~/.claude', '', 'claude-code-guide']) expect(isClaudeCommand(c), c).toBe(false);
+  });
+
+  it('so a command that only mentions claude still spins like any other command', () => {
+    expect(processBadge('git log --grep claude', undefined)).toEqual({ kind: 'command', spin: true });
+    expect(processBadge('tail -f ~/.claude/debug.log', 'idle')).toEqual({ kind: 'command', spin: true });
+  });
+});
+

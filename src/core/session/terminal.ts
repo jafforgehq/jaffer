@@ -48,13 +48,11 @@ export class PtySession {
   /** True once the shell has emitted integration marks, i.e. we can trust the state below. */
   integrated = false;
   promptReady = false;
-  lastExit: number | null = null;
   private pendingCmd = '';
   private running: { cmd: string; startedAt: number; marker: ReturnType<Terminal['registerMarker']> } | null = null;
   private batch: string[] = [];
   private batchBytes = 0;
   private flushTimer: NodeJS.Timeout | null = null;
-  private lastActivity = Date.now();
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
 
@@ -92,14 +90,6 @@ export class PtySession {
     return this.term.rows;
   }
 
-  get idleMs(): number {
-    return Date.now() - this.lastActivity;
-  }
-
-  get busy(): boolean {
-    return this.running !== null;
-  }
-
   /** When the running command started (ms since epoch), for how long the mole has been digging. */
   get runningSince(): number | null {
     return this.running?.startedAt ?? null;
@@ -116,7 +106,6 @@ export class PtySession {
   // ------------------------------------------------------------------ io
 
   private onPtyData(data: string): void {
-    this.lastActivity = Date.now();
     // Emit only after the headless terminal has parsed the chunk. Snapshots taken via
     // consistentSnapshot() are then exactly "everything emitted so far", never a partial chunk.
     this.term.write(data, () => this.queueOut(data));
@@ -155,24 +144,6 @@ export class PtySession {
       } catch {
         /* pty already gone */
       }
-    }
-  }
-
-  /** Make full-screen apps (Claude Code, vim…) repaint, e.g. after a client re-attaches. */
-  nudge(): void {
-    if (!this._alive) return;
-    const { cols, rows } = this.term;
-    try {
-      this.pty.resize(cols, Math.max(1, rows - 1));
-      setTimeout(() => {
-        try {
-          if (this._alive) this.pty.resize(cols, rows);
-        } catch {
-          /* ignore */
-        }
-      }, 30);
-    } catch {
-      /* ignore */
     }
   }
 
@@ -310,7 +281,6 @@ export class PtySession {
   }
 
   private finishCommand(exit: number | null): void {
-    this.lastExit = exit;
     const run = this.running;
     if (!run) return;
     this.running = null;

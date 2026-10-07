@@ -5,10 +5,10 @@ export interface JafferBridge {
   onEvent(cb: (event: string, data: any) => void): () => void;
   onMenu(cb: (id: string) => void): () => void;
   onFocus(cb: (focused: boolean) => void): () => void;
-  notify(title: string, body: string): Promise<void>;
   openExternal(url: string): Promise<void>;
-  reveal(path: string): Promise<void>;
-  appInfo(): Promise<{ version: string; platform: string; dark: boolean; home: string; packaged: boolean }>;
+  /** Opens Jaffer's own folder in Finder (never a path the page names). */
+  reveal(): Promise<void>;
+  appInfo(): Promise<{ version: string; platform: string; dark: boolean; home: string; packaged: boolean; openAtLogin: boolean }>;
   setLoginItem(on: boolean): Promise<void>;
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */

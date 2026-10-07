@@ -7,6 +7,7 @@ import { makeMemoryApi, type MemoryApi } from '../core/memory-api';
 import { tryConnect, ensureDaemon, launchDaemon } from '../core/daemon-client';
 import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
+import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { resetJaffer } from '../core/reset';
 import { detectTargets } from '../core/memory/exports';
@@ -21,24 +22,9 @@ const dim = (s: string) => (process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s);
 const red = (s: string) => (process.stderr.isTTY ? `\x1b[31m${s}\x1b[0m` : s);
 const green = (s: string) => (process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s);
 
-function flag(name: string, def?: string): string | undefined {
-  const i = args.findIndex((a) => a === `--${name}`);
-  if (i >= 0) return args[i + 1] && !args[i + 1]!.startsWith('--') ? args[i + 1] : 'true';
-  const eq = args.find((a) => a.startsWith(`--${name}=`));
-  return eq ? eq.slice(name.length + 3) : def;
-}
-function positional(from = 1): string[] {
-  const out: string[] = [];
-  for (let i = from; i < args.length; i++) {
-    const a = args[i]!;
-    if (a.startsWith('--')) {
-      if (!a.includes('=') && args[i + 1] && !args[i + 1]!.startsWith('--')) i++;
-      continue;
-    }
-    out.push(a);
-  }
-  return out;
-}
+const parsed = parseArgs(args);
+const flag = (name: string, def?: string): string | undefined => parsed.flags.get(name) ?? def;
+const positional = (): string[] => parsed.positional;
 
 function launcher() {
   const here = __dirname; // dist/cli
@@ -169,7 +155,7 @@ async function main(): Promise<void> {
       if (!q) throw new Error('Usage: jaffer forget <id|description>');
       const client = await tryConnect(paths);
       const r = await memoryCall('memory.forget', { id: q }, client);
-      console.log(r.archived.length ? `forgot: ${r.archived.map((i: any) => i.text).join(' | ')}` : dim('nothing matched'));
+      console.log(r.archived.length ? `forgot: ${r.archived.map((i: any) => i.text).join(' | ')}` : dim('nothing matched closely enough (use the id from `jaffer recall`; a pinned memory is forgotten by its id only)'));
       client?.close();
       return;
     }

@@ -76,7 +76,7 @@ Memory lives in `~/.jaffer/memory`. Secrets (keys, tokens, passwords in flags, e
 
 ## One session, the command line, a clean start
 
-The app is a window onto a background daemon (`jafferd`, a unix socket in `~/.jaffer/run`) that owns your shell, a headless copy of the screen, what Claude Code is doing and the memory. Re-attaching restores the exact screen, including full-screen programs.
+The app is a window onto a background daemon (`jafferd`, a unix socket in `~/.jaffer/run`) that owns your shell, a headless copy of the screen, what Claude Code is doing and the memory. Re-attaching restores the exact screen, including full-screen programs. To survive a reboot the screen and scrollback are saved in `~/.jaffer/session` (mode 0600, unredacted, because it is your terminal); *Settings → Reset* removes them.
 
 ```
 jaffer remember "Always run the linter before committing" --kind convention

@@ -27,10 +27,14 @@ interface SavedState {
 }
 
 interface SavedScreens {
-  [paneId: string]: { data: string; cols: number; rows: number; cwd: string; savedAt: string };
+  [paneId: string]: { data: string };
 }
 
 const MAIN = 'main';
+const RESPAWN_MIN_MS = 150;
+const RESPAWN_MAX_MS = 10_000;
+/** A shell that lived this long was a working one: the next respawn is quick again. */
+const HEALTHY_MS = 3_000;
 
 /**
  * Owns the one session: a single terminal. There is no way to open a second one, by design. The shell lives in the
@@ -44,6 +48,9 @@ export class SessionHost {
   private startedAt = nowIso();
   private disposed = false;
   private restarting = new Set<string>();
+  /** How long to wait before the next respawn: short normally, longer each time the shell dies within seconds of starting. */
+  private backoffMs = RESPAWN_MIN_MS;
+  private spawnedAt = 0;
 
   constructor(
     private paths: JafferPaths,
@@ -80,7 +87,7 @@ export class SessionHost {
     this.persist();
   }
 
-  async spawn(id: string, o: { cwd?: string; cols?: number; rows?: number; restoreScreen?: string; restoredAt?: string; banner?: string } = {}): Promise<PtySession> {
+  async spawn(id: string, o: { cwd?: string; cols?: number; rows?: number; restoreScreen?: string; restoredAt?: string } = {}): Promise<PtySession> {
     if (id !== MAIN) throw new Error('There is only one session.');
     const cfg = this.config.get();
     const shell = cfg.shell.path && fs.existsSync(cfg.shell.path) ? cfg.shell.path : defaultShell();
@@ -88,12 +95,11 @@ export class SessionHost {
     const cwd = o.cwd && fs.existsSync(o.cwd) ? o.cwd : os.homedir();
     const session = new PtySession({ file: spawn.file, args: spawn.args, cwd, env: spawn.env, cols: o.cols ?? 120, rows: o.rows ?? 32, scrollback: 10_000 });
     this.panes.set(id, session);
+    this.spawnedAt = Date.now();
     // Queue the restored screen *before* any shell output can arrive.
     if (o.restoreScreen) {
       const when = o.restoredAt ? ` ${new Date(o.restoredAt).toLocaleString()}` : '';
       void session.inject(o.restoreScreen + `\x1b[0m\r\n\x1b[2m── session restored${when} ──\x1b[0m\r\n`);
-    } else if (o.banner) {
-      void session.inject(o.banner);
     }
     session.events.on((event) => {
       if (event.type === 'data' || event.type === 'command' || event.type === 'cwd') this.dirty = true;
@@ -110,13 +116,26 @@ export class SessionHost {
     // The one session never goes away: start a fresh shell in the same place.
     if (this.restarting.has(id)) return;
     this.restarting.add(id);
+    this.backoffMs = Date.now() - this.spawnedAt < HEALTHY_MS ? Math.min(this.backoffMs * 2, RESPAWN_MAX_MS) : RESPAWN_MIN_MS;
     const { cwd, cols, rows } = session;
     const snap = session.snapshot();
     session.dispose();
-    await new Promise((r) => setTimeout(r, 150));
-    if (this.disposed) return;
-    await this.spawn(id, { cwd, cols, rows, restoreScreen: snap.data, banner: undefined });
-    this.restarting.delete(id);
+    try {
+      // A shell that cannot start (a bad path, no ptys left) is tried again, each time after a longer wait: the one session
+      // must not stay dead because a single attempt threw, and must not burn the CPU on a shell that dies at once.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, this.backoffMs));
+        if (this.disposed) return;
+        try {
+          await this.spawn(id, { cwd, cols, rows, restoreScreen: snap.data });
+          break;
+        } catch {
+          this.backoffMs = Math.min(this.backoffMs * 2, RESPAWN_MAX_MS);
+        }
+      }
+    } finally {
+      this.restarting.delete(id);
+    }
     this.events.emit({ pane: id, lifecycle: 'restarted' });
   }
 
@@ -146,7 +165,7 @@ export class SessionHost {
       for (const [id, p] of this.panes) {
         if (!p.alive) continue;
         const s = p.snapshot(3000);
-        screens[id] = { data: s.data, cols: s.cols, rows: s.rows, cwd: s.cwd, savedAt: state.savedAt };
+        screens[id] = { data: s.data };
       }
       writeJson(this.paths.screenSnapshot, screens);
     } catch {

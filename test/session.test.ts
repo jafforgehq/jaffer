@@ -168,3 +168,54 @@ describe('one session, ever', () => {
     }
   });
 });
+
+describe('the one session comes back when its shell dies', () => {
+  const lifecycle = (host: SessionHost) => {
+    const seen: string[] = [];
+    host.events.on((e) => {
+      if ('lifecycle' in e) seen.push(e.lifecycle);
+    });
+    return seen;
+  };
+
+  it('starts a fresh shell in the same place when the shell exits', async () => {
+    const host = new SessionHost(env.paths, env.config, 'test');
+    await host.start();
+    const seen = lifecycle(host);
+    try {
+      const first = host.get('main')!;
+      first.write('exit\r');
+      await waitUntilTrue(() => seen.includes('restarted'), 8_000);
+      const second = host.get('main')!;
+      expect(second).not.toBe(first);
+      expect(second.alive).toBe(true);
+    } finally {
+      const main = host.get('main');
+      host.dispose();
+      if (main) await stopShell(main);
+    }
+  });
+
+  it('does not respawn in a tight loop when the shell dies at once: each try waits longer', async () => {
+    env.config.patch({ shell: { path: '/usr/bin/false', args: [] } });
+    const host = new SessionHost(env.paths, env.config, 'test');
+    const seen = lifecycle(host);
+    await host.start();
+    try {
+      await new Promise((r) => setTimeout(r, 2000));
+      const tries = seen.filter((l) => l === 'spawned' || l === 'restarted').length;
+      expect(tries).toBeGreaterThanOrEqual(2); // it does keep trying
+      expect(tries).toBeLessThanOrEqual(6); // 13 would be a shell every 150 ms
+    } finally {
+      host.dispose();
+    }
+  }, 15_000);
+});
+
+async function waitUntilTrue(fn: () => boolean, ms: number): Promise<void> {
+  const t0 = Date.now();
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}

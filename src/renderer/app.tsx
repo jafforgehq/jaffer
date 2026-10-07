@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, overlay, ready, setSideWidth, side, sideWidth, toggleSide, appVersion } from './state';
+import { activePane, cfg, openOverlay, overlay, ready, setSideWidth, side, sideWidth, toggleSide, appVersion } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
 import { MemoryPanel } from './components/MemoryPanel';
@@ -17,7 +17,7 @@ function applyTheme(): void {
   const vars = cssVars(th, c.appearance.opacity);
   const root = document.documentElement;
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
-  root.dataset.theme = th.dark ? 'dark' : 'light';
+  root.style.colorScheme = th.dark ? 'dark' : 'light'; // native controls (scrollbars, selects, date pickers) follow the theme
   root.dataset.motion = c.appearance.animations === false ? 'off' : 'on';
 }
 
@@ -47,10 +47,10 @@ export function App(): VNode | null {
     const key = (e: KeyboardEvent) => {
       if (!e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === 'p' && !e.shiftKey) (e.preventDefault(), (overlay.value = overlay.value === 'palette' ? null : 'palette'));
+      if (k === 'p' && !e.shiftKey) (e.preventDefault(), overlay.value === 'palette' ? (overlay.value = null) : openOverlay('palette'));
       else if (k === 'm' && e.shiftKey) (e.preventDefault(), toggleSide('memory'));
-      else if (k === ',') (e.preventDefault(), (overlay.value = 'settings'));
-      else if (k === 'f' && !e.shiftKey) (e.preventDefault(), (overlay.value = 'find'));
+      else if (k === ',') (e.preventDefault(), openOverlay('settings'));
+      else if (k === 'f' && !e.shiftKey) (e.preventDefault(), openOverlay('find'));
     };
     window.addEventListener('keydown', key);
     return () => {

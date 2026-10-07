@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 
 /** Anthropic's official install command for Claude Code on macOS. */
-export const INSTALL_CMD = 'curl -fsSL https://claude.ai/install.sh | bash';
+const INSTALL_CMD = 'curl -fsSL https://claude.ai/install.sh | bash';
 
 export function InstallCommand(): VNode {
   const [copied, setCopied] = useState(false);

@@ -4,7 +4,7 @@ import { bm25 } from './text';
 const DAY = 86_400_000;
 
 /** How quickly an unreinforced memory of each kind loses relevance (half-life in days). */
-export const HALF_LIFE_DAYS: Record<MemoryKind, number> = {
+const HALF_LIFE_DAYS: Record<MemoryKind, number> = {
   preference: 240,
   convention: 150,
   fact: 365,

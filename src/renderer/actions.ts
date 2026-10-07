@@ -1,4 +1,5 @@
-import { activePane, cfg, info, overlay, patchConfig, refreshMemory, toast, toggleSide } from './state';
+import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, safeCommand, toast, toggleSide } from './state';
+import { isClaudeCommand } from '../shared/process-badge';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -26,12 +27,12 @@ function zoom(delta: number): void {
 export async function runClaude(): Promise<void> {
   const t = term();
   if (!t) return;
-  if (info.value.busy && /\bclaude\b/.test(info.value.busy)) {
+  if (info.value.busy && isClaudeCommand(info.value.busy)) {
     t.focus(); // already running: take me to it
     return;
   }
   if (info.value.busy) {
-    toast({ kind: 'info', text: `The terminal is busy running ${info.value.busy}.` });
+    toast({ kind: 'info', text: `The terminal is busy running ${safeCommand(info.value.busy)}.` });
     return;
   }
   t.type('claude\r');
@@ -52,9 +53,9 @@ export const actions: Action[] = [
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
-  { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => (overlay.value = 'find') },
+  { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => openOverlay('find') },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
-  { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => (overlay.value = 'settings') },
+  { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },
   { id: 'zoom-out', title: 'Smaller text', section: 'View', keys: '⌘-', run: () => zoom(-1) },
   { id: 'zoom-reset', title: 'Actual size', section: 'View', keys: '⌘0', run: () => zoom(0) },
@@ -62,22 +63,18 @@ export const actions: Action[] = [
   { id: 'consolidate', title: 'Memory: tidy up (merge duplicates, fade stale)', section: 'Memory', keywords: 'consolidate dream cleanup', run: () => guarded(async () => (toast({ kind: 'info', text: (await call('memory.consolidate', {})).summary }), refreshMemory(0))) },
   { id: 'setup-claude', title: 'Connect Claude Code to Jaffer memory (MCP + hooks)', section: 'Integrations', keywords: 'claude mcp hooks', run: () => guarded(async () => (await call('setup.claude.install', {}), undefined), 'Claude Code now shares Jaffer’s memory.') },
   { id: 'install-cli', title: 'Install the `jaffer` command in ~/.local/bin', section: 'Integrations', keywords: 'cli path shell command', run: () => guarded(async () => { const r = await call('setup.cli.install', {}); toast({ kind: 'info', text: r.hint ?? `Installed ${r.link}` }, 9000); }) },
-  { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: async () => void window.jaffer.reveal((await window.jaffer.appInfo()).home) },
+  { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: () => void window.jaffer.reveal() },
   ...THEMES.map<Action>((t) => ({ id: `theme:${t.id}`, title: `Theme: ${t.name}`, section: 'Appearance', keywords: 'color scheme', run: () => patchConfig({ appearance: { theme: t.id } }) })),
 ];
 
-export function runAction(id: string): void {
+function runAction(id: string): void {
   const a = actions.find((x) => x.id === id);
   if (a) void a.run();
 }
 
 /** Map native menu ids to actions. */
 export function onMenu(id: string): void {
-  const alias: Record<string, string> = { palette: 'palette' };
-  if (id === 'palette') {
-    overlay.value = 'palette';
-    return;
-  }
-  runAction(alias[id] ?? id);
+  if (id === 'palette') openOverlay('palette');
+  else runAction(id);
 }
 

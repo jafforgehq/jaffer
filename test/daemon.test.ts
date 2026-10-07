@@ -487,6 +487,37 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-ans')?.state === 'idle', 5_000);
   });
 
+  it('the terminal’s own replies (focus, mouse, attribute reports) are not the person answering Claude; typing is', async () => {
+    const base = { session_id: 'sess-reports' };
+    await c.call('claude.event', ev('PreToolUse', { ...base, tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, tool_use_id: 'toolu_r1' }));
+    await c.call('claude.event', ev('Notification', { ...base, message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }));
+    const mine = async () => (await states()).find((s) => s.id === 'sess-reports')?.state;
+    expect(await mine()).toBe('needs-you');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    for (const report of ['\x1b[I', '\x1b[<0;12;4M', '\x1b[?1;2c', '\x1b[24;80R']) await c.call('pty.write', { data: report });
+    await sleep(300);
+    expect(await mine()).toBe('needs-you'); // clicking the window or a program asking the terminal a question answered nothing
+    await c.call('pty.write', { data: 'y' });
+    await waitUntil(async () => (await mine()) === 'working', 5_000);
+    await c.call('pty.write', { data: '\x03' }); // leave the shell's input line clean for the tests that follow
+    await sleep(300);
+  });
+
+  it('putting `jaffer` in ~/.local/bin replaces its own link, and refuses to overwrite a file of the person’s', async () => {
+    const bin = path.join(env3.userHome, '.local', 'bin');
+    const link = path.join(bin, 'jaffer');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.rmSync(link, { force: true });
+    expect((await c.call('setup.cli.install', {})).link).toBe(link);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    await c.call('setup.cli.install', {}); // again: it is its own link, replaced
+    fs.rmSync(link);
+    fs.writeFileSync(link, '#!/bin/sh\necho mine\n');
+    await expect(c.call('setup.cli.install', {})).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(fs.readFileSync(link, 'utf8')).toContain('echo mine');
+    fs.rmSync(link);
+  });
+
   it('Esc while Claude works fires no Stop hook: the transcript shows it, and "Working" ends (words inside tool output do not count)', async () => {
     const transcript = path.join(env3.root, 'sess-esc.jsonl');
     fs.writeFileSync(transcript, '{"type":"user","message":{"role":"user","content":"go"}}\n');
@@ -517,6 +548,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect((await cost())!.last.messages).toBe(1);
     expect((await cost())!.totalUsd).toBeCloseTo(0.0202, 6);
     expect(JSON.stringify(await states())).not.toContain('SECRET'); // numbers only, never the words
+    expect(JSON.stringify(await states())).not.toContain('.jsonl'); // and nothing about where the transcript is leaves the daemon
     // the next answer adds to the session
     await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'second' }));
     fs.appendFileSync(transcript, reply('a2', { input_tokens: 10, output_tokens: 500 }));
@@ -584,26 +616,24 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
       { kind: 'tool', id: 'toolu_real1', name: 'Read', input: { file_path: path.join(env3.userHome, 'notes.txt') }, text: 'Reading it.', when: main },
       { kind: 'text', text: 'The notes say the deploy script is release.sh.', when: main },
     );
+    const known = new Set((await states()).map((s) => s.id)); // before Claude runs
     await c.call('session.attach', { cols: 100, rows: 30 });
     await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
     await sleep(800);
     await c.call('pty.write', { data: 'unset -f claude\r' }); // the stand-in function an earlier test left in this shell
     await sleep(400);
     await c.call('pty.write', { data: 'claude -p "read notes.txt and tell me what it says"\r' });
-    const real = async () => (await states()).find((s) => /notes\.txt/.test(s.prompt ?? ''));
-    // `claude -p` exits right after its last event, and a hook process started a moment before can die with it, so only
-    // what comes early is guaranteed: the prompt (UserPromptSubmit) and the tool call (PreToolUse). The later events
-    // (PostToolUse, Stop) are covered by the synthetic tests above, and by every interactive session, where Stop comes
-    // seconds before Claude exits.
-    await waitUntil(async () => {
-      const r = await real();
-      return r?.state === 'ended' && r.activity.some((a) => a.name === 'Read');
-    }, 60_000).catch(async (e) => {
+    // The state keeps no prompt or tool call, so the proof that the real hooks arrived is a session nobody had told the daemon
+    // about: only Claude Code's own hooks, through the real `jaffer hook`, can have created it. `claude -p` exits right after its
+    // last event, and the shell reporting that exit is what ends it.
+    const real = async () => (await states()).find((s) => !known.has(s.id));
+    await waitUntil(async () => (await real())?.state === 'ended', 60_000).catch(async (e) => {
       throw new Error(`${e.message}; sessions=${JSON.stringify(await states())}; mock saw ${mock3.requests.length} requests`);
     });
     const r = (await real())!;
-    expect(r.prompt).toContain('read notes.txt'); // what the user asked, from the real UserPromptSubmit
-    expect(r.activity.some((a) => a.name === 'Read' && /notes\.txt/.test(a.summary))).toBe(true); // the tool call, from the real PreToolUse
+    expect(r.id).toMatch(/\S/);
+    expect(JSON.stringify(r)).not.toContain('notes.txt'); // and nothing of what was asked or read is kept
+    expect(JSON.stringify(r)).not.toContain('.jsonl');
   }, 90_000);
 });
 

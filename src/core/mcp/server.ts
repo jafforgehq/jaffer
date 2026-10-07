@@ -21,7 +21,7 @@ const INSTRUCTIONS = `Jaffer is the user's terminal. It keeps a long-term memory
 - Call jaffer_remember when the user states a durable preference/convention or after solving something non-obvious. One self-contained sentence. Never store secrets or task-specific temporary details.
 - Call jaffer_forget when a memory is wrong or the user asks you to forget something.`;
 
-export function makeTools(call: Call): Tool[] {
+function makeTools(call: Call): Tool[] {
   return [
     {
       name: 'jaffer_context',
@@ -65,8 +65,9 @@ export function makeTools(call: Call): Tool[] {
       description: 'Forget a memory by id (from jaffer_recall) or by describing it.',
       inputSchema: { type: 'object', properties: { id_or_description: { type: 'string' } }, required: ['id_or_description'] },
       run: async (a) => {
-        const r = await call('memory.forget', { id: String(a?.id_or_description ?? '') });
-        return r.archived.length ? `Forgot: ${r.archived.map((i: any) => i.text).join(' | ')}` : 'Nothing matched.';
+        const r = await call('memory.forget', { id: String(a?.id_or_description ?? ''), agent: true });
+        if (r.refused === 'pinned') return 'That memory is pinned by the user, so only the user can forget it. Tell them if it is wrong.';
+        return r.archived.length ? `Forgot: ${r.archived.map((i: any) => i.text).join(' | ')}` : 'Nothing matched closely enough. Use the id from jaffer_recall to be exact.';
       },
     },
   ];

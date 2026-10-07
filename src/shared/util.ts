@@ -17,12 +17,27 @@ export function ensureDir(dir: string, mode = 0o700): void {
   fs.mkdirSync(dir, { recursive: true, mode });
 }
 
-/** Write a file atomically (tmp + rename) so a crash never leaves a half-written file. */
-export function writeFileAtomic(file: string, data: string, mode = 0o600): void {
-  ensureDir(path.dirname(file));
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
-  fs.writeFileSync(tmp, data, { mode });
-  fs.renameSync(tmp, file);
+/**
+ * Write a file atomically (tmp + rename) so a crash never leaves a half-written file. `preserve` is for files that belong to the
+ * user (their CLAUDE.md, a settings file): a symlink (a dotfiles manager) is written through, not replaced by a plain file, and
+ * the permissions the file already has are kept; `mode` is only for a file that is not there yet.
+ */
+export function writeFileAtomic(file: string, data: string, mode = 0o600, opts: { preserve?: boolean } = {}): void {
+  let target = file;
+  let useMode = mode;
+  if (opts.preserve) {
+    try {
+      target = fs.realpathSync(file);
+      useMode = fs.statSync(target).mode & 0o777;
+    } catch {
+      /* not there yet: a new file */
+    }
+  }
+  ensureDir(path.dirname(target));
+  const tmp = `${target}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, data, { mode: useMode });
+  fs.chmodSync(tmp, useMode); // the umask must not narrow what was asked for or kept
+  fs.renameSync(tmp, target);
 }
 
 export function readJson<T>(file: string, fallback: T): T {

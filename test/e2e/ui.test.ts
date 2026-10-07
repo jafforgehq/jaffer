@@ -188,6 +188,11 @@ describe('Jaffer UI end to end', () => {
     await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
     await page.waitForSelector('.onboard[data-step="signin"]', { timeout: 20_000 });
+    // a shortcut must not replace the first-run screen: closing what replaced it would leave first run unfinished
+    for (const k of ['Meta+p', 'Meta+,', 'Meta+f']) await page.keyboard.press(k);
+    await sleep(300);
+    expect(await page.locator('.palette, .settings, .findbar').count()).toBe(0);
+    expect(await page.locator('.onboard').count()).toBe(1);
     await page.locator('.onboard button', { hasText: 'plain terminal' }).click();
     await page.waitForSelector('.onboard[data-step="choices"]');
     const text = (await page.textContent('.onboard')) ?? '';
@@ -283,8 +288,11 @@ describe('Jaffer UI end to end', () => {
     expect(await cs(`${bar} .spinner`, 'animationName')).toContain('spin');
     await page.keyboard.press('Control+c');
     await until(async () => !(await page.$(bar)), 10_000, 'the command to end');
-    // Claude Code is a program you sit in: running is not working. (A command line that names claude stands in for it.)
-    await page.keyboard.type('sleep 40 # claude', { delay: 4 });
+    // Claude Code is a program you sit in: running is not working. (A shell function called claude that sleeps stands in for it.)
+    await page.keyboard.type('claude() { sleep 40; }', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    await page.keyboard.type('claude', { delay: 4 });
     await page.keyboard.press('Enter');
     await page.waitForSelector(`${bar}[data-kind="claude"]`);
     expect(await page.locator(`${bar} .spinner`).count()).toBe(0);
@@ -306,6 +314,9 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Control+c');
     await until(async () => !(await page.$(bar)), 10_000, 'the command to end');
     await sendHook('SessionEnd', { session_id: 'spin-1' });
+    await page.keyboard.type('unset -f claude', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
   }, 60_000);
 
   it('Settings → Reset: says what it does, and only asks the app (which asks the person) before anything is touched', async () => {
@@ -436,7 +447,7 @@ describe('Jaffer UI end to end', () => {
         ([t, a]) => {
           const now = Date.now();
           (window as any).__event('claude.state', {
-            sessions: [{ id: 'effort-1', cwd: '/tmp', state: 'working', since: now - (t as number), activity: [], subagents: (a as number[]).map((age, i) => ({ id: `e${i}`, type: 'Explore', status: 'running', startedAt: now - age })) }],
+            sessions: [{ id: 'effort-1', state: 'working', since: now - (t as number), subagents: (a as number[]).map((age, i) => ({ id: `e${i}`, type: 'Explore', status: 'running', startedAt: now - age })) }],
           });
         },
         [turn, ages] as const,
@@ -527,6 +538,94 @@ describe('Jaffer UI end to end', () => {
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
     for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
   }, 90_000);
+
+  it('the Notes tab: opening it never rewrites NOTES.md, what was typed is saved even if the tab is left at once, and it cannot grow without limit', async () => {
+    const notes = path.join(env.home, 'memory', 'NOTES.md');
+    const tab = (name: string) => page.locator('.tabs button', { hasText: name }).click();
+    fs.mkdirSync(path.dirname(notes), { recursive: true });
+    const long = 'a line of the person’s own notes\n'.repeat(900); // over the 20 000 characters the tab edits
+    fs.writeFileSync(notes, long);
+    const before = fs.statSync(notes).mtimeMs;
+    await page.keyboard.press('Meta+Shift+M');
+    await page.waitForSelector('.memory');
+    await tab('Notes');
+    await page.waitForSelector('.notes textarea');
+    await sleep(1300); // longer than the half second the tab waits before saving
+    expect(fs.readFileSync(notes, 'utf8')).toBe(long); // just looking changed nothing: not cut, not rewritten
+    expect(fs.statSync(notes).mtimeMs).toBe(before);
+    expect(await page.getAttribute('.notes textarea', 'maxlength')).toBe('20000');
+    // typed, then the tab is left within the half second: it is saved all the same
+    fs.writeFileSync(notes, 'old note\n');
+    await tab('Learned');
+    await tab('Notes');
+    await until(async () => (await page.inputValue('.notes textarea')) === 'old note\n', 8_000, 'the notes to load');
+    await page.fill('.notes textarea', 'typed and left at once');
+    await tab('Learned');
+    await until(async () => fs.readFileSync(notes, 'utf8') === 'typed and left at once', 5_000, 'the notes to be saved on leaving the tab');
+    // and again when the whole drawer is closed straight after typing
+    await tab('Notes');
+    await until(async () => (await page.inputValue('.notes textarea')) === 'typed and left at once', 8_000, 'the notes to load again');
+    await page.fill('.notes textarea', 'typed, drawer closed');
+    await page.keyboard.press('Meta+Shift+M');
+    await until(async () => fs.readFileSync(notes, 'utf8') === 'typed, drawer closed', 5_000, 'the notes to be saved on closing the drawer');
+    fs.rmSync(notes, { force: true });
+  }, 60_000);
+
+  it('Settings: no label wraps a button, focus goes into the dialog and back, Open at login tells the truth, the colour scheme follows the theme', async () => {
+    const dialogFocused = () => page.evaluate(() => !!document.activeElement?.closest('.modal'));
+    const nav = (name: string) => page.locator('.settings-nav button', { hasText: name }).click();
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await until(dialogFocused, 3_000, 'the keyboard to move into the dialog'); // the terminal does not keep it behind the dialog
+    for (const section of ['Appearance', 'Memory', 'Claude Code', 'Updates', 'Reset']) {
+      await nav(section);
+      // a <label> around a button forwards a click on its words to the button: "Add memory tools" or "Reset…" by a stray click
+      expect(await page.locator('label.field:has(button)').count(), section).toBe(0);
+    }
+    await nav('Appearance');
+    const login = () => page.locator('label.field', { hasText: 'Open at login' }).locator('input');
+    expect(await login().isChecked()).toBe(false);
+    await page.locator('label.field', { hasText: 'Open at login' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => (window as any).__loginItem)) === true, 5_000, 'the login item to be set');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await until(async () => page.evaluate(() => !!document.activeElement?.closest('.term')), 5_000, 'the keyboard to go back to the terminal');
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await until(async () => login().isChecked(), 5_000, 'the switch to show what is true after reopening');
+    await page.locator('label.field', { hasText: 'Open at login' }).locator('.switch').click(); // back off
+    await until(async () => (await page.evaluate(() => (window as any).__loginItem)) === false, 5_000, 'the login item to be cleared');
+    // native controls follow the theme
+    const scheme = () => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+    expect(await scheme()).toBe('dark');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-light' } }));
+    await until(async () => (await scheme()) === 'light', 5_000, 'the colour scheme to follow the light theme');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-dark' } }));
+    await until(async () => (await scheme()) === 'dark', 5_000, 'and the dark one');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
+  it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {
+    await page.evaluate(() => {
+      const clip = { reads: 0, written: [] as string[] };
+      (window as any).__clip = clip;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => (clip.reads++, 'SECRET-CLIPBOARD'), writeText: async (t: string) => void clip.written.push(t) } });
+    });
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    // asking for the clipboard: the program gets nothing, and the page never reads it
+    await page.keyboard.type("printf '\\033]52;c;?\\a'; echo ASKED");
+    await page.keyboard.press('Enter');
+    await until(async () => /^ASKED/m.test(await termText()), 8_000, 'the query to have been sent');
+    await sleep(500);
+    expect(await page.evaluate(() => (window as any).__clip.reads)).toBe(0);
+    expect(await termText()).not.toContain('U0VDUkVULUNMSVBCT0FSRA'); // base64 of the secret, which the old provider typed back into the shell
+    // putting text there works, as over ssh
+    await page.keyboard.type("printf '\\033]52;c;%s\\a' \"$(printf 'copied by a script' | base64)\"; echo COPIED");
+    await page.keyboard.press('Enter');
+    await until(async () => (await page.evaluate(() => (window as any).__clip.written as string[])).includes('copied by a script'), 8_000, 'the text to reach the clipboard');
+  }, 60_000);
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');

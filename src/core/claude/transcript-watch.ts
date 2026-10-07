@@ -31,10 +31,10 @@ export function isStopLine(line: string): boolean {
 }
 
 /** Was the transcript written to within `withinMs`? Claude Code writes it as it works, so a quiet file means a quiet Claude. */
-export function transcriptActive(file: string | undefined, withinMs: number, now: number = Date.now()): boolean {
+export function transcriptActive(file: string | undefined, withinMs: number): boolean {
   if (!file) return false;
   try {
-    return now - fs.statSync(file).mtimeMs < withinMs;
+    return Date.now() - fs.statSync(file).mtimeMs < withinMs;
   } catch {
     return false;
   }

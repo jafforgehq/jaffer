@@ -52,11 +52,15 @@ setInterval(() => (clock.value = Date.now()), 15_000);
 export const side = signal<Side>(store.get('jaffer.side') === 'memory' ? 'memory' : null); // the memory drawer; closed unless the person opened it
 export const sideWidth = signal(Number(store.get('jaffer.sideWidth')) || 420);
 export const overlay = signal<Overlay>(null);
+/** Open a dialog, but not over the first-run screen: that has to be answered, and a shortcut would replace it and leave first run unfinished. */
+export function openOverlay(next: Exclude<Overlay, 'onboarding' | null>): void {
+  if (overlay.value === 'onboarding') return;
+  overlay.value = next;
+}
 export const windowFocused = signal(true);
 export const appVersion = signal('');
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
 export const updateState = signal<UpdateState | null>(null);
-export const zoom = signal(0);
 
 export function setSide(s: Side): void {
   side.value = s;
@@ -99,10 +103,10 @@ export interface ClaudeAuthState {
   loginError?: string;
 }
 /** What the Claude in the terminal is doing, pushed by the daemon from its hook events (newest change first). */
-export const claudeLive = signal<ClaudeSession[]>([]);
+const claudeLive = signal<ClaudeSession[]>([]);
 /** The Claude session the mole and the title bar follow: the most recently changed one that has not ended. */
 export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
-export function applyClaudeState(sessions: ClaudeSession[]): void {
+function applyClaudeState(sessions: ClaudeSession[]): void {
   claudeLive.value = sessions;
 }
 async function loadClaudeState(): Promise<void> {
@@ -189,7 +193,7 @@ export const ptyBus = new Emitter<{ event: string; data: any }>();
 
 // ------------------------------------------------------------------ bootstrap
 
-export async function refreshInfo(): Promise<void> {
+async function refreshInfo(): Promise<void> {
   try {
     const i = await jaffer().call('session.info', {});
     batch(() => {
@@ -263,7 +267,7 @@ export function safeCommand(cmd: string): string {
   return isSensitiveCommand(cmd) ? '(hidden)' : redactText(cmd);
 }
 
-export function homeDir(): string {
+function homeDir(): string {
   return (window as unknown as { __home?: string }).__home ?? '';
 }
 

@@ -16,7 +16,7 @@ export interface CursorState {
   ingest: Record<string, number>;
 }
 
-export const DEFAULT_CURSOR: CursorState = { reflectedSeq: 0, candidates: {}, ingest: {} };
+const DEFAULT_CURSOR: CursorState = { reflectedSeq: 0, candidates: {}, ingest: {} };
 
 const MAX_TEXT = 4000;
 
@@ -28,12 +28,14 @@ const MAX_TEXT = 4000;
 export class EpisodeLog {
   private seq = 0;
 
+  /** `minSeq`: the last number the reflector has read. After every day file was pruned the files say 0, and numbers at or below the cursor would never be reflected on. */
   constructor(
     private paths: JafferPaths,
     private clock: () => number = Date.now,
+    minSeq = 0,
   ) {
     ensureDir(paths.memoryEpisodesDir);
-    this.seq = this.scanMaxSeq();
+    this.seq = Math.max(this.scanMaxSeq(), minSeq);
   }
 
   private fileFor(ts: string): string {
@@ -80,10 +82,6 @@ export class EpisodeLog {
     return out;
   }
 
-  get lastSeq(): number {
-    return this.seq;
-  }
-
   /** Returns null when the input was dropped (sensitive command etc.). */
   append(input: EpisodeInput): Episode | null {
     const e = this.sanitize(input);
@@ -128,13 +126,6 @@ export class EpisodeLog {
 
   pending(after: number): number {
     return Math.max(0, this.seq - after);
-  }
-
-  recent(limit = 50): Episode[] {
-    const files = this.files();
-    const out: Episode[] = [];
-    for (let i = files.length - 1; i >= 0 && out.length < limit; i--) out.unshift(...this.readFile(files[i]!));
-    return out.slice(-limit);
   }
 
   /** Delete day files older than `days`. Returns number removed. */
