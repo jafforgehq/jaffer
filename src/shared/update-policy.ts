@@ -52,3 +52,21 @@ export function isNewer(version: string, current: string): boolean {
   }
   return false;
 }
+
+export const RELEASES_URL = 'https://github.com/jafforgehq/jaffer/releases/latest';
+
+/** What the dialog after Check for Updates… says, or null when the update prompt itself is the answer. */
+export function manualResult(s: UpdateState): { message: string; detail: string; releases: boolean } | null {
+  switch (s.status) {
+    case 'uptodate':
+      return { message: 'Jaffer is up to date', detail: `You have ${s.current}, the latest version.`, releases: false };
+    case 'downloading':
+      return { message: `Downloading Jaffer ${s.version ?? 'update'}`, detail: 'Jaffer will ask when it is ready to install.', releases: false };
+    case 'unavailable':
+      return { message: 'Updates are off in this build', detail: 'Only the signed release downloaded from GitHub updates itself. The latest version is always on the releases page.', releases: true };
+    case 'error':
+      return { message: 'Could not check for updates', detail: s.error ?? 'Unknown error.', releases: true };
+    default:
+      return null;
+  }
+}

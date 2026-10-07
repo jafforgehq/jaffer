@@ -27,6 +27,8 @@ xattr -dr com.apple.quarantine /Applications/Jaffer.app
 
 Every release also ships `SHA256SUMS.txt`. How releases get signed and notarized (on your Mac with `scripts/release-mac.sh`, or in CI with repository secrets) is in [docs/SIGNING.md](docs/SIGNING.md).
 
+**Updates.** The signed app looks for new releases on GitHub (shortly after launch, then every few hours), downloads one in the background and then **asks**: *Update and restart* or *Later*. Updating restarts Jaffer and ends your terminal session, so the prompt says so, and says it again when Claude is working at that moment. Nothing is ever installed without your yes, not even when you quit. *Jaffer → Check for Updates…* answers on demand, and **Settings → Updates** turns the background check off. Unsigned builds (the previews CI makes, or one you built yourself) never update themselves.
+
 **Latest build from `main`:** every push builds both Macs in CI. Open the newest run under *Actions → CI* and download the `Jaffer-macOS` artifact.
 
 **Releases are automatic.** When a push to `main` passes the tests and the Mac build, CI publishes a release for the `version` in `package.json` (skipping it if that version already has one). To ship a new version, bump `version` and push. With Apple credentials configured the release is signed and notarized; without them it is published as a clearly marked unsigned pre-release. (Pushing a `vX.Y.Z` tag, or *Actions → CI → Run workflow* with a *release_tag*, works too.)

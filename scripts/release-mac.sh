@@ -3,7 +3,8 @@
 # is already in your login keychain. Nothing secret leaves your machine: no .p12 export, no GitHub secrets.
 #
 #   scripts/release-mac.sh                 build + sign + notarize + verify into ./release
-#   scripts/release-mac.sh --publish       ...and upload to the GitHub release for the version in package.json
+#   scripts/release-mac.sh --publish       ...and upload to the GitHub release for the version in package.json (the update
+#                                          manifest last, so installed apps only see a release once it is complete)
 #   scripts/release-mac.sh --skip-notarize sign only (fast; Gatekeeper will still warn on other Macs)
 #   scripts/release-mac.sh --arch arm64    build one architecture only (arm64 | x64 | both, default both)
 #
@@ -134,6 +135,22 @@ fi
 say "Checksums"
 (cd release && shasum -a 256 *.dmg *.zip | tee SHA256SUMS.txt)
 
+# ---- 5b. update manifest ----------------------------------------------------------------------------------------
+# Installed apps find new versions through release/latest-mac.yml, so a manifest that names the wrong version or misses a zip
+# would strand or break every user on that architecture. Check it before anything is uploaded.
+say "Checking the update manifest (latest-mac.yml)"
+[ -f release/latest-mac.yml ] || die "release/latest-mac.yml is missing: the build did not write the update manifest (is \`publish\` set in electron-builder.yml?)."
+grep -q "^version: $VERSION\$" release/latest-mac.yml || die "latest-mac.yml names another version than package.json ($VERSION)."
+WANT=(arm64 x64)
+[ "$ARCH" = arm64 ] && WANT=(arm64)
+[ "$ARCH" = x64 ] && WANT=(x64)
+for A in "${WANT[@]}"; do
+  grep -q "url: Jaffer-$VERSION-$A.zip" release/latest-mac.yml || die "latest-mac.yml does not list Jaffer-$VERSION-$A.zip"
+  [ -f "release/Jaffer-$VERSION-$A.zip" ] || die "release/Jaffer-$VERSION-$A.zip is missing"
+done
+grep -q "sha512:" release/latest-mac.yml || die "latest-mac.yml has no checksums"
+echo "latest-mac.yml lists version $VERSION for: ${WANT[*]}"
+
 # ---- 6. publish -------------------------------------------------------------------------------------------------
 if [ "$PUBLISH" = 1 ]; then
   command -v gh >/dev/null || die "the GitHub CLI is needed to publish: brew install gh && gh auth login"
@@ -142,13 +159,13 @@ if [ "$PUBLISH" = 1 ]; then
   NOTES="Signed with an Apple Developer ID and **notarized by Apple**: opens without Gatekeeper warnings.
 
 **Which file?** Apple Silicon (M1 and later): \`arm64\`. Intel Macs: \`x64\`. Use the \`.dmg\` (drag to Applications) or the \`.zip\`. Verify downloads with \`SHA256SUMS.txt\`."
-  FILES=(release/*.dmg release/*.zip release/SHA256SUMS.txt)
-  if gh release view "$TAG" >/dev/null 2>&1; then
-    gh release upload "$TAG" "${FILES[@]}" --clobber
-    gh release edit "$TAG" --prerelease=false --latest --notes "$NOTES"
-  else
-    gh release create "$TAG" "${FILES[@]}" --title "Jaffer $VERSION" --notes "$NOTES" --generate-notes --latest
-  fi
+  FILES=(release/*.dmg release/*.zip release/*.zip.blockmap release/SHA256SUMS.txt)
+  # A release that does not exist yet starts as a pre-release, which installed apps ignore, until the manifest is there.
+  gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "Jaffer $VERSION" --notes "$NOTES" --generate-notes
+  gh release upload "$TAG" "${FILES[@]}" --clobber
+  # The manifest goes up last: an installed app that can see it finds every file it names. Then the release becomes the latest.
+  gh release upload "$TAG" release/latest-mac.yml --clobber
+  gh release edit "$TAG" --prerelease=false --latest --notes "$NOTES"
   gh release view "$TAG" --json url -q .url
 fi
 

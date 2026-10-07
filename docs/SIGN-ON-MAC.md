@@ -111,6 +111,10 @@ Write down anything wrong (screenshot, what you did, what you expected) and give
 
 ## Later: releasing new versions
 
+Installed apps (0.2.0 and later) find a new version through `latest-mac.yml`, which only `scripts/release-mac.sh --publish`
+uploads, after the dmgs and zips it names (the release is a pre-release until then, which apps ignore). The unsigned previews
+CI makes carry no manifest, so they can never be offered as an update. Each app asks its user before it installs.
+
 - Bump `version` in `package.json` and push to `main`. CI then publishes that version automatically as an **unsigned
   pre-release**. Run `scripts/release-mac.sh --publish` on your Mac afterwards to swap in the signed files.
 - To have CI sign and notarize by itself, add the Apple secrets to the repository (`docs/SIGNING.md`, section B). Type

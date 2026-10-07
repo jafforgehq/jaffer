@@ -12,6 +12,7 @@ Jaffer is a macOS terminal (Electron + a detached session daemon) with one never
 ## Rules that matter
 - Anything that reaches memory, episodes or a model goes through `src/shared/redact.ts` first. Never persist command output of sensitive commands (`isSensitiveCommand`).
 - The daemon owns the shell: never make the app a requirement for a running session.
+- Updates ask first: nothing installs without a click (`autoInstallOnAppQuit` stays off, quitting never replaces the app behind a running session), only a packaged, Developer ID signed app checks, and `latest-mac.yml` is uploaded last and only by `scripts/release-mac.sh` (never by CI previews).
 - Jaffer is for Claude Code only. Don't add integrations, exports or copy for other agents (Codex, Gemini, ...); `export.targets` only knows `claude-code` and `ConfigStore` drops anything else a saved config still lists.
 - Jaffer runs on Claude subscriptions only: there is no Anthropic API key anywhere (no UI, no RPC, no CLI command, no engine), and `ANTHROPIC_API_KEY` is ignored. Don't add key entry back without being asked.
 - Whether the user is signed in to Claude comes only from `claude auth status` (`src/core/integrations/claude-auth.ts`): never read Claude's credential files or keychain item, and never let the account email or organisation out of that function. The first-run sign-in step has no skip and types nothing into the terminal; tests fake `claude` with `test/helpers/fake-claude.ts`.

@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, nativeTheme, screen, shell, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { ensureDaemon, tryConnect, type Launcher } from '../core/daemon-client';
@@ -8,6 +10,9 @@ import { needsYouNotification } from '../shared/notify-policy';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
+import { manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { UpdateController, type UpdaterLike } from './updates';
+import { updaterLog } from './updater-log';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
@@ -50,7 +55,6 @@ function wireClient(c: RpcClient): void {
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
     if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number; by: string });
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
-    if (event === 'agent.event') onAgentEvent(data as { type: string; stopReason?: string; error?: string; name?: string; summary?: string });
   });
   c.onClose.on(() => void onDaemonDown());
 }
@@ -131,15 +135,101 @@ function notify(title: string, body: string): void {
   note.show();
 }
 
-function onAgentEvent(e: { type: string; stopReason?: string; error?: string; name?: string; summary?: string }): void {
-  if (win?.isFocused()) return;
-  if (e.type === 'turn_end') {
-    app.dock?.bounce('informational');
-    notify(e.error ? 'Jaffer hit a problem' : 'Jaffer finished', e.error ?? 'The agent finished its turn.');
-  } else if (e.type === 'approval_request') {
-    app.dock?.bounce('critical');
-    notify('Jaffer needs approval', `${e.name}: ${e.summary ?? ''}`);
+// ---------------------------------------------------------------- updates
+
+let updates: UpdateController | null = null;
+let installing = false;
+let autoUpdates = true;
+const updateLog = updaterLog(path.join(paths.home, 'updater.log'));
+const noUpdater: UpdaterLike = { on: () => undefined, checkForUpdates: async () => null, quitAndInstall: () => undefined };
+const idleUpdateState = (): UpdateState => ({ status: 'unavailable', current: VERSION, auto: autoUpdates });
+
+/** The running bundle's signature: only a Developer ID signed app can be updated in place. */
+function bundleSigner(): Promise<ReturnType<typeof signerKind>> {
+  const bundle = path.resolve(process.execPath, '..', '..', '..');
+  return new Promise((resolve) => {
+    execFile('/usr/bin/codesign', ['-dvv', bundle], { timeout: 10_000 }, (_err, stdout, stderr) => resolve(signerKind(`${stdout}\n${stderr}`)));
+  });
+}
+
+/** The prompt must be seen: if Jaffer is in the background, nudge with a notification and ask once the window is in front. */
+async function whenWindowFocused(version: string): Promise<void> {
+  if (win && !win.isDestroyed() && win.isFocused()) return;
+  notify(`Jaffer ${version} is ready`, 'Click to review the update. Nothing is installed until you say so.');
+  await new Promise<void>((resolve) => {
+    const poll = setInterval(() => {
+      if (win && !win.isDestroyed() && win.isFocused()) {
+        clearInterval(poll);
+        resolve();
+      }
+    }, 500);
+  });
+}
+
+async function setupUpdates(): Promise<void> {
+  const eligible = app.isPackaged && !process.env.JAFFER_SMOKE && (await bundleSigner()) === 'developer-id';
+  if (eligible) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false; // quitting must never replace the app behind a running session
+    autoUpdater.allowPrerelease = false;
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.logger = { info: (m: unknown) => updateLog(String(m)), warn: (m: unknown) => updateLog(`warn ${m}`), error: (m: unknown) => updateLog(`error ${m}`), debug: () => undefined };
+    const feed = process.env.JAFFER_UPDATE_URL;
+    if (feed && /^https?:\/\//.test(feed)) autoUpdater.setFeedURL({ provider: 'generic', url: feed }); // for testing the flow against a local server
+    autoUpdater.on('error', (e: Error) => {
+      if (!installing) return;
+      // the installer failed after we had ended the session: keep running, with a fresh session
+      installing = false;
+      quitting = false;
+      void dialog.showMessageBox({ type: 'error', message: 'The update could not be installed', detail: `${e.message.slice(0, 300)}\n\nJaffer is still running. You can download the latest version from GitHub.`, buttons: ['Open releases page', 'OK'], defaultId: 1 }).then((r) => {
+        if (r.response === 0) void shell.openExternal(RELEASES_URL);
+      });
+      void onDaemonDown();
+    });
   }
+  updates = new UpdateController({
+    updater: eligible ? autoUpdater : noUpdater, // electron-updater is not even touched in builds that cannot update
+    current: VERSION,
+    enabled: eligible,
+    auto: () => autoUpdates,
+    ask: async (text, version) => {
+      await whenWindowFocused(version);
+      const parent = win && !win.isDestroyed() ? win : undefined;
+      const opts = { type: 'info' as const, message: text.message, detail: text.detail, buttons: [...text.buttons], defaultId: 0, cancelId: 1 };
+      const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+      return r.response === 0;
+    },
+    claudeBusy: () => prevClaude.some((s) => s.state === 'working' || s.state === 'needs-you'),
+    prepareInstall: async () => {
+      installing = true;
+      quitting = true;
+      await client?.call('app.shutdown', {}).catch(() => undefined);
+      client?.close();
+    },
+    log: updateLog,
+    onState: (s) => sendToRenderer('jaffer:event', 'update.state', s),
+  });
+  await syncUpdates();
+  sendToRenderer('jaffer:event', 'update.state', updates.state());
+  updates.start();
+}
+
+async function syncUpdates(): Promise<void> {
+  try {
+    const c = await client?.call('config.get', {});
+    autoUpdates = c?.updates?.auto !== false;
+  } catch {
+    /* keep the last value */
+  }
+}
+
+/** Jaffer → Check for Updates…: always answers. The update prompt itself comes from the controller. */
+async function manualUpdateCheck(): Promise<void> {
+  const s = updates ? await updates.checkNow() : idleUpdateState();
+  const r = manualResult(s);
+  if (!r) return;
+  const res = await dialog.showMessageBox({ type: 'info', message: r.message, detail: r.detail, buttons: r.releases ? ['Open releases page', 'OK'] : ['OK'], defaultId: r.releases ? 1 : 0 });
+  if (r.releases && res.response === 0) void shell.openExternal(RELEASES_URL);
 }
 
 // ---------------------------------------------------------------- window
@@ -234,6 +324,7 @@ function buildMenu(): void {
       label: 'Jaffer',
       submenu: [
         { role: 'about' },
+        { label: 'Check for Updates…', click: () => void manualUpdateCheck() },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'Cmd+,', click: act('settings') },
         { type: 'separator' },
@@ -313,7 +404,10 @@ ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!client || !client.connected) throw new Error('The session daemon is not connected.');
   const long = method.startsWith('setup.') || method === 'memory.reflect' || method === 'memory.consolidate';
   const r = await client.call(method, params, long ? 120_000 : 30_000);
-  if (method === 'config.patch') void syncHotkey();
+  if (method === 'config.patch') {
+    void syncHotkey();
+    void syncUpdates();
+  }
   return r;
 });
 ipcMain.handle('jaffer:notify', (e, title: string, body: string) => {
@@ -328,6 +422,14 @@ ipcMain.handle('jaffer:reveal', (e, p: string) => {
 ipcMain.handle('jaffer:app-info', (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   return { version: VERSION, platform: process.platform, dark: nativeTheme.shouldUseDarkColors, home: paths.home, packaged: app.isPackaged };
+});
+ipcMain.handle('jaffer:update-state', (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  return updates ? updates.state() : idleUpdateState();
+});
+ipcMain.handle('jaffer:update-check', async (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  return updates ? await updates.checkNow() : idleUpdateState();
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });
@@ -346,6 +448,7 @@ app.whenReady().then(async () => {
   }
   createWindow();
   app.on('activate', showWindow);
+  void setupUpdates();
   if (process.env.JAFFER_SMOKE) void smokeTest();
 });
 
@@ -370,6 +473,8 @@ async function smokeTest(): Promise<void> {
     while (Date.now() < deadline && !(await js<boolean>('!!document.querySelector(".term .xterm")'))) await sleep(200);
     if (!(await js<boolean>('!!document.querySelector(".term .xterm")'))) return fail('terminal never rendered');
     const hello = await js<{ version: string }>('window.jaffer.call("hello", {})');
+    const upd = await js<{ status: string; current: string }>('window.jaffer.updates.state()');
+    if (upd.current !== hello.version) return fail(`update state is for ${upd.current}, the daemon is ${hello.version}`);
     await js('window.jaffer.call("config.patch", { onboarded: true })');
     // type into the real shell through the same path the UI uses and read the command back from the daemon
     await js('window.jaffer.call("session.attach", { cols: 100, rows: 30 })');

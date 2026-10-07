@@ -52,6 +52,10 @@ Ranking = confidence × time-decay (half-life per kind) × usage × scope releva
 
 The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. Hook payloads and everything fed to memory or a model are redacted first. `permissions.ts` keeps the command and path risk rules (read-only / ordinary / risky / blocked) for the approval cards of a later release.
 
+## Updates
+
+`src/main/updates.ts` (`UpdateController`) drives `electron-updater` against the GitHub releases and decides nothing about the outside world itself: the updater, the dialog and ending the session are injected, so it is tested with fakes (`test/update-controller.test.ts`). `src/shared/update-policy.ts` holds the pure parts (prompt wording, when to ask, version checks, reading `codesign` output). The flow is check → download in the background → **ask** (native dialog) → on yes, end the session through the daemon (`app.shutdown`) and `quitAndInstall`. `autoInstallOnAppQuit` is off on purpose: quitting must never replace the app behind a running session. Only a packaged, Developer ID signed app checks (the bundle's signature is read at startup), only non-prerelease releases count, and errors are logged to `~/.jaffer/updater.log` and shown in Settings, never as a dialog unless the user asked. The release side is `scripts/release-mac.sh`: it checks `latest-mac.yml` and uploads it after everything it names.
+
 ## The window
 
 The renderer is three layers on a canvas: a **session rail** (left), the **terminal card** (centre) and the **inspector** (right: the Claude panel or memory), with a toolbar above and a status bar below. Colours come from layered tokens derived from the active theme (`themes.ts`): `--chrome` is the canvas, `--surface` the cards on it, `--raised` cards on those. A theme change therefore repaints the whole app.

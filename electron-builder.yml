@@ -43,4 +43,9 @@ dmg:
     - { x: 150, y: 190 }
     - { x: 410, y: 190, type: link, path: /Applications }
   window: { width: 560, height: 380 }
+# Makes the build write latest-mac.yml (next to the zips) and embed app-update.yml: where the app looks for updates.
+publish:
+  provider: github
+  owner: jafforgehq
+  repo: jaffer
 artifactName: "${productName}-${version}-${arch}.${ext}"

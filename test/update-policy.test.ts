@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanVersion, isNewer, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
+import { cleanVersion, isNewer, manualResult, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
 
 describe('cleanVersion', () => {
   it('accepts release versions and rejects anything else', () => {
@@ -66,5 +66,22 @@ describe('isNewer', () => {
     expect(isNewer('0.2.0-beta.1', '0.2.0')).toBe(false);
     expect(isNewer('nope', '0.1.1')).toBe(false);
     expect(isNewer('0.2.0', 'dev')).toBe(false);
+  });
+});
+
+describe('manualResult', () => {
+  const base = { current: '0.1.1', auto: true };
+  it('answers every outcome of Check for Updates… in plain words', () => {
+    expect(manualResult({ ...base, status: 'uptodate' })).toMatchObject({ message: 'Jaffer is up to date', releases: false });
+    expect(manualResult({ ...base, status: 'uptodate' })!.detail).toContain('0.1.1');
+    expect(manualResult({ ...base, status: 'downloading', version: '0.2.0' })!.message).toContain('0.2.0');
+    expect(manualResult({ ...base, status: 'downloading', version: '0.2.0' })!.detail).toMatch(/ask/i);
+    expect(manualResult({ ...base, status: 'unavailable' })).toMatchObject({ message: 'Updates are off in this build', releases: true });
+    expect(manualResult({ ...base, status: 'error', error: 'offline' })).toMatchObject({ message: 'Could not check for updates', detail: 'offline', releases: true });
+  });
+  it('says nothing when the prompt itself is the answer', () => {
+    expect(manualResult({ ...base, status: 'ready', version: '0.2.0' })).toBeNull();
+    expect(manualResult({ ...base, status: 'checking' })).toBeNull();
+    expect(manualResult({ ...base, status: 'idle' })).toBeNull();
   });
 });
