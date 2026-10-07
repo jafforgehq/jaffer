@@ -422,6 +422,112 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await count()) === 0, 8_000, 'the crew to leave with the session');
   }, 90_000);
 
+  it('the longer an agent works, the harder its mole works: faster, sweating, a hard hat and a bigger pile', async () => {
+    const main = '.pet-corner .pet[data-role="main"]';
+    const helpers = '.pet-corner .pet-helper';
+    const efforts = () => page.$$eval(helpers, (els) => els.map((e) => (e as HTMLElement).dataset.effort));
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await until(async () => (await page.locator(helpers).count()) === 0, 8_000, 'no helpers to start with');
+    await sleep(500); // the daemon's own trailing push of those endings must not land on top of what is injected below
+    // what the daemon would push: a turn working for six minutes and three agents of different ages
+    const push = (turn: number, ages: number[]) =>
+      page.evaluate(
+        ([t, a]) => {
+          const now = Date.now();
+          (window as any).__event('claude.state', {
+            sessions: [{ id: 'effort-1', cwd: '/tmp', state: 'working', since: now - (t as number), activity: [], subagents: (a as number[]).map((age, i) => ({ id: `e${i}`, type: 'Explore', status: 'running', startedAt: now - age })) }],
+          });
+        },
+        [turn, ages] as const,
+      );
+    await push(10_000, [5_000]);
+    await until(async () => (await page.getAttribute(main, 'data-effort')) === '0', 8_000, 'a fresh turn to be at effort 0');
+    expect(await cs(`${main} .pet-hat`, 'opacity')).toBe('0');
+    const calm = parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')));
+    await push(6 * 60_000, [6 * 60_000, 150_000, 45_000]);
+    await until(async () => (await page.getAttribute(main, 'data-effort')) === '3', 8_000, 'a six-minute turn to be at effort 3');
+    await until(async () => (await efforts()).join() === '3,2,1', 8_000, 'the helpers to be as tired as their agents are old');
+    // the hat and the pile fade in over a moment
+    await until(async () => (await cs(`${main} .pet-hat`, 'opacity')) === '1', 5_000, 'the hard hat');
+    await until(async () => (await cs(`${main} .pet-pile`, 'opacity')) === '1', 5_000, 'the pile of dirt');
+    expect(await cs(`${main} .pet-sweat`, 'opacity')).not.toBe('0');
+    expect(parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')))).toBeLessThan(calm * 0.6); // it digs faster
+    expect(parseFloat(String(await cs(`${helpers}:nth-of-type(5) .pet-body`, 'animationDuration')))).toBeGreaterThan(parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')))); // and the younger agent's mole is calmer
+    expect(await page.textContent(`${main} title`)).toMatch(/working hard/);
+    await sleep(500);
+    await shot('14g-pet-effort');
+    // Animations off: the hat and the pile still say how long it has been
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+    await until(async () => (await cs(`${main} .pet-hat`, 'opacity')) === '1', 5_000, 'the hard hat to stay on');
+    expect(await cs(`${main} .pet-body`, 'animationName')).toBe('none');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+    // a new agent starts fresh
+    await push(6 * 60_000, [6 * 60_000, 2_000]);
+    await until(async () => (await efforts()).join() === '3,0', 8_000, 'a new agent to start at effort 0');
+    // the turn is over: nothing is left running
+    await sendHook('SessionStart', { session_id: 'effort-2' });
+    await sendHook('SessionEnd', { session_id: 'effort-2' });
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await until(async () => (await page.getAttribute(main, 'data-effort')) === '0', 8_000, 'the effort to reset when the work stops');
+  }, 90_000);
+
+  it('what each answer cost: a quiet figure in the title bar after every answer, with the session total, and Settings turns it off', async () => {
+    fs.mkdirSync(shots, { recursive: true });
+    const transcript = path.join(shots, 'cost-transcript.jsonl');
+    const reply = (id: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', role: 'assistant', content: [{ type: 'text', text: 'done' }], usage } })}\n`;
+    fs.writeFileSync(transcript, '');
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    const chip = '[data-cost-chip]';
+    const answer = async (usage: object, id: string) => {
+      const base = { session_id: 'cost-1', transcript_path: transcript };
+      await sendHook('UserPromptSubmit', { ...base, prompt: 'go' });
+      fs.appendFileSync(transcript, reply(id, usage));
+      await sendHook('Stop', { ...base, last_assistant_message: 'done' });
+    };
+    expect(await page.locator(chip).count()).toBe(0); // nothing to say before the first answer
+    // (1000 × 2 + 2000 × 10 + 100000 × 0.2) / 1e6 = $0.042
+    await answer({ input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 100_000 }, 'c1');
+    await until(async () => /≈ \$0\.04/.test((await page.locator(chip).textContent()) ?? ''), 8_000, 'the cost of the first answer');
+    let tip = (await page.locator(chip).getAttribute('title')) ?? '';
+    expect(tip).toMatch(/This answer ≈ \$0\.04: 1k new in, 100k cached, 2k out/);
+    expect(tip).toMatch(/This session ≈ \$0\.04 over 1 answer\b/);
+    expect(tip).toMatch(/not billed per token/); // it says what the figure is, and what it is not
+    expect(await page.locator(chip).evaluate((el) => getComputedStyle(el).animationName)).toContain('cost-flash'); // it lights up for a moment
+    await sleep(900);
+    await shot('14h-cost');
+    // the next answer replaces the figure and adds to the session
+    await answer({ input_tokens: 0, output_tokens: 100_000 }, 'c2'); // $1.00
+    await until(async () => /≈ \$1\.00/.test((await page.locator(chip).textContent()) ?? ''), 8_000, 'the cost of the second answer');
+    tip = (await page.locator(chip).getAttribute('title')) ?? '';
+    expect(tip).toMatch(/This session ≈ \$1\.04 over 2 answers/);
+    // the title bar stays aligned with the chip in it, at the narrowest window too
+    for (const w of [1360, 660]) {
+      await page.setViewportSize({ width: w, height: 860 });
+      await sleep(250);
+      const pill = (await page.locator('.session-pill').boundingBox())!;
+      const right = (await page.locator('.tb-right').boundingBox())!;
+      expect(pill.x + pill.width, `pill clear of the right side at ${w}px`).toBeLessThanOrEqual(right.x + 1);
+      expect(right.x + right.width, `right side inside the window at ${w}px`).toBeLessThanOrEqual(w);
+    }
+    await page.setViewportSize({ width: 1360, height: 860 });
+    // switched off in Settings: gone, and the next answer does not bring it back
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+    await page.locator('label.field', { hasText: 'Show what each answer cost' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.showCost === false, 8_000, 'the cost to be switched off');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await until(async () => (await page.locator(chip).count()) === 0, 8_000, 'the figure to leave');
+    await answer({ input_tokens: 10, output_tokens: 10 }, 'c3');
+    await sleep(1000);
+    expect(await page.locator(chip).count()).toBe(0);
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+  }, 90_000);
+
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
     await page.waitForSelector('.memory');

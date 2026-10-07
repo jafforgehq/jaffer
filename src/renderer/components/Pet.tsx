@@ -4,6 +4,7 @@ import { cfg, currentClaude, info } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { petMood, type PetMood } from '../../shared/pet-mood';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
+import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
 
 const SAYS: Record<PetMood, string> = {
   sleep: 'Zzz… nothing is running',
@@ -14,11 +15,12 @@ const SAYS: Record<PetMood, string> = {
 };
 
 /** One mole on its own molehill. The main one follows Claude and the terminal; a helper stands for one background agent. */
-function Mole({ mood, label, helper }: { mood: PetMood; label: string; helper?: number }): VNode {
+function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: string; helper?: number; effort?: Effort }): VNode {
   return (
     <svg
       class={helper === undefined ? 'pet' : 'pet pet-helper'}
       data-mood={mood}
+      data-effort={effort}
       data-role={helper === undefined ? 'main' : 'helper'}
       style={helper === undefined ? undefined : ({ '--i': helper + 1 } as never)}
       viewBox="0 0 120 72"
@@ -39,6 +41,11 @@ function Mole({ mood, label, helper }: { mood: PetMood; label: string; helper?: 
             <circle class="pet-eye" cx="68" cy="38" r="2" />
           </g>
           <path class="pet-lids" d="M49.4 38.4q2.6 2.6 5.2 0M65.4 38.4q2.6 2.6 5.2 0" />
+          <path class="pet-sweat" d="M73.5 28.5q-3.2 4.4-3.2 6.6a3.2 3.2 0 0 0 6.4 0q0-2.2-3.2-6.6z" />
+          <g class="pet-hat">
+            <path d="M46.5 30.4q13.5-17 27 0z" />
+            <rect x="43" y="29.4" width="34" height="3.2" rx="1.6" />
+          </g>
           <g class="pet-arm pet-arm-l">
             <ellipse class="pet-paw" cx="43" cy="54" rx="6.8" ry="4.6" />
             <path class="pet-claws" d="M38.6 57.6l-1.6 2.6M42 58.6l-.4 3M45.6 58.2l.8 2.8" />
@@ -55,8 +62,11 @@ function Mole({ mood, label, helper }: { mood: PetMood; label: string; helper?: 
         <circle cx="60" cy="58" r="2.4" style={{ '--dx': '2px', '--dy': '-42px', animationDelay: 'calc(0.32s + var(--i, 0) * 0.21s)' } as never} />
         <circle cx="60" cy="58" r="1.8" style={{ '--dx': '16px', '--dy': '-36px', animationDelay: 'calc(0.1s + var(--i, 0) * 0.21s)' } as never} />
         <circle cx="60" cy="58" r="2.1" style={{ '--dx': '28px', '--dy': '-28px', animationDelay: 'calc(0.26s + var(--i, 0) * 0.21s)' } as never} />
+        <circle class="pet-more" cx="60" cy="58" r="1.6" style={{ '--dx': '-34px', '--dy': '-20px', animationDelay: 'calc(0.2s + var(--i, 0) * 0.21s)' } as never} />
+        <circle class="pet-more" cx="60" cy="58" r="1.9" style={{ '--dx': '36px', '--dy': '-18px', animationDelay: 'calc(0.38s + var(--i, 0) * 0.21s)' } as never} />
       </g>
       <path class="pet-mound" d="M8 70Q26 55 60 57Q94 55 112 70Z" />
+      <path class="pet-pile" d="M92 70Q106 46 120 70Z" />
       <circle class="pet-pebble" cx="24" cy="64" r="1.6" />
       <circle class="pet-pebble" cx="96" cy="63" r="2" />
       <g class="pet-zs">
@@ -83,7 +93,18 @@ function Mole({ mood, label, helper }: { mood: PetMood; label: string; helper?: 
 export function Pet(): VNode | null {
   const session = currentClaude();
   const live = session?.state;
-  const running = session ? session.subagents.filter((a) => a.status === 'running').length : 0;
+  const runningAgents = session ? session.subagents.filter((a) => a.status === 'running').sort((a, b) => a.startedAt - b.startedAt) : [];
+  const running = runningAgents.length;
+  const busy = info.value.busy ?? null;
+
+  // the longer something works, the harder its mole works: re-check every few seconds while anything is running
+  const [, tick] = useState(0);
+  const active = live === 'working' || running > 0 || !!busy;
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, [active]);
 
   const [cheering, setCheering] = useState(false);
   const prev = useRef(live);
@@ -113,7 +134,10 @@ export function Pet(): VNode | null {
   useEffect(() => () => clearTimeout(leave.current), []);
 
   if (cfg.value?.appearance.pet === false) return null;
-  const mood = petMood({ badge: processBadge(info.value.busy ?? null, live), claude: live, cheering });
+  const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
+  const now = Date.now();
+  const effort = mood === 'dig' ? effortLevel(longestRunning([live === 'working' ? session?.since : undefined, busy ? info.value.busySince ?? undefined : undefined], now)) : 0;
+  const tired = effort >= 2 ? ' · working hard' : '';
   const crew = running > 0 ? ` · ${running} background agent${running === 1 ? '' : 's'} working` : '';
   return (
     <div class="pet-corner">
@@ -124,9 +148,15 @@ export function Pet(): VNode | null {
           </clipPath>
         </defs>
       </svg>
-      <Mole mood={mood} label={`${SAYS[mood]}${crew}`} />
+      <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${crew}`} />
       {crewMoods(running, shown).map((m, i) => (
-        <Mole key={i} helper={i} mood={m} label={m === 'cheer' ? 'A background agent finished' : 'A background agent is working'} />
+        <Mole
+          key={i}
+          helper={i}
+          mood={m}
+          effort={m === 'dig' ? effortLevel(longestRunning([runningAgents[i]?.startedAt], now)) : 0}
+          label={m === 'cheer' ? 'A background agent finished' : 'A background agent is working'}
+        />
       ))}
     </div>
   );

@@ -90,6 +90,9 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 /* the pill is centred on the window itself (not on what is left between the traffic lights and the Memory button); both sides reserve the same room */
 .titlebar { position: relative; }
 .tb-right { margin-left: auto; position: relative; z-index: 1; }
+.cost-chip { font: 500 11px var(--font-ui, sans-serif); font-variant-numeric: tabular-nums; color: var(--muted); padding: 2px 7px; border-radius: 999px; white-space: nowrap; cursor: default; -webkit-app-region: no-drag; }
+:root:not([data-motion='off']) .cost-chip { animation: cost-flash 1.6s ease-out; }
+@keyframes cost-flash { 0% { color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { color: var(--muted); background: transparent; } }
 .tb-center { position: absolute; inset: 0 170px; display: flex; justify-content: center; align-items: center; min-width: 0; pointer-events: none; }
 .tb-center .session-pill { pointer-events: auto; }
 .session-pill {
@@ -424,8 +427,17 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pet-paw { fill: color-mix(in srgb, var(--accent) 28%, var(--fur)); }
 .pet-claws { fill: none; stroke: var(--surface); stroke-width: 1.4; stroke-linecap: round; opacity: 0.85; }
 .pet-body { transform: translateY(var(--pet-y)); }
+.pet { --t: 0.5s; } /* the tempo of the digging: faster the longer it works */
+.pet[data-effort='1'] { --t: 0.4s; }
+.pet[data-effort='2'] { --t: 0.3s; }
+.pet[data-effort='3'] { --t: 0.22s; }
 .pet-arm { transform-box: fill-box; transform-origin: 50% 0; }
-.pet-dirt, .pet-zs, .pet-bang, .pet-sparks { opacity: 0; }
+.pet-dirt, .pet-zs, .pet-bang, .pet-sparks, .pet-hat, .pet-sweat, .pet-pile { opacity: 0; }
+.pet-hat { fill: var(--warn); transition: opacity 0.3s; }
+.pet-hat path:first-child { stroke: color-mix(in srgb, var(--warn) 60%, #000); stroke-width: 0.8; stroke-linejoin: round; }
+.pet-sweat { fill: color-mix(in srgb, #58b4ff 70%, var(--surface)); transform-box: fill-box; }
+.pet-pile { fill: var(--soil); transform-box: fill-box; transform-origin: 50% 100%; transform: scale(0); transition: transform 0.6s ease-out, opacity 0.3s; }
+.pet-more { display: none; }
 .pet-dirt circle { fill: var(--soil); }
 .pet-zs text { fill: var(--faint); font: 700 9px var(--font-ui, sans-serif); }
 .pet-bang circle { fill: var(--warn); }
@@ -440,6 +452,12 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pet[data-mood='dig'] { --pet-y: 3px; }
 .pet[data-mood='dig'] .pet-arm-l { transform: rotate(-16deg); }
 .pet[data-mood='dig'] .pet-arm-r { transform: rotate(16deg); }
+.pet[data-mood='dig'][data-effort='1'] .pet-pile, .pet[data-mood='dig'][data-effort='2'] .pet-pile, .pet[data-mood='dig'][data-effort='3'] .pet-pile { opacity: 1; }
+.pet[data-mood='dig'][data-effort='1'] .pet-pile { transform: scale(0.55); }
+.pet[data-mood='dig'][data-effort='2'] .pet-pile { transform: scale(0.85); }
+.pet[data-mood='dig'][data-effort='3'] .pet-pile { transform: scale(1.15); }
+.pet[data-mood='dig'][data-effort='2'] .pet-sweat, .pet[data-mood='dig'][data-effort='3'] .pet-sweat, .pet[data-mood='dig'][data-effort='3'] .pet-hat { opacity: 1; }
+.pet[data-mood='dig'][data-effort='2'] .pet-more, .pet[data-mood='dig'][data-effort='3'] .pet-more { display: inline; }
 .pet[data-mood='alert'] { --pet-y: -5px; }
 .pet[data-mood='alert'] .pet-bang { opacity: 1; }
 .pet[data-mood='alert'] .pet-eye { r: 2.6; }
@@ -458,11 +476,13 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 @keyframes pet-pop { 0%, 100% { transform: scale(1) rotate(0); } 50% { transform: scale(1.14) rotate(-6deg); } }
 @keyframes pet-hop { 0%, 100% { transform: translateY(var(--pet-y)); } 45% { transform: translateY(calc(var(--pet-y) - 9px)); } }
 @keyframes pet-twinkle { 0%, 100% { transform: scale(0.5); opacity: 0.3; } 50% { transform: scale(1.1); opacity: 1; } }
-:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-body { animation: pet-bob 0.5s ease-in-out infinite; }
-:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-arm-l { animation: pet-dig-l 0.5s ease-in-out infinite; }
-:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-arm-r { animation: pet-dig-r 0.5s ease-in-out 0.25s infinite; }
+:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-body { animation: pet-bob var(--t) ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-arm-l { animation: pet-dig-l var(--t) ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-arm-r { animation: pet-dig-r var(--t) ease-in-out calc(var(--t) / 2) infinite; }
 :root:not([data-motion='off']) .pet[data-mood='dig'] .pet-dirt { opacity: 1; }
-:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-dirt circle { animation: pet-fling 0.9s ease-out infinite; }
+:root:not([data-motion='off']) .pet[data-mood='dig'] .pet-dirt circle { animation: pet-fling calc(var(--t) * 1.8) ease-out infinite; }
+:root:not([data-motion='off']) .pet[data-mood='dig'][data-effort='2'] .pet-sweat, :root:not([data-motion='off']) .pet[data-mood='dig'][data-effort='3'] .pet-sweat { animation: pet-sweat 1.1s ease-in infinite; }
+@keyframes pet-sweat { 0% { transform: translateY(-2px) scale(0.6); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(9px) scale(1); opacity: 0; } }
 :root:not([data-motion='off']) .pet[data-mood='rest'] .pet-body, :root:not([data-motion='off']) .pet[data-mood='sleep'] .pet-body { animation: pet-breathe 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
 :root:not([data-motion='off']) .pet[data-mood='rest'] .pet-eyes { animation: pet-blink 5s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; }
 :root:not([data-motion='off']) .pet[data-mood='sleep'] .pet-zs text { animation: pet-z 2.6s ease-in-out infinite; }
@@ -479,4 +499,4 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 /* the helpers dig a beat apart, so the crew does not move as one */
 :root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-body { animation-delay: calc(var(--i) * 0.13s); }
 :root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-arm-l { animation-delay: calc(var(--i) * 0.13s); }
-:root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-arm-r { animation-delay: calc(var(--i) * 0.13s + 0.25s); }
+:root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-arm-r { animation-delay: calc(var(--i) * 0.13s + var(--t) / 2); }

@@ -35,7 +35,11 @@ export interface JafferConfig {
   export: { targets: 'claude-code'[]; claudeSkills: boolean };
   ingest: { claudeCode: boolean; backfillDays: number };
   /** The person chose a plain terminal at first run. Claude stays on offer (Settings → Claude Code), nothing about it nags; connecting it clears this. */
-  claude: { skipped: boolean };
+  claude: {
+    skipped: boolean;
+    /** After every answer, say what it cost (an estimate from the token counts at API list prices; a subscription is not billed per token). */
+    showCost: boolean;
+  };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
   hotkey: string;
@@ -69,7 +73,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   export: { targets: [], claudeSkills: false },
   ingest: { claudeCode: false, backfillDays: 7 },
-  claude: { skipped: false },
+  claude: { skipped: false, showCost: true },
   updates: { auto: true },
   hotkey: 'Control+`',
 };

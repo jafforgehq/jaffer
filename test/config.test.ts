@@ -75,3 +75,18 @@ describe('updates.auto', () => {
     expect(new ConfigStore(env.paths).get().updates.auto).toBe(false);
   });
 });
+
+describe('claude.showCost', () => {
+  it('is on by default, also for a config file saved before the setting existed', () => {
+    expect(DEFAULT_CONFIG.claude.showCost).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { skipped: true } }));
+    expect(new ConfigStore(env.paths).get().claude).toEqual({ skipped: true, showCost: true });
+  });
+
+  it('can be switched off and stays off, without touching the rest of claude', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ claude: { skipped: true } });
+    store.patch({ claude: { showCost: false } });
+    expect(new ConfigStore(env.paths).get().claude).toEqual({ skipped: true, showCost: false });
+  });
+});

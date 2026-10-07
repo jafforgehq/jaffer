@@ -114,9 +114,9 @@ describe('ClaudeWatcher', () => {
 
   it('SubagentStart/Stop track subagents', () => {
     w.handle(fx('SubagentStart'));
-    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'running' }]);
+    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'running', startedAt: 1_000 }]);
     w.handle(fx('SubagentStop'));
-    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'done' }]);
+    expect(only().subagents).toEqual([{ id: 'agent-1', type: 'general-purpose', status: 'done', startedAt: 1_000 }]);
   });
 
   it('SessionEnd → ended, and ended sessions are dropped after 5 minutes', () => {
@@ -231,6 +231,18 @@ describe('ClaudeWatcher', () => {
     expect(only().subagents.map((a) => a.status)).toEqual(['done', 'running']);
   });
 
+  it('remembers when each background agent started, so the mole can work harder the longer it goes on', () => {
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'Explore' }));
+    expect(only().subagents[0]).toMatchObject({ id: 'bg-1', status: 'running', startedAt: 1_000 });
+    t = 61_000;
+    w.handle(fx('SubagentStart', { agent_id: 'bg-2', agent_type: 'general-purpose' }));
+    w.handle(fx('SubagentStop', { agent_id: 'bg-1', agent_type: 'Explore' }));
+    expect(only().subagents.map((a) => [a.id, a.status, a.startedAt])).toEqual([['bg-1', 'done', 1_000], ['bg-2', 'running', 61_000]]);
+    t = 121_000;
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'Explore' })); // the same agent id working again: a new run
+    expect(only().subagents[0]).toMatchObject({ status: 'running', startedAt: 121_000 });
+  });
+
   it('a session that ends leaves no agent running', () => {
     w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'general-purpose' }));
     w.handle(fx('SessionEnd'));
@@ -310,6 +322,39 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('UserPromptSubmit'));
     expect(seen).toHaveLength(2);
     expect(seen[1]![0]!.state).toBe('working');
+  });
+});
+
+describe('ClaudeWatcher cost', () => {
+  const turn = (usd: number | undefined) => ({ usd, input: 10, output: 20, cacheRead: 30, cacheWrite: 0, model: 'claude-sonnet-5-5', messages: 1 });
+
+  it('keeps the last answer and a running total over the session', () => {
+    w.handle(fx('SessionStart'));
+    expect(only().cost).toBeUndefined();
+    t = 2_000;
+    w.setCost('sess-1', turn(0.05));
+    expect(only().cost).toMatchObject({ totalUsd: 0.05, answers: 1, partial: false, at: 2_000, last: { usd: 0.05, output: 20 } });
+    w.setCost('sess-1', turn(0.25));
+    expect(only().cost).toMatchObject({ totalUsd: 0.3, answers: 2, last: { usd: 0.25 } });
+  });
+
+  it('an answer it could not price still counts, and the total says it is a floor', () => {
+    w.handle(fx('SessionStart'));
+    w.setCost('sess-1', turn(0.1));
+    w.setCost('sess-1', turn(undefined));
+    expect(only().cost).toMatchObject({ totalUsd: 0.1, answers: 2, partial: true });
+  });
+
+  it('tells the listeners, ignores a session it does not know, and hands out copies', () => {
+    w.handle(fx('SessionStart'));
+    const seen: ClaudeSession[][] = [];
+    w.changes.on((s) => seen.push(s));
+    w.setCost('nobody', turn(1));
+    expect(seen).toHaveLength(0);
+    w.setCost('sess-1', turn(1));
+    expect(seen).toHaveLength(1);
+    only().cost!.last.output = 999;
+    expect(only().cost!.last.output).toBe(20);
   });
 });
 

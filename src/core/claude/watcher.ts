@@ -1,5 +1,6 @@
 import { Emitter } from '../../shared/emitter';
 import { isSensitiveCommand, redactText } from '../../shared/redact';
+import type { TurnCost } from '../../shared/claude-cost';
 
 /**
  * What the Claude Code running in Jaffer's terminal is doing, built from its hook events. Pure state: no I/O, so it is
@@ -9,7 +10,17 @@ import { isSensitiveCommand, redactText } from '../../shared/redact';
 
 export type ClaudeState = 'idle' | 'working' | 'needs-you' | 'ended';
 export interface ClaudeActivity { id: string; name: string; summary: string; status: 'running' | 'done' | 'failed'; startedAt: number; durMs?: number }
-export interface ClaudeSubagent { id: string; type: string; status: 'running' | 'done' }
+export interface ClaudeSubagent { id: string; type: string; status: 'running' | 'done'; startedAt: number }
+/** What the answers of one session cost, estimated from their token counts (see shared/claude-cost). */
+export interface ClaudeCost {
+  last: TurnCost;
+  /** Dollars over the answers that could be priced. */
+  totalUsd: number;
+  answers: number;
+  /** Some answer had no known price, so the total is a floor. */
+  partial: boolean;
+  at: number;
+}
 export interface ClaudeSession {
   id: string;
   cwd: string;
@@ -23,6 +34,7 @@ export interface ClaudeSession {
   lastReply?: string;
   notice?: string;
   transcriptPath?: string;
+  cost?: ClaudeCost;
 }
 
 const MAX_ACTIVITY = 30;
@@ -160,6 +172,15 @@ export class ClaudeWatcher {
     if (changed) this.changes.emit(this.sessions());
   }
 
+  /** The daemon read what the answer that just ended cost. Pure bookkeeping: the number comes from the transcript. */
+  setCost(sessionId: string, turn: TurnCost): void {
+    const e = this.map.get(sessionId);
+    if (!e) return;
+    const prev = e.s.cost;
+    e.s.cost = { last: turn, totalUsd: (prev?.totalUsd ?? 0) + (turn.usd ?? 0), answers: (prev?.answers ?? 0) + 1, partial: (prev?.partial ?? false) || turn.usd === undefined, at: this.now() };
+    this.changes.emit(this.sessions());
+  }
+
   /** Rows still `running` when the turn is over (their PostToolUse never came) are finished one way or the other. */
   private settle(s: ClaudeSession, as: 'done' | 'failed'): void {
     for (const a of s.activity) if (a.status === 'running') a.status = as;
@@ -175,7 +196,7 @@ export class ClaudeWatcher {
   private snapshot(): ClaudeSession[] {
     return [...this.map.values()]
       .sort((a, b) => b.touched - a.touched)
-      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, activity: s.activity.map((a) => ({ ...a })), subagents: s.subagents.map((a) => ({ ...a })) }));
+      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, activity: s.activity.map((a) => ({ ...a })), subagents: s.subagents.map((a) => ({ ...a })) }));
   }
 
   private setState(s: ClaudeSession, state: ClaudeState): void {
@@ -279,9 +300,11 @@ export class ClaudeWatcher {
         if (!agentId) break;
         const status = ev === 'SubagentStart' ? 'running' : 'done';
         const hit = s.subagents.find((a) => a.id === agentId);
-        if (hit) hit.status = status;
-        else {
-          s.subagents.push({ id: agentId, type: clip(o.agent_type, 60) || 'agent', status });
+        if (hit) {
+          if (status === 'running' && hit.status !== 'running') hit.startedAt = this.now(); // the same id working again is a new run
+          hit.status = status;
+        } else {
+          s.subagents.push({ id: agentId, type: clip(o.agent_type, 60) || 'agent', status, startedAt: this.now() });
           if (s.subagents.length > MAX_SUBAGENTS) s.subagents.splice(0, s.subagents.length - MAX_SUBAGENTS);
         }
         break;

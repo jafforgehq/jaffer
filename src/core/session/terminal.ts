@@ -100,6 +100,11 @@ export class PtySession {
     return this.running !== null;
   }
 
+  /** When the running command started (ms since epoch), for how long the mole has been digging. */
+  get runningSince(): number | null {
+    return this.running?.startedAt ?? null;
+  }
+
   get runningCommand(): string | null {
     return this.running?.cmd ?? null;
   }

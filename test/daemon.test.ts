@@ -501,6 +501,54 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-esc')?.state === 'idle', 5_000);
   });
 
+  it('says what each answer cost, from the token counts in the transcript, and adds them up over the session', async () => {
+    const transcript = path.join(env3.root, 'sess-cost.jsonl');
+    const reply = (id: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', role: 'assistant', content: [{ type: 'text', text: 'SECRET words that must not be kept' }], usage } })}\n`;
+    // an earlier conversation in the same file is not part of this answer
+    fs.writeFileSync(transcript, reply('old', { input_tokens: 1_000_000, output_tokens: 0 }));
+    const base = { session_id: 'sess-cost', transcript_path: transcript };
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'first' }));
+    fs.appendFileSync(transcript, reply('a1', { input_tokens: 100, output_tokens: 1000, cache_read_input_tokens: 50_000 }) + reply('a1', { input_tokens: 100, output_tokens: 1000, cache_read_input_tokens: 50_000 }));
+    await c.call('claude.event', ev('Stop', base));
+    const cost = async () => (await states()).find((s) => s.id === 'sess-cost')?.cost;
+    await waitUntil(async () => (await cost())?.answers === 1, 5_000);
+    // (100 × 2 + 1000 × 10 + 50000 × 0.2) / 1e6, once although the answer has two lines
+    expect((await cost())!.last.usd).toBeCloseTo(0.0202, 6);
+    expect((await cost())!.last.messages).toBe(1);
+    expect((await cost())!.totalUsd).toBeCloseTo(0.0202, 6);
+    expect(JSON.stringify(await states())).not.toContain('SECRET'); // numbers only, never the words
+    // the next answer adds to the session
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'second' }));
+    fs.appendFileSync(transcript, reply('a2', { input_tokens: 10, output_tokens: 500 }));
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await cost())?.answers === 2, 5_000);
+    expect((await cost())!.last.usd).toBeCloseTo(0.00502, 6);
+    expect((await cost())!.totalUsd).toBeCloseTo(0.02522, 6);
+    // a response Claude gives without a new prompt (a background agent finished) is its own answer, not a repeat of the last
+    fs.appendFileSync(transcript, reply('a3', { input_tokens: 10, output_tokens: 100 }));
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await cost())?.answers === 3, 5_000);
+    expect((await cost())!.last.output).toBe(100);
+  });
+
+  it('says nothing about cost when it is switched off in Settings, and starts again when it is switched on', async () => {
+    const transcript = path.join(env3.root, 'sess-nocost.jsonl');
+    const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 1, output_tokens: 1000 } } })}\n`;
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-nocost', transcript_path: transcript };
+    await c.call('config.patch', { claude: { showCost: false } });
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'quiet' }));
+    fs.appendFileSync(transcript, reply('q1'));
+    await c.call('claude.event', ev('Stop', base));
+    await sleep(900);
+    expect((await states()).find((s) => s.id === 'sess-nocost')?.cost).toBeUndefined();
+    await c.call('config.patch', { claude: { showCost: true } });
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'loud' }));
+    fs.appendFileSync(transcript, reply('q2'));
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-nocost')?.cost?.answers === 1, 5_000);
+  });
+
   it('a stopped claude (Ctrl+Z: the shell reports exit 148) does not end the session', async () => {
     await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-susp', prompt: 'a long task' }));
     await c.call('session.attach', { cols: 100, rows: 30 });

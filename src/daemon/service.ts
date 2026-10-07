@@ -14,6 +14,7 @@ import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
+import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
@@ -48,6 +49,9 @@ export class JafferService {
   /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
   private claudeWatcher = new ClaudeWatcher();
   private rejectionWatches = new Map<string, () => void>();
+  /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
+  private turnStart = new Map<string, number>();
+  private costTimers = new Set<NodeJS.Timeout>();
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
@@ -110,6 +114,8 @@ export class JafferService {
     for (const t of this.timers) clearInterval(t);
     for (const stop of this.rejectionWatches.values()) stop();
     this.rejectionWatches.clear();
+    for (const t of this.costTimers) clearTimeout(t);
+    this.costTimers.clear();
     this.memory?.stop();
     try {
       // Learn from whatever is pending before going away.
@@ -159,7 +165,7 @@ export class JafferService {
     const pane = this.host.mainPane;
     const cwd = pane?.cwd ?? this.userHome;
     const proj = resolveProject(cwd, this.userHome);
-    return { cwd, project: proj.root, branch: proj.branch, busy: pane?.runningCommand ?? null };
+    return { cwd, project: proj.root, branch: proj.branch, busy: pane?.runningCommand ?? null, busySince: pane?.runningSince ?? null };
   }
 
   // ------------------------------------------------------------------ events
@@ -237,6 +243,50 @@ export class JafferService {
       }
     }, 100);
     this.claudePushTimer.unref?.();
+  }
+
+  /**
+   * What an answer cost: measured on the transcript from the prompt to the Stop hook, only the token counts are read. The last
+   * lines may land just after the hook fires, so an empty read is tried once more.
+   */
+  private trackCost(p: unknown): void {
+    if (!p || typeof p !== 'object') return;
+    const o = p as Record<string, unknown>;
+    const id = typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '';
+    if (!id) return;
+    const file = typeof o.transcript_path === 'string' ? o.transcript_path : this.claudeWatcher.sessions().find((s) => s.id === id)?.transcriptPath;
+    if (o.hook_event_name === 'UserPromptSubmit') {
+      this.turnStart.set(id, transcriptSize(file));
+      if (this.turnStart.size > 20) this.turnStart.delete(this.turnStart.keys().next().value!);
+    } else if (o.hook_event_name === 'SessionEnd') {
+      this.turnStart.delete(id);
+    } else if (o.hook_event_name === 'Stop') {
+      const start = this.turnStart.get(id);
+      if (start === undefined || !file) return;
+      if (!this.config.get().claude.showCost) {
+        this.turnStart.set(id, transcriptSize(file));
+        return;
+      }
+      // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended
+      const read = (retry: boolean): void => {
+        const end = transcriptSize(file);
+        const turn = readTurnCost(file, start, end);
+        if (turn) {
+          this.turnStart.set(id, end);
+          this.claudeWatcher.setCost(id, turn);
+        } else if (retry) this.later(1500, () => read(false));
+      };
+      this.later(300, () => read(true));
+    }
+  }
+
+  private later(ms: number, fn: () => void): void {
+    const t = setTimeout(() => {
+      this.costTimers.delete(t);
+      fn();
+    }, ms);
+    t.unref?.();
+    this.costTimers.add(t);
   }
 
   /**
@@ -332,6 +382,7 @@ export class JafferService {
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {
       this.claudeWatcher.handle(p);
+      this.trackCost(p);
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.sessions() }));

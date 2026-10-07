@@ -365,6 +365,9 @@ export function Settings(): VNode {
                   )}
                 </span>
               </Field>
+              <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
+                <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
+              </Field>
               <Field label="Learn from Claude Code sessions" hint="reads its local transcripts (read-only)">
                 <Switch checked={c.ingest.claudeCode} onChange={(v) => set({ ingest: { claudeCode: v } })} />
               </Field>

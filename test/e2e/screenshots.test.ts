@@ -297,8 +297,11 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('the mole follows the Claude in the terminal: at work, waiting for you, then done', async () => {
     const session = path.join(repo, 'src/auth/session.ts');
+    // where Claude Code would write the conversation: the answer's token counts are read from it (nothing else)
+    const transcript = path.join(tmp, 'demo-transcript.jsonl');
+    fs.writeFileSync(transcript, '');
     /** One Claude Code hook event, as `jaffer hook` would deliver it from inside this terminal. */
-    const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, ...over });
+    const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, transcript_path: transcript, ...over });
     await hook('SessionStart', { model: 'claude-opus-5-5' });
     await hook('UserPromptSubmit', { prompt: 'why is the auth test failing?' });
     await hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1' });
@@ -309,7 +312,10 @@ describe.skipIf(!OUT)('README screenshots', () => {
     // three background agents: a helper mole for each, digging a beat apart
     for (const id of ['demo-sub-1', 'demo-sub-2', 'demo-sub-3']) await hook('SubagentStart', { agent_id: id, agent_type: id === 'demo-sub-1' ? 'Explore' : 'general-purpose' });
     await until(async () => (await page.locator('.pet-helper').count()) === 3, 8_000, 'three helper moles');
-    await sleep(900);
+    // the longer they work the harder they dig: age the turn and the agents the way the daemon's clock would
+    const aged = (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.map((s: any) => ({ ...s, since: Date.now() - 6 * 60_000, subagents: s.subagents.map((a: any, i: number) => ({ ...a, startedAt: Date.now() - [6 * 60_000, 150_000, 45_000][i]! })) }));
+    await page.evaluate((sessions) => (window as any).__event('claude.state', { sessions }), aged);
+    await sleep(1100);
     await shot('03b-crew');
     for (const id of ['demo-sub-1', 'demo-sub-2', 'demo-sub-3']) await hook('SubagentStop', { agent_id: id, agent_type: 'Explore' });
     await until(async () => (await page.locator('.pet-helper').count()) === 0, 8_000, 'the helpers to leave');
@@ -329,8 +335,11 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await typeCommand('./bin/test');
     await until(async () => /16 passed/.test((await termLines()).join('\n')), 15_000, 'passing run in the terminal');
     await hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: './bin/test' }, tool_use_id: 'd3', duration_ms: 1900 });
+    // the answer, as Claude Code would have recorded it: (3000 × 4 + 4200 × 20 + 180000 × 0.2) / 1e6 ≈ $0.13 at Opus 5.5's list price
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { id: 'demo-a1', model: 'claude-opus-5-5', role: 'assistant', content: [], usage: { input_tokens: 3000, output_tokens: 4200, cache_read_input_tokens: 180_000 } } })}\n`);
     await hook('Stop', { last_assistant_message: 'Fixed.' });
     await page.waitForSelector('.pet[data-mood="cheer"]');
+    await page.waitForSelector('[data-cost-chip]');
     await sleep(350);
     expect(fs.readFileSync(session, 'utf8')).toContain('expiresAt <= now');
     await shot('02-terminal');

@@ -32,6 +32,8 @@ export interface SessionInfo {
   project?: string;
   branch?: string;
   busy?: string | null;
+  /** When the running command started (ms since epoch). */
+  busySince?: number | null;
   version?: string;
   startedAt?: string;
 }
@@ -205,10 +207,10 @@ export async function bootstrap(): Promise<void> {
     if (event.startsWith('pty.')) {
       ptyBus.emit({ event, data });
       if (event === 'pty.start') {
-        if (data.pane === 'main') info.value = { ...info.value, busy: data.cmd || 'command' };
+        if (data.pane === 'main') info.value = { ...info.value, busy: data.cmd || 'command', busySince: Date.now() };
         void refreshInfoSoon();
       } else if (event === 'pty.command') {
-        info.value = { ...info.value, busy: null };
+        info.value = { ...info.value, busy: null, busySince: null };
         void refreshInfoSoon();
       } else if (event === 'pty.cwd') {
         info.value = { ...info.value, cwd: data.cwd };
