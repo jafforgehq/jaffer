@@ -4,6 +4,8 @@ import path from 'node:path';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { ensureDaemon, tryConnect, type Launcher } from '../core/daemon-client';
+import { needsYouNotification } from '../shared/notify-policy';
+import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 
@@ -47,6 +49,7 @@ function wireClient(c: RpcClient): void {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
     if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number; by: string });
+    if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
     if (event === 'agent.event') onAgentEvent(data as { type: string; stopReason?: string; error?: string; name?: string; summary?: string });
   });
   c.onClose.on(() => void onDaemonDown());
@@ -95,9 +98,22 @@ async function offerRestart(oldVersion: string): Promise<void> {
 
 // ---------------------------------------------------------------- notifications & dock
 
+let lastTerminalNotifyAt = 0;
+let prevClaude: ClaudeSession[] = [];
+
 function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
+  lastTerminalNotifyAt = Date.now();
   notify(n.title || 'Terminal', n.body);
+}
+
+/** Claude, in the terminal, is waiting for the user and they are looking elsewhere. */
+function onClaudeState(sessions: ClaudeSession[]): void {
+  const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
+  prevClaude = sessions;
+  if (!n) return;
+  app.dock?.bounce('critical');
+  notify(n.title, n.body);
 }
 
 /** A long command finished while you were looking at something else. */
