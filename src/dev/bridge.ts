@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { makePaths } from '../shared/paths';
 import { ensureDaemon } from '../core/daemon-client';
 import type { RpcClient } from '../core/rpc';
+import { VERSION } from '../core/version';
 
 /**
  * Development/test bridge: serves the renderer in a plain browser and relays `window.jaffer`
@@ -35,9 +36,9 @@ const SHIM = `(() => {
     onMenu: (cb) => { menu.add(cb); window.__menu = (id) => menu.forEach((f) => f(id)); return () => menu.delete(cb); },
     onFocus: (cb) => { const on = () => cb(true), off = () => cb(false); window.addEventListener('focus', on); window.addEventListener('blur', off); return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); }; },
     notify: async () => {}, openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
-    appInfo: async () => ({ version: 'dev', platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
+    appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
-    updates: { state: async () => ({ status: 'idle', current: 'dev', auto: true }), check: async () => ({ status: 'uptodate', current: 'dev', auto: true }) },
+    updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
     setLoginItem: async () => {}, pathForFile: () => '', platform: 'darwin',
   };
 })();`;

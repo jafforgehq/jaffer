@@ -330,7 +330,7 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Updates' }).click();
-    expect(await page.textContent('[data-upd-status]')).toMatch(/Jaffer dev/);
+    expect(await page.textContent('[data-upd-status]')).toContain(`Jaffer ${JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version}`); // the version this build reports
     // the switch is the setting
     await page.locator('label.field', { hasText: 'Check automatically' }).locator('.switch').click();
     await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).updates.auto === false, 8_000, 'automatic checks to be switched off');

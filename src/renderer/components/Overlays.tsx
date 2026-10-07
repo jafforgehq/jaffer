@@ -349,10 +349,10 @@ export function Settings(): VNode {
             <>
               <h4>Claude Code</h4>
               <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. If you are signed out, the panel offers to sign you in.</p>
-              <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.mcp ? 'MCP on' : 'MCP off'} · ${claude.hooks ? 'hooks on' : 'hooks off'}` : 'not found on PATH') : '…'}>
+              <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.hooks ? 'hooks on' : 'hooks off'} · ${claude.mcp ? 'memory tools (MCP) on' : 'memory tools (MCP) off'}` : 'not found on PATH') : '…'}>
                 <span class="row">
                   <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
-                    {claude?.mcp && claude.hooks ? 'Reinstall' : 'Connect'}
+                    {claude?.mcp && claude.hooks ? 'Reinstall' : claude?.hooks ? 'Add memory tools' : 'Connect'}
                   </button>
                   {(claude?.mcp || claude?.hooks) && (
                     <button class="btn" disabled={busy === 'ccr'} onClick={() => void run('ccr', () => call('setup.claude.remove', {}), 'Disconnected from Claude Code.')}>

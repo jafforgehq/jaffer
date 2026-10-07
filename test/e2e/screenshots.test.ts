@@ -244,7 +244,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
     // the demo person is signed in to Claude: first run passes the sign-in step by itself (everything but `claude auth` is the real claude)
     const signedIn = fakeClaude(path.join(tmp, 'bin'), { loggedIn: true, passthrough: CLAUDE });
     bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-      env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+      env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: fs.existsSync('/usr/bin/zsh') ? '/usr/bin/zsh' : '/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       stdio: ['ignore', 'pipe', 'inherit'],
       cwd: repo,
     });
@@ -275,6 +275,8 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.goto(`${url}?debug=1&renderer=dom`);
     await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 30_000 }); // sign-in passes by itself, then the consent choices
     await shot('01-welcome');
+    // this demo person starts Claude Code themselves (the scripted session below stands in for it)
+    await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click();
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');
     await page.click('.seg-btn[title^="Claude"]'); // a first run starts with just the terminal; open Claude's panel like a person would
@@ -299,6 +301,20 @@ describe.skipIf(!OUT)('README screenshots', () => {
     const session = path.join(repo, 'src/auth/session.ts');
     /** One Claude Code hook event, as `jaffer hook` would deliver it from inside this terminal. */
     const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, ...over });
+    // a moment earlier: another turn, caught while it works (the status pill breathes, the bars move, the running row sweeps)
+    const early = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-0', hook_event_name: name, cwd: repo, ...over });
+    await early('SessionStart', { model: 'claude-opus-5-5' });
+    await early('UserPromptSubmit', { prompt: 'find every caller of isExpired() and check the edge case' });
+    await early('PreToolUse', { tool_name: 'Grep', tool_input: { pattern: 'isExpired' }, tool_use_id: 'w1' });
+    await early('PostToolUse', { tool_name: 'Grep', tool_input: { pattern: 'isExpired' }, tool_use_id: 'w1', duration_ms: 38 });
+    await early('SubagentStart', { agent_id: 'demo-sub-1', agent_type: 'Explore' });
+    await early('SubagentStart', { agent_id: 'demo-sub-2', agent_type: 'general-purpose' });
+    await early('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'w2' });
+    await page.waitForSelector('.live-pill[data-state="working"]');
+    await sleep(700); // let the motion be mid-way, not at its first frame
+    await clearToasts();
+    await shot('03a-working');
+    await early('SessionEnd');
     await hook('SessionStart', { model: 'claude-opus-5-5' });
     await hook('UserPromptSubmit', { prompt: 'why is the auth test failing?' });
     await hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1' });
@@ -365,6 +381,11 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.click('.settings-nav button:text-is("Claude Code")');
     await sleep(300);
     await shot('12-claude-code-settings');
+    await page.click('.settings-nav button:text-is("Updates")');
+    await sleep(200);
+    await page.evaluate(() => (window as any).__event('update.state', { status: 'ready', current: '0.2.0', version: '0.2.1', auto: true })); // what Settings shows once a release is downloaded
+    await page.waitForSelector('.upd-line[data-upd-status="ready"]');
+    await shot('13-updates');
     await page.keyboard.press('Escape');
   }, 60_000);
 
