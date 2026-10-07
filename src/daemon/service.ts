@@ -14,7 +14,7 @@ import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
-import { watchRejection } from '../core/claude/transcript-watch';
+import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
@@ -101,6 +101,9 @@ export class JafferService {
     this.memory.start(tickMs());
     this.startIngest();
     this.timers.push(setInterval(() => this.memory.syncExports(), 120_000));
+    this.timers[this.timers.length - 1]!.unref?.();
+    // a turn that ended with no signal at all (Esc, an API error, a crash) must not stay "Working" for ever
+    this.timers.push(setInterval(() => this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000)), 30_000));
     this.timers[this.timers.length - 1]!.unref?.();
     this.log(`jafferd ${this.version} listening on ${this.paths.socket}`);
   }
@@ -245,17 +248,18 @@ export class JafferService {
     this.claudePushTimer.unref?.();
   }
 
-  /** Declining a prompt in the terminal fires no hook: while a session waits for the user, read its transcript for that. */
+  /**
+   * Declining a prompt or pressing Esc in the terminal fires no hook (and Esc no Stop): while a session works or waits for the
+   * user, read its transcript for the line that says so.
+   */
   private watchForRejections(sessions: { id: string; state: string; transcriptPath?: string; tool?: unknown }[]): void {
     for (const s of sessions) {
       const watching = this.rejectionWatches.has(s.id);
-      // from the moment Claude waits until the tool is settled: after the user typed an answer the panel already says working,
-      // but a decline still fires no hook and only the transcript shows it
-      const waiting = !!s.transcriptPath && (s.state === 'needs-you' || (watching && s.state === 'working' && !!s.tool));
+      const waiting = !!s.transcriptPath && (s.state === 'needs-you' || s.state === 'working');
       if (waiting && !watching) {
-        const stop = watchRejection(s.transcriptPath!, () => {
+        const stop = watchInterruption(s.transcriptPath!, () => {
           this.rejectionWatches.delete(s.id);
-          this.claudeWatcher.retractNotice(s.id);
+          this.claudeWatcher.interrupted(s.id);
         });
         this.rejectionWatches.set(s.id, stop);
       } else if (!waiting && watching) {

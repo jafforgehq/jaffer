@@ -29,6 +29,10 @@ const MAX_ACTIVITY = 30;
 const MAX_SUBAGENTS = 20;
 const MAX_SESSIONS = 5;
 const ENDED_TTL_MS = 5 * 60_000;
+/** A turn that is `working` but has gone this quiet (no hook, transcript not growing) is over: Esc and API errors fire no Stop hook. */
+const STALE_MS = 5 * 60_000;
+/** With a tool running there is nothing to hear for as long as the tool takes (a build), so be patient. */
+const STALE_TOOL_MS = 30 * 60_000;
 const MAX_PROMPT = 120;
 const MAX_REPLY = 240;
 const MAX_SUMMARY = 160;
@@ -104,7 +108,7 @@ export class ClaudeWatcher {
 
   /**
    * The user typed in the terminal while Claude waited for them: they are answering. Back to working, tool kept (an approval
-   * is followed by PostToolUse; a decline fires no hook and is noticed from the transcript, see retractNotice).
+   * is followed by PostToolUse; a decline fires no hook and is noticed from the transcript, see interrupted).
    */
   userAnswered(): void {
     const before = JSON.stringify(this.snapshot());
@@ -116,14 +120,42 @@ export class ClaudeWatcher {
     if (JSON.stringify(this.snapshot()) !== before) this.changes.emit(this.sessions());
   }
 
-  /** The user declined a prompt in the terminal: back to idle. Works while waiting and after they answered (a tool still pending). */
-  retractNotice(sessionId: string): void {
+  /**
+   * The person stopped Claude in the terminal (declined a prompt, or pressed Esc). Neither fires a hook, least of all Stop, so the
+   * daemon reads it from the transcript and calls this: back to idle, whatever was running did not finish.
+   */
+  interrupted(sessionId: string): void {
     const e = this.map.get(sessionId);
-    if (!e || !(e.s.state === 'needs-you' || (e.s.state === 'working' && e.s.tool))) return;
+    if (!e || !(e.s.state === 'working' || e.s.state === 'needs-you')) return;
+    this.settle(e.s, 'failed');
     this.setState(e.s, 'idle');
     e.s.notice = undefined;
     e.s.tool = undefined;
     this.changes.emit(this.sessions());
+  }
+
+  /**
+   * Safety net for a turn that ended without any signal (a crash, an API error, an interruption the transcript did not show):
+   * `working` with no hook for minutes, and `alive` (is the transcript still growing?) saying no, becomes idle. `needs-you` is
+   * never swept: waiting for a person takes as long as it takes.
+   */
+  sweep(alive: (s: ClaudeSession) => boolean): void {
+    const t = this.now();
+    let changed = false;
+    for (const e of this.map.values()) {
+      const s = e.s;
+      if (s.state !== 'working' || t - e.touched < (s.tool ? STALE_TOOL_MS : STALE_MS) || alive({ ...s })) continue;
+      this.settle(s, 'failed');
+      this.setState(s, 'idle');
+      s.tool = undefined;
+      changed = true;
+    }
+    if (changed) this.changes.emit(this.sessions());
+  }
+
+  /** Rows still `running` when the turn is over (their PostToolUse never came) are finished one way or the other. */
+  private settle(s: ClaudeSession, as: 'done' | 'failed'): void {
+    for (const a of s.activity) if (a.status === 'running') a.status = as;
   }
 
   /** Newest change first; ended sessions older than five minutes are dropped. */
@@ -247,6 +279,7 @@ export class ClaudeWatcher {
         break;
       }
       case 'Stop':
+        this.settle(s, 'done');
         this.setState(s, 'idle');
         s.tool = undefined;
         s.notice = undefined;

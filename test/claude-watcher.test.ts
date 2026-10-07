@@ -82,7 +82,7 @@ describe('ClaudeWatcher', () => {
     expect(only()).toMatchObject({ state: 'idle', notice: undefined });
   });
 
-  it('needs-you clears on PostToolUse, Stop, UserPromptSubmit and retractNotice', () => {
+  it('needs-you clears on PostToolUse, Stop, UserPromptSubmit and interrupted', () => {
     const needs = () => {
       w = new ClaudeWatcher({ now: () => t });
       w.handle(fx('PreToolUse', bash('rm -rf build')));
@@ -99,7 +99,7 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('UserPromptSubmit'));
     expect(only()).toMatchObject({ state: 'working', notice: undefined });
     needs();
-    w.retractNotice('sess-1');
+    w.interrupted('sess-1');
     expect(only()).toMatchObject({ state: 'idle', notice: undefined, tool: undefined });
   });
 
@@ -156,16 +156,68 @@ describe('ClaudeWatcher', () => {
     expect(only().state).toBe('idle');
   });
 
-  it('retractNotice also works after the user answered: a declined prompt is noticed even though the panel already shows working', () => {
+  it('interrupted also works after the user answered: a declined prompt is noticed even though the panel already shows working', () => {
     w.handle(fx('PreToolUse', bash('rm -rf build')));
     w.handle(fx('Notification'));
     w.userAnswered();
     expect(only().state).toBe('working');
-    w.retractNotice('sess-1'); // the transcript shows the user declined
+    w.interrupted('sess-1'); // the transcript shows the user declined
     expect(only()).toMatchObject({ state: 'idle', tool: undefined });
+  });
+
+  it('interrupted: Esc while Claude works fires no Stop hook, so the transcript is what ends the turn: idle, the tool gone, its row failed', () => {
     w.handle(fx('UserPromptSubmit'));
-    w.retractNotice('sess-1'); // no tool pending: a stray call changes nothing
-    expect(only().state).toBe('working');
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+    w.handle(fx('PreToolUse', bash('npm run lint', 'toolu_b')));
+    w.handle(fx('PostToolUse', bash('npm run lint', 'toolu_b')));
+    w.interrupted('sess-1');
+    expect(only()).toMatchObject({ state: 'idle', tool: undefined });
+    expect(only().activity.map((a) => [a.id, a.status])).toEqual([['toolu_a', 'failed'], ['toolu_b', 'done']]);
+    w.interrupted('sess-1'); // nothing is happening: nothing changes
+    expect(only().state).toBe('idle');
+    w.handle(fx('UserPromptSubmit', { session_id: 'plain' }));
+    w.interrupted('plain'); // Esc during plain generation, no tool at all
+    expect(w.sessions().find((x) => x.id === 'plain')!.state).toBe('idle');
+    w.interrupted('nobody'); // an unknown session is ignored
+  });
+
+  it('Stop settles rows whose PostToolUse never arrived: the turn is over, so nothing is still running', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse', bash('sleep 1', 'toolu_lost')));
+    w.handle(fx('Stop'));
+    expect(only().activity.map((a) => a.status)).toEqual(['done']);
+  });
+
+  it('sweep: a turn that went silent (no hook for minutes, transcript not growing) is not working any more', () => {
+    w.handle(fx('UserPromptSubmit'));
+    t = 1_000 + 4 * 60_000;
+    w.sweep(() => false);
+    expect(only().state).toBe('working'); // four minutes of silence can still be a long answer
+    t = 1_000 + 5 * 60_000 + 1;
+    w.sweep(() => true);
+    expect(only().state).toBe('working'); // the transcript is still being written
+    w.sweep(() => false);
+    expect(only().state).toBe('idle');
+  });
+
+  it('sweep is patient with a running tool, never touches needs-you, and an event restarts the clock', () => {
+    w.handle(fx('PreToolUse', bash('npm run build', 'toolu_long')));
+    t = 1_000 + 29 * 60_000;
+    w.sweep(() => false);
+    expect(only()).toMatchObject({ state: 'working', tool: { name: 'Bash', summary: 'npm run build' } }); // a long build is not silence
+    t = 1_000 + 31 * 60_000;
+    w.sweep(() => false);
+    expect(only()).toMatchObject({ state: 'idle', tool: undefined });
+    expect(only().activity[0]!.status).toBe('failed');
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_n')));
+    w.handle(fx('Notification'));
+    t += 3 * 3600_000;
+    w.sweep(() => false);
+    expect(only().state).toBe('needs-you'); // waiting for the person can take as long as it takes
+    w.handle(fx('PostToolUse', bash('npm test', 'toolu_n')));
+    t += 4 * 60_000;
+    w.sweep(() => false);
+    expect(only().state).toBe('working'); // the PostToolUse restarted the clock
   });
 
   it('endAll ends every session', () => {

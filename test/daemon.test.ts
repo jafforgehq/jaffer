@@ -480,6 +480,20 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-ans')?.state === 'idle', 5_000);
   });
 
+  it('Esc while Claude works fires no Stop hook: the transcript shows it, and "Working" ends (words inside tool output do not count)', async () => {
+    const transcript = path.join(env3.root, 'sess-esc.jsonl');
+    fs.writeFileSync(transcript, '{"type":"user","message":{"role":"user","content":"go"}}\n');
+    const base = { session_id: 'sess-esc', transcript_path: transcript };
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'build the thing' }));
+    expect((await states()).find((s) => s.id === 'sess-esc')?.state).toBe('working');
+    // a tool printing the very words is not the person pressing Esc
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'grep: [Request interrupted by user' }] } })}\n`);
+    await sleep(1200);
+    expect((await states()).find((s) => s.id === 'sess-esc')?.state).toBe('working');
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })}\n`);
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-esc')?.state === 'idle', 5_000);
+  });
+
   it('a stopped claude (Ctrl+Z: the shell reports exit 148) does not end the session', async () => {
     await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-susp', prompt: 'a long task' }));
     await c.call('session.attach', { cols: 100, rows: 30 });
