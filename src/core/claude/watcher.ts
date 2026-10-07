@@ -144,11 +144,18 @@ export class ClaudeWatcher {
     let changed = false;
     for (const e of this.map.values()) {
       const s = e.s;
-      if (s.state !== 'working' || t - e.touched < (s.tool ? STALE_TOOL_MS : STALE_MS) || alive({ ...s })) continue;
-      this.settle(s, 'failed');
-      this.setState(s, 'idle');
-      s.tool = undefined;
-      changed = true;
+      const quiet = t - e.touched;
+      if (s.state === 'working' && quiet >= (s.tool ? STALE_TOOL_MS : STALE_MS) && !alive({ ...s })) {
+        this.settle(s, 'failed');
+        this.setState(s, 'idle');
+        s.tool = undefined;
+        changed = true;
+      }
+      // a background agent outlives the turn that started it, so only long silence (no hook, transcript not growing) ends it
+      if (s.state !== 'ended' && quiet >= STALE_TOOL_MS && s.subagents.some((a) => a.status === 'running') && !alive({ ...s })) {
+        for (const a of s.subagents) a.status = 'done';
+        changed = true;
+      }
     }
     if (changed) this.changes.emit(this.sessions());
   }
@@ -179,6 +186,7 @@ export class ClaudeWatcher {
   }
 
   private end(s: ClaudeSession): void {
+    for (const a of s.subagents) a.status = 'done';
     this.setState(s, 'ended');
     s.tool = undefined;
     s.notice = undefined;

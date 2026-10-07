@@ -220,6 +220,40 @@ describe('ClaudeWatcher', () => {
     expect(only().state).toBe('working'); // the PostToolUse restarted the clock
   });
 
+  it('background agents outlive the turn that started them: Stop does not touch them, SubagentStop finishes them', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'general-purpose' }));
+    w.handle(fx('SubagentStart', { agent_id: 'bg-2', agent_type: 'Explore' }));
+    w.handle(fx('Stop'));
+    expect(only().state).toBe('idle');
+    expect(only().subagents.map((a) => a.status)).toEqual(['running', 'running']);
+    w.handle(fx('SubagentStop', { agent_id: 'bg-1', agent_type: 'general-purpose' }));
+    expect(only().subagents.map((a) => a.status)).toEqual(['done', 'running']);
+  });
+
+  it('a session that ends leaves no agent running', () => {
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'general-purpose' }));
+    w.handle(fx('SessionEnd'));
+    expect(only().subagents.map((a) => a.status)).toEqual(['done']);
+    w.handle(fx('SubagentStart', { session_id: 'other', agent_id: 'bg-9', agent_type: 'Explore' }));
+    w.endAll();
+    expect(w.sessions().flatMap((x) => x.subagents).every((a) => a.status === 'done')).toBe(true);
+  });
+
+  it('sweep: a background agent that has been silent for half an hour is not running any more, also in an idle session; a recent one stays', () => {
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'general-purpose' }));
+    w.handle(fx('Stop'));
+    t = 1_000 + 29 * 60_000;
+    w.sweep(() => false);
+    expect(only().subagents[0]!.status).toBe('running');
+    t = 1_000 + 31 * 60_000;
+    w.sweep(() => true); // its transcript is still being written: it is alive
+    expect(only().subagents[0]!.status).toBe('running');
+    w.sweep(() => false);
+    expect(only().subagents[0]!.status).toBe('done');
+    expect(only().state).toBe('idle');
+  });
+
   it('endAll ends every session', () => {
     w.handle(fx('UserPromptSubmit', { session_id: 'a' }));
     w.handle(fx('Stop', { session_id: 'b' }));

@@ -306,6 +306,13 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await sleep(700); // let the motion be mid-way, not at its first frame
     await clearToasts();
     await shot('03a-digging');
+    // three background agents: a helper mole for each, digging a beat apart
+    for (const id of ['demo-sub-1', 'demo-sub-2', 'demo-sub-3']) await hook('SubagentStart', { agent_id: id, agent_type: id === 'demo-sub-1' ? 'Explore' : 'general-purpose' });
+    await until(async () => (await page.locator('.pet-helper').count()) === 3, 8_000, 'three helper moles');
+    await sleep(900);
+    await shot('03b-crew');
+    for (const id of ['demo-sub-1', 'demo-sub-2', 'demo-sub-3']) await hook('SubagentStop', { agent_id: id, agent_type: 'Explore' });
+    await until(async () => (await page.locator('.pet-helper').count()) === 0, 8_000, 'the helpers to leave');
     await hook('PostToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1', duration_ms: 42 });
     // it found the bug and proposes the fix: now it waits for the user
     const edit = { file_path: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' };

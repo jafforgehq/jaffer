@@ -377,6 +377,51 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector(pet);
   }, 90_000);
 
+  it('the crew: a helper mole for every background agent, they outlive the main turn, cheer when done, and leave with the session', async () => {
+    const helpers = '.pet-corner .pet-helper';
+    const count = () => page.locator(helpers).count();
+    const moods = () => page.$$eval(helpers, (els) => els.map((e) => (e as HTMLElement).dataset.mood));
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    const hook = (name: string, over: Record<string, unknown> = {}) => sendHook(name, { session_id: 'crew-1', ...over });
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await until(async () => (await count()) === 0, 8_000, 'no helpers to start with');
+    await hook('SessionStart');
+    await hook('UserPromptSubmit', { prompt: 'research three things' });
+    await hook('SubagentStart', { agent_id: 'a1', agent_type: 'Explore' });
+    await hook('SubagentStart', { agent_id: 'a2', agent_type: 'general-purpose' });
+    await until(async () => (await count()) === 2, 8_000, 'two helper moles');
+    expect(await moods()).toEqual(['dig', 'dig']);
+    expect(await cs(`${helpers} .pet-body`, 'animationName')).toContain('pet-bob');
+    expect(await page.textContent('.pet-corner .pet[data-role="main"] title')).toMatch(/2 background agents working/); // said in words too, for anyone who cannot see it
+    await sleep(600); // past the moment they pop out of their molehills
+    await shot('14f-pet-crew');
+    // the main turn ends, the agents go on: background agents outlive the turn that started them
+    await hook('Stop', { last_assistant_message: 'two agents are on it' });
+    await sleep(400);
+    expect(await count()).toBe(2);
+    expect(await moods()).toEqual(['dig', 'dig']);
+    // one agent finishes: its mole cheers, then leaves
+    await hook('SubagentStop', { agent_id: 'a1', agent_type: 'Explore' });
+    await until(async () => (await moods()).join() === 'dig,cheer', 5_000, 'one helper to cheer');
+    await until(async () => (await count()) === 1, 6_000, 'the finished helper to leave');
+    // a crowd is capped
+    for (const id of ['a3', 'a4', 'a5']) await hook('SubagentStart', { agent_id: id, agent_type: 'Explore' });
+    await until(async () => (await count()) === 3, 8_000, 'the crew capped at three');
+    const card = (await page.locator('.terminal-area').boundingBox())!;
+    const corner = (await page.locator('.pet-corner').boundingBox())!;
+    expect(corner.x).toBeGreaterThanOrEqual(card.x);
+    expect(corner.x + corner.width).toBeLessThanOrEqual(card.x + card.width);
+    // Animations off: the crew is still there, standing still
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+    expect(await count()).toBe(3);
+    expect(await cs(`${helpers} .pet-body`, 'animationName')).toBe('none');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+    // the session ends: no agent is running any more
+    await hook('SessionEnd');
+    await until(async () => (await count()) === 0, 8_000, 'the crew to leave with the session');
+  }, 90_000);
+
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
     await page.waitForSelector('.memory');

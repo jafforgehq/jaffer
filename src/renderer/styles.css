@@ -407,7 +407,10 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 
 /* The pet: a mole in the sidebar. Every pose is a [data-mood] state (so it is right with Animations off too); the motion is only
    added under :root:not([data-motion='off']), and macOS Reduce motion stops it through the global rule below. */
-.pet-corner { position: absolute; right: 22px; bottom: 10px; z-index: 3; pointer-events: none; opacity: 0.94; } /* a corner of the terminal; clicks and selection go straight through */
+.pet-corner { position: absolute; right: 22px; bottom: 10px; z-index: 3; pointer-events: none; opacity: 0.94; display: flex; flex-direction: row-reverse; align-items: flex-end; }
+.pet-defs { position: absolute; width: 0; height: 0; }
+/* helpers: one smaller mole per running background agent, standing to the left of the main one */
+.pet-helper { width: 78px; height: 47px; margin-left: -6px; } /* a corner of the terminal; clicks and selection go straight through */
 .pet { width: 112px; height: 67px; overflow: visible; --fur: color-mix(in srgb, var(--text) 44%, var(--bg-solid)); --soil: color-mix(in srgb, var(--accent) 26%, color-mix(in srgb, var(--text) 24%, var(--bg-solid))); --fur-deep: color-mix(in srgb, var(--fur) 62%, #000); --pet-y: 8px; }
 .pet-hole { fill: color-mix(in srgb, var(--chrome-solid) 60%, #000); }
 .pet-mound { fill: var(--soil); }
@@ -470,3 +473,10 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 :root:not([data-motion='off']) .pet[data-mood='cheer'] .pet-sparks path:nth-child(2) { animation-delay: 0.2s; }
 :root:not([data-motion='off']) .pet[data-mood='cheer'] .pet-sparks path:nth-child(3) { animation-delay: 0.4s; }
 
+
+@keyframes pet-enter { from { transform: translateY(18px) scale(0.7); opacity: 0; } }
+:root:not([data-motion='off']) .pet-helper { animation: pet-enter 0.35s ease-out; }
+/* the helpers dig a beat apart, so the crew does not move as one */
+:root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-body { animation-delay: calc(var(--i) * 0.13s); }
+:root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-arm-l { animation-delay: calc(var(--i) * 0.13s); }
+:root:not([data-motion='off']) .pet-helper[data-mood='dig'] .pet-arm-r { animation-delay: calc(var(--i) * 0.13s + 0.25s); }
