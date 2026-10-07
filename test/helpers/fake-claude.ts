@@ -11,10 +11,12 @@ import path from 'node:path';
  *   mode "hang"        status and login never finish
  *   mode "login-fail"  login exits 1 without signing in
  *
+ * `interactive: 'stub'`: `claude` with no arguments (what typing `claude` in the terminal does) prints a line and exits 0 instead of
+ * starting the real TUI, so a test can see that something started Claude Code without a TUI taking over the shell.
  * Any other command goes to `passthrough` (the real claude) when one is given, so a test can keep using the real thing
  * for everything but the login state.
  */
-export function fakeClaude(dir: string, o: { loggedIn: boolean; mode?: string; passthrough?: string | null }) {
+export function fakeClaude(dir: string, o: { loggedIn: boolean; mode?: string; passthrough?: string | null; interactive?: 'stub' }) {
   fs.mkdirSync(dir, { recursive: true });
   const bin = path.join(dir, 'claude');
   const state = path.join(dir, 'state');
@@ -27,6 +29,7 @@ export function fakeClaude(dir: string, o: { loggedIn: boolean; mode?: string; p
     `#!/bin/sh
 D=${JSON.stringify(dir)}
 REAL=${JSON.stringify(o.passthrough ?? '')}
+INTERACTIVE=${JSON.stringify(o.interactive ?? '')}
 echo "$* HOME=$HOME KEY=\${ANTHROPIC_API_KEY:+set}" >> "$D/calls.log"
 M=$(cat "$D/mode")
 S=$(cat "$D/state")
@@ -52,6 +55,7 @@ if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   echo in > "$D/state"
   exit 0
 fi
+if [ "$#" -eq 0 ] && [ "$INTERACTIVE" = stub ]; then echo "fake claude: interactive session"; exit 0; fi
 if [ -n "$REAL" ]; then exec "$REAL" "$@"; fi
 echo "fake claude: unsupported: $*" >&2
 exit 64

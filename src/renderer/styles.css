@@ -618,7 +618,10 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .ob-actions { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .ob-error { margin: 0; font-size: 12.5px; color: var(--danger); line-height: 1.45; }
 .ob-note { margin: 2px 0 0; font-size: 12px; line-height: 1.5; text-align: center; }
-.onboard-foot { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+/* An ordinary laptop window is under 900px high: the three feature cards are the part to give up, so that all four choices and the button fit. */
+@media (max-height: 900px) { .onboard .features { display: none; } .modal:has(.onboard) { max-height: 92vh; } }
+/* sticky: however short the window, the way forward stays in view while the choices scroll behind it */
+.onboard-foot { display: flex; align-items: center; gap: 14px; margin: 18px -34px -24px; padding: 14px 34px 24px; position: sticky; bottom: 0; z-index: 1; background: linear-gradient(to bottom, transparent, var(--surface) 18px); }
 
 @media (max-width: 860px) { .rail { display: none; } }
 @media (max-width: 760px) { .side { position: absolute; right: 8px; top: 0; bottom: 0; z-index: 8; } }

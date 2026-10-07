@@ -67,7 +67,7 @@ beforeAll(async () => {
   fs.mkdirSync(path.join(env.userHome, '.codex'), { recursive: true });
   fs.mkdirSync(path.join(env.userHome, '.gemini'), { recursive: true });
   // `claude` as the app finds it: signed out at first, and the real binary for everything except `claude auth`.
-  fake = fakeClaude(path.join(env.root, 'bin'), { loggedIn: false, passthrough: CLAUDE });
+  fake = fakeClaude(path.join(env.root, 'bin'), { loggedIn: false, passthrough: CLAUDE, interactive: 'stub' });
   mock = new MockAnthropic();
   const mockUrl = await mock.listen();
   bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
@@ -122,7 +122,27 @@ describe('Jaffer UI end to end', () => {
     expect(choices).toMatch(/hooks/i); // what connecting Claude Code does is said plainly: the hooks see its prompts and tool calls
     expect(choices).toMatch(/your prompts, its tool calls and replies/i);
     expect(choices).not.toMatch(/MCP/); // the memory tools are Settings → Claude Code, not a first-run decision
+    // starting Claude Code is a choice too, on by default, and it says who answers Claude Code's own questions
+    const startBox = page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('input[type=checkbox]');
+    expect(await startBox.count()).toBe(1);
+    expect(await startBox.isChecked()).toBe(true);
+    expect(choices).toMatch(/Jaffer never answers them for you/i);
+    const noArgCalls = () => fake.calls().filter((l) => l.startsWith(' HOME=')).length; // `claude` typed with nothing after it
     expect(choices).toContain('Get started');
+    // the way forward is always in view, however short the window: Get started stays inside the dialog without scrolling
+    for (const height of [860, 640]) {
+      await page.setViewportSize({ width: 1360, height });
+      await sleep(150);
+      const dialog = (await page.locator('.onboard').boundingBox())!;
+      const btn = (await page.locator('.onboard .btn.primary').boundingBox())!;
+      expect(btn.y + btn.height, `Get started inside the dialog at ${height}px high`).toBeLessThanOrEqual(dialog.y + dialog.height + 0.5);
+      if (height >= 800) {
+        // at an ordinary window height every choice is readable without scrolling: nothing sits behind the button
+        const last = (await page.locator('.onboard .choices label').last().boundingBox())!;
+        expect(last.y + last.height, `the last choice clear of Get started at ${height}px high`).toBeLessThanOrEqual(btn.y + 0.5);
+      }
+    }
+    await page.setViewportSize({ width: 1360, height: 860 });
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
 
@@ -135,6 +155,8 @@ describe('Jaffer UI end to end', () => {
     expect(cfg.export.targets).not.toContain('codex');
     expect(fake.calls().some((l) => l.startsWith('auth login '))).toBe(true);
     expect(fake.calls().some((l) => l.startsWith('mcp add'))).toBe(false); // Get started connects the hooks for the panel, not the MCP server
+    await until(async () => noArgCalls() === 1, 15_000, 'Get started to start Claude Code in the terminal'); // typed for the person, once
+    await until(async () => /fake claude: interactive session/.test(await termText()), 10_000, 'Claude Code to answer in the terminal')
     // Jaffer drove the sign-in itself: nothing was typed into the user's shell
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     expect(await termText()).not.toMatch(/auth login/);
@@ -145,6 +167,24 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.panel-sub')).toMatch(/Live view of the Claude running in your terminal/);
   }, 90_000);
 
+
+  it('first run with "Start Claude Code" switched off: Get started types nothing into the terminal', async () => {
+    const noArgCalls = () => fake.calls().filter((l) => l.startsWith(' HOME=')).length;
+    const before = noArgCalls();
+    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 }); // already signed in: straight to the choices
+    await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click();
+    expect(await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('input[type=checkbox]').isChecked()).toBe(false);
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard', { state: 'detached' });
+    await page.waitForSelector('.term .xterm');
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).onboarded === true, 8_000, 'onboarding to finish');
+    await sleep(2_500); // long enough for a typed command to have run
+    expect(noArgCalls()).toBe(before);
+    await page.click('.seg-btn[title^="Claude"]'); // the tests after this one start from an open panel, as the first run leaves it
+    await page.waitForSelector('.panel-head');
+  }, 60_000);
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     await page.click('.term');

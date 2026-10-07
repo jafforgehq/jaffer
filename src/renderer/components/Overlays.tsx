@@ -3,7 +3,7 @@ import type { VNode } from 'preact';
 import { activePane, appVersion, cfg, checkClaudeSetup, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
-import { actions, type Action } from '../actions';
+import { actions, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock, IconDownload } from './icons';
@@ -522,11 +522,19 @@ function SignInStep({ onDone }: { onDone: () => void }): VNode {
   );
 }
 
+/** The person said yes to starting Claude Code: wait for the terminal to be there and its prompt to draw, then type `claude` for them. */
+async function startClaudeWhenReady(): Promise<void> {
+  for (let i = 0; i < 50 && !terminals.get(activePane.value); i++) await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r) => setTimeout(r, 400));
+  await runClaude();
+}
+
 export function Onboarding(): VNode {
   const [stage, setStage] = useState<'signin' | 'choices'>('signin');
   const [learn, setLearn] = useState(true);
   const [curate, setCurate] = useState(true);
   const [claude, setClaude] = useState(true);
+  const [start, setStart] = useState(true);
   const [busy, setBusy] = useState(false);
   const go = async () => {
     setBusy(true);
@@ -539,6 +547,7 @@ export function Onboarding(): VNode {
       if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks for the panel; the memory tools are a Settings choice
       overlay.value = null;
       setSide(null); // just the terminal at first; Claude's panel is one click or ⌘J away
+      if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
     } finally {
       setBusy(false);
     }
@@ -609,6 +618,13 @@ export function Onboarding(): VNode {
                 <span class="t">
                   <b>Show what Claude is doing in the panel</b>
                   <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the panel can show it; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts. More options are in Settings → Claude Code.</small>
+                </span>
+              </label>
+              <label>
+                <Switch checked={start} onChange={setStart} />
+                <span class="t">
+                  <b>Start Claude Code in the terminal now</b>
+                  <small>Types claude for you. Claude Code then asks its own questions (trust this folder, allow a tool) right there in the terminal; Jaffer never answers them for you.</small>
                 </span>
               </label>
             </div>
