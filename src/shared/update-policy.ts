@@ -19,13 +19,22 @@ export function cleanVersion(v: unknown): string | null {
   return typeof v === 'string' && v.length <= 40 && VERSION.test(v) ? v : null;
 }
 
-export function promptText(o: { version: string; claudeBusy: boolean }): { message: string; detail: string; buttons: [string, string] } {
+export interface PromptText {
+  message: string;
+  detail: string;
+  buttons: [string, string];
+  /** Return and Esc both mean Later: someone typing in the terminal when the prompt appears must not accept it by accident. */
+  defaultId: number;
+  cancelId: number;
+}
+
+export function promptText(o: { version: string; claudeBusy: boolean }): PromptText {
   const lines = [
     'Updating restarts Jaffer and ends your terminal session: anything running in it stops. Your memory is kept, and the shell comes back in the same folder.',
   ];
-  if (o.claudeBusy) lines.push('Claude is working right now; updating stops it.');
+  if (o.claudeBusy) lines.push('Claude is working or waiting for you right now; updating stops it.');
   lines.push('Choose Later to keep working. Jaffer will ask again the next time it starts.');
-  return { message: `Jaffer ${o.version} is ready`, detail: lines.join('\n\n'), buttons: ['Update and restart', 'Later'] };
+  return { message: `Jaffer ${o.version} is ready`, detail: lines.join('\n\n'), buttons: ['Update and restart', 'Later'], defaultId: 1, cancelId: 1 };
 }
 
 /** A background check does not nag about a version the user already put off; a manual check always answers. */
@@ -63,10 +72,22 @@ export function manualResult(s: UpdateState): { message: string; detail: string;
     case 'downloading':
       return { message: `Downloading Jaffer ${s.version ?? 'update'}`, detail: 'Jaffer will ask when it is ready to install.', releases: false };
     case 'unavailable':
-      return { message: 'Updates are off in this build', detail: 'Only the signed release downloaded from GitHub updates itself. The latest version is always on the releases page.', releases: true };
+      return { message: 'Updates are off in this build', detail: s.error ?? 'Only the signed release downloaded from GitHub updates itself. The latest version is always on the releases page.', releases: true };
     case 'error':
       return { message: 'Could not check for updates', detail: s.error ?? 'Unknown error.', releases: true };
     default:
       return null;
   }
+}
+
+/** The test-only feed override (JAFFER_UPDATE_URL): https anywhere, plain http only to this machine. */
+export function isAllowedFeedUrl(u: string): boolean {
+  return /^https:\/\/\S+$/i.test(u) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?(\/\S*)?$/i.test(u);
+}
+
+/** Why an app that cannot replace itself should not check for updates (null when it can). The install would fail after the session had ended. */
+export function bundleProblem(bundlePath: string, writableParent: boolean): string | null {
+  if (bundlePath.includes('/AppTranslocation/')) return 'Jaffer is running from a temporary location. Move it to your Applications folder and open it again to turn updates on.';
+  if (!writableParent) return 'Jaffer cannot replace itself where it is installed (a disk image, or a folder you cannot write to). Copy it to your Applications folder to turn updates on.';
+  return null;
 }

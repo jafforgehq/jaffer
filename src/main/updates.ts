@@ -1,4 +1,4 @@
-import { cleanVersion, isNewer, promptText, shouldAsk, type UpdateState, type UpdateStatus } from '../shared/update-policy';
+import { cleanVersion, isNewer, promptText, shouldAsk, type PromptText, type UpdateState, type UpdateStatus } from '../shared/update-policy';
 
 /**
  * The update flow, with everything that touches the outside world injected (the updater, the dialog, ending the session),
@@ -7,7 +7,7 @@ import { cleanVersion, isNewer, promptText, shouldAsk, type UpdateState, type Up
  */
 
 export interface UpdaterLike {
-  on(ev: 'checking-for-update' | 'update-available' | 'update-not-available' | 'update-downloaded' | 'error', cb: (arg?: any) => void): unknown;
+  on(ev: 'checking-for-update' | 'update-available' | 'update-not-available' | 'update-downloaded' | 'download-progress' | 'error', cb: (arg?: any) => void): unknown;
   checkForUpdates(): Promise<{ downloadPromise?: Promise<unknown> | null } | null | undefined | void>;
   quitAndInstall(silent?: boolean, forceRun?: boolean): void;
 }
@@ -20,15 +20,24 @@ export interface UpdateDeps {
   enabled: boolean;
   /** Settings → Updates → Check automatically. */
   auto: () => boolean;
-  /** Show the prompt; true = update now. */
-  ask(text: ReturnType<typeof promptText>, version: string): Promise<boolean>;
+  /**
+   * Show the prompt; true = update now. `text` is built by the caller when the dialog is about to appear (the Claude warning
+   * must be current), `manual` says the user asked for it (bring the window forward).
+   */
+  ask(text: () => PromptText, version: string, manual: boolean): Promise<boolean>;
   claudeBusy(): boolean;
   /** End the session and let the app quit; called right before the install. */
   prepareInstall(): Promise<void>;
   log(msg: string): void;
   onState?(s: UpdateState): void;
+  /** Shown instead of a generic message when `enabled` is false. */
+  unavailableReason?: string;
   firstCheckMs?: number;
   intervalMs?: number;
+  /** A check that has not answered by then counts as failed (default 90 s). */
+  checkTimeoutMs?: number;
+  /** A download with no progress for this long counts as stalled (default 15 min). */
+  downloadStallMs?: number;
 }
 
 const MAX_ERROR = 200;
@@ -44,6 +53,7 @@ export class UpdateController {
   private running: Promise<UpdateState> | null = null;
   private timers: NodeJS.Timeout[] = [];
   private last = '';
+  private lastActivity = 0;
 
   constructor(private d: UpdateDeps) {
     this.status = d.enabled ? 'idle' : 'unavailable';
@@ -59,6 +69,9 @@ export class UpdateController {
     u.on('update-not-available', () => {
       if (this.status !== 'ready') this.set('uptodate');
     });
+    u.on('download-progress', () => {
+      this.lastActivity = Date.now();
+    });
     u.on('update-downloaded', (info) => {
       const v = this.usable(info?.version);
       if (!v) return;
@@ -69,7 +82,7 @@ export class UpdateController {
   }
 
   state(): UpdateState {
-    return { status: this.status, current: this.d.current, version: this.version, error: this.error, auto: this.d.auto() };
+    return { status: this.status, current: this.d.current, version: this.version, error: this.status === 'unavailable' ? this.d.unavailableReason : this.error, auto: this.d.auto() };
   }
 
   start(): void {
@@ -106,6 +119,7 @@ export class UpdateController {
 
   private set(status: UpdateStatus, o: { version?: string; error?: string } = {}): void {
     this.status = status;
+    if (status === 'downloading') this.lastActivity = Date.now();
     this.version = o.version ?? (status === 'ready' || status === 'downloading' ? this.version : undefined);
     this.error = o.error;
     const s = this.state();
@@ -130,17 +144,21 @@ export class UpdateController {
         void this.offer(this.version);
         return Promise.resolve(this.state());
       }
-      if (this.status === 'downloading') return Promise.resolve(this.state());
     }
-    if (this.running) return this.running;
+    if (this.status === 'downloading' && !this.stalled()) return Promise.resolve(this.state());
+    if (this.running) {
+      if (manual) this.manual = true; // the user asked while a background check was running: the answer is for them
+      return this.running;
+    }
     this.manual = manual;
     this.running = (async () => {
       this.error = undefined;
       try {
-        const r = await this.d.updater.checkForUpdates();
-        if (manual && this.status === 'downloading' && r && r.downloadPromise) {
+        const r = await this.withTimeout(this.d.updater.checkForUpdates());
+        const download = r && r.downloadPromise ? r.downloadPromise.catch((e) => void this.onError(e)) : null; // always handled: a failed background download is not an unhandled rejection
+        if (manual && this.status === 'downloading' && download) {
           // an update downloaded earlier is "downloaded" again within moments; wait briefly so the answer is "ready"
-          await Promise.race([r.downloadPromise.catch(() => undefined), new Promise((res) => setTimeout(res, DOWNLOAD_GRACE_MS))]);
+          await Promise.race([download, new Promise((res) => setTimeout(res, DOWNLOAD_GRACE_MS))]);
         }
         if (this.status === 'checking') this.set('uptodate');
       } catch (e) {
@@ -153,13 +171,26 @@ export class UpdateController {
     return this.running;
   }
 
+  private stalled(): boolean {
+    return Date.now() - this.lastActivity > (this.d.downloadStallMs ?? 15 * 60_000);
+  }
+
+  /** The updater library has no working request timeout under Electron, so a stuck network call must not stick the controller too. */
+  private withTimeout<T>(p: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('The check timed out')), this.d.checkTimeoutMs ?? 90_000);
+    });
+    return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+  }
+
   private async offer(version: string): Promise<void> {
     const manual = this.manual;
     this.manual = false;
     if (this.asking || !shouldAsk({ manual, declined: this.declined, version })) return;
     this.asking = true;
     try {
-      const yes = await this.d.ask(promptText({ version, claudeBusy: this.d.claudeBusy() }), version);
+      const yes = await this.d.ask(() => promptText({ version: this.version ?? version, claudeBusy: this.d.claudeBusy() }), version, manual);
       if (!yes) {
         this.declined = version;
         return;

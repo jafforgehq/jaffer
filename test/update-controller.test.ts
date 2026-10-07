@@ -31,7 +31,7 @@ const found = (v: string) => (u: FakeUpdater) => {
 
 let order: string[] = [];
 let up: FakeUpdater;
-let asked: { message: string; detail: string; version: string }[];
+let asked: { message: string; detail: string; version: string; manual: boolean }[];
 let answer: () => Promise<boolean>;
 let auto = true;
 let busy = false;
@@ -44,8 +44,9 @@ function make(over: Partial<UpdateDeps> = {}) {
     current: '0.1.1',
     enabled: true,
     auto: () => auto,
-    ask: async (t, version) => {
-      asked.push({ message: t.message, detail: t.detail, version });
+    ask: async (text, version, manual) => {
+      const t = text(); // built when the dialog is about to show, like the real one
+      asked.push({ message: t.message, detail: t.detail, version, manual });
       return answer();
     },
     claudeBusy: () => busy,
@@ -212,11 +213,76 @@ describe('UpdateController: asking', () => {
   });
 
   it('a manual check right after a cached download reports ready, not downloading', async () => {
-    up.script = (u) => void u.emit('update-available', { version: '0.2.0' });
-    up.downloadPromise = Promise.resolve().then(() => void up.emit('update-downloaded', { version: '0.2.0' }));
+    up.script = (u) => {
+      u.emit('update-available', { version: '0.2.0' });
+      // the cached file is "downloaded" again a moment after the check itself has finished
+      up.downloadPromise = new Promise((res) => setTimeout(() => (up.emit('update-downloaded', { version: '0.2.0' }), res(null)), 500));
+    };
     const c = make();
-    const s = await c.checkNow();
-    expect(s.status).toBe('ready');
+    const p = c.checkNow();
+    await vi.advanceTimersByTimeAsync(600);
+    expect((await p).status).toBe('ready');
+  });
+
+  it('a real download takes longer than the grace period: the answer is "downloading", and the prompt follows when it is ready', async () => {
+    up.script = (u) => {
+      u.emit('update-available', { version: '0.2.0' });
+      up.downloadPromise = new Promise((res) => setTimeout(() => (up.emit('update-downloaded', { version: '0.2.0' }), res(null)), 60_000));
+    };
+    const c = make();
+    const p = c.checkNow();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect((await p).status).toBe('downloading');
+    expect(asked).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(asked).toHaveLength(1);
+  });
+
+  it('the prompt text is built when the dialog shows, so the Claude warning is current', async () => {
+    busy = false;
+    let build: () => { detail: string } = () => ({ detail: '' });
+    up.script = found('0.2.0');
+    const c = make({
+      ask: async (text) => {
+        build = text;
+        return false;
+      },
+    });
+    await c.checkNow();
+    await settle();
+    busy = true; // Claude started working while the prompt waited for the window
+    expect(build().detail).toMatch(/claude is working/i);
+  });
+
+  it('tells the dialog whether the user asked (a manual check brings the window forward)', async () => {
+    up.script = found('0.2.0');
+    const c = make();
+    await c.checkNow();
+    await settle();
+    expect(asked[0]!.manual).toBe(true);
+    up.script = found('0.2.1');
+    c.start();
+    await vi.advanceTimersByTimeAsync(16_000);
+    await settle();
+    expect(asked.find((a) => a.version === '0.2.1')!.manual).toBe(false);
+  });
+
+  it('a manual check that joins a background check still counts as asked for', async () => {
+    let release: () => void = () => undefined;
+    up.script = async (u) => {
+      await new Promise<void>((r) => (release = r));
+      found('0.2.0')(u);
+    };
+    const c = make();
+    c.start();
+    await vi.advanceTimersByTimeAsync(16_000); // the background check is now waiting
+    const manual = c.checkNow();
+    release();
+    await manual;
+    await settle();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.manual).toBe(true);
   });
 });
 
@@ -264,6 +330,69 @@ describe('UpdateController: what it ignores and how it fails', () => {
     c.start();
     await vi.advanceTimersByTimeAsync(16_000);
     expect(c.state().status).toBe('ready');
+  });
+
+  it('a check that never answers times out, says so, and the next tick tries again', async () => {
+    up.script = () => new Promise(() => undefined);
+    const c = make();
+    c.start();
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(c.state().status).toBe('checking');
+    await vi.advanceTimersByTimeAsync(91_000);
+    expect(c.state()).toMatchObject({ status: 'error', error: expect.stringMatching(/timed out/i) });
+    up.script = (u) => void u.emit('update-not-available', { version: '0.1.1' });
+    await vi.advanceTimersByTimeAsync(6 * 3600_000);
+    expect(c.state().status).toBe('uptodate');
+    expect(up.checks).toBe(2);
+  });
+
+  it('a download that stops making progress does not block checking for good', async () => {
+    up.script = (u) => void u.emit('update-available', { version: '0.2.0' }); // never finishes
+    const c = make();
+    await c.checkNow();
+    expect(c.state().status).toBe('downloading');
+    await c.checkNow(); // still downloading, nothing stalled yet: no second check
+    expect(up.checks).toBe(1);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    up.script = (u) => void u.emit('update-not-available', { version: '0.1.1' });
+    await c.checkNow();
+    expect(up.checks).toBe(2);
+    expect(c.state().status).toBe('uptodate');
+  });
+
+  it('progress keeps a slow download alive', async () => {
+    up.script = (u) => void u.emit('update-available', { version: '0.2.0' });
+    const c = make();
+    await c.checkNow();
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      up.emit('download-progress', { percent: 10 * i });
+    }
+    await c.checkNow();
+    expect(up.checks).toBe(1);
+  });
+
+  it('a background download that fails is not an unhandled rejection', async () => {
+    const seen: unknown[] = [];
+    const on = (e: unknown) => void seen.push(e);
+    process.on('unhandledRejection', on);
+    up.script = (u) => {
+      u.emit('update-available', { version: '0.2.0' });
+      const failing = Promise.reject(new Error('download broke'));
+      up.downloadPromise = failing;
+    };
+    const c = make();
+    c.start();
+    await vi.advanceTimersByTimeAsync(16_000);
+    await settle();
+    await vi.advanceTimersByTimeAsync(10);
+    process.off('unhandledRejection', on);
+    expect(seen).toEqual([]);
+  });
+
+  it('a build that cannot update says why', async () => {
+    const c = make({ enabled: false, unavailableReason: 'Move Jaffer to your Applications folder.' });
+    expect(c.state()).toMatchObject({ status: 'unavailable', error: 'Move Jaffer to your Applications folder.' });
   });
 
   it('reports each step to the UI', async () => {

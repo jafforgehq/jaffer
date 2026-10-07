@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanVersion, isNewer, manualResult, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
+import { bundleProblem, cleanVersion, isAllowedFeedUrl, isNewer, manualResult, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
 
 describe('cleanVersion', () => {
   it('accepts release versions and rejects anything else', () => {
@@ -24,7 +24,12 @@ describe('promptText', () => {
   });
   it('warns when Claude is working or waiting right now', () => {
     const t = promptText({ version: '0.2.0', claudeBusy: true });
-    expect(t.detail).toMatch(/claude is working/i);
+    expect(t.detail).toMatch(/claude is working or waiting for you/i);
+  });
+  it('makes Return mean Later, so typing in the terminal when the prompt appears cannot accept it', () => {
+    const t = promptText({ version: '0.2.0', claudeBusy: false });
+    expect(t.buttons[t.defaultId]).toBe('Later');
+    expect(t.buttons[t.cancelId]).toBe('Later');
   });
 });
 
@@ -83,5 +88,36 @@ describe('manualResult', () => {
     expect(manualResult({ ...base, status: 'ready', version: '0.2.0' })).toBeNull();
     expect(manualResult({ ...base, status: 'checking' })).toBeNull();
     expect(manualResult({ ...base, status: 'idle' })).toBeNull();
+  });
+});
+
+describe('isAllowedFeedUrl', () => {
+  it('allows https anywhere and plain http only on this machine', () => {
+    expect(isAllowedFeedUrl('https://example.com/feed')).toBe(true);
+    expect(isAllowedFeedUrl('http://127.0.0.1:8765')).toBe(true);
+    expect(isAllowedFeedUrl('http://localhost:3000/updates')).toBe(true);
+    expect(isAllowedFeedUrl('http://[::1]:8000')).toBe(true);
+    expect(isAllowedFeedUrl('http://example.com/feed')).toBe(false);
+    expect(isAllowedFeedUrl('http://127.0.0.1.evil.com/')).toBe(false);
+    expect(isAllowedFeedUrl('file:///tmp/feed')).toBe(false);
+    expect(isAllowedFeedUrl('')).toBe(false);
+  });
+});
+
+describe('bundleProblem', () => {
+  it('says why an app that cannot replace itself will not check for updates', () => {
+    expect(bundleProblem('/Applications/Jaffer.app', true)).toBeNull();
+    expect(bundleProblem('/Users/me/Applications/Jaffer.app', true)).toBeNull();
+    expect(bundleProblem('/private/var/folders/xx/T/AppTranslocation/ABC/d/Jaffer.app', true)).toMatch(/Applications folder/);
+    expect(bundleProblem('/Volumes/Jaffer 0.2.0/Jaffer.app', false)).toMatch(/Applications folder/);
+    expect(bundleProblem('/Applications/Jaffer.app', false)).toMatch(/cannot replace itself/i);
+  });
+});
+
+describe('manualResult with a reason', () => {
+  it('shows the reason an unavailable build gives instead of the generic text', () => {
+    const r = manualResult({ status: 'unavailable', current: '0.2.0', auto: true, error: 'Move Jaffer to your Applications folder.' });
+    expect(r!.detail).toContain('Move Jaffer to your Applications folder.');
+    expect(r!.releases).toBe(true);
   });
 });
