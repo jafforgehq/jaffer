@@ -21,32 +21,8 @@ const INSTRUCTIONS = `Jaffer is the user's terminal. It keeps a long-term memory
 - Call jaffer_remember when the user states a durable preference/convention or after solving something non-obvious. One self-contained sentence. Never store secrets or task-specific temporary details.
 - Call jaffer_forget when a memory is wrong or the user asks you to forget something.`;
 
-/** Tools that act in the user's own terminal session. Offered only to Jaffer's own panel agent, never to a Claude Code you run yourself. */
-function sessionTools(call: Call): Tool[] {
-  const outcome = async (name: string, input: unknown): Promise<string> => {
-    const r = await call('agent.tool', { name, input });
-    if (r.isError) throw new Error(r.output);
-    return r.output;
-  };
+export function makeTools(call: Call): Tool[] {
   return [
-    {
-      name: 'run_command',
-      description: "Run a shell command in the user's own terminal session. It is typed into their real shell, visible to them, and shares its working directory, environment variables and virtualenvs. Returns the exit code and the output. Use this for every shell command (do not use Bash).",
-      inputSchema: { type: 'object', properties: { command: { type: 'string' }, timeout_seconds: { type: 'number', description: 'Give up waiting after this long (default 120). The command keeps running.' } }, required: ['command'] },
-      run: (a) => outcome('run_command', a),
-    },
-    {
-      name: 'read_terminal',
-      description: "Read the last lines of the user's terminal screen: what is running and what it printed.",
-      inputSchema: { type: 'object', properties: { lines: { type: 'number' } }, required: [] },
-      run: (a) => outcome('read_terminal', a),
-    },
-  ];
-}
-
-export function makeTools(call: Call, opts: { session?: boolean } = {}): Tool[] {
-  return [
-    ...(opts.session ? sessionTools(call) : []),
     {
       name: 'jaffer_context',
       description: "Load what Jaffer knows that is relevant to the current project and (optionally) a topic: the user's preferences, conventions, lessons and learned procedures.",
@@ -100,14 +76,12 @@ export interface McpOptions {
   call: Call;
   version: string;
   cwd?: string;
-  /** Also offer the terminal tools (only for the panel agent's own Claude Code process). */
-  session?: boolean;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
 }
 
 export function runMcpServer(o: McpOptions): { close(): void } {
-  const tools = makeTools(o.call, { session: o.session });
+  const tools = makeTools(o.call);
   const out = o.output ?? process.stdout;
   const cwd = o.cwd ?? process.cwd();
   const send = (msg: unknown) => out.write(JSON.stringify(msg) + '\n');

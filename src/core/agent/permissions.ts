@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
-import type { Risk } from './types';
+/** What kind of action a tool call is, for the approval cards of a later release. */
+export type Risk = 'read' | 'write' | 'command' | 'risky';
 
 export interface Assessment {
   /** auto = run without asking (in the current mode); ask = needs user approval; deny = never. */

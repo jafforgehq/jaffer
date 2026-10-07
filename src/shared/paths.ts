@@ -15,11 +15,9 @@ export interface JafferPaths {
   sessionDir: string;
   sessionState: string;
   screenSnapshot: string;
-  thread: string;
   threadSummary: string;
   /** The working directory of the Claude Code engine's process (stable, so its session can always be resumed). */
   agentDir: string;
-  cliThread: string;
   cliState: string;
   shellDir: string;
   binDir: string;
@@ -35,7 +33,6 @@ export interface JafferPaths {
   memoryPolicy: string;
   memoryNotes: string;
   memoryHistoryDir: string;
-  secrets: string;
 }
 
 export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -59,10 +56,8 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     sessionDir,
     sessionState: path.join(sessionDir, 'state.json'),
     screenSnapshot: path.join(sessionDir, 'screen.json'),
-    thread: path.join(sessionDir, 'thread.jsonl'),
     threadSummary: path.join(sessionDir, 'summary.md'),
     agentDir: path.join(home, 'agent'),
-    cliThread: path.join(sessionDir, 'cli-thread.json'),
     cliState: path.join(sessionDir, 'cli-state.json'),
     shellDir: path.join(home, 'shell'),
     binDir: path.join(home, 'bin'),
@@ -78,6 +73,5 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     memoryPolicy: path.join(memoryDir, 'POLICY.md'),
     memoryNotes: path.join(memoryDir, 'NOTES.md'),
     memoryHistoryDir: path.join(memoryDir, 'history'),
-    secrets: path.join(home, 'secrets.json'),
   };
 }

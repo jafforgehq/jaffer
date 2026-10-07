@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
 import { makePaths } from '../shared/paths';
 import { ConfigStore } from '../shared/config';
 import { MemoryEngine } from '../core/memory/engine';
@@ -11,7 +10,6 @@ import { VERSION } from '../core/version';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
-import type { AgentEvent } from '../core/agent/types';
 
 const paths = makePaths();
 const args = process.argv.slice(2);
@@ -84,7 +82,6 @@ ${bold('Memory')}
   jaffer context [--query q]            print what Jaffer knows for the current directory
 
 ${bold('Agent')}
-  jaffer ask <prompt>                   ask the built-in agent (same single session as the app)
 
 ${bold('Claude Code')}
   jaffer setup claude [--remove|--status]   wire Claude Code to this memory (MCP server + hooks)
@@ -108,18 +105,7 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'mcp': {
       const client = await tryConnect(paths);
-      const session = args.includes('--session');
-      runMcpServer({
-        version: VERSION,
-        session,
-        call: (m, p) => {
-          if (m === 'agent.tool') {
-            if (!client) throw new Error("Jaffer's session is not running, so there is no terminal to run that in.");
-            return client.call(m, p, 15 * 60_000);
-          }
-          return memoryCall(m, p, client);
-        },
-      });
+      runMcpServer({ version: VERSION, call: (m, p) => memoryCall(m, p, client) });
       client?.onClose.on(() => process.exit(0));
       return; // keep running on stdin
     }
@@ -232,15 +218,6 @@ async function main(): Promise<void> {
       return;
     }
 
-    case 'ask': {
-      const text = positional().join(' ');
-      if (!text) throw new Error('Usage: jaffer ask <prompt>');
-      const client = await ensureDaemon(paths, launcher());
-      await runAsk(client, text);
-      client.close();
-      return;
-    }
-
     case 'setup': {
       if (args[1] !== 'claude') throw new Error('Usage: jaffer setup claude [--remove|--status]');
       const wrapper = path.join(paths.binDir, 'jaffer');
@@ -339,51 +316,6 @@ async function main(): Promise<void> {
       process.stderr.write(red(`Unknown command: ${cmd}\n\n`) + HELP);
       process.exitCode = 2;
   }
-}
-
-async function runAsk(client: RpcClient, text: string): Promise<void> {
-  const rl = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, output: process.stderr }) : null;
-  await new Promise<void>((resolve, reject) => {
-    let turnId = '';
-    const off = client.on('agent.event', (e: AgentEvent) => {
-      if (turnId && 'turnId' in e && e.turnId !== turnId) return;
-      switch (e.type) {
-        case 'text':
-          process.stdout.write(e.delta);
-          break;
-        case 'tool_call':
-          process.stderr.write(dim(`\n⏺ ${e.name} ${e.summary.slice(0, 100)}\n`));
-          break;
-        case 'approval_request':
-          if (!rl) {
-            void client.call('agent.approve', { callId: e.callId, decision: 'deny' });
-          } else {
-            rl.question(`\nAllow ${e.name}: ${e.summary.slice(0, 120)}\n  (${e.reason}) [y/N/a=always] `, (a) => {
-              const d = /^y/i.test(a) ? 'allow' : /^a/i.test(a) ? 'allow-always' : 'deny';
-              void client.call('agent.approve', { callId: e.callId, decision: d });
-            });
-          }
-          break;
-        case 'notice':
-          process.stderr.write(dim(`\n${e.text}\n`));
-          break;
-        case 'turn_end':
-          off();
-          process.stdout.write('\n');
-          if (e.error) {
-            process.stderr.write(red(e.error + '\n'));
-            process.exitCode = 1;
-          }
-          resolve();
-          break;
-      }
-    });
-    client
-      .call('agent.send', { text })
-      .then((r: { turnId: string }) => (turnId = r.turnId))
-      .catch(reject);
-  });
-  rl?.close();
 }
 
 main().catch((e) => {

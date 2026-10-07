@@ -2,7 +2,6 @@ import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
 
 /** ask: reads are automatic, everything that changes state needs approval. auto: only risky actions ask. */
-export type ApprovalMode = 'ask' | 'auto';
 
 export interface JafferConfig {
   /** First-run consent flow completed. Until then nothing is exported and no model is called. */
@@ -21,26 +20,6 @@ export interface JafferConfig {
     renderer: 'webgl' | 'dom';
   };
   shell: { path: string; args: string[] };
-  agent: {
-    /**
-     * Who runs the agent panel. "api": your Anthropic API key. "claude-code": your Claude Code login (the `claude` CLI),
-     * so no API key is needed. "auto": the API key when there is one, otherwise Claude Code.
-     */
-    engine: 'auto' | 'api' | 'claude-code';
-    /** Model alias for the Claude Code engine ("sonnet", "opus", …); empty uses Claude Code's own default. */
-    cliModel: string;
-    model: string;
-    effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    approvals: ApprovalMode;
-    /** Rules added by "always allow" decisions, e.g. "run_command:pnpm test" or "edit_file:*". */
-    allow: string[];
-    /** "session": agent commands run visibly in your shell; "subprocess": isolated child process. */
-    runIn: 'session' | 'subprocess';
-    maxToolRounds: number;
-    refusalFallback: boolean;
-    /** Compact the thread when it exceeds this many (estimated) tokens. */
-    compactAtTokens: number;
-  };
   memory: {
     enabled: boolean;
     /** "auto": use a model to curate memory when credentials exist. "off": offline heuristics only. */
@@ -71,18 +50,6 @@ export const DEFAULT_CONFIG: JafferConfig = {
     renderer: 'webgl',
   },
   shell: { path: '', args: [] },
-  agent: {
-    engine: 'auto',
-    cliModel: '',
-    model: 'claude-sonnet-5-5',
-    effort: 'medium',
-    approvals: 'ask',
-    allow: [],
-    runIn: 'session',
-    maxToolRounds: 40,
-    refusalFallback: true,
-    compactAtTokens: 140_000,
-  },
   memory: {
     enabled: true,
     llm: 'auto',

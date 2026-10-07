@@ -1,10 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type Anthropic from '@anthropic-ai/sdk';
 import { ConfigStore, type DeepPartial, type JafferConfig } from '../shared/config';
 import { makePaths, type JafferPaths } from '../shared/paths';
-import { makeSecretStore, type SecretStore } from '../shared/secrets';
 import { ensureDir, errMsg, nowIso, writeFileAtomic } from '../shared/util';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 import { RpcError, RpcServer, type ServerConn } from '../core/rpc';
@@ -12,12 +10,6 @@ import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
 import { MemoryEngine } from '../core/memory/engine';
 import { makeMemoryApi } from '../core/memory-api';
-import { AgentRuntime } from '../core/agent/runtime';
-import { AgentHub } from '../core/agent/hub';
-import { ClaudeCodeEngine } from '../core/agent/claude-engine';
-import { executeTool } from '../core/agent/tools';
-import { AnthropicLlm, AnthropicProvider, makeClient, resolveCredentials, type Credentials } from '../core/agent/anthropic';
-import type { ToolEnv } from '../core/agent/tools';
 import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksConnected, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
@@ -26,17 +18,13 @@ import { watchRejection } from '../core/claude/transcript-watch';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
-import type { Decision } from '../core/agent/types';
 import type { PtyEvent } from '../core/session/terminal';
-
-const KEY_NAME = 'anthropic-api-key';
 
 export interface ServiceOptions {
   paths?: JafferPaths;
   version?: string;
   /** Absolute path of the CLI bundle the ~/.jaffer/bin/jaffer wrapper should run. */
   cliScript?: string;
-  secrets?: SecretStore;
   /** Where "~" is for exports/ingest (tests). */
   userHome?: string;
   log?: (msg: string) => void;
@@ -49,16 +37,12 @@ export class JafferService {
   readonly paths: JafferPaths;
   readonly config: ConfigStore;
   readonly rpc = new RpcServer();
-  readonly secrets: SecretStore;
   host!: SessionHost;
   memory!: MemoryEngine;
-  agent!: AgentHub;
   private claudeBin: string | null = null;
   private claudeProbe: Promise<void> | null = null;
   private login: ClaudeLogin | null = null;
   private loginError: string | undefined;
-  private apiKey: string | null = null;
-  private client: Anthropic | null = null;
   private startedAt = nowIso();
   private lastCommand: { cmd: string; exit: number | null } | undefined;
   /** The last commands of the session, for the app's session rail. Redacted; sensitive commands are left out entirely. */
@@ -85,14 +69,11 @@ export class JafferService {
     ensureDir(this.paths.home);
     ensureDir(this.paths.runDir);
     this.config = new ConfigStore(this.paths);
-    this.secrets = opts.secrets ?? makeSecretStore(this.paths);
   }
 
   // ------------------------------------------------------------------ lifecycle
 
   async start(): Promise<void> {
-    // The API-key engine is off (Claude subscriptions only), so the Keychain is not even read.
-    this.apiKey = this.apiEngineEnabled() ? await this.secrets.get(KEY_NAME).catch(() => null) : null;
     this.writeWrapper();
     try {
       // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own entries).
@@ -106,30 +87,10 @@ export class JafferService {
       paths: this.paths,
       config: this.config,
       home: this.userHome,
-      // An API key is preferred; otherwise curate through the user's own Claude Code login when it exists.
-      llm: () => (this.credentialsReady() ? new AnthropicLlm(() => this.getClient(), this.config.get().memory.reflectorModel) : this.cliLlm),
+      // Jaffer runs on a Claude subscription: memory is curated through the user's own Claude Code login (`claude -p`).
+      llm: () => this.cliLlm,
     });
     this.host = new SessionHost(this.paths, this.config, this.version);
-    const api = new AgentRuntime({
-      paths: this.paths,
-      config: this.config,
-      provider: () => (this.credentialsReady() ? new AnthropicProvider(() => this.getClient()) : null),
-      toolEnv: () => this.toolEnv(),
-      terminal: () => this.terminalInfo(),
-      memory: this.memory,
-      credentialsReady: () => this.credentialsReady(),
-    });
-    const cli = new ClaudeCodeEngine({
-      paths: this.paths,
-      config: this.config,
-      memory: this.memory,
-      terminal: () => this.terminalInfo(),
-      claudePath: () => this.claudeBin,
-      mcp: () => ({ command: this.cliWrapper, args: ['mcp', '--session'], env: { JAFFER_HOME: this.paths.home } }),
-      env: () => this.claudeEnv(),
-      log: this.log,
-    });
-    this.agent = new AgentHub(api, cli, this.config, { api: () => this.credentialsReady(), claudeCode: () => this.claudeBin !== null, apiEnabled: () => this.apiEngineEnabled() });
     this.probeClaude();
 
     this.wireEvents();
@@ -150,7 +111,6 @@ export class JafferService {
     for (const stop of this.rejectionWatches.values()) stop();
     this.rejectionWatches.clear();
     this.memory?.stop();
-    await this.agent?.dispose();
     try {
       // Learn from whatever is pending before going away.
       await Promise.race([this.memory?.reflect({ force: false, llm: false }), new Promise((r) => setTimeout(r, 3000))]);
@@ -193,73 +153,13 @@ export class JafferService {
     return path.join(this.paths.binDir, 'jaffer');
   }
 
-  // ------------------------------------------------------------------ credentials
-
-  /**
-   * Jaffer runs on Claude subscriptions only for now: the panel and memory curation use the Claude Code login, and an
-   * API key (stored or in the environment) is ignored. JAFFER_API_ENGINE=1 switches the old API-key engine back on;
-   * the tests use it, and so can a future release.
-   */
-  apiEngineEnabled(): boolean {
-    return process.env.JAFFER_API_ENGINE === '1';
-  }
-
-  credentialsReady(): boolean {
-    return this.apiEngineEnabled() && (!!this.apiKey || !!process.env.ANTHROPIC_API_KEY || !!process.env.ANTHROPIC_AUTH_TOKEN);
-  }
-
-  private credentials(): Credentials {
-    return resolveCredentials(this.apiKey);
-  }
-
-  private getClient(): Anthropic {
-    if (!this.client) this.client = makeClient(this.credentials());
-    return this.client;
-  }
-
-
-  // ------------------------------------------------------------------ terminal info + tool env
+  // ------------------------------------------------------------------ terminal info
 
   private terminalInfo() {
     const pane = this.host.mainPane;
     const cwd = pane?.cwd ?? this.userHome;
     const proj = resolveProject(cwd, this.userHome);
     return { cwd, project: proj.root, branch: proj.branch, lastCommand: this.lastCommand, busy: pane?.runningCommand ?? null };
-  }
-
-  private toolEnv(): ToolEnv {
-    const mem = this.memory;
-    const cwd = () => this.host.mainPane?.cwd ?? this.userHome;
-    const pane = () => this.host.mainPane;
-    return {
-      cwd,
-      runIn: this.config.get().agent.runIn,
-      runInSession: async (cmd, timeoutMs) => {
-        const p = pane();
-        if (!p) throw new Error('No terminal session.');
-        return p.runCommand(cmd, { timeoutMs });
-      },
-      readScreen: (n) => pane()?.readScreen(n) ?? '',
-      terminalState: () => ({ busy: pane()?.runningCommand ?? null, alt: pane()?.altScreen ?? false, cwd: cwd() }),
-      typeIntoTerminal: (t) => pane()?.write(t),
-      projectRoot: () => resolveProject(cwd(), this.userHome).root,
-      recall: (q) => {
-        const r = mem.recall(q, { cwd: cwd(), limit: 8 });
-        const lines = r.items.map((i) => `[${i.id}] (${i.kind}${i.scope === 'global' ? '' : ', project'}) ${i.text}`);
-        for (const s of r.skills) lines.push(`skill "${s.name}": ${s.whenToUse} → ${s.steps.join(' ; ')}`);
-        return lines.join('\n') || 'No matching memories.';
-      },
-      remember: (text, kind, scope) => {
-        const root = resolveProject(cwd(), this.userHome).root;
-        const res = mem.remember(text, { source: 'agent', kind: kind as never, scope: scope === 'project' && root ? `project:${root}` : 'global' });
-        if ('error' in res) return res.error;
-        return res.deduped ? `Already known; reinforced: ${res.item.text}` : `Remembered [${res.item.id}]: ${res.item.text}`;
-      },
-      forget: (q) => {
-        const r = mem.forget(q);
-        return r.archived.length ? `Forgot: ${r.archived.map((i) => i.text).join(' | ')}` : 'Nothing matched.';
-      },
-    };
   }
 
   // ------------------------------------------------------------------ events
@@ -313,7 +213,6 @@ export class JafferService {
         if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output, by: ev.by });
       }
     });
-    this.agent.events.on((e) => this.rpc.broadcast('agent.event', e));
     this.claudeWatcher.changes.on((sessions) => {
       this.pushClaudeState();
       this.watchForRejections(sessions);
@@ -430,55 +329,21 @@ export class JafferService {
     });
     r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version, recentCommands: this.recentCommands }));
 
-    // ---- agent
-    r.handle('agent.send', async (p: { text: string }) => {
-      const text = String(p?.text ?? '').trim();
-      if (!text) throw new RpcError('Empty message');
-      if (this.claudeProbe) await this.claudeProbe;
-      return this.agent.send(text);
-    });
-    r.handle('agent.cancel', () => {
-      this.agent.cancel();
-      return true;
-    });
-    r.handle('agent.approve', (p: { callId: string; decision: Decision }) => this.agent.approve(p.callId, p.decision));
-    r.handle('agent.thread', async () => {
-      if (this.claudeProbe) await this.claudeProbe; // so the first status already knows whether Claude Code is there
-      return { items: this.agent.thread.items(), status: this.agent.status() };
-    });
-    r.handle('agent.status', () => this.agent.status());
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {
       this.claudeWatcher.handle(p);
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.sessions() }));
-    r.handle('agent.compact', async () => {
-      if (this.agent.kind() === 'claude-code') return { compacted: false }; // Claude Code compacts its own context
-      const provider = this.credentialsReady() ? new AnthropicProvider(() => this.getClient()) : null;
-      if (!provider) throw new RpcError('No credentials', 'ENOAUTH');
-      return { compacted: await this.agent.api.maybeCompact(provider, undefined, true) };
-    });
-    // Used by the panel's Claude Code process (through `jaffer mcp --session`) to act in the user's own terminal.
-    // Approval has already happened: Claude Code asked Jaffer's UI before calling the tool.
-    r.handle('agent.tool', async (p: { name: string; input: unknown }) => {
-      if (p?.name !== 'run_command' && p?.name !== 'read_terminal') throw new RpcError(`Unknown tool ${p?.name}`);
-      return executeTool(this.toolEnv(), p.name, p.input);
-    });
 
     // ---- memory
     const api = makeMemoryApi(this.memory);
     for (const [method, fn] of Object.entries(api)) r.handle(method, (p) => fn(p ?? {}));
     r.handle('ingest.now', () => this.ingestor?.scan() ?? { files: 0, turns: 0 });
 
-    // ---- config & secrets
+    // ---- config
     r.handle('config.get', () => this.config.get());
     r.handle('config.patch', (p: DeepPartial<JafferConfig>) => this.config.patch(p ?? {}));
-    r.handle('secrets.status', async () => {
-      await this.probeClaude();
-      const st = this.agent.status();
-      return { ready: st.ready, apiKey: this.credentialsReady(), claudeCode: this.claudeBin !== null, engine: st.engine, source: this.credentials().source, backend: this.secrets.backend };
-    });
 
     // ---- integrations
     r.handle('setup.targets', () => detectTargets(this.userHome));

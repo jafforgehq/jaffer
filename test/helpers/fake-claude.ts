@@ -3,7 +3,7 @@ import path from 'node:path';
 
 /**
  * A stand-in for the `claude` CLI that only knows `claude auth status` and `claude auth login`, with a login state
- * the test can flip. Everything it was asked is appended to calls.log, one line per call: "<args> HOME=<home>".
+ * the test can flip. Everything it was asked is appended to calls.log, one line per call: "<args> HOME=<home> KEY=<set if ANTHROPIC_API_KEY was in its environment>".
  *
  *   mode "ok"          status prints JSON (exit 0 when signed in, 1 when not); login signs in after a moment
  *   mode "garbage"     status prints text that is not JSON
@@ -27,7 +27,7 @@ export function fakeClaude(dir: string, o: { loggedIn: boolean; mode?: string; p
     `#!/bin/sh
 D=${JSON.stringify(dir)}
 REAL=${JSON.stringify(o.passthrough ?? '')}
-echo "$* HOME=$HOME" >> "$D/calls.log"
+echo "$* HOME=$HOME KEY=\${ANTHROPIC_API_KEY:+set}" >> "$D/calls.log"
 M=$(cat "$D/mode")
 S=$(cat "$D/state")
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then

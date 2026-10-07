@@ -38,7 +38,6 @@ beforeAll(async () => {
       SHELL: '/bin/bash',
       JAFFER_TICK_MS: '400',
       ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000',
-      JAFFER_API_ENGINE: '1', // the API-key engine is off in the product; these tests exercise it on purpose
       ANTHROPIC_BASE_URL: url,
       PS1: '$ ',
       // the panel's Claude Code process (only used by the Claude Code engine test): isolated profile, talks to the mock
@@ -157,68 +156,7 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(fs.existsSync(path.join(env.paths.binDir, 'jaffer'))).toBe(true);
   });
 
-  it('runs a full agent turn through the real SDK, executing a tool in the shared terminal', async () => {
-    const c = await connect();
-    const events = collect(c, 'agent.event');
-    const cmds = collect(c, 'pty.command');
-    await c.call('session.attach', { cols: 100, rows: 30 });
-    mock.reset().queue({ kind: 'tool', id: 'toolu_a', name: 'run_command', input: { command: 'echo agent-was-here' } }, { kind: 'text', text: 'Ran it: agent-was-here.' });
-    await c.call('agent.send', { text: 'please echo something' });
-    await waitUntil(() => events.some((e) => e.type === 'turn_end'));
-    const end = events.find((e) => e.type === 'turn_end');
-    expect(end.error).toBeUndefined();
-    expect(events.filter((e) => e.type === 'text').map((e) => e.delta).join('')).toContain('Ran it');
-    // the command was typed into the user's own shell and flagged as the agent's
-    expect(cmds.some((x) => x.cmd === 'echo agent-was-here' && x.by === 'agent')).toBe(true);
-    const thread = await c.call('agent.thread', {});
-    expect(thread.items.map((i: any) => i.kind)).toEqual(['user', 'tool', 'assistant']);
-    // second request carried the tool result back to the API
-    const second = mock.requests.at(-1)!.body.messages;
-    expect(JSON.stringify(second)).toContain('agent-was-here');
-  });
-
-  it('asks for approval before a state-changing command and honours the answer', async () => {
-    const c = await connect();
-    const events = collect(c, 'agent.event');
-    mock.reset().queue({ kind: 'tool', id: 'toolu_b', name: 'write_file', input: { path: path.join(env.userHome, 'approved.txt'), content: 'hello' } }, { kind: 'text', text: 'done' });
-    await c.call('agent.send', { text: 'write a file' });
-    await waitUntil(() => events.some((e) => e.type === 'approval_request' && e.name === 'write_file'));
-    expect(fs.existsSync(path.join(env.userHome, 'approved.txt'))).toBe(false);
-    const req = events.find((e) => e.type === 'approval_request' && e.name === 'write_file');
-    await c.call('agent.approve', { callId: req.callId, decision: 'allow' });
-    await waitUntil(() => events.some((e) => e.type === 'turn_end'));
-    expect(fs.readFileSync(path.join(env.userHome, 'approved.txt'), 'utf8')).toBe('hello');
-  });
-
-  it.skipIf(!CLAUDE)('runs the panel on a Claude Code login: its commands are typed into the shared terminal, after Jaffer approves them', async () => {
-    const c = await connect();
-    await c.call('session.attach', { cols: 100, rows: 30 });
-    await c.call('config.patch', { agent: { engine: 'claude-code' } });
-    expect((await c.call('secrets.status', {})).claudeCode).toBe(true);
-    const events = collect(c, 'agent.event');
-    const main = (b: any) => (b.tools?.length ?? 0) > 0;
-    const target = path.join(env.userHome, 'made-by-claude.txt');
-    mock.reset().queue({ kind: 'tool', id: 'toolu_cc1', name: 'mcp__jaffer-session__run_command', input: { command: 'touch made-by-claude.txt && echo claude-was-here' }, text: 'Creating it.', when: main }, { kind: 'text', text: 'Created the file.', when: main });
-    await c.call('agent.send', { text: 'make a file' });
-    await waitUntil(() => events.some((e) => e.type === 'approval_request' && e.name === 'run_command'), 60_000);
-    expect(fs.existsSync(target)).toBe(false); // asked first
-    const req = events.find((e) => e.type === 'approval_request' && e.name === 'run_command');
-    await c.call('agent.approve', { callId: req.callId, decision: 'allow' });
-    await waitUntil(() => events.some((e) => e.type === 'turn_end'), 60_000);
-    expect(events.find((e) => e.type === 'turn_end').error).toBeUndefined();
-    expect(fs.existsSync(target)).toBe(true);
-    // it ran in the user's own terminal session, where they can see it
-    const att = await c.call('session.attach', { cols: 100, rows: 30 });
-    expect(att.snapshot.data).toContain('touch made-by-claude.txt');
-    expect(att.snapshot.data).toContain('claude-was-here');
-    // the panel shows the conversation, and it is Claude Code's
-    const t = await c.call('agent.thread', {});
-    expect(t.status.engine).toBe('claude-code');
-    expect(t.items.some((i: any) => i.kind === 'tool' && i.name === 'run_command' && /claude-was-here/.test(i.output ?? ''))).toBe(true);
-    await c.call('config.patch', { agent: { engine: 'auto' } });
-  }, 120_000);
-
-  it('survives a daemon restart: same directory, previous screen restored, conversation intact', async () => {
+  it('survives a daemon restart: same directory, previous screen restored, memory intact', async () => {
     const c = await connect();
     const cmds = collect(c, 'pty.command');
     await c.call('session.attach', { cols: 100, rows: 30 });
@@ -226,7 +164,6 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await c.call('pty.write', { data: `cd ${path.join(env.userHome, 'restart-dir')}\r` });
     await waitUntil(async () => (await c.call('session.info', {})).cwd.endsWith('restart-dir'));
     await sleep(300);
-    const threadBefore = (await c.call('agent.thread', {})).items.length;
     await c.call('app.shutdown', {});
     await waitUntil(async () => !(await tryConnect(env.paths, 300)), 8000);
     clients.length = 0;
@@ -236,13 +173,13 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     const att = await c2.call('session.attach', { cols: 100, rows: 30 });
     expect(att.snapshot.data).toContain('persisted-marker-42');
     expect(att.snapshot.data).toContain('session restored');
-    expect((await c2.call('agent.thread', {})).items.length).toBe(threadBefore);
     // memory persisted too
     expect((await c2.call('memory.list', {})).items.length).toBeGreaterThan(0);
     void cmds;
   }, 30_000);
 
-  it('memory evolves on its own: rules, model curation and Claude Code transcripts, with no manual trigger', async () => {
+  // Model curation runs through the user's Claude login (`claude -p`), here the real claude against the mock API.
+  it.skipIf(!CLAUDE)('memory evolves on its own: rules, model curation and Claude Code transcripts, with no manual trigger', async () => {
     const c = await connect();
     const cmds = collect(c, 'pty.command');
     await c.call('session.attach', { cols: 100, rows: 30 });
@@ -347,6 +284,17 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await expect(c.call('nope.nothing', {})).rejects.toThrow(/unknown method/);
     expect((await c.call('hello', {})).protocol).toBe(1);
   });
+
+  it('has no chat: the agent and secrets requests are gone, and so is `jaffer ask`', async () => {
+    const c = await connect();
+    for (const m of ['agent.send', 'agent.thread', 'agent.status', 'agent.approve', 'agent.cancel', 'agent.compact', 'agent.tool', 'secrets.status', 'secrets.setAnthropicKey', 'secrets.clearAnthropicKey']) {
+      await expect(c.call(m, {}), m).rejects.toThrow(/unknown method/);
+    }
+    const ask = spawnSync(process.execPath, [launcher.cliScript!, 'ask', 'hello'], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8' });
+    expect(ask.status).not.toBe(0);
+    expect(ask.stderr).toMatch(/Unknown command: ask/);
+    expect(ask.stdout + ask.stderr).not.toMatch(/jaffer ask/); // not even in the help text
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
@@ -373,14 +321,11 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     env2.cleanup();
   });
 
-  it('runs on the Claude login only: an API key in the environment does not switch the panel to API billing', async () => {
-    expect(await c.call('secrets.status', {})).toMatchObject({ apiKey: false, claudeCode: true, engine: 'claude-code' });
-    expect((await c.call('agent.status', {})).engine).toBe('claude-code');
-  });
-
-  it('has no way to store an Anthropic API key', async () => {
-    await expect(c.call('secrets.setAnthropicKey', { key: 'sk-ant-api03-whatever' })).rejects.toThrow(/unknown method/);
-    await expect(c.call('secrets.clearAnthropicKey', {})).rejects.toThrow(/unknown method/);
+  it('asks `claude auth status` as the login, without an API key from the environment (a key is not a subscription)', async () => {
+    await c.call('setup.claude.auth', {});
+    const asked = fake.calls().filter((l) => l.startsWith('auth status'));
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((l) => l.endsWith(' KEY='))).toBe(true); // the daemon itself runs with ANTHROPIC_API_KEY set
   });
 
   it('reports whether Claude Code is installed and signed in, and nothing about the account', async () => {

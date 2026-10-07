@@ -11,13 +11,17 @@ beforeEach(() => {
 afterEach(() => env.cleanup());
 
 const fake = (o: { loggedIn: boolean; mode?: string }) => fakeClaude(path.join(env.root, 'bin'), o);
-const userEnv = () => ({ ...process.env, HOME: env.userHome });
+const userEnv = () => {
+  const e: NodeJS.ProcessEnv = { ...process.env, HOME: env.userHome };
+  delete e.ANTHROPIC_API_KEY; // the daemon strips it too; keep the expected log lines the same on any machine
+  return e;
+};
 
 describe('claudeAuth', () => {
   it('says signed in when `claude auth status` reports loggedIn', async () => {
     const f = fake({ loggedIn: true });
     expect(await claudeAuth(f.bin, userEnv())).toEqual({ installed: true, loggedIn: true });
-    expect(f.calls()).toEqual([`auth status --json HOME=${env.userHome}`]); // asked as the user: their HOME decides which login it sees
+    expect(f.calls()).toEqual([`auth status --json HOME=${env.userHome} KEY=`]); // asked as the user: their HOME decides which login it sees
   });
 
   it('says signed out when the CLI reports loggedIn false and exits non-zero', async () => {
@@ -57,7 +61,7 @@ describe('ClaudeLogin', () => {
     expect(login.running).toBe(true);
     expect(await done).toEqual({ ok: true });
     expect(login.running).toBe(false);
-    expect(f.calls()).toEqual([`auth login HOME=${env.userHome}`]);
+    expect(f.calls()).toEqual([`auth login HOME=${env.userHome} KEY=`]);
     expect(await claudeAuth(f.bin, userEnv())).toEqual({ installed: true, loggedIn: true });
   });
 
