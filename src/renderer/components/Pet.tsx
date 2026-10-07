@@ -12,7 +12,7 @@ const SAYS: Record<PetMood, string> = {
   cheer: 'Done!',
 };
 
-/** A little mole at the bottom of the sidebar. Pure decoration: every pose is a CSS state, the motion stops with Settings → Animations. */
+/** A little mole in a corner of the terminal. Pure decoration: every pose is a CSS state, the motion stops with Settings → Animations. */
 export function Pet(): VNode | null {
   const live = currentClaude()?.state;
   const [cheering, setCheering] = useState(false);
@@ -33,7 +33,7 @@ export function Pet(): VNode | null {
   if (cfg.value?.appearance.pet === false) return null;
   const mood = petMood({ badge: processBadge(info.value.busy ?? null, live), claude: live, cheering });
   return (
-    <div class="rail-pet">
+    <div class="pet-corner">
       <svg class="pet" data-mood={mood} viewBox="0 0 120 72" role="img" aria-label={SAYS[mood]}>
         <title>{SAYS[mood]}</title>
         <defs>

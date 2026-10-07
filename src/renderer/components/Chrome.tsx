@@ -1,7 +1,7 @@
 import type { VNode } from 'preact';
-import { cfg, claudeAuth, currentClaude, daemonUp, dismissToast, fmtDuration, info, memPulse, memStats, overlay, railOpen, safeCommand, setSide, side, tildePath, toasts, toggleRail, toggleSide } from '../state';
+import { currentClaude, daemonUp, dismissToast, info, memPulse, safeCommand, side, tildePath, toasts, toggleSide } from '../state';
 import { processBadge } from '../../shared/process-badge';
-import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconX } from './icons';
+import { IconBrain, IconBranch, IconInfo, IconX } from './icons';
 
 function shortPath(p: string): string {
   if (!p) return '';
@@ -12,18 +12,11 @@ function shortPath(p: string): string {
 
 export function TitleBar(): VNode {
   const i = info.value;
-  const busy = currentClaude()?.state === 'working'; // a dot on the Claude button while Claude works
   const running = i.busy ?? null;
   const badge = processBadge(running, currentClaude()?.state);
   return (
     <div class="titlebar">
-      <div class="tb-left">
-        {!railOpen.value && (
-          <button class="icon-btn" title="Show sidebar (⌘B)" onClick={toggleRail}>
-            <IconSidebar size={16} />
-          </button>
-        )}
-      </div>
+      <div class="tb-left" />
       <div class="tb-center">
         <span class="session-pill" title={i.cwd}>
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
@@ -48,61 +41,12 @@ export function TitleBar(): VNode {
       </div>
       <div class="tb-right">
         <div class="seg">
-          <button class={`seg-btn ${side.value === 'agent' ? 'on' : ''}`} title="Claude (⌘J)" onClick={() => toggleSide('agent')}>
-            <IconAgent size={14} /> Claude
-            {busy && <span class="busy-dot" />}
-          </button>
           <button class={`seg-btn seg-mem ${side.value === 'memory' ? 'on' : ''}`} title="Memory (⇧⌘M)" onClick={() => toggleSide('memory')}>
             <IconBrain size={14} /> Memory
             {memPulse.value > 0 && <span class="pulse" key={memPulse.value} />}
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-export function StatusBar(): VNode {
-  const st = memStats.value;
-  const i = info.value;
-  const last = i.lastCommand;
-  const live = currentClaude();
-  const claude = !!i.busy && /\bclaude\b/.test(i.busy);
-  return (
-    <div class="statusbar">
-      <span class="sb-item">
-        <span class={`live ${daemonUp.value ? '' : 'off'}`} style={{ width: '6px', height: '6px' }} />
-        one session
-      </span>
-      {last && (
-        <span class={`sb-item cmd ${last.exit === 0 ? 'ok' : 'bad'}`} title={last.cmd}>
-          {last.exit === 0 ? <IconCheck size={11} /> : <IconX size={11} />}
-          {last.exit === 0 ? '' : `${last.exit} `}
-          {safeCommand(last.cmd).slice(0, 48)}
-        </span>
-      )}
-      <div class="grow" />
-      {live?.state === 'needs-you' ? (
-        <button class="sb-item sb-btn warn" onClick={() => setSide('agent')} title="Claude is waiting for you in the terminal">
-          <IconInfo size={11} /> Claude needs you
-        </button>
-      ) : live?.state === 'working' ? (
-        <span class="sb-item accent">
-          <IconBolt size={11} /> Claude working{live.tool ? ` · ${live.tool.name}` : ''}
-        </span>
-      ) : claude ? (
-        <span class="sb-item accent">
-          <IconBolt size={11} /> Claude Code is running
-        </span>
-      ) : null}
-      {claudeAuth.value?.installed === false && !cfg.value?.claude?.skipped && (
-        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Claude Code needs to be installed and signed in: see Settings">
-          <IconInfo size={11} /> set up Claude
-        </button>
-      )}
-      <button class="sb-item sb-btn" onClick={() => toggleSide('memory')} title="Open memory">
-        <span class="mem-dot" key={memPulse.value} /> {st ? `${st.active} memories · ${st.skills} skills` : 'memory'}
-      </button>
     </div>
   );
 }
@@ -139,4 +83,3 @@ export function DaemonBanner(): VNode | null {
   return <div class="daemon-banner">Reconnecting to your session…</div>;
 }
 
-void fmtDuration;

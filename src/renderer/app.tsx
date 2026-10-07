@@ -1,13 +1,12 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, overlay, ready, railOpen, setSide, setSideWidth, side, sideWidth, toggleRail, toggleSide, appVersion } from './state';
+import { activePane, cfg, overlay, ready, setSideWidth, side, sideWidth, toggleSide, appVersion } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
-import { ClaudePanel } from './components/ClaudePanel';
 import { MemoryPanel } from './components/MemoryPanel';
-import { SessionRail } from './components/SessionRail';
-import { DaemonBanner, StatusBar, TitleBar, Toasts } from './components/Chrome';
+import { Pet } from './components/Pet';
+import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
 import { cssVars, themeById } from './themes';
 
@@ -49,8 +48,6 @@ export function App(): VNode | null {
       if (!e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === 'p' && !e.shiftKey) (e.preventDefault(), (overlay.value = overlay.value === 'palette' ? null : 'palette'));
-      else if (k === 'j') (e.preventDefault(), toggleSide('agent'));
-      else if (k === 'b' && !e.shiftKey) (e.preventDefault(), toggleRail());
       else if (k === 'm' && e.shiftKey) (e.preventDefault(), toggleSide('memory'));
       else if (k === ',') (e.preventDefault(), (overlay.value = 'settings'));
       else if (k === 'f' && !e.shiftKey) (e.preventDefault(), (overlay.value = 'find'));
@@ -63,28 +60,26 @@ export function App(): VNode | null {
   }, []);
 
   if (!ready.value || !cfg.value) return <div class="boot">Starting your session…</div>;
-  const s = side.value;
   void activePane.value;
   void appVersion.value;
   return (
-    <div class={`app ${railOpen.value ? 'rail-open' : ''}`}>
-      {railOpen.value && <SessionRail />}
+    <div class="app">
       <div class="stage">
         <TitleBar />
         <DaemonBanner />
         <div class="workspace">
           <div class="terminal-area">
             <PaneTree />
+            <Pet />
             {overlay.value === 'find' && <FindBar />}
           </div>
-          {s && (
+          {side.value === 'memory' && (
             <aside class="side" style={{ width: `${sideWidth.value}px` }}>
               <SideResizer />
-              {s === 'agent' ? <ClaudePanel /> : <MemoryPanel />}
+              <MemoryPanel />
             </aside>
           )}
         </div>
-        <StatusBar />
       </div>
       <Toasts />
       {overlay.value === 'palette' && <Palette />}
@@ -94,4 +89,3 @@ export function App(): VNode | null {
   );
 }
 
-void setSide;

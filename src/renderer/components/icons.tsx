@@ -90,12 +90,6 @@ export const IconUndo = ({ size, class: c }: P): VNode => (
 );
 
 // ---- second set (session rail, cards, palette)
-export const IconSidebar = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <rect x="3" y="4" width="18" height="16" rx="3" />
-    <path d="M9 4v16" />
-  </svg>
-);
 export const IconFolder = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
@@ -159,12 +153,6 @@ export const IconReset = ({ size, class: c }: P): VNode => (
 export const IconBolt = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M13 3L5 13.5h6L10 21l8-10.5h-6L13 3z" />
-  </svg>
-);
-export const IconPanelRight = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <rect x="3" y="4" width="18" height="16" rx="3" />
-    <path d="M15 4v16" />
   </svg>
 );
 export const IconPalette = ({ size, class: c }: P): VNode => (

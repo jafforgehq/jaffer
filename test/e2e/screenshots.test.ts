@@ -14,7 +14,7 @@ import { findClaude } from '../../src/core/integrations/claude';
  * Generates the README screenshots: `npm run screenshots` (writes docs/screenshots/*.png).
  *
  * What is real: the renderer, the session daemon, a zsh PTY with Jaffer's shell integration, a git repository, the
- * live Claude panel and the memory engine. What is scripted: the Claude Code hook events the panel is fed (what
+ * mole and the memory engine. What is scripted: the Claude Code hook events the mole follows (what
  * `jaffer hook` would deliver from a real session, injected through the daemon so the run is deterministic and needs
  * no sign-in), and the demo project's test script, which prints output in the style of a JS test runner. Nothing here
  * is a mock-up image.
@@ -279,8 +279,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click();
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');
-    await page.click('.seg-btn[title^="Claude"]'); // a first run starts with just the terminal; open Claude's panel like a person would
-    await page.waitForSelector('.panel-head');
     await until(async () => (await termLines()).some((l) => l.includes('❯')), 30_000, 'the shell prompt');
     // the daemon starts the shell in $HOME; go to the project like a person would
     await typeCommand('cd ~/code/acme-api');
@@ -297,34 +295,24 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await clearToasts();
   }, 120_000);
 
-  it('the Claude in the terminal, live in the panel: waiting for you, then done', async () => {
+  it('the mole follows the Claude in the terminal: at work, waiting for you, then done', async () => {
     const session = path.join(repo, 'src/auth/session.ts');
     /** One Claude Code hook event, as `jaffer hook` would deliver it from inside this terminal. */
     const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, ...over });
-    // a moment earlier: another turn, caught while it works (the status pill breathes, the bars move, the running row sweeps)
-    const early = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-0', hook_event_name: name, cwd: repo, ...over });
-    await early('SessionStart', { model: 'claude-opus-5-5' });
-    await early('UserPromptSubmit', { prompt: 'find every caller of isExpired() and check the edge case' });
-    await early('PreToolUse', { tool_name: 'Grep', tool_input: { pattern: 'isExpired' }, tool_use_id: 'w1' });
-    await early('PostToolUse', { tool_name: 'Grep', tool_input: { pattern: 'isExpired' }, tool_use_id: 'w1', duration_ms: 38 });
-    await early('SubagentStart', { agent_id: 'demo-sub-1', agent_type: 'Explore' });
-    await early('SubagentStart', { agent_id: 'demo-sub-2', agent_type: 'general-purpose' });
-    await early('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'w2' });
-    await page.waitForSelector('.live-pill[data-state="working"]');
-    await sleep(700); // let the motion be mid-way, not at its first frame
-    await clearToasts();
-    await shot('03a-working');
-    await early('SessionEnd');
     await hook('SessionStart', { model: 'claude-opus-5-5' });
     await hook('UserPromptSubmit', { prompt: 'why is the auth test failing?' });
     await hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1' });
-    await sleep(300);
+    await page.waitForSelector('.pet[data-mood="dig"]');
+    await sleep(700); // let the motion be mid-way, not at its first frame
+    await clearToasts();
+    await shot('03a-digging');
     await hook('PostToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1', duration_ms: 42 });
     // it found the bug and proposes the fix: now it waits for the user
     const edit = { file_path: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' };
     await hook('PreToolUse', { tool_name: 'Edit', tool_input: edit, tool_use_id: 'd2' });
     await hook('Notification', { message: 'Claude needs your permission to edit session.ts', notification_type: 'permission_prompt' });
-    await page.waitForSelector('.live-pill[data-state="needs-you"]');
+    await page.waitForSelector('.pet[data-mood="alert"]');
+    await sleep(500);
     await clearToasts();
     await shot('03-needs-you');
     // the user says yes in the terminal: the edit happens, then the tests run
@@ -334,10 +322,11 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await typeCommand('./bin/test');
     await until(async () => /16 passed/.test((await termLines()).join('\n')), 15_000, 'passing run in the terminal');
     await hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: './bin/test' }, tool_use_id: 'd3', duration_ms: 1900 });
-    await hook('Stop', { last_assistant_message: 'Fixed: `isExpired()` now treats `expiresAt` itself as expired, and the suite passes (16/16). It was one character in `src/auth/session.ts:14`: `<` became `<=`.' });
-    await page.waitForSelector('.live-pill[data-state="idle"]');
+    await hook('Stop', { last_assistant_message: 'Fixed.' });
+    await page.waitForSelector('.pet[data-mood="cheer"]');
+    await sleep(350);
     expect(fs.readFileSync(session, 'utf8')).toContain('expiresAt <= now');
-    await shot('02-companion');
+    await shot('02-terminal');
   }, 120_000);
 
   it('memory the app has built up, and the log of how it changed', async () => {
@@ -356,7 +345,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('command palette, themes, settings', async () => {
     await clearToasts();
-    await page.click('.seg-btn[title^="Claude"]').catch(() => undefined);
+    if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // the memory drawer was open: the terminal gets the room back
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await shot('06-palette');
@@ -373,7 +362,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Enter');
     await sleep(600);
     await typeCommand('./bin/test');
-    await page.keyboard.press('Meta+j'); // give the terminal the room
     await sleep(500);
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
@@ -436,8 +424,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
       await page.evaluate(() => (window as any).__menu('close-pane'));
       await until(async () => (await page.$$('.term .xterm')).length === 1, 10_000, 'back to a single pane');
     }
-    await page.keyboard.press('Meta+j'); // bring the agent panel back
-    await sleep(500);
     await page.click('.term');
     await page.keyboard.type('clear', { delay: 14 });
     await page.keyboard.press('Enter');

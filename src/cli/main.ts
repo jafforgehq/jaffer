@@ -115,7 +115,7 @@ async function main(): Promise<void> {
       // Called by Claude Code; must be fast, silent on failure, and never block the session.
       const which = args[1];
       if (process.env.JAFFER_NO_HOOKS) return; // Jaffer's own `claude -p` helper calls must not be primed with memory
-      // Only a claude running inside Jaffer's terminal reports to the live panel; memory hooks work anywhere.
+      // Only a claude running inside Jaffer's terminal reports (the mole and the notification follow it); memory hooks work anywhere.
       const inSession = process.env.JAFFER_SESSION === '1';
       if (!inSession && which !== 'session-start' && which !== 'stop') return;
       const input = await readStdin();

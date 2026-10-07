@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, checkClaudeSetup, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
@@ -226,7 +226,6 @@ export function Settings(): VNode {
   const refresh = () => {
     void call('setup.claude.status', {}).then(setClaude).catch(() => undefined);
     void call('setup.targets', {}).then(setTargets).catch(() => undefined);
-    void checkClaudeSetup(); // the panel's "not connected" message follows what Settings just did
   };
   useEffect(refresh, []);
   const set = (p: object) => void patchConfig(p);
@@ -312,7 +311,7 @@ export function Settings(): VNode {
               <Field label="Animations" hint="a little life while Claude works. Also off when macOS Reduce motion is on">
                 <Switch checked={c.appearance.animations !== false} onChange={(v) => set({ appearance: { animations: v } })} />
               </Field>
-              <Field label="Pet" hint="a little mole in the sidebar: it digs while something runs">
+              <Field label="Pet" hint="a little mole in a corner of the terminal: it digs while something runs">
                 <Switch checked={c.appearance.pet !== false} onChange={(v) => set({ appearance: { pet: v } })} />
               </Field>
               <Field label="GPU rendering" hint="turn off if text looks wrong (needs a new pane to apply)">
@@ -352,7 +351,8 @@ export function Settings(): VNode {
           {section === 'integrations' && (
             <>
               <h4>Claude Code</h4>
-              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. If you are signed out, the panel offers to sign you in.</p>
+              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. Install and sign-in help is right here too; Claude is optional.</p>
+              <SignInStep onDone={refresh} />
               <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.hooks ? 'hooks on' : 'hooks off'} · ${claude.mcp ? 'memory tools (MCP) on' : 'memory tools (MCP) off'}` : 'not found on PATH') : '…'}>
                 <span class="row">
                   <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
@@ -472,7 +472,7 @@ function UpdatesSection({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) 
 // ------------------------------------------------------------------ onboarding
 
 /** First thing on a first run: is Claude Code installed and signed in? Nothing is typed into the terminal here. */
-function SignInStep({ onDone, onSkip }: { onDone: () => void; onSkip: () => void }): VNode {
+function SignInStep({ onDone, onSkip }: { onDone: () => void; onSkip?: () => void }): VNode {
   const [auth, setAuth] = useState<ClaudeAuthState | null>(null);
   const [busy, setBusy] = useState(false);
   const inflight = useRef(false);
@@ -546,7 +546,7 @@ function SignInStep({ onDone, onSkip }: { onDone: () => void; onSkip: () => void
         </div>
       )}
       {auth?.loginError && <p class="ob-error">{auth.loginError}</p>}
-      {!auth?.loggedIn && (
+      {!auth?.loggedIn && onSkip && (
         <div class="ob-actions">
           <button class="btn ghost" onClick={onSkip}>
             Use Jaffer as a plain terminal for now
@@ -579,7 +579,7 @@ export function Onboarding(): VNode {
     setBusy(true);
     try {
       if (plain) {
-        // Nothing about Claude is on until the person adds it (the panel offers it): not the hooks, not the curation of memory by Claude
+        // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks, not the curation of memory by Claude
         await patchConfig({ onboarded: true, memory: { enabled: learn, llm: 'off' }, ingest: { claudeCode: false }, claude: { skipped: true } });
         overlay.value = null;
         setSide(null);
@@ -590,9 +590,9 @@ export function Onboarding(): VNode {
         memory: { enabled: learn, llm: curate && learn ? 'auto' : 'off' },
         ingest: { claudeCode: claude && learn },
       });
-      if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks for the panel; the memory tools are a Settings choice
+      if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude; the memory tools are a Settings choice
       overlay.value = null;
-      setSide(null); // just the terminal at first; Claude's panel is one click or ⌘J away
+      setSide(null); // just the terminal at first
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
     } finally {
       setBusy(false);
@@ -652,7 +652,7 @@ export function Onboarding(): VNode {
                   <small>{plain ? 'Commands are redacted for secrets and stay on this Mac.' : 'Commands and conversations are redacted for secrets and stay on this Mac.'}</small>
                 </span>
               </label>
-              {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, open the Claude panel (⌘J): it connects Claude Code and shows what it does.</p>}
+              {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}
               {!plain && (
               <>
               <label class={learn ? '' : 'off'}>
@@ -665,8 +665,8 @@ export function Onboarding(): VNode {
               <label>
                 <Switch checked={claude} onChange={setClaude} />
                 <span class="t">
-                  <b>Show what Claude is doing in the panel</b>
-                  <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the panel can show it; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts. More options are in Settings → Claude Code.</small>
+                  <b>Let Jaffer follow Claude Code</b>
+                  <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the mole can react and you get a notification when Claude needs you; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts. More options are in Settings → Claude Code.</small>
                 </span>
               </label>
               <label>

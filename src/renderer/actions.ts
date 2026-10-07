@@ -1,4 +1,4 @@
-import { activePane, cfg, info, overlay, patchConfig, refreshMemory, side, toast, toggleRail, toggleSide } from './state';
+import { activePane, cfg, info, overlay, patchConfig, refreshMemory, side, toast, toggleSide } from './state';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -48,9 +48,7 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 }
 
 export const actions: Action[] = [
-  { id: 'toggle-rail', title: 'Toggle sidebar', section: 'View', keys: '⌘B', keywords: 'session rail', run: toggleRail },
-  { id: 'toggle-agent', title: 'Toggle Claude panel', section: 'View', keys: '⌘J', run: () => toggleSide('agent') },
-  { id: 'toggle-memory', title: 'Toggle memory panel', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
+  { id: 'toggle-memory', title: 'Memory: show or hide', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },

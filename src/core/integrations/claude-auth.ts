@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 
 /**
  * Is the user signed in to Claude Code? Jaffer is for Claude Code only, so the first run walks the user through
- * signing in, and the panel offers it again if the login lapses. Both go through the `claude` CLI itself
+ * signing in, and Settings → Claude Code offers it again. Both go through the `claude` CLI itself
  * (`claude auth status` / `claude auth login`), so Jaffer never sees credentials.
  */
 

@@ -4,7 +4,7 @@ import type { ProcessBadge } from './process-badge';
 export type PetMood = 'sleep' | 'rest' | 'dig' | 'alert' | 'cheer';
 
 /**
- * What the little mole in the sidebar is doing. It digs while anything is working (a command that runs, or Claude with a
+ * What the little mole in the corner of the terminal is doing. It digs while anything is working (a command that runs, or Claude with a
  * turn in progress), sits up and waves when Claude needs the person, cheers for a moment when a turn ends, rests while Claude
  * Code is open and idle, and sleeps otherwise.
  */

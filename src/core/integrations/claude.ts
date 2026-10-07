@@ -31,8 +31,8 @@ interface HookEntry {
 }
 
 /**
- * SessionStart and Stop feed memory, so Claude Code waits for them. Every other event only reports to the live
- * companion panel and is `async`, so it can never slow Claude Code down.
+ * SessionStart and Stop feed memory, so Claude Code waits for them. Every other event only reports Claude's live
+ * state (the mole, the notification) and is `async`, so it can never slow Claude Code down.
  */
 const EVENTS: { event: string; arg: string; timeout: number; async?: boolean }[] = [
   { event: 'SessionStart', arg: 'hook session-start', timeout: 8 },

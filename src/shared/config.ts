@@ -18,9 +18,9 @@ export interface JafferConfig {
     optionAsMeta: boolean;
     /** webgl is fastest; dom is the safe fallback for unusual GPU setups. */
     renderer: 'webgl' | 'dom';
-    /** Decorative motion (a live panel that looks alive). Off here, or macOS Reduce motion, and everything stands still. */
+    /** Decorative motion (the mole, the spinning ring). Off here, or macOS Reduce motion, and everything stands still. */
     animations: boolean;
-    /** A little mole in the sidebar that digs while something runs. */
+    /** A little mole in a corner of the terminal that digs while something runs. */
     pet: boolean;
   };
   shell: { path: string; args: string[] };
@@ -36,7 +36,7 @@ export interface JafferConfig {
   };
   export: { targets: 'claude-code'[]; claudeSkills: boolean };
   ingest: { claudeCode: boolean; backfillDays: number };
-  /** The person chose a plain terminal at first run. Claude stays on offer (the panel), nothing about it nags; connecting it clears this. */
+  /** The person chose a plain terminal at first run. Claude stays on offer (Settings → Claude Code), nothing about it nags; connecting it clears this. */
   claude: { skipped: boolean };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };

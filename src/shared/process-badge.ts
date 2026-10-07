@@ -7,7 +7,7 @@ export interface ProcessBadge {
 }
 
 /**
- * What the toolbar and the sidebar say about the program running in the terminal. An ordinary command is working until it
+ * What the title bar says about the program running in the terminal. An ordinary command is working until it
  * ends, so it spins. Claude Code is a program you sit in all day: it spins only while its hooks say it is working, never just
  * because the process is alive (a spinner that never stops says nothing).
  */

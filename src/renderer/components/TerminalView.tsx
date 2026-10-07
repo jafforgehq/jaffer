@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
-import { Terminal, type IDecoration, type IMarker } from '@xterm/xterm';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -71,37 +71,6 @@ export function TerminalView({ pane }: { pane: string }) {
       /* images are optional */
     }
     term.open(el);
-
-    // A thin stripe in the gutter for every finished command (green: it worked, red: it failed), from OSC 133.
-    // It is drawn over the terminal, so it never touches the scrollback or what programs see.
-    let promptMarker: IMarker | null = null;
-    let ranSincePrompt = false;
-    const stripes: IDecoration[] = [];
-    term.parser.registerOscHandler(133, (data) => {
-      const kind = data[0];
-      if (kind === 'A') {
-        promptMarker = term.registerMarker(0) ?? null;
-        ranSincePrompt = false;
-      } else if (kind === 'C') {
-        ranSincePrompt = true;
-      } else if (kind === 'D' && ranSincePrompt && promptMarker && !promptMarker.isDisposed) {
-        const exit = data.length > 2 ? Number.parseInt(data.slice(2), 10) : 0;
-        const b = term.buffer.active;
-        const height = b.baseY + b.cursorY - promptMarker.line;
-        if (height > 0) {
-          const deco = term.registerDecoration({ marker: promptMarker, x: 0, width: 1, height });
-          deco?.onRender((e) => {
-            e.classList.add('blk', exit === 0 ? 'ok' : 'err');
-          });
-          if (deco) {
-            stripes.push(deco);
-            if (stripes.length > 300) stripes.shift()?.dispose();
-          }
-        }
-        ranSincePrompt = false;
-      }
-      return false; // leave it to anyone else listening
-    });
 
     let webgl: WebglAddon | null = null;
     const forced = new URLSearchParams(location.search).get('renderer');

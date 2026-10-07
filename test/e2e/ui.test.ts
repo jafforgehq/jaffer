@@ -160,12 +160,24 @@ describe('Jaffer UI end to end', () => {
     // Jaffer drove the sign-in itself: nothing was typed into the user's shell
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     expect(await termText()).not.toMatch(/auth login/);
-    // a first run starts with just the terminal; Claude's panel is one click (or ⌘J) away and says what it is
-    expect(await page.locator('.panel-head').count()).toBe(0);
-    await page.click('.seg-btn[title^="Claude"]');
-    await page.waitForSelector('.panel-head');
-    expect(await page.textContent('.panel-sub')).toMatch(/Live view of the Claude running in your terminal/);
+    // a calm window: the terminal, a title bar, and the mole
+    expect(await page.locator('.rail, .statusbar, .agent, .panel-head').count()).toBe(0);
+    await page.waitForSelector('.pet-corner .pet');
   }, 90_000);
+
+  it('a calm window: only the terminal, the title bar and the mole, whatever keys are pressed', async () => {
+    for (const k of ['Meta+b', 'Meta+j']) await page.keyboard.press(k); // the sidebar and the Claude panel are gone
+    await sleep(300);
+    expect(await page.locator('.rail, .statusbar, .agent, .panel-head, .side').count()).toBe(0);
+    expect(await page.locator('.titlebar .seg-btn', { hasText: 'Memory' }).count()).toBe(1); // memory is the one drawer, one click away
+    expect(await page.locator('.titlebar .seg-btn', { hasText: 'Claude' }).count()).toBe(0);
+    const term = (await page.locator('.terminal-area').boundingBox())!;
+    const pet = (await page.locator('.pet-corner').boundingBox())!;
+    expect(pet.x + pet.width).toBeLessThanOrEqual(term.x + term.width + 0.5); // the mole sits inside a corner of the terminal
+    expect(pet.y + pet.height).toBeLessThanOrEqual(term.y + term.height + 0.5);
+    expect(await page.$eval('.pet-corner', (el) => getComputedStyle(el).pointerEvents)).toBe('none'); // and never takes a click or a selection
+    await shot('02a-calm-window');
+  });
 
 
   it('first run without Claude: "plain terminal" passes the sign-in, offers no Claude switches, and installs and starts nothing', async () => {
@@ -181,7 +193,7 @@ describe('Jaffer UI end to end', () => {
     const text = (await page.textContent('.onboard')) ?? '';
     expect(text).toContain('Learn from my sessions');
     expect(text).not.toMatch(/Start Claude Code|Show what Claude is doing|curate memory/i);
-    expect(text).toMatch(/Claude panel/i); // and how to add Claude later
+    expect(text).toMatch(/Settings → Claude Code/i); // and how to add Claude later
     await shot('01b-onboarding-plain-terminal');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
@@ -212,8 +224,6 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).onboarded === true, 8_000, 'onboarding to finish');
     await sleep(2_500); // long enough for a typed command to have run
     expect(noArgCalls()).toBe(before);
-    await page.click('.seg-btn[title^="Claude"]'); // the tests after this one start from an open panel, as the first run leaves it
-    await page.waitForSelector('.panel-head');
   }, 60_000);
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
@@ -227,133 +237,11 @@ describe('Jaffer UI end to end', () => {
     await shot('02-terminal');
   }, 40_000);
 
-  it('the title bar and status bar follow the shell (cwd, last command)', async () => {
+  it('the title bar follows the shell (cwd)', async () => {
     await page.keyboard.type('cd /tmp');
     await page.keyboard.press('Enter');
     await until(async () => (await page.textContent('.session-pill .cwd'))?.includes('/tmp'), 10_000, 'cwd in the title bar');
-    expect(await page.textContent('.statusbar')).toContain('cd /tmp');
   });
-
-  it('the session rail shows where you are and what just ran, and can be hidden', async () => {
-    await page.waitForSelector('.rail');
-    const rail = (await page.textContent('.rail')) ?? '';
-    expect(rail).toContain('Session live');
-    expect(await page.textContent('.rail .cmd-list')).toContain('hello-from-the-ui'); // from the daemon's record of the session
-    await page.keyboard.press('Meta+b');
-    await page.waitForSelector('.rail', { state: 'detached' });
-    await page.keyboard.press('Meta+b');
-    await page.waitForSelector('.rail');
-  });
-
-  it('marks finished commands in the terminal gutter: green when they worked, red when they failed', async () => {
-    await page.click('.term');
-    for (const cmd of ['true', 'false']) {
-      await page.keyboard.type(cmd, { delay: 8 });
-      await page.keyboard.press('Enter');
-      await sleep(400);
-    }
-    await until(async () => (await page.$('.blk.ok')) && (await page.$('.blk.err')), 10_000, 'a green and a red stripe');
-    // and the rail records the failure
-    await until(async () => /false/.test((await page.textContent('.rail .cmd-row.bad')) ?? ''), 10_000, 'the failed command in the rail');
-  }, 30_000);
-
-  it('there is one Claude in the sidebar; the panel header opens the full Claude Code in the terminal', async () => {
-    const titles = await page.$$eval('.rail .row-title', (els) => els.map((e) => e.textContent));
-    expect(titles.filter((t) => t === 'Claude')).toHaveLength(1);
-    expect(titles).not.toContain('Claude Code'); // it used to be listed as a second "agent": it is the same Claude, just another place to use it
-    expect((await page.textContent('.rail')) ?? '').not.toContain('click to start');
-    // a stand-in `claude` (an alias is a plain command, so the shell reports it), so the test never starts the real program
-    await page.click('.term');
-    await page.keyboard.type("alias claude='echo opened-claude-code-from-panel'", { delay: 4 });
-    await page.keyboard.press('Enter');
-    await until(async () => /alias claude/.test((await page.textContent('.rail .cmd-list')) ?? ''), 10_000, 'the stand-in to be defined and the shell idle');
-    await page.click('.agent .panel-head button[title^="Open the full Claude Code"]');
-    await until(async () => (await termText()).split('\n').some((l) => l.trim() === 'opened-claude-code-from-panel'), 10_000, 'the header button to run claude in the terminal');
-    await page.keyboard.type('unalias claude', { delay: 4 });
-    await page.keyboard.press('Enter');
-  }, 40_000);
-
-  it('the panel is a live companion: no session, then working with its tool, needs you, then idle with the reply', async () => {
-    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
-    await page.waitForSelector('.live-empty');
-    expect(await page.textContent('.live-empty')).toMatch(/Run .?claude.? in the terminal/);
-    expect(await page.textContent('.live-pill')).toBe('No session');
-    expect(await page.locator('.agent textarea').count()).toBe(0); // no prompt box: you talk to Claude in the terminal
-    expect(await page.locator('.composer').count()).toBe(0);
-
-    await sendHook('UserPromptSubmit', { prompt: 'fix the build, my key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' });
-    await sendHook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' });
-    await page.waitForSelector('.live-pill[data-state="working"]');
-    expect(await page.textContent('.live-pill')).toBe('Working');
-    // the daemon pushes at most every 100 ms, so the tool can arrive a moment after the first event
-    await until(async () => /Bash/.test((await page.textContent('.live-now')) ?? '') && /npm test/.test((await page.textContent('.live-now')) ?? ''), 8_000, 'the running tool');
-    expect(await page.textContent('.agent')).not.toContain('sk-ant-api03'); // a secret in a prompt never reaches the screen
-    expect((await page.textContent('.rail')) ?? '').toMatch(/working/i);
-    expect((await page.textContent('.statusbar')) ?? '').toMatch(/working/i);
-
-    await sendHook('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' });
-    await page.waitForSelector('.live-pill[data-state="needs-you"]');
-    expect(await page.textContent('.live-pill')).toBe('Needs you');
-    expect(await page.textContent('.live-needs')).toContain('Claude needs your permission to use Bash');
-    expect((await page.textContent('.rail')) ?? '').toMatch(/waiting for you/i);
-    await shot('03b-needs-you');
-
-    await sendHook('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1', duration_ms: 1500 });
-    await sendHook('Stop', { last_assistant_message: 'All tests pass now.' });
-    await page.waitForSelector('.live-pill[data-state="idle"]');
-    expect(await page.textContent('.live-pill')).toBe('Idle');
-    expect(await page.locator('.live-needs').count()).toBe(0);
-    expect(await page.textContent('.live-activity .live-row[data-status="done"]')).toContain('npm test');
-    expect(await page.textContent('.live-reply')).toContain('All tests pass now.');
-    await shot('03-agent');
-  }, 40_000);
-
-  it('animations: Claude at work looks alive, the Settings switch turns them off, and macOS Reduce motion is respected', async () => {
-    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
-    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
-    await sendHook('UserPromptSubmit', { prompt: 'work on it' });
-    await sendHook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'm1' });
-    await sendHook('SubagentStart', { agent_id: 'm-agent-1', agent_type: 'general-purpose' });
-    await page.waitForSelector('.live-pill[data-state="working"]');
-    await page.waitForSelector('.live-activity .live-row');
-    // on by default
-    expect(await page.evaluate(() => document.documentElement.dataset.motion)).toBe('on');
-    expect(await cs('.live-pill', 'animationName')).toContain('fx-breathe');
-    expect(await cs('.live-activity .live-row', 'animationName')).toContain('fx-slide-in');
-    expect(await page.locator('.fx-eq').count()).toBe(1); // the little equaliser beside the status
-    const mark = '.live-activity .live-row[data-status="running"] .live-mark';
-    expect(await cs(mark, 'animationName')).toContain('blink');
-    expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // one pulsing dot per running subagent
-    await shot('03d-working');
-    // off from Settings → Appearance
-    await page.keyboard.press('Meta+,');
-    await page.waitForSelector('.settings');
-    await page.locator('label.field', { hasText: 'Animations' }).locator('.switch').click();
-    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.animations === false, 8_000, 'the setting to be saved');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.settings', { state: 'detached' });
-    expect(await page.evaluate(() => document.documentElement.dataset.motion)).toBe('off');
-    expect(await cs('.live-pill', 'animationName')).toBe('none');
-    expect(await cs('.live-activity .live-row', 'animationName')).toBe('none');
-    expect(await page.locator('.fx-eq').count()).toBe(0);
-    expect(await cs(mark, 'animationName')).toBe('none'); // the existing blinking mark is decoration too, so the switch stops it
-    expect(await page.locator('.fx-agents .fx-dot').count()).toBe(1); // the count itself stays: it is information, only the pulsing is decoration
-    expect(await cs('.fx-agents .fx-dot', 'animationName')).toBe('none');
-    // and on again
-    await page.keyboard.press('Meta+,');
-    await page.waitForSelector('.settings');
-    await page.locator('label.field', { hasText: 'Animations' }).locator('.switch').click();
-    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.animations === true, 8_000, 'the setting to be saved again');
-    await page.keyboard.press('Escape');
-    expect(await cs('.live-pill', 'animationName')).toContain('fx-breathe');
-    // macOS "Reduce motion": everything stands still even though the setting is on
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    const dur = parseFloat(String(await cs('.live-pill', 'animationDuration')));
-    expect(dur).toBeLessThan(0.001);
-    await page.emulateMedia({ reducedMotion: null });
-    await sendHook('SubagentStop', { agent_id: 'm-agent-1', agent_type: 'general-purpose' });
-    await sendHook('Stop', { last_assistant_message: 'done' });
-  }, 60_000);
 
   it('Settings → Updates: the version, the automatic-checks switch, Check now, and what a ready update looks like', async () => {
     const send = (state: object) => page.evaluate((st) => (window as any).__event('update.state', st), state);
@@ -387,9 +275,6 @@ describe('Jaffer UI end to end', () => {
   it('the running-process spinner: an ordinary command spins, Claude Code spins only while it works, and Animations off stops it', async () => {
     const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
     const bar = '.session-pill .running';
-    const chip = '.session-card .tag.claude';
-    if (!(await page.$('.rail'))) await page.keyboard.press('Meta+b');
-    await page.waitForSelector('.rail');
     await page.click('.term');
     // an ordinary command is working until it ends: it spins
     await page.keyboard.type('sleep 40', { delay: 4 });
@@ -402,25 +287,21 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.type('sleep 40 # claude', { delay: 4 });
     await page.keyboard.press('Enter');
     await page.waitForSelector(`${bar}[data-kind="claude"]`);
-    await page.waitForSelector(chip);
     expect(await page.locator(`${bar} .spinner`).count()).toBe(0);
     expect(await page.locator(`${bar} .run-dot`).count()).toBe(1);
-    expect(await page.locator(`${chip} .spinner`).count()).toBe(0);
     // it starts working: now it moves
     await sendHook('UserPromptSubmit', { session_id: 'spin-1', prompt: 'go' });
     await page.waitForSelector(`${bar} .spinner`);
-    await page.waitForSelector(`${chip} .spinner`);
     expect(await cs(`${bar} .spinner`, 'animationName')).toContain('spin');
     // Animations off: the ring stands still, still visible
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
     await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
     expect(await cs(`${bar} .spinner`, 'animationName')).toBe('none');
-    expect(await cs(`${chip} .spinner`, 'animationName')).toBe('none');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
     await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'on', 8_000, 'motion to be on again');
     // the turn ends: calm again, though the program is still running
     await sendHook('Stop', { session_id: 'spin-1', last_assistant_message: 'done' });
-    await until(async () => (await page.locator(`${bar} .spinner`).count()) === 0 && (await page.locator(`${chip} .spinner`).count()) === 0, 8_000, 'the spinners to stop');
+    await until(async () => (await page.locator(`${bar} .spinner`).count()) === 0, 8_000, 'the spinner to stop');
     expect(await page.locator(`${bar} .run-dot`).count()).toBe(1);
     await page.keyboard.press('Control+c');
     await until(async () => !(await page.$(bar)), 10_000, 'the command to end');
@@ -443,11 +324,10 @@ describe('Jaffer UI end to end', () => {
   });
 
   it('the pet: asleep when nothing runs, digging while something does, up when Claude needs you, cheering after a turn, gone when switched off', async () => {
-    const pet = '.rail-pet .pet';
+    const pet = '.pet-corner .pet';
     const mood = () => page.getAttribute(pet, 'data-mood');
     const arm = `${pet} .pet-arm-l`;
     const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
-    if (!(await page.$('.rail'))) await page.keyboard.press('Meta+b');
     await page.waitForSelector(pet);
     // a clean slate: earlier tests left Claude sessions behind, and an open Claude Code (even idle) is not sleep
     for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
@@ -475,6 +355,10 @@ describe('Jaffer UI end to end', () => {
     await sleep(150);
     await shot('14d-pet-cheer');
     await until(async () => (await mood()) === 'dig', 8_000, 'the pet to go back to digging (the command still runs)');
+    // macOS "Reduce motion": the claws stand still even though the setting is on
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(parseFloat(String(await cs(arm, 'animationDuration')))).toBeLessThan(0.001);
+    await page.emulateMedia({ reducedMotion: null });
     // Animations off: same pose, nothing moves
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
     await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
@@ -491,43 +375,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.locator(pet).count()) === 0, 8_000, 'the pet to leave');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { pet: true } }));
     await page.waitForSelector(pet);
-    await sendHook('SessionStart'); // the tests after this one carry on with the session they had (a SessionStart revives an ended one)
   }, 90_000);
-
-  it('file paths in the panel are shown relative to where Claude is working', async () => {
-    const file = '/work/app/src/auth/session.ts';
-    await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });
-    await sendHook('UserPromptSubmit', { session_id: 'paths-1', cwd: '/work/app', prompt: 'look at the session code' });
-    await sendHook('PreToolUse', { session_id: 'paths-1', cwd: '/work/app', tool_name: 'Read', tool_input: { file_path: file }, tool_use_id: 'p1' });
-    await until(async () => /src\/auth\/session\.ts/.test((await page.textContent('.live-now')) ?? ''), 8_000, 'the file being read');
-    expect(await page.textContent('.live-now')).not.toContain('/work/app/');
-    expect(await page.getAttribute('.live-activity .live-row .live-sum', 'title')).toBe(file); // the full path stays one hover away
-    await sendHook('SessionEnd', { session_id: 'paths-1' });
-  });
-
-  it('the panel lists subagents, and goes back to "No session" when Claude Code ends', async () => {
-    await sendHook('SubagentStart', { agent_id: 'agent-1', agent_type: 'general-purpose' });
-    await page.waitForSelector('.live-subagents');
-    expect(await page.textContent('.live-subagents')).toContain('general-purpose');
-    await sendHook('SubagentStop', { agent_id: 'agent-1', agent_type: 'general-purpose' });
-    await until(async () => /done/i.test((await page.textContent('.live-subagents')) ?? ''), 8_000, 'the subagent to show as done');
-    await sendHook('SessionEnd');
-    await page.waitForSelector('.live-pill[data-state="none"]');
-    expect(await page.textContent('.live-pill')).toBe('No session');
-  });
-
-  it('with Claude Code not connected the empty panel says so, instead of claiming Claude is not running, and Connect fixes it', async () => {
-    await page.evaluate(() => window.jaffer.call('setup.claude.remove', {}));
-    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
-    await until(async () => /not connected/i.test((await page.textContent('.live-empty')) ?? ''), 15_000, 'the not-connected message');
-    expect(await page.textContent('.live-empty')).not.toMatch(/isn't running/);
-    await shot('03c-not-connected');
-    await page.click('.live-empty .btn.primary');
-    await until(async () => /isn't running/.test((await page.textContent('.live-empty')) ?? ''), 20_000, 'the panel after connecting');
-    const status = await page.evaluate(() => window.jaffer.call('setup.claude.status', {}));
-    expect(status.hooks).toBe(true);
-  }, 60_000);
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
@@ -586,6 +434,8 @@ describe('Jaffer UI end to end', () => {
       expect(body, `Settings > ${section}`).not.toMatch(/api key|Anthropic key|sk-ant/i);
       expect(await page.locator('.settings input[type="password"]').count(), `Settings > ${section}`).toBe(0);
     }
+    await page.click('.settings-nav button:has-text("Claude Code")');
+    expect((await page.textContent('.settings')) ?? '').toMatch(/Claude Code is installed/); // install and sign-in help live here now
     expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(|Approvals|Run commands|Always-allowed/);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
@@ -594,7 +444,6 @@ describe('Jaffer UI end to end', () => {
   it('there is exactly one session: no split controls, the shortcuts do nothing, and the daemon refuses to open another', async () => {
     await page.keyboard.press('Escape');
     expect(await page.$('button[title^="Split"]')).toBeNull();
-    expect((await page.textContent('.rail')) ?? '').not.toMatch(/Split|Panes/);
     await page.evaluate(() => (window as any).__menu('split-right')); // what ⌘D used to do
     await page.evaluate(() => (window as any).__menu('split-down'));
     await sleep(500);
@@ -634,28 +483,6 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Control+c');
   });
 
-  it('a lapsed Claude login shows a lasting banner in the panel; signing in clears it and types nothing into the terminal', async () => {
-    fake.setLoggedIn(false); // as when the login expires
-    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // a fresh start of the app checks on boot
-    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
-    await page.waitForSelector('.panel-signin', { timeout: 20_000 });
-    expect(await page.textContent('.panel-signin')).toMatch(/signed out/i);
-    await shot('01b-panel-signed-out');
-    await page.click('.panel-signin .btn.primary');
-    await page.waitForSelector('.panel-signin', { state: 'detached', timeout: 20_000 });
-    expect(await termText()).not.toMatch(/auth login/);
-  }, 60_000);
-
-
-  it('a signed-out banner clears by itself when the user signs in elsewhere and comes back to the window', async () => {
-    fake.setLoggedIn(false);
-    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
-    await page.waitForSelector('.panel-signin', { timeout: 20_000 });
-    fake.setLoggedIn(true); // signed in in another terminal
-    await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // the window comes back to the front
-    await page.waitForSelector('.panel-signin', { state: 'detached', timeout: 20_000 });
-  }, 60_000);
 });
 
 void ensureDaemon;

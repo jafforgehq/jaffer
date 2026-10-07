@@ -390,8 +390,6 @@ function buildMenu(): void {
       submenu: [
         { label: 'Command Palette…', accelerator: 'Cmd+P', click: act('palette') },
         { type: 'separator' },
-        { label: 'Toggle Sidebar', accelerator: 'Cmd+B', click: act('toggle-rail') },
-        { label: 'Toggle Agent', accelerator: 'Cmd+J', click: act('toggle-agent') },
         { label: 'Toggle Memory', accelerator: 'Shift+Cmd+M', click: act('toggle-memory') },
         { type: 'separator' },
         { label: 'Bigger', accelerator: 'Cmd+=', click: act('zoom-in') },

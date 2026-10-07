@@ -78,19 +78,19 @@ Afterwards: `git checkout main`.
 
 ## 5. Try the app (nobody has run it on a real Mac yet; please look for these)
 
-- One window, one terminal; the sidebar on the left (session card, Claude entry, recent commands), toolbar at the top,
-  status bar at the bottom. Traffic-light buttons should sit inside the top-left of the window; the window may be
+- Look: a calm window: the terminal, a thin title bar (folder and branch, a Memory button) and a little mole in the bottom-right
+  corner. No sidebar, no status bar. Traffic-light buttons should sit inside the top-left of the window; the window may be
   slightly see-through (vibrancy). Note anything overlapping or clipped.
-- Shortcuts: `⌘B` sidebar, `⌘J` Claude panel, `⇧⌘M` memory, `⌘P` palette, `⇧⌘C` run Claude Code in the terminal,
-  `⌘W` hides the window, `⌘Q` quits the app **but the session keeps running**: open Jaffer again and the same shell
-  and screen are there. There must be no way to open a second terminal or split.
-- Claude: the first run starts with a **Sign in to Claude** step (it passes by itself if you are signed in, and opens your
-  browser if not). Then run `claude` in the terminal and ask it something (for example "what is in this folder?"). The
-  Claude panel (`⌘J`) is a live view of that Claude, with no prompt box: it should go **Working** (with the tool being run),
-  then **Idle** with the start of its reply. Ask it to edit a file: while its permission prompt waits in the terminal the
-  panel, the sidebar and the status bar say **Needs you**, and with the window in the background you get a notification.
-  Answer the prompt in the terminal and the panel follows.
-- Memory: run a few commands, tell Claude "from now on always use tabs"; the Memory panel (`⇧⌘M`) should show it soon.
+- Shortcuts: `⇧⌘M` memory, `⌘P` palette, `⇧⌘C` run Claude Code in the terminal, `⌘W` hides the window, `⌘Q` quits the app
+  **but the session keeps running**: open Jaffer again and the same shell and screen are there. There must be no way to open
+  a second terminal or split.
+- Claude: the first run starts with a **Sign in to Claude** step (it passes by itself if you are signed in, opens your
+  browser if not, and offers *Use Jaffer as a plain terminal for now*). Then run `claude` in the terminal and ask it
+  something (for example "what is in this folder?"). The mole should dig while it works and cheer when it finishes; the ring
+  in the title bar spins only while it works. Ask it to edit a file: while its permission prompt waits in the terminal the
+  mole sits up with a `!`, and with the window in the background you get a notification. Answer the prompt in the terminal
+  and the mole follows. Press `Esc` while Claude works: the mole should stop digging.
+- Memory: run a few commands, tell Claude "from now on always use tabs"; the Memory drawer (`⇧⌘M`) should show it soon.
 
 Write down anything wrong (screenshot, what you did, what you expected) and give it to Claude Code to fix.
 
