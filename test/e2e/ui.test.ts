@@ -130,6 +130,11 @@ describe('Jaffer UI end to end', () => {
     // Jaffer drove the sign-in itself: nothing was typed into the user's shell
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     expect(await termText()).not.toMatch(/auth login/);
+    // a first run starts with just the terminal; Claude's panel is one click (or ⌘J) away and says what it is
+    expect(await page.locator('.panel-head').count()).toBe(0);
+    await page.click('.seg-btn[title^="Claude"]');
+    await page.waitForSelector('.panel-head');
+    expect(await page.textContent('.panel-sub')).toMatch(/This chat is separate from the claude you run there/);
   }, 90_000);
 
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {

@@ -54,7 +54,7 @@ export const daemonUp = signal(true);
 export const ready = signal(false);
 export const info = signal<SessionInfo>({ cwd: '' });
 export const activePane = signal('main');
-export const side = signal<Side>((store.get('jaffer.side') as Side) ?? 'agent');
+export const side = signal<Side>((store.get('jaffer.side') as Side) ?? null); // a first run starts with just the terminal
 export const sideWidth = signal(Number(store.get('jaffer.sideWidth')) || 420);
 export const railOpen = signal(store.get('jaffer.rail') !== '0');
 /** A slow clock for relative times ("2m ago", uptime) without a timer per component. */

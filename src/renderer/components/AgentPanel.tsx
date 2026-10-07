@@ -456,6 +456,9 @@ export function AgentPanel(): VNode {
           <IconX size={15} />
         </button>
       </div>
+      <div class="panel-sub">
+        Jaffer’s Claude: it works in your terminal. This chat is separate from the <code>claude</code> you run there.
+      </div>
       {busy && <div class="progress-line" />}
 
       {!agentReady.value && <SetupBanner />}

@@ -292,6 +292,8 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await shot('01-welcome');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');
+    await page.click('.seg-btn[title^="Claude"]'); // a first run starts with just the terminal; open Claude's panel like a person would
+    await page.waitForSelector('.panel-head');
     if (CLAUDE) await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'claude-code' } }));
     await until(async () => (await termLines()).some((l) => l.includes('❯')), 30_000, 'the shell prompt');
     // the daemon starts the shell in $HOME; go to the project like a person would

@@ -594,7 +594,7 @@ export function Onboarding(): VNode {
       if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message }));
       await refreshKeyStatus();
       overlay.value = null;
-      setSide('agent');
+      setSide(null); // just the terminal at first; Claude's panel is one click or ⌘J away
     } finally {
       setBusy(false);
     }
