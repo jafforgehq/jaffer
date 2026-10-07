@@ -87,7 +87,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the window has no sidebar to sit beside them */
 .titlebar button, .titlebar input, .titlebar .seg { -webkit-app-region: no-drag; }
 .tb-left, .tb-right { display: flex; align-items: center; gap: 4px; flex: none; }
-.tb-center { flex: 1; display: flex; justify-content: center; min-width: 0; }
+/* the pill is centred on the window itself (not on what is left between the traffic lights and the Memory button); both sides reserve the same room */
+.titlebar { position: relative; }
+.tb-right { margin-left: auto; position: relative; z-index: 1; }
+.tb-center { position: absolute; inset: 0 170px; display: flex; justify-content: center; align-items: center; min-width: 0; pointer-events: none; }
+.tb-center .session-pill { pointer-events: auto; }
 .session-pill {
   display: inline-flex; align-items: center; gap: 9px; max-width: 100%; height: 28px; padding: 0 12px 0 10px; border-radius: 999px;
   background: var(--hover); border: 1px solid var(--line); color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
@@ -396,7 +400,8 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 /* sticky: however short the window, the way forward stays in view while the choices scroll behind it */
 .onboard-foot { display: flex; align-items: center; gap: 14px; margin: 18px -34px -24px; padding: 14px 34px 24px; position: sticky; bottom: 0; z-index: 1; background: linear-gradient(to bottom, transparent, var(--surface) 18px); }
 
-@media (max-width: 760px) { .side { position: absolute; right: 8px; top: 0; bottom: 0; z-index: 8; } }
+/* a narrow window: the drawer lies over the terminal instead of squeezing it, inside the workspace, aligned to the card */
+@media (max-width: 760px) { .workspace { position: relative; } .side { position: absolute; right: var(--gap); top: 0; bottom: var(--gap); z-index: 8; } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
 

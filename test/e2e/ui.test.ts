@@ -471,6 +471,53 @@ describe('Jaffer UI end to end', () => {
     await shot('10-restored');
   }, 40_000);
 
+  it('the layout lines up at any window size: the title bar shares one centre line, the card has even margins, the drawer matches the card, the mole sits inside, nothing overflows', async () => {
+    const box = async (sel: string) => (await page.locator(sel).first().boundingBox())!;
+    const cy = (b: { y: number; height: number }) => b.y + b.height / 2;
+    const cx = (b: { x: number; width: number }) => b.x + b.width / 2;
+    const measure = async (w: number, h: number, drawer: boolean) => {
+      const bar = await box('.titlebar');
+      const pill = await box('.session-pill');
+      const mem = await box('.titlebar .seg');
+      const card = await box('.terminal-area');
+      const pet = await box('.pet-corner');
+      const where = `${w}x${h}${drawer ? ' with the memory drawer' : ''}`;
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 0.5), `no sideways scroll at ${where}`).toBe(true);
+      expect(Math.abs(cy(pill) - cy(bar)), `pill centred in the title bar at ${where}`).toBeLessThan(1.5);
+      expect(Math.abs(cy(mem) - cy(bar)), `Memory button centred in the title bar at ${where}`).toBeLessThan(1.5);
+      expect(Math.abs(cx(pill) - w / 2), `pill centred on the window at ${where}`).toBeLessThan(2);
+      const left = card.x;
+      const bottom = h - (card.y + card.height);
+      expect(Math.abs(left - bottom), `card margins even (left ${left}, bottom ${bottom}) at ${where}`).toBeLessThan(1.5);
+      expect(pet.x + pet.width, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.x + card.width);
+      expect(pet.y + pet.height, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.y + card.height);
+      if (drawer) {
+        const side = await box('.side');
+        expect(Math.abs(side.y - card.y), `drawer top meets the card top at ${where}`).toBeLessThan(1);
+        expect(Math.abs(side.height - card.height), `drawer as tall as the card at ${where}`).toBeLessThan(1);
+        if (w > 760) expect(Math.abs(side.x - (card.x + card.width) - left), `gap between card and drawer equals the margin at ${where}`).toBeLessThan(1.5); // a narrow window lets the drawer lie over the terminal instead
+        expect(Math.abs(w - (side.x + side.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
+      } else {
+        expect(Math.abs(w - (card.x + card.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
+      }
+    };
+    if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // start with the drawer closed
+    await page.waitForSelector('.side', { state: 'detached' });
+    for (const [w, h] of [[1360, 860], [900, 640], [660, 520]] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await sleep(200);
+      await measure(w, h, false);
+      await page.keyboard.press('Meta+Shift+M');
+      await page.waitForSelector('.side');
+      await sleep(200);
+      await measure(w, h, true);
+      if (w < 1000) await shot(`15-layout-${w}`);
+      await page.keyboard.press('Meta+Shift+M');
+      await page.waitForSelector('.side', { state: 'detached' });
+    }
+    await page.setViewportSize({ width: 1360, height: 860 });
+  });
+
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
     await page.click('.term');
     await page.keyboard.type('cat <<EOF');
