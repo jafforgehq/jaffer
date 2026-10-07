@@ -14,13 +14,14 @@ import { findClaude } from '../../src/core/integrations/claude';
  * Generates the README screenshots: `npm run screenshots` (writes docs/screenshots/*.png).
  *
  * What is real: the renderer, the session daemon, a zsh PTY with Jaffer's shell integration, a git repository, the
- * agent runtime and the memory engine. What is scripted: the model's replies (a local stand-in for the Anthropic API,
- * so the run is deterministic and needs no key) and the demo project's test script, which prints output in the style
- * of a JS test runner. Nothing here is a mock-up image.
+ * live Claude panel and the memory engine. What is scripted: the Claude Code hook events the panel is fed (what
+ * `jaffer hook` would deliver from a real session, injected through the daemon so the run is deterministic and needs
+ * no sign-in), and the demo project's test script, which prints output in the style of a JS test runner. Nothing here
+ * is a mock-up image.
  */
 const OUT = process.env.JAFFER_SCREENSHOTS;
 const root = path.resolve(__dirname, '../..');
-/** With the real `claude` binary present the demo conversation runs on the Claude Code engine (the real thing, with scripted replies). */
+/** The real `claude`, when present: the first-run sign-in passes through a stand-in that answers `auth`, and the opt-in scene runs the real TUI. */
 const CLAUDE = await findClaude().catch(() => null);
 const CHROME = [process.env.JAFFER_CHROME, '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/opt/pw-browsers/chromium/chrome-linux/chrome'].find((p) => p && fs.existsSync(p));
 
@@ -87,22 +88,6 @@ async function clearToasts(): Promise<void> {
     await close.click().catch(() => undefined);
     await sleep(120);
   }
-}
-
-async function approveAll(): Promise<void> {
-  for (;;) {
-    const btn = await page.$('.approval .btn.primary');
-    if (!btn) return;
-    await btn.click();
-    await sleep(300);
-  }
-}
-
-async function ask(text: string): Promise<void> {
-  const before = (await page.$$('.msg.user')).length;
-  await page.fill('.composer textarea', text);
-  await page.keyboard.press('Enter');
-  await until(async () => (await page.$$('.msg.user')).length > before, 10_000, 'the question to appear');
 }
 
 const remember = (text: string, kind: string, extra: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('memory.remember', p), { text, kind, ...extra });
@@ -294,7 +279,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.waitForSelector('.term .xterm');
     await page.click('.seg-btn[title^="Claude"]'); // a first run starts with just the terminal; open Claude's panel like a person would
     await page.waitForSelector('.panel-head');
-    if (CLAUDE) await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'claude-code' } }));
     await until(async () => (await termLines()).some((l) => l.includes('❯')), 30_000, 'the shell prompt');
     // the daemon starts the shell in $HOME; go to the project like a person would
     await typeCommand('cd ~/code/acme-api');
@@ -311,42 +295,33 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await clearToasts();
   }, 120_000);
 
-  it('the agent investigates in the same terminal and asks before changing anything', async () => {
+  it('the Claude in the terminal, live in the panel: waiting for you, then done', async () => {
     const session = path.join(repo, 'src/auth/session.ts');
-    // Claude Code's own tool names when it is the engine; Jaffer's when the API is
-    const via = (claudeName: string, name: string) => (CLAUDE ? claudeName : name);
-    const pathKey = CLAUDE ? 'file_path' : 'path';
-    const main = CLAUDE ? { when: (b: any) => (b.tools?.length ?? 0) > 0 } : {};
-    mock.reset().queue(
-      { kind: 'tool', id: 'toolu_d1', name: via('Read', 'read_file'), input: { [pathKey]: session }, text: "That's the session expiry test. Let me look at the code it exercises.", ...main },
-      {
-        kind: 'text',
-        text:
-          '**Found it.** `isExpired()` in `src/auth/session.ts:14` compares with a strict `<`, so a session whose `expiresAt` equals the current millisecond still counts as valid. The test freezes the clock at exactly `expiresAt` and expects `true`.\n\n' +
-          '```ts\nreturn session.expiresAt < now; // should be <=\n```\n\n' +
-          'Making the check inclusive is the whole fix. Want me to apply it and re-run the tests?',
-        thinking: 'The failing assertion is the boundary case. The comparison is strict.',
-        ...main,
-      },
-    );
-    await ask("why is the auth test failing?");
-    await until(async () => /Found it/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the diagnosis');
-    await until(async () => !(await page.$('.working')), 15_000, 'turn to finish');
-
-    mock.reset().queue(
-      { kind: 'tool', id: 'toolu_d2', name: via('Edit', 'edit_file'), input: { [pathKey]: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' }, text: 'Making the comparison inclusive.', ...main },
-      { kind: 'tool', id: 'toolu_d3', name: via('mcp__jaffer-session__run_command', 'run_command'), input: { command: './bin/test' }, ...main },
-      { kind: 'text', text: 'Fixed: `isExpired()` now treats `expiresAt` itself as expired, and the suite passes (**16/16**).\n\n- `src/auth/session.ts:14`: `<` became `<=`\n- ran `./bin/test` in your terminal, so the output above is the real run', ...main },
-    );
-    await ask('yes, fix it and run the tests');
-    await page.waitForSelector('.approval', { timeout: 60_000 });
-    await shot('03-approval');
-    await approveAll();
-    await until(async () => /Fixed:/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the fix summary');
-    await until(async () => !(await page.$('.working')), 15_000, 'turn to finish');
+    /** One Claude Code hook event, as `jaffer hook` would deliver it from inside this terminal. */
+    const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, ...over });
+    await hook('SessionStart', { model: 'claude-opus-5-5' });
+    await hook('UserPromptSubmit', { prompt: 'why is the auth test failing?' });
+    await hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1' });
+    await sleep(300);
+    await hook('PostToolUse', { tool_name: 'Read', tool_input: { file_path: session }, tool_use_id: 'd1', duration_ms: 42 });
+    // it found the bug and proposes the fix: now it waits for the user
+    const edit = { file_path: session, old_string: 'return session.expiresAt < now;', new_string: 'return session.expiresAt <= now;' };
+    await hook('PreToolUse', { tool_name: 'Edit', tool_input: edit, tool_use_id: 'd2' });
+    await hook('Notification', { message: 'Claude needs your permission to edit session.ts', notification_type: 'permission_prompt' });
+    await page.waitForSelector('.live-pill[data-state="needs-you"]');
+    await clearToasts();
+    await shot('03-needs-you');
+    // the user says yes in the terminal: the edit happens, then the tests run
+    fs.writeFileSync(session, fs.readFileSync(session, 'utf8').replace(edit.old_string, edit.new_string));
+    await hook('PostToolUse', { tool_name: 'Edit', tool_input: edit, tool_use_id: 'd2', duration_ms: 310 });
+    await hook('PreToolUse', { tool_name: 'Bash', tool_input: { command: './bin/test' }, tool_use_id: 'd3' });
+    await typeCommand('./bin/test');
     await until(async () => /16 passed/.test((await termLines()).join('\n')), 15_000, 'passing run in the terminal');
-    expect(fs.readFileSync(path.join(repo, 'src/auth/session.ts'), 'utf8')).toContain('expiresAt <= now');
-    await shot('02-agent');
+    await hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: './bin/test' }, tool_use_id: 'd3', duration_ms: 1900 });
+    await hook('Stop', { last_assistant_message: 'Fixed: `isExpired()` now treats `expiresAt` itself as expired, and the suite passes (16/16). It was one character in `src/auth/session.ts:14`: `<` became `<=`.' });
+    await page.waitForSelector('.live-pill[data-state="idle"]');
+    expect(fs.readFileSync(session, 'utf8')).toContain('expiresAt <= now');
+    await shot('02-companion');
   }, 120_000);
 
   it('memory the app has built up, and the log of how it changed', async () => {
@@ -387,9 +362,9 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await shot('10-settings');
-    await page.click('.settings-nav button:text-is("Claude")');
+    await page.click('.settings-nav button:text-is("Claude Code")');
     await sleep(300);
-    await shot('12-claude-settings');
+    await shot('12-claude-code-settings');
     await page.keyboard.press('Escape');
   }, 60_000);
 

@@ -3,7 +3,7 @@
 ```
 ┌────────────────────────── Jaffer.app (Electron) ───────────────────────────┐
 │ main process: window, menu, dock, notifications, global hotkey, IPC relay   │
-│ renderer: Preact + xterm.js (WebGL) · agent panel · memory panel · palette  │
+│ renderer: Preact + xterm.js (WebGL) · Claude panel · memory panel · palette │
 └───────────────▲─────────────────────────────────────────────────────────────┘
                 │ unix socket (NDJSON RPC + events), ~/.jaffer/run/jafferd.sock
 ┌───────────────┴────────── jafferd (detached, survives the app) ─────────────┐
@@ -11,8 +11,8 @@
 │     │             └ headless xterm: screen snapshots, OSC 133/633 parsing    │
 │ MemoryEngine ── EpisodeLog → heuristics / model reflector → MemoryStore     │
 │     │              (journal, decay, consolidate, skills, exports)            │
-│ AgentRuntime ── Thread (append-only, compaction) ── Anthropic provider      │
-│ ClaudeIngestor · secrets (Keychain) · config                                │
+│ ClaudeWatcher ── live state of the terminal's Claude, from its hook events   │
+│ ClaudeIngestor · ClaudeLogin / claudeAuth · config                           │
 └───────────────▲─────────────────────────────────────────────────────────────┘
                 │ same RPC
    jaffer CLI ──┴── jaffer mcp (stdio MCP server for Claude Code) ── hooks
@@ -30,11 +30,17 @@ There is one shell, and the code makes it the only one: `SessionHost` runs a sin
 
 PTY output is parsed by a headless xterm.js in the daemon *before* it is emitted to clients. A client attaches with `session.attach`, which waits for the write queue to drain and returns `serialize()` output (screen + scrollback + alt-screen + modes) plus a sequence number; every later `pty.data` event carries `seq`, so the renderer drops anything already covered by the snapshot and re-attaches on any gap. Slow clients are resynchronised from a snapshot instead of buffering without bound.
 
-Shell integration scripts (`resources/shell`, embedded into `src/generated`) hook zsh (`ZDOTDIR` shim that sources your real dotfiles), bash (`--init-file`, bash 3.2 compatible) and fish. They emit OSC 133 (`A` prompt, `C` output start, `D;<exit>`) and OSC 633 (`E` command line, `P;Cwd=`). From those the daemon knows when the shell is idle, what ran, with what exit code and output, and can let the agent type a command into the live shell and wait for it.
+Shell integration scripts (`resources/shell`, embedded into `src/generated`) hook zsh (`ZDOTDIR` shim that sources your real dotfiles), bash (`--init-file`, bash 3.2 compatible) and fish. They emit OSC 133 (`A` prompt, `C` output start, `D;<exit>`) and OSC 633 (`E` command line, `P;Cwd=`). From those the daemon knows when the shell is idle, what ran, with what exit code and output, and can type a command into the live shell and wait for it.
 
-## Agent
+## One Claude, and a live panel for it
 
-`AgentRuntime` drives the Messages API with streaming, adaptive thinking, eager tool-input streaming and server-side refusal fallback. History is **append-only**: the system prompt and tool list never change, memory arrives as `<jaffer-context>` deltas inside the new user turn, thinking blocks are dropped from completed turns, and compaction replaces the whole prefix with a briefing — so prompt caching and preserved-thinking checks keep working over months. Tools: `run_command` (in the live shell, falling back to an isolated subprocess), `read_terminal`, file read/write/edit, search, `recall`/`remember`/`forget`. Reads and read-only commands are automatic; everything else asks (or auto-approves in auto mode) — except `sudo`, force-push, recursive deletes, etc., which always ask, and catastrophic commands, which never run.
+There is one Claude in Jaffer: the `claude` running in the terminal. Jaffer has no chat of its own and runs no model of its own (memory curation goes through `claude -p`, on the user's Claude login). The right-hand panel is a read-only companion fed by Claude Code's **hooks**.
+
+- **Events in.** `jaffer setup claude` (or the first-run consent, or a daemon start with an older install) registers hooks in `~/.claude/settings.json`: SessionStart and Stop (which feed memory, so Claude Code waits for them) and, `async`, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, Notification, SessionEnd. Each runs `jaffer hook <event>`, which does nothing unless `JAFFER_SESSION=1` (the shell Jaffer hosts exports it), forwards the JSON payload to the daemon as `claude.event`, prints nothing and exits 0 on every path, so Claude Code behaves exactly as without Jaffer when the daemon is down or slow.
+- **State.** `ClaudeWatcher` (`src/core/claude/watcher.ts`) is a pure state machine per `session_id`: `idle`, `working`, `needs-you` or `ended`, the tool being run, the last 30 tool calls of the turn, subagents, a redacted prompt preview and last reply. Hooks are asynchronous and can arrive out of order, so only UserPromptSubmit and PreToolUse move a session to `working`, and a permission Notification only counts while a tool is pending. Everything it keeps passes `redact.ts`; sensitive commands show only the tool name.
+- **Staleness.** Declining a prompt in the terminal fires no hook, so while a session is `needs-you` the daemon reads the tail of its transcript (`transcript-watch.ts`) for the rejection line. The `claude` command finishing in the shell ends every session, which also covers a crashed Claude Code.
+- **Surface.** RPC `claude.event` (from hooks), `claude.state` (snapshot) and the pushed event `claude.state` (throttled to one per 100 ms). The state lives in the daemon, so it survives quitting the app. When a session newly needs the user and the window is not in front, the main process shows a notification (`notify-policy.ts`), unless a terminal notification was just shown.
+- **Not built yet:** answering Claude Code's permission prompts from the panel (a blocking permission hook, allow only after a click, any failure leaving Claude Code's own dialog in charge), and usage and diffs from the transcript.
 
 ## Memory
 
@@ -44,23 +50,12 @@ Ranking = confidence × time-decay (half-life per kind) × usage × scope releva
 
 ## Process boundaries and trust
 
-The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. The agent's shell commands are classified (read-only / ordinary / risky / blocked) before they run, file writes to credentials and system paths always ask, and everything fed to memory or a model is redacted first.
+The renderer is sandboxed (`contextIsolation`, no Node) and only reaches the daemon through the preload bridge; the main process checks the sender frame. Hook payloads and everything fed to memory or a model are redacted first. `permissions.ts` keeps the command and path risk rules (read-only / ordinary / risky / blocked) for the approval cards of a later release.
 
 ## The window
 
-The renderer is three layers on a canvas: a **session rail** (left), the **terminal card** (centre) and the **inspector** (right: agent or memory), with a toolbar above and a status bar below. Colours come from layered tokens derived from the active theme (`themes.ts`): `--chrome` is the canvas, `--surface` the cards on it, `--raised` cards on those. A theme change therefore repaints the whole app.
+The renderer is three layers on a canvas: a **session rail** (left), the **terminal card** (centre) and the **inspector** (right: the Claude panel or memory), with a toolbar above and a status bar below. Colours come from layered tokens derived from the active theme (`themes.ts`): `--chrome` is the canvas, `--surface` the cards on it, `--raised` cards on those. A theme change therefore repaints the whole app.
 
 - The rail reads `session.info` (project, branch, uptime, and the daemon's ring of recent commands, which is redacted and omits sensitive commands) and keeps itself live from `pty.start`, `pty.command` and `pty.cwd` events. Because the daemon owns this state, the rail looks the same after you quit and reopen the app.
 - Command stripes are xterm decorations created from the OSC 133 sequences the shell integration already emits (`A` prompt, `C` output, `D;exit`). They live in the renderer only; the daemon's snapshots and the scrollback are untouched.
-- Approval cards preview what the agent is about to do (a diff for `edit_file`, the new contents for `write_file`, the command for `run_command`) from the tool input the daemon already sends.
-
-## Two engines behind one panel (one is switched off)
-
-The panel's conversation is served by `AgentHub`, which knows two engines. **For now only Claude Code is on: Jaffer runs on Claude subscriptions.** The API-key engine stays in the code but is unreachable unless the daemon is started with `JAFFER_API_ENGINE=1` (the tests do that, and a future release can). With it off, the hub always answers Claude Code, an API key (stored or in the environment) is ignored and the Keychain is not read, and there is no RPC or UI to store one. With it on, `agent.engine: auto` prefers an API key, otherwise Claude Code.
-
-- `AgentRuntime` (API key, switched off): Jaffer's own loop over the Anthropic Messages API. Append-only history, its own tools.
-- `ClaudeCodeEngine` (Claude Code login): one long-lived `claude -p --input-format stream-json --output-format stream-json --permission-mode manual --permission-prompt-tool stdio` process. It is started in a fixed directory (`~/.jaffer/agent`) so its session can always be resumed by id after a restart; stdout events (text, thinking, tool calls and results) are mapped onto the same `AgentEvent`s the UI already renders, and Claude Code's tool names are normalised (`Edit` → `edit_file`, …) so policy and previews are shared (`assess.ts`).
-
-Safety properties, both enforced in code and covered by tests: every `can_use_tool` request is answered by Jaffer (auto, ask the UI, or deny) and never by Claude Code's defaults; shell commands are not Claude Code's `Bash` (disallowed) but `run_command` from `jaffer mcp --session`, which calls the daemon's `agent.tool` and types into the user's own pane; those tools are only in the MCP config of the panel's own process.
-
-The panel engine keeps its own thread (`cli-thread.json`) for display; switching engines shows that engine's conversation. Learning from panel turns goes through `observeAgentTurn` with the real project, and the transcript ingestor skips the engine's working directory so nothing is learned twice or under the wrong project.
+- The Claude panel renders `claude.state` only: no prompt box, no thread. File paths are shown relative to where Claude is working (`shortToolPath`).

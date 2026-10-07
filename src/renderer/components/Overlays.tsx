@@ -508,7 +508,7 @@ export function Onboarding(): VNode {
                   <IconClock size={15} />
                 </div>
                 <b>Always the same session</b>
-                Quit the app, close the lid, come back tomorrow — your shell, your running processes and your conversation are exactly where you left them.
+                Quit the app, close the lid, come back tomorrow — your shell, your running processes and Claude Code are exactly where you left them.
               </div>
               <div class="feature">
                 <div class="f-ico">

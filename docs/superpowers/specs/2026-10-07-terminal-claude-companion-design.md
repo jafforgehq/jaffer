@@ -154,3 +154,13 @@ leaves Claude Code's own prompt in charge.
 
 Behaviour against the real Anthropic API (the spike used a mock), "Always allow" persistence, Edit-tool diffs, prompts
 inside subagents, auto/bypass permission modes.
+
+## Changes made while building
+
+- `assess.ts` was deleted with the panel's tools (it only knew their names); `permissions.ts` (the generic command and path risk rules) stays and now owns the `Risk` type. `resolvePath` was not kept.
+- The lapsed-login banner is re-checked at startup and when the window regains focus (always while signed out, at most once a minute while signed in; `src/shared/auth-recheck.ts`), because there are no panel turns any more.
+- `Last reply` keeps the start of the reply (a preview), not its tail. A late `PostToolUse` never turns an idle session back to `working`, and a permission `Notification` only counts while a tool is pending, because async hooks can arrive out of order.
+- File paths in the panel are shown relative to the session's working directory, abbreviated when long and elsewhere (`src/shared/short-path.ts`), with the full path on hover.
+- The `@anthropic-ai/sdk` dependency was removed; model curation runs only through `claude -p`.
+- The README screenshots were regenerated as one set (`02-companion.png`, `03-needs-you.png`, `12-claude-code-settings.png` replace the chat images).
+

@@ -95,7 +95,7 @@ function Learned(): VNode {
             <IconBrain size={22} />
           </div>
           <div class="empty-title">Nothing learned yet</div>
-          <p>Jaffer watches your commands, your agent conversations and your Claude Code sessions, and distils what is worth keeping — preferences, project conventions, fixes that worked. It shows up here, and you can pin, edit or forget anything.</p>
+          <p>Jaffer watches your commands and your Claude Code sessions, and distils what is worth keeping — preferences, project conventions, fixes that worked. It shows up here, and you can pin, edit or forget anything.</p>
         </div>
       )}
       {groups.map(([scope, list]) => (

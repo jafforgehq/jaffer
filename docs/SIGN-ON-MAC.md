@@ -84,9 +84,12 @@ Afterwards: `git checkout main`.
 - Shortcuts: `⌘B` sidebar, `⌘J` Claude panel, `⇧⌘M` memory, `⌘P` palette, `⇧⌘C` run Claude Code in the terminal,
   `⌘W` hides the window, `⌘Q` quits the app **but the session keeps running**: open Jaffer again and the same shell
   and screen are there. There must be no way to open a second terminal or split.
-- Claude: run `claude` in the terminal and type `/login` if you are not signed in. Then Settings (`⌘,`) → Claude should say
-  "Claude Code: found". Ask Claude something in the panel (for example "what is in this folder?"); it should run the
-  command **in your terminal** and ask before changing anything.
+- Claude: the first run starts with a **Sign in to Claude** step (it passes by itself if you are signed in, and opens your
+  browser if not). Then run `claude` in the terminal and ask it something (for example "what is in this folder?"). The
+  Claude panel (`⌘J`) is a live view of that Claude, with no prompt box: it should go **Working** (with the tool being run),
+  then **Idle** with the start of its reply. Ask it to edit a file: while its permission prompt waits in the terminal the
+  panel, the sidebar and the status bar say **Needs you**, and with the window in the background you get a notification.
+  Answer the prompt in the terminal and the panel follows.
 - Memory: run a few commands, tell Claude "from now on always use tabs"; the Memory panel (`⇧⌘M`) should show it soon.
 
 Write down anything wrong (screenshot, what you did, what you expected) and give it to Claude Code to fix.
