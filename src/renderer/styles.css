@@ -504,7 +504,6 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pal-sec { flex: none; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint); }
 .pal-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pal-title mark { background: none; color: var(--accent); font-weight: 650; }
-.pal-row.ask .pal-title { color: var(--accent); }
 .pal-foot { display: flex; align-items: center; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); }
 .pal-foot span { display: inline-flex; align-items: center; gap: 5px; }
 .findbar { position: absolute; top: 10px; right: 14px; z-index: 10; display: flex; gap: 4px; align-items: center; padding: 5px; border-radius: 12px; background: var(--raised-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }

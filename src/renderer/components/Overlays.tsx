@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, overlay, patchConfig, setSide, toast, type ClaudeAuthState } from '../state';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconWand, IconX, IconBolt, IconClock } from './icons';
+import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -88,8 +88,7 @@ export function Palette(): VNode {
       .sort((x, y) => y.s - x.s)
       .map((x) => x.a);
   }, [q]);
-  const askRow = q.trim().length > 0;
-  const total = results.length + (askRow ? 1 : 0);
+  const total = results.length;
   useEffect(() => setSel(0), [q]);
   useEffect(() => {
     list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
@@ -98,10 +97,6 @@ export function Palette(): VNode {
   const run = (i: number) => {
     close();
     if (i < results.length) void results[i]!.run();
-    else if (askRow) {
-      setSide('agent');
-      void sendToAgent(q.trim());
-    }
   };
   const rows: VNode[] = [];
   let lastSection = '';
@@ -133,7 +128,7 @@ export function Palette(): VNode {
           <IconSearch size={17} />
           <input
             ref={input}
-            placeholder="Type a command, or ask Claude anything…"
+            placeholder="Type a command…"
             value={q}
             onInput={(e) => setQ((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => {
@@ -145,15 +140,6 @@ export function Palette(): VNode {
         </div>
         <div class="palette-list" ref={list}>
           {rows}
-          {askRow && (
-            <button class={`pal-row ask ${sel === results.length ? 'sel' : ''}`} onMouseEnter={() => setSel(results.length)} onClick={() => run(results.length)}>
-              <span class="pal-ico">
-                <IconWand size={13} />
-              </span>
-              <span class="pal-title">Ask Claude: {q.trim()}</span>
-              <kbd>↵</kbd>
-            </button>
-          )}
         </div>
         <div class="pal-foot">
           <span>
@@ -228,7 +214,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-type Section = 'appearance' | 'agent' | 'memory' | 'integrations';
+type Section = 'appearance' | 'memory' | 'integrations';
 
 export function Settings(): VNode {
   const c = cfg.value!;
@@ -258,7 +244,6 @@ export function Settings(): VNode {
 
   const nav: { id: Section; label: string; icon: VNode }[] = [
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
-    { id: 'agent', label: 'Claude', icon: <IconAgent size={14} /> },
     { id: 'memory', label: 'Memory', icon: <IconBrain size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
   ];
@@ -332,45 +317,6 @@ export function Settings(): VNode {
             </>
           )}
 
-          {section === 'agent' && (
-            <>
-              <h4>Claude</h4>
-              <p class="lede">The Claude panel works in your own shell and asks before it changes anything.</p>
-              <Field label="Approvals" hint="risky commands always ask">
-                <select value={c.agent.approvals} onChange={(e) => set({ agent: { approvals: (e.target as HTMLSelectElement).value } })}>
-                  <option value="ask">Ask before changing anything</option>
-                  <option value="auto">Auto-approve (risky actions still ask)</option>
-                </select>
-              </Field>
-              <Field label="Run commands" hint="where Claude's commands execute (the Claude panel needs “in my terminal”)">
-                <select value={c.agent.runIn} onChange={(e) => set({ agent: { runIn: (e.target as HTMLSelectElement).value } })}>
-                  <option value="session">In my terminal session (visible, shared state)</option>
-                  <option value="subprocess">In an isolated background process</option>
-                </select>
-              </Field>
-              {c.agent.allow.length > 0 && (
-                <Field label="Always-allowed" hint={c.agent.allow.join(', ')}>
-                  <button class="btn" onClick={() => set({ agent: { allow: [] } })}>
-                    Reset
-                  </button>
-                </Field>
-              )}
-
-              <h4>Your Claude account</h4>
-              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login, so your plan covers it. If you are signed out, the panel offers to sign you in.</p>
-              <Field label="Model" hint="what Claude Code should use for this panel">
-                <select value={c.agent.cliModel} onChange={(e) => set({ agent: { cliModel: (e.target as HTMLSelectElement).value } })}>
-                  <option value="">Claude Code's default</option>
-                  {['sonnet', 'opus', 'fable', 'haiku'].map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </>
-          )}
-
           {section === 'memory' && (
             <>
               <h4>Memory</h4>
@@ -396,7 +342,7 @@ export function Settings(): VNode {
           {section === 'integrations' && (
             <>
               <h4>Claude Code</h4>
-              <p class="lede">Share what Jaffer learns with Claude Code, and learn from it in return.</p>
+              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. If you are signed out, the panel offers to sign you in.</p>
               <Field label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.mcp ? 'MCP on' : 'MCP off'} · ${claude.hooks ? 'hooks on' : 'hooks off'}` : 'not found on PATH') : '…'}>
                 <span class="row">
                   <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
@@ -527,7 +473,6 @@ export function Onboarding(): VNode {
         ingest: { claudeCode: claude && learn },
       });
       if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message }));
-      await refreshKeyStatus();
       overlay.value = null;
       setSide(null); // just the terminal at first; Claude's panel is one click or ⌘J away
     } finally {

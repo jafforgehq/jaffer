@@ -1,6 +1,5 @@
-import { activePane, cfg, info, overlay, patchConfig, refreshMemory, setSide, side, toast, toggleRail, toggleSide } from './state';
+import { activePane, cfg, info, overlay, patchConfig, refreshMemory, side, toast, toggleRail, toggleSide } from './state';
 import { terminals } from './components/TerminalView';
-import { composerFocus } from './components/AgentPanel';
 import { THEMES } from './themes';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -52,17 +51,6 @@ export const actions: Action[] = [
   { id: 'toggle-rail', title: 'Toggle sidebar', section: 'View', keys: '⌘B', keywords: 'session rail', run: toggleRail },
   { id: 'toggle-agent', title: 'Toggle Claude panel', section: 'View', keys: '⌘J', run: () => toggleSide('agent') },
   { id: 'toggle-memory', title: 'Toggle memory panel', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
-  {
-    id: 'ask',
-    title: 'Ask Claude…',
-    section: 'Claude',
-    keys: '⌘L',
-    keywords: 'chat prompt agent',
-    run: () => {
-      setSide('agent');
-      composerFocus.value++;
-    },
-  },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
@@ -74,7 +62,6 @@ export const actions: Action[] = [
   { id: 'zoom-reset', title: 'Actual size', section: 'View', keys: '⌘0', run: () => zoom(0) },
   { id: 'reflect', title: 'Memory: learn from recent activity now', section: 'Memory', keywords: 'reflect evolve', run: () => guarded(async () => (toast({ kind: 'learn', text: (await call('memory.reflect', { force: true })).summary }), refreshMemory(0))) },
   { id: 'consolidate', title: 'Memory: tidy up (merge duplicates, fade stale)', section: 'Memory', keywords: 'consolidate dream cleanup', run: () => guarded(async () => (toast({ kind: 'info', text: (await call('memory.consolidate', {})).summary }), refreshMemory(0))) },
-  { id: 'compact', title: 'Claude: compact the conversation', section: 'Claude', run: () => guarded(async () => (await call('agent.compact', {}), undefined), 'Conversation compacted.') },
   { id: 'setup-claude', title: 'Connect Claude Code to Jaffer memory (MCP + hooks)', section: 'Integrations', keywords: 'claude mcp hooks', run: () => guarded(async () => (await call('setup.claude.install', {}), undefined), 'Claude Code now shares Jaffer’s memory.') },
   { id: 'install-cli', title: 'Install the `jaffer` command in ~/.local/bin', section: 'Integrations', keywords: 'cli path shell command', run: () => guarded(async () => { const r = await call('setup.cli.install', {}); toast({ kind: 'info', text: r.hint ?? `Installed ${r.link}` }, 9000); }) },
   { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: async () => void window.jaffer.reveal((await window.jaffer.appInfo()).home) },

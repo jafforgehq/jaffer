@@ -71,7 +71,7 @@ beforeAll(async () => {
   mock = new MockAnthropic();
   const mockUrl = await mock.listen();
   bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, JAFFER_API_ENGINE: '1' /* off in the product; the panel tests below drive it on purpose */, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   url = await new Promise<string>((resolve, reject) => {
@@ -267,6 +267,14 @@ describe('Jaffer UI end to end', () => {
   it('command palette runs actions', async () => {
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
+    // there is one Claude and it lives in the terminal: the palette has no "ask Claude" and no chat commands
+    expect(await page.getAttribute('.palette input', 'placeholder')).not.toMatch(/ask claude/i);
+    await page.keyboard.type('claude');
+    const found = (await page.textContent('.palette-list')) ?? '';
+    expect(found).toContain('Run Claude Code in the terminal');
+    expect(found).not.toMatch(/Ask Claude|compact the conversation/i);
+    expect(await page.locator('.pal-row.ask').count()).toBe(0);
+    await page.fill('.palette input', '');
     await page.keyboard.type('tokyo');
     await shot('06-palette');
     await page.keyboard.press('Enter');
@@ -285,15 +293,16 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings');
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
+    // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code']);
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
-    for (const section of ['Claude', 'Memory', 'Claude Code']) {
+    for (const section of ['Memory', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);
       const body = (await page.textContent('.settings')) ?? '';
       expect(body, `Settings > ${section}`).not.toMatch(/api key|Anthropic key|sk-ant/i);
       expect(await page.locator('.settings input[type="password"]').count(), `Settings > ${section}`).toBe(0);
     }
-    await page.click('.settings-nav button:has-text("Claude")');
-    expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(/);
+    expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(|Approvals|Run commands|Always-allowed/);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
   });

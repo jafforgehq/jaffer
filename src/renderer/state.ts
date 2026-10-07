@@ -1,7 +1,5 @@
 import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
-import type { AgentEvent, ThreadItem, UsageTotals } from '../core/agent/types';
-import type { AgentStatus } from '../core/agent/runtime';
 import type { ClaudeSession } from '../core/claude/watcher';
 import { shouldRecheckAuth } from '../shared/auth-recheck';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
@@ -104,18 +102,7 @@ export function dismissToast(id: number): void {
   toasts.value = toasts.value.filter((t) => t.id !== id);
 }
 
-// ------------------------------------------------------------------ agent
-
-export type LiveItem = ThreadItem & { state?: 'running' | 'approval' | 'done'; risk?: string; reason?: string; callId?: string; t0?: number; dur?: number };
-
-export const thread = signal<LiveItem[]>([]);
-export const agentStatus = signal<AgentStatus | null>(null);
-export const turn = signal<{ id: string; started: number; thinking: string; notice?: string } | null>(null);
-export const agentUsage = signal<UsageTotals | null>(null);
-/** True when the panel can run: Claude Code is signed in/installed, or an API key exists. */
-export const agentReady = signal(true);
-export const agentEngine = signal<'api' | 'claude-code'>('api');
-export const engines = signal<{ api: boolean; claudeCode: boolean }>({ api: false, claudeCode: false });
+// ------------------------------------------------------------------ Claude
 
 export interface ClaudeAuthState {
   installed: boolean;
@@ -123,7 +110,7 @@ export interface ClaudeAuthState {
   loginRunning: boolean;
   loginError?: string;
 }
-/** Where the Claude Code login stands, as last asked (null until the first answer). Asked at startup and after a failed turn, never on a timer. */
+/** Where the Claude Code login stands, as last asked (null until the first answer). Asked at startup and when the window comes back to the front, never on a timer. */
 export const claudeAuth = signal<ClaudeAuthState | null>(null);
 let lastAuthCheck = 0;
 export async function checkClaudeAuth(): Promise<void> {
@@ -147,80 +134,6 @@ async function loadClaudeState(): Promise<void> {
     applyClaudeState((await jaffer().call('claude.state', {})).sessions);
   } catch {
     /* the daemon is not there yet; its next push fills this in */
-  }
-}
-
-let liveAssistant: { id: string; text: string } | null = null;
-let seq = 0;
-
-export async function loadThread(): Promise<void> {
-  const r = await jaffer().call('agent.thread', {});
-  batch(() => {
-    thread.value = r.items as LiveItem[];
-    agentStatus.value = r.status;
-    agentUsage.value = r.status.usage;
-    agentReady.value = r.status.ready;
-    agentEngine.value = r.status.engine ?? 'api';
-    if (r.status.engines) engines.value = r.status.engines;
-  });
-}
-
-export function applyAgentEvent(e: AgentEvent): void {
-  switch (e.type) {
-    case 'turn_start':
-      liveAssistant = null;
-      turn.value = { id: e.turnId, started: Date.now(), thinking: '' };
-      thread.value = [...thread.value, { kind: 'user', id: `u${++seq}-${e.turnId}`, text: e.text }];
-      break;
-    case 'text': {
-      if (!liveAssistant) {
-        liveAssistant = { id: `a${++seq}-${e.turnId}`, text: '' };
-        thread.value = [...thread.value, { kind: 'assistant', id: liveAssistant.id, text: '' }];
-      }
-      liveAssistant.text += e.delta;
-      const id = liveAssistant.id;
-      const text = liveAssistant.text;
-      thread.value = thread.value.map((i) => (i.id === id ? { ...i, text } : i));
-      break;
-    }
-    case 'thinking':
-      if (turn.value) turn.value = { ...turn.value, thinking: (turn.value.thinking + e.delta).slice(-4000) };
-      break;
-    case 'tool_call':
-      liveAssistant = null; // text after a tool call starts a new bubble
-      thread.value = [...thread.value, { kind: 'tool', id: e.callId, callId: e.callId, name: e.name, summary: e.summary, input: e.input, state: 'running', t0: Date.now() }];
-      break;
-    case 'approval_request':
-      thread.value = thread.value.map((i) => (i.kind === 'tool' && i.id === e.callId ? { ...i, state: 'approval', risk: e.risk, reason: e.reason } : i));
-      break;
-    case 'tool_result':
-      thread.value = thread.value.map((i) => (i.kind === 'tool' && i.id === e.callId ? { ...i, output: e.output, isError: e.isError, state: 'done', dur: i.t0 ? Date.now() - i.t0 : undefined } : i));
-      break;
-    case 'usage':
-      agentUsage.value = e.usage;
-      break;
-    case 'notice':
-      if (turn.value) turn.value = { ...turn.value, notice: e.text };
-      toast({ kind: e.level === 'warn' ? 'error' : 'info', text: e.text });
-      break;
-    case 'turn_end':
-      liveAssistant = null;
-      turn.value = null;
-      if (e.error) {
-        toast({ kind: 'error', text: e.error }, 9000);
-        void checkClaudeAuth(); // an expired login looks like any other failed turn; ask, and show the banner if that is it
-      }
-      // settle on what was actually persisted (drops live-only state, thinking, etc.)
-      void loadThread().catch(() => undefined);
-      break;
-  }
-}
-
-export async function sendToAgent(text: string): Promise<void> {
-  try {
-    await jaffer().call('agent.send', { text });
-  } catch (e) {
-    toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }, 8000);
   }
 }
 
@@ -316,19 +229,6 @@ export async function refreshInfo(): Promise<void> {
   }
 }
 
-export async function refreshKeyStatus(): Promise<void> {
-  try {
-    const r = await jaffer().call('secrets.status', {});
-    batch(() => {
-      agentReady.value = r.ready;
-      agentEngine.value = r.engine ?? 'api';
-      engines.value = { api: !!r.apiKey, claudeCode: !!r.claudeCode };
-    });
-  } catch {
-    /* ignore */
-  }
-}
-
 export async function bootstrap(): Promise<void> {
   const j = jaffer();
   j.onEvent((event, data) => {
@@ -349,18 +249,13 @@ export async function bootstrap(): Promise<void> {
         void refreshInfoSoon();
       }
     } else if (event === 'claude.state') applyClaudeState(data.sessions);
-    else if (event === 'agent.event') applyAgentEvent(data);
     else if (event === 'memory.event') onMemoryEvent(data);
-    else if (event === 'config.changed') {
-      const before = cfg.value?.agent.engine;
-      cfg.value = data;
-      void refreshKeyStatus().then(() => (before !== data.agent.engine ? loadThread() : undefined)); // another engine, another conversation
-    } else if (event === 'session.lifecycle') void refreshInfo();
+    else if (event === 'config.changed') cfg.value = data;
+    else if (event === 'session.lifecycle') void refreshInfo();
     else if (event === 'daemon.down') daemonUp.value = false;
     else if (event === 'daemon.up') {
       daemonUp.value = true;
       void refreshInfo();
-      void loadThread();
       void loadClaudeState();
       refreshMemory(0);
       ptyBus.emit({ event: 'daemon.up', data: {} });
@@ -377,7 +272,7 @@ export async function bootstrap(): Promise<void> {
     appVersion.value = app.version;
     overlay.value = config.onboarded ? null : 'onboarding';
   });
-  await Promise.all([refreshInfo(), loadThread(), refreshKeyStatus(), loadClaudeState()]);
+  await Promise.all([refreshInfo(), loadClaudeState()]);
   refreshMemory(0);
   ready.value = true;
   if (config.onboarded) void checkClaudeAuth();
