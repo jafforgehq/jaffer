@@ -380,8 +380,9 @@ export class JafferService {
       });
       return { started: true };
     });
-    r.handle('setup.claude.install', async () => {
-      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv() });
+    // `mcp: false` connects the hooks only (what the first run and the panel's Connect button do); Settings adds the memory tools too.
+    r.handle('setup.claude.install', async (p: { mcp?: boolean } | undefined) => {
+      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv(), mcp: p?.mcp });
       this.config.patch({ ingest: { claudeCode: true }, export: { targets: [...new Set([...this.config.get().export.targets, 'claude-code' as const])] } });
       return res;
     });

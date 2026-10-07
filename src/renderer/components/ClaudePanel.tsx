@@ -148,7 +148,7 @@ export function ClaudePanel(): VNode {
   const connect = async () => {
     setConnecting(true);
     try {
-      await window.jaffer.call('setup.claude.install', {});
+      await window.jaffer.call('setup.claude.install', { mcp: false });
       await checkClaudeSetup();
     } catch (e) {
       toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });

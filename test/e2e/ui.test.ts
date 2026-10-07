@@ -121,6 +121,7 @@ describe('Jaffer UI end to end', () => {
     expect(choices).not.toMatch(/codex|gemini|other agents|api key/i);
     expect(choices).toMatch(/hooks/i); // what connecting Claude Code does is said plainly: the hooks see its prompts and tool calls
     expect(choices).toMatch(/your prompts, its tool calls and replies/i);
+    expect(choices).not.toMatch(/MCP/); // the memory tools are Settings → Claude Code, not a first-run decision
     expect(choices).toContain('Get started');
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
@@ -133,6 +134,7 @@ describe('Jaffer UI end to end', () => {
     expect(cfg.memory.enabled).toBe(true);
     expect(cfg.export.targets).not.toContain('codex');
     expect(fake.calls().some((l) => l.startsWith('auth login '))).toBe(true);
+    expect(fake.calls().some((l) => l.startsWith('mcp add'))).toBe(false); // Get started connects the hooks for the panel, not the MCP server
     // Jaffer drove the sign-in itself: nothing was typed into the user's shell
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     expect(await termText()).not.toMatch(/auth login/);

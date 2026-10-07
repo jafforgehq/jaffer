@@ -329,6 +329,17 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(asked.every((l) => l.endsWith(' KEY='))).toBe(true); // the daemon itself runs with ANTHROPIC_API_KEY set
   });
 
+  it('connecting for the live panel installs the hooks only: no MCP server is registered unless it is asked for', async () => {
+    const before = fake.calls().length;
+    const res = await c.call('setup.claude.install', { mcp: false });
+    expect(res.status.hooks).toBe(true);
+    expect(res.messages.join('\n')).not.toMatch(/MCP/);
+    expect(fake.calls().slice(before).some((l) => l.startsWith('mcp add'))).toBe(false);
+    const full = await c.call('setup.claude.install', {}); // Settings → Claude Code → Connect still adds the memory tools
+    expect(full.messages.join('\n')).toMatch(/MCP/);
+    expect(fake.calls().some((l) => l.startsWith('mcp add'))).toBe(true);
+  });
+
   it('reports whether Claude Code is installed and signed in, and nothing about the account', async () => {
     expect(await c.call('setup.claude.auth', {})).toEqual({ installed: true, loggedIn: false, loginRunning: false });
     fake.setLoggedIn(true);

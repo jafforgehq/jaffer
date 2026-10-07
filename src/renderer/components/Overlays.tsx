@@ -536,7 +536,7 @@ export function Onboarding(): VNode {
         memory: { enabled: learn, llm: curate && learn ? 'auto' : 'off' },
         ingest: { claudeCode: claude && learn },
       });
-      if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message }));
+      if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks for the panel; the memory tools are a Settings choice
       overlay.value = null;
       setSide(null); // just the terminal at first; Claude's panel is one click or ⌘J away
     } finally {
@@ -607,8 +607,8 @@ export function Onboarding(): VNode {
               <label>
                 <Switch checked={claude} onChange={setClaude} />
                 <span class="t">
-                  <b>Connect Claude Code</b>
-                  <small>Adds an MCP server and hooks. The hooks tell Jaffer what Claude Code does in this terminal (your prompts, its tool calls and replies) so the panel can show it; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts.</small>
+                  <b>Show what Claude is doing in the panel</b>
+                  <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the panel can show it; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts. More options are in Settings → Claude Code.</small>
                 </span>
               </label>
             </div>

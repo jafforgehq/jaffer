@@ -209,7 +209,7 @@ export async function setupClaude(cliPath: string, opts: { home?: string; env?: 
   const messages: string[] = [];
   if (opts.hooks !== false) {
     const h = installHooks(cliPath, home);
-    messages.push(h.error ? `Hooks: ${h.error}` : h.changed ? 'Installed SessionStart/Stop hooks in ~/.claude/settings.json.' : 'Hooks already installed.');
+    messages.push(h.error ? `Hooks: ${h.error}` : h.changed ? 'Installed Jaffer’s hooks in ~/.claude/settings.json.' : 'Hooks already installed.');
   }
   if (opts.mcp !== false) {
     const claude = await findClaude(env);

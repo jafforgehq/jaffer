@@ -40,7 +40,7 @@ git clone https://github.com/jafforgehq/jaffer && cd jaffer
 ./scripts/install-mac.sh        # needs Node 22+; builds and copies Jaffer.app to /Applications
 ```
 
-On first launch Jaffer asks what it may do (sign in to Claude, learn from your sessions, connect Claude Code). Nothing is on until you say so.
+On first launch Jaffer asks what it may do (sign in to Claude, learn from your sessions, show what Claude is doing in the panel). Nothing is on until you say so.
 
 ## What the window gives you
 
