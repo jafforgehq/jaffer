@@ -1,0 +1,12 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "hook_event_name": "MessageDisplay",
+  "turn_id": "prompt-1",
+  "message_id": "prompt-1",
+  "index": 0,
+  "final": true,
+  "delta": "Delegating."
+}

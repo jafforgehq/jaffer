@@ -1,0 +1,14 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "false"
+  },
+  "tool_use_id": "toolu_1",
+  "error": "Command exited with non-zero status code 1",
+  "is_interrupt": false
+}

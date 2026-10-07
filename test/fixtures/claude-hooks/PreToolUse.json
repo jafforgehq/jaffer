@@ -1,0 +1,18 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "mock sub task",
+    "prompt": "say hi from the subagent",
+    "subagent_type": "general-purpose"
+  },
+  "tool_use_id": "toolu_1"
+}

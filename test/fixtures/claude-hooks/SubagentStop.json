@@ -1,0 +1,26 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "agent_id": "agent-1",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/user/.claude/projects/-work-app/sess-1/subagents/agent-1.jsonl",
+  "last_assistant_message": "Hello from the mock model. Nothing else to do.",
+  "background_tasks": [
+    {
+      "id": "aa17bc159bbef3896",
+      "type": "subagent",
+      "status": "running",
+      "description": "mock sub task",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

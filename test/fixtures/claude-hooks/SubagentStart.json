@@ -1,0 +1,9 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "agent_id": "agent-1",
+  "agent_type": "general-purpose",
+  "hook_event_name": "SubagentStart"
+}

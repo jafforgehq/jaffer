@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "hook_event_name": "SessionEnd",
+  "reason": "other"
+}
