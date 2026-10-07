@@ -3,8 +3,13 @@ import type { VNode } from 'preact';
 import { runClaude } from '../actions';
 import { checkClaudeAuth, claudeAuth, currentClaude, fmtDuration, setSide, toast } from '../state';
 import type { ClaudeSession } from '../../core/claude/watcher';
+import { shortToolPath } from '../../shared/short-path';
 import { InstallCommand } from './ClaudeInstall';
 import { IconAgent, IconTerminal, IconX } from './icons';
+
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'NotebookEdit']);
+/** What a tool call is about, as a person reads it: file paths relative to where Claude is working. */
+const about = (name: string, summary: string, cwd: string): string => (FILE_TOOLS.has(name) ? shortToolPath(summary, cwd) : summary);
 
 const LABEL = { working: 'Working', idle: 'Idle', 'needs-you': 'Needs you', ended: 'No session' } as const;
 
@@ -76,7 +81,7 @@ function Live({ s }: { s: ClaudeSession }): VNode {
             {s.tool ? (
               <>
                 <b>{s.tool.name}</b>
-                {s.tool.summary && <code title={s.tool.summary}>{s.tool.summary}</code>}
+                {s.tool.summary && <code title={s.tool.summary}>{about(s.tool.name, s.tool.summary, s.cwd)}</code>}
               </>
             ) : (
               <span class="faint">Thinking…</span>
@@ -99,7 +104,7 @@ function Live({ s }: { s: ClaudeSession }): VNode {
                 <span class="live-mark">{a.status === 'running' ? '…' : a.status === 'done' ? '✓' : '✕'}</span>
                 <span class="live-name">{a.name}</span>
                 <span class="live-sum" title={a.summary}>
-                  {a.summary}
+                  {about(a.name, a.summary, s.cwd)}
                 </span>
                 {a.durMs != null && <span class="live-dur">{fmtDuration(a.durMs)}</span>}
               </div>

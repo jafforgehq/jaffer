@@ -234,6 +234,17 @@ describe('Jaffer UI end to end', () => {
     await shot('03-agent');
   }, 40_000);
 
+  it('file paths in the panel are shown relative to where Claude is working', async () => {
+    const file = '/work/app/src/auth/session.ts';
+    await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });
+    await sendHook('UserPromptSubmit', { session_id: 'paths-1', cwd: '/work/app', prompt: 'look at the session code' });
+    await sendHook('PreToolUse', { session_id: 'paths-1', cwd: '/work/app', tool_name: 'Read', tool_input: { file_path: file }, tool_use_id: 'p1' });
+    await until(async () => /src\/auth\/session\.ts/.test((await page.textContent('.live-now')) ?? ''), 8_000, 'the file being read');
+    expect(await page.textContent('.live-now')).not.toContain('/work/app/');
+    expect(await page.getAttribute('.live-activity .live-row .live-sum', 'title')).toBe(file); // the full path stays one hover away
+    await sendHook('SessionEnd', { session_id: 'paths-1' });
+  });
+
   it('the panel lists subagents, and goes back to "No session" when Claude Code ends', async () => {
     await sendHook('SubagentStart', { agent_id: 'agent-1', agent_type: 'general-purpose' });
     await page.waitForSelector('.live-subagents');
