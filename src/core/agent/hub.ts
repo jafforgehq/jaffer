@@ -11,8 +11,9 @@ export type EngineKind = 'api' | 'claude-code';
  * (`AgentRuntime`) or your Claude Code login (`ClaudeCodeEngine`). The hub picks one per message and presents
  * a single event stream, thread and status to the rest of the app.
  *
- * "auto" prefers the API key when there is one (it was added on purpose) and otherwise uses Claude Code, so the
- * panel works the moment you are signed in to Claude Code, with no key to paste.
+ * For now Jaffer runs on Claude subscriptions only: the API-key engine is switched off (`apiEnabled`, see
+ * JAFFER_API_ENGINE in the daemon), and the hub always answers with Claude Code. Switched on, "auto" prefers the API
+ * key when there is one (it was added on purpose) and otherwise uses Claude Code.
  */
 export class AgentHub {
   readonly events = new Emitter<AgentEvent>();
@@ -21,13 +22,14 @@ export class AgentHub {
     readonly api: AgentRuntime,
     readonly cli: ClaudeCodeEngine,
     private config: ConfigStore,
-    private ready: { api: () => boolean; claudeCode: () => boolean },
+    private ready: { api: () => boolean; claudeCode: () => boolean; apiEnabled: () => boolean },
   ) {
     api.events.on((e) => this.events.emit(e));
     cli.events.on((e) => this.events.emit(e));
   }
 
   kind(): EngineKind {
+    if (!this.ready.apiEnabled()) return 'claude-code';
     const e = this.config.get().agent.engine;
     if (e === 'api' || e === 'claude-code') return e;
     return this.ready.api() ? 'api' : this.ready.claudeCode() ? 'claude-code' : 'api';
@@ -46,7 +48,7 @@ export class AgentHub {
   }
 
   status(): AgentStatus {
-    return { ...this.active.status(), engines: { api: this.ready.api(), claudeCode: this.ready.claudeCode() } };
+    return { ...this.active.status(), engines: { api: this.ready.apiEnabled() && this.ready.api(), claudeCode: this.ready.claudeCode() } };
   }
 
   send(text: string): { turnId: string } {

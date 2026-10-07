@@ -54,11 +54,11 @@ The renderer is three layers on a canvas: a **session rail** (left), the **termi
 - Command stripes are xterm decorations created from the OSC 133 sequences the shell integration already emits (`A` prompt, `C` output, `D;exit`). They live in the renderer only; the daemon's snapshots and the scrollback are untouched.
 - Approval cards preview what the agent is about to do (a diff for `edit_file`, the new contents for `write_file`, the command for `run_command`) from the tool input the daemon already sends.
 
-## Two engines behind one panel
+## Two engines behind one panel (one is switched off)
 
-The panel's conversation is served by one of two engines, chosen per message by `AgentHub` (`agent.engine`: `auto` prefers an API key, otherwise Claude Code):
+The panel's conversation is served by `AgentHub`, which knows two engines. **For now only Claude Code is on: Jaffer runs on Claude subscriptions.** The API-key engine stays in the code but is unreachable unless the daemon is started with `JAFFER_API_ENGINE=1` (the tests do that, and a future release can). With it off, the hub always answers Claude Code, an API key (stored or in the environment) is ignored and the Keychain is not read, and there is no RPC or UI to store one. With it on, `agent.engine: auto` prefers an API key, otherwise Claude Code.
 
-- `AgentRuntime` (API key): Jaffer's own loop over the Anthropic Messages API. Append-only history, its own tools.
+- `AgentRuntime` (API key, switched off): Jaffer's own loop over the Anthropic Messages API. Append-only history, its own tools.
 - `ClaudeCodeEngine` (Claude Code login): one long-lived `claude -p --input-format stream-json --output-format stream-json --permission-mode manual --permission-prompt-tool stdio` process. It is started in a fixed directory (`~/.jaffer/agent`) so its session can always be resumed by id after a restart; stdout events (text, thinking, tool calls and results) are mapped onto the same `AgentEvent`s the UI already renders, and Claude Code's tool names are normalised (`Edit` → `edit_file`, …) so policy and previews are shared (`assess.ts`).
 
 Safety properties, both enforced in code and covered by tests: every `can_use_tool` request is answered by Jaffer (auto, ask the UI, or deny) and never by Claude Code's defaults; shell commands are not Claude Code's `Bash` (disallowed) but `run_command` from `jaffer mcp --session`, which calls the daemon's `agent.tool` and types into the user's own pane; those tools are only in the MCP config of the panel's own process.

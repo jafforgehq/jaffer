@@ -86,7 +86,7 @@ export function StatusBar(): VNode {
         </span>
       )}
       {!agentReady.value && (
-        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Sign in with Claude Code, or add an Anthropic API key, in Settings">
+        <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Claude Code needs to be installed and signed in: see Settings">
           <IconInfo size={11} /> set up Claude
         </button>
       )}

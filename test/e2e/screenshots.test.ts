@@ -259,7 +259,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
     // the demo person is signed in to Claude: first run passes the sign-in step by itself (everything but `claude auth` is the real claude)
     const signedIn = fakeClaude(path.join(tmp, 'bin'), { loggedIn: true, passthrough: CLAUDE });
     bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-      env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+      env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_API_ENGINE: '1' /* off in the product; the demo conversation runs through the mock */, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: '/usr/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       stdio: ['ignore', 'pipe', 'inherit'],
       cwd: repo,
     });

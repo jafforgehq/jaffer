@@ -68,7 +68,7 @@ beforeAll(async () => {
   mock = new MockAnthropic();
   const mockUrl = await mock.listen();
   bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
-    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, JAFFER_API_ENGINE: '1' /* off in the product; the panel tests below drive it on purpose */, JAFFER_HOME: env.home, HOME: env.userHome, SHELL: '/bin/bash', ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   url = await new Promise<string>((resolve, reject) => {
@@ -104,6 +104,7 @@ describe('Jaffer UI end to end', () => {
     const text = (await page.textContent('.onboard')) ?? '';
     expect(text).toContain('Sign in with Claude');
     expect(text).not.toMatch(/skip/i);
+    expect(text).not.toMatch(/api key|console/i); // subscriptions only: no key, no pay-per-use account
     expect(await page.locator('.onboard .choices').count()).toBe(0);
     expect(await page.getByText('Get started').count()).toBe(0);
     await page.keyboard.press('Escape');
@@ -114,7 +115,7 @@ describe('Jaffer UI end to end', () => {
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
     const choices = (await page.textContent('.onboard')) ?? '';
-    expect(choices).not.toMatch(/codex|gemini|other agents/i);
+    expect(choices).not.toMatch(/codex|gemini|other agents|api key/i);
     expect(choices).toContain('Get started');
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
@@ -260,6 +261,15 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings');
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
+    // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
+    for (const section of ['Claude', 'Memory', 'Claude Code']) {
+      await page.click(`.settings-nav button:has-text("${section}")`);
+      const body = (await page.textContent('.settings')) ?? '';
+      expect(body, `Settings > ${section}`).not.toMatch(/api key|Anthropic key|sk-ant/i);
+      expect(await page.locator('.settings input[type="password"]').count(), `Settings > ${section}`).toBe(0);
+    }
+    await page.click('.settings-nav button:has-text("Claude")');
+    expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(/);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
   });

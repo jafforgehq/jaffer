@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, engines, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, toast, type ClaudeAuthState } from '../state';
+import { InstallCommand } from './ClaudeInstall';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
@@ -234,7 +235,6 @@ export function Settings(): VNode {
   const [section, setSection] = useState<Section>('appearance');
   const [claude, setClaude] = useState<{ claudeInstalled: boolean; hooks: boolean; mcp: boolean } | null>(null);
   const [targets, setTargets] = useState<{ target: string; label: string; installed: boolean }[]>([]);
-  const [key, setKey] = useState('');
   const [busy, setBusy] = useState('');
   const refresh = () => {
     void call('setup.claude.status', {}).then(setClaude).catch(() => undefined);
@@ -336,20 +336,13 @@ export function Settings(): VNode {
             <>
               <h4>Claude</h4>
               <p class="lede">The Claude panel works in your own shell and asks before it changes anything.</p>
-              <Field label="Runs on" hint={`Claude Code: ${claude?.claudeInstalled ? 'found' : 'not found'} · API key: ${engines.value.api ? 'saved' : 'none'}`}>
-                <select value={c.agent.engine} onChange={(e) => set({ agent: { engine: (e.target as HTMLSelectElement).value } })}>
-                  <option value="auto">Automatic (API key if there is one, otherwise Claude Code)</option>
-                  <option value="claude-code">My Claude Code login (no API key needed)</option>
-                  <option value="api">My Anthropic API key</option>
-                </select>
-              </Field>
               <Field label="Approvals" hint="risky commands always ask">
                 <select value={c.agent.approvals} onChange={(e) => set({ agent: { approvals: (e.target as HTMLSelectElement).value } })}>
                   <option value="ask">Ask before changing anything</option>
                   <option value="auto">Auto-approve (risky actions still ask)</option>
                 </select>
               </Field>
-              <Field label="Run commands" hint="where Claude's commands execute (the Claude Code engine needs “in my terminal”)">
+              <Field label="Run commands" hint="where Claude's commands execute (the Claude panel needs “in my terminal”)">
                 <select value={c.agent.runIn} onChange={(e) => set({ agent: { runIn: (e.target as HTMLSelectElement).value } })}>
                   <option value="session">In my terminal session (visible, shared state)</option>
                   <option value="subprocess">In an isolated background process</option>
@@ -363,8 +356,8 @@ export function Settings(): VNode {
                 </Field>
               )}
 
-              <h4>Claude Code login</h4>
-              <p class="lede">Uses the account you are signed in with in Claude Code, so your plan covers it. Not signed in yet? Run <code>claude</code> in the terminal and type <code>/login</code>.</p>
+              <h4>Your Claude account</h4>
+              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login, so your plan covers it. If you are signed out, the panel offers to sign you in.</p>
               <Field label="Model" hint="what Claude Code should use for this panel">
                 <select value={c.agent.cliModel} onChange={(e) => set({ agent: { cliModel: (e.target as HTMLSelectElement).value } })}>
                   <option value="">Claude Code's default</option>
@@ -372,53 +365,6 @@ export function Settings(): VNode {
                     <option key={m} value={m}>
                       {m}
                     </option>
-                  ))}
-                </select>
-              </Field>
-
-              <h4>Anthropic API key</h4>
-              <p class="lede">Optional. If you add a key, Automatic mode uses it instead.</p>
-              <Field label="API key" hint={engines.value.api ? 'saved in your Keychain' : 'stored in your Keychain'}>
-                <span class="row">
-                  <input type="password" placeholder={engines.value.api ? '•••••••• (saved)' : 'sk-ant-…'} value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} />
-                  <button
-                    class="btn"
-                    disabled={!key || busy === 'key'}
-                    onClick={() =>
-                      void run(
-                        'key',
-                        async () => {
-                          await call('secrets.setAnthropicKey', { key });
-                          setKey('');
-                          await refreshKeyStatus();
-                          await loadThread();
-                        },
-                        'API key saved.',
-                      )
-                    }
-                  >
-                    Save
-                  </button>
-                  {engines.value.api && (
-                    <button class="btn danger" onClick={() => void run('keyclear', async () => (await call('secrets.clearAnthropicKey', {}), await refreshKeyStatus(), await loadThread()), 'API key removed.')}>
-                      Remove
-                    </button>
-                  )}
-                </span>
-              </Field>
-              <Field label="Model">
-                <select value={c.agent.model} onChange={(e) => set({ agent: { model: (e.target as HTMLSelectElement).value } })}>
-                  {['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5'].map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Effort" hint="how hard it thinks">
-                <select value={c.agent.effort} onChange={(e) => set({ agent: { effort: (e.target as HTMLSelectElement).value } })}>
-                  {['low', 'medium', 'high', 'xhigh', 'max'].map((m) => (
-                    <option key={m}>{m}</option>
                   ))}
                 </select>
               </Field>
@@ -432,7 +378,7 @@ export function Settings(): VNode {
               <Field label="Learn from my sessions" hint="commands and agent chats; secrets are redacted first">
                 <Switch checked={c.memory.enabled} onChange={(v) => set({ memory: { enabled: v } })} />
               </Field>
-              <Field label="Let Claude curate memory" hint="sends redacted summaries to Claude: your API key, or your Claude Code login">
+              <Field label="Let Claude curate memory" hint="sends redacted summaries to Claude, through your Claude login">
                 <Switch checked={c.memory.llm === 'auto'} onChange={(v) => set({ memory: { llm: v ? 'auto' : 'off' } })} />
               </Field>
               <Field label="Keep raw activity for" hint="days; learned memory is kept regardless">
@@ -484,13 +430,10 @@ export function Settings(): VNode {
 
 // ------------------------------------------------------------------ onboarding
 
-const INSTALL_CMD = 'curl -fsSL https://claude.ai/install.sh | bash';
-
 /** First thing on a first run: is Claude Code installed and signed in? Nothing is typed into the terminal here. */
 function SignInStep({ onDone }: { onDone: () => void }): VNode {
   const [auth, setAuth] = useState<ClaudeAuthState | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
   const inflight = useRef(false);
   const refresh = () => {
     if (inflight.current) return;
@@ -522,9 +465,6 @@ function SignInStep({ onDone }: { onDone: () => void }): VNode {
       setBusy(false);
     }
   };
-  const copy = () => {
-    void navigator.clipboard?.writeText(INSTALL_CMD).then(() => setCopied(true)).catch(() => undefined);
-  };
   const installState = !auth ? 'wait' : auth.installed ? 'ok' : 'bad';
   const signedState = !auth ? 'wait' : auth.loggedIn ? 'ok' : auth.loginRunning ? 'wait' : auth.installed ? 'bad' : 'idle';
   return (
@@ -544,12 +484,7 @@ function SignInStep({ onDone }: { onDone: () => void }): VNode {
           <p>
             Claude Code is not installed yet. Run this in any terminal (Terminal.app works), then come back: Jaffer notices by itself.
           </p>
-          <div class="ob-cmdrow">
-            <code class="ob-cmd">{INSTALL_CMD}</code>
-            <button class="btn small" onClick={copy}>
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-          </div>
+          <InstallCommand />
           <div class="ob-actions">
             <button class="btn primary big" onClick={refresh}>
               Check again
@@ -571,7 +506,7 @@ function SignInStep({ onDone }: { onDone: () => void }): VNode {
       )}
       {auth?.loginError && <p class="ob-error">{auth.loginError}</p>}
       <p class="faint ob-note">
-        Sign-in opens your browser. Claude Code needs a Claude Pro, Max, Team or Enterprise plan, or an Anthropic Console account. Nothing is typed into your terminal during setup.
+        Sign-in opens your browser. Claude Code needs a Claude Pro, Max, Team or Enterprise plan. Nothing is typed into your terminal during setup.
       </p>
     </div>
   );

@@ -295,7 +295,7 @@ function trusted(e: Electron.IpcMainInvokeEvent): boolean {
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   if (!client || !client.connected) throw new Error('The session daemon is not connected.');
-  const long = method.startsWith('agent.compact') || method === 'secrets.setAnthropicKey' || method.startsWith('setup.') || method === 'memory.reflect' || method === 'memory.consolidate';
+  const long = method.startsWith('agent.compact') || method.startsWith('setup.') || method === 'memory.reflect' || method === 'memory.consolidate';
   const r = await client.call(method, params, long ? 120_000 : 30_000);
   if (method === 'config.patch') void syncHotkey();
   return r;

@@ -4,6 +4,7 @@ import { signal } from '@preact/signals';
 import { runClaude } from '../actions';
 import { agentEngine, agentStatus, agentUsage, cfg, checkClaudeAuth, claudeAuth, engines, fmtDuration, agentReady, loadThread, overlay, patchConfig, refreshKeyStatus, sendToAgent, setSide, thread, tildePath, toast, turn, type LiveItem } from '../state';
 import { Markdown } from './Markdown';
+import { InstallCommand } from './ClaudeInstall';
 import { IconAgent, IconBolt, IconBranch, IconBrain, IconCheck, IconClock, IconEdit, IconFile, IconSearch, IconShield, IconStop, IconTerminal, IconWand, IconX, IconArrowUp, IconList } from './icons';
 
 export const composerFocus = signal(0);
@@ -214,32 +215,17 @@ function ContextMeter(): VNode | null {
   );
 }
 
-/** Shown only when neither Claude Code nor an API key is available. */
+/** Shown only when Claude Code is not installed: Jaffer runs on a Claude subscription, through Claude Code. */
 function SetupBanner(): VNode {
-  const [key, setKey] = useState('');
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    setBusy(true);
-    try {
-      const r = await call('secrets.setAnthropicKey', { key });
-      toast({ kind: 'info', text: r.verified ? 'API key saved to your Keychain.' : `Key saved (${r.note ?? 'could not verify'}).` });
-      setKey('');
-      await refreshKeyStatus();
-      await loadThread();
-    } catch (e) {
-      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    const t = setInterval(() => void refreshKeyStatus(), 3000); // goes away by itself once Claude Code is installed
+    return () => clearInterval(t);
+  }, []);
   return (
     <div class="banner">
-      <strong>Claude needs a way in.</strong> Install <b>Claude Code</b> and sign in with <code>/login</code>: this panel then works with your own Claude login, no API key needed. Or paste an Anthropic API key (kept in your macOS Keychain).
+      <strong>Claude Code is not installed.</strong> Jaffer runs on your Claude subscription, through Claude Code. Run this in any terminal (Terminal.app works), then come back: Jaffer notices by itself.
       <div class="row">
-        <input type="password" placeholder="sk-ant-…" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && key && void save()} />
-        <button class="btn primary" disabled={!key || busy} onClick={() => void save()}>
-          {busy ? 'Checking…' : 'Save'}
-        </button>
+        <InstallCommand />
       </div>
     </div>
   );

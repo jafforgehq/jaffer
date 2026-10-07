@@ -84,7 +84,8 @@ export class JafferService {
   // ------------------------------------------------------------------ lifecycle
 
   async start(): Promise<void> {
-    this.apiKey = await this.secrets.get(KEY_NAME).catch(() => null);
+    // The API-key engine is off (Claude subscriptions only), so the Keychain is not even read.
+    this.apiKey = this.apiEngineEnabled() ? await this.secrets.get(KEY_NAME).catch(() => null) : null;
     this.writeWrapper();
     void ClaudeCliLlm.detect(this.userEnv()).then((l) => (this.cliLlm = l)).catch(() => undefined);
 
@@ -115,7 +116,7 @@ export class JafferService {
       env: () => this.claudeEnv(),
       log: this.log,
     });
-    this.agent = new AgentHub(api, cli, this.config, { api: () => this.credentialsReady(), claudeCode: () => this.claudeBin !== null });
+    this.agent = new AgentHub(api, cli, this.config, { api: () => this.credentialsReady(), claudeCode: () => this.claudeBin !== null, apiEnabled: () => this.apiEngineEnabled() });
     this.probeClaude();
 
     this.wireEvents();
@@ -179,8 +180,17 @@ export class JafferService {
 
   // ------------------------------------------------------------------ credentials
 
+  /**
+   * Jaffer runs on Claude subscriptions only for now: the panel and memory curation use the Claude Code login, and an
+   * API key (stored or in the environment) is ignored. JAFFER_API_ENGINE=1 switches the old API-key engine back on;
+   * the tests use it, and so can a future release.
+   */
+  apiEngineEnabled(): boolean {
+    return process.env.JAFFER_API_ENGINE === '1';
+  }
+
   credentialsReady(): boolean {
-    return !!this.apiKey || !!process.env.ANTHROPIC_API_KEY || !!process.env.ANTHROPIC_AUTH_TOKEN;
+    return this.apiEngineEnabled() && (!!this.apiKey || !!process.env.ANTHROPIC_API_KEY || !!process.env.ANTHROPIC_AUTH_TOKEN);
   }
 
   private credentials(): Credentials {
@@ -192,12 +202,6 @@ export class JafferService {
     return this.client;
   }
 
-  private async setKey(key: string | null): Promise<void> {
-    if (key) await this.secrets.set(KEY_NAME, key);
-    else await this.secrets.delete(KEY_NAME);
-    this.apiKey = key;
-    this.client = null;
-  }
 
   // ------------------------------------------------------------------ terminal info + tool env
 
@@ -412,30 +416,6 @@ export class JafferService {
       await this.probeClaude();
       const st = this.agent.status();
       return { ready: st.ready, apiKey: this.credentialsReady(), claudeCode: this.claudeBin !== null, engine: st.engine, source: this.credentials().source, backend: this.secrets.backend };
-    });
-    r.handle('secrets.setAnthropicKey', async (p: { key: string; verify?: boolean }) => {
-      const key = String(p?.key ?? '').trim();
-      if (!key) throw new RpcError('Empty key');
-      const previous = this.apiKey;
-      await this.setKey(key);
-      if (p.verify !== false) {
-        try {
-          await this.getClient().models.list({ limit: 1 });
-        } catch (e) {
-          const status = (e as { status?: number }).status;
-          if (status === 401 || status === 403) {
-            await this.setKey(previous);
-            throw new RpcError('Anthropic rejected that key.', 'EAUTH');
-          }
-          // network trouble etc.: keep the key, report softly
-          return { ok: true, verified: false, note: errMsg(e) };
-        }
-      }
-      return { ok: true, verified: true };
-    });
-    r.handle('secrets.clearAnthropicKey', async () => {
-      await this.setKey(null);
-      return { ok: true };
     });
 
     // ---- integrations

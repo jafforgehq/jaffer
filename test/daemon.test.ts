@@ -38,6 +38,7 @@ beforeAll(async () => {
       SHELL: '/bin/bash',
       JAFFER_TICK_MS: '400',
       ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000',
+      JAFFER_API_ENGINE: '1', // the API-key engine is off in the product; these tests exercise it on purpose
       ANTHROPIC_BASE_URL: url,
       PS1: '$ ',
       // the panel's Claude Code process (only used by the Claude Code engine test): isolated profile, talks to the mock
@@ -135,7 +136,8 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(rec.stdout).toContain('linter before committing');
     const st = cli('status');
     expect(st.stdout).toContain('running');
-    expect(st.stdout).toMatch(/agent: .*ready/);
+    expect(st.stdout).toMatch(/claude: .*(signed in|signed out|not installed)/); // Jaffer runs on the Claude login; there is no key to report
+    expect(st.stdout).not.toMatch(/api key/i);
     // the Claude Code SessionStart hook prints the context Claude will start with
     const hook = spawnSync(process.execPath, [launcher.cliScript!, 'hook', 'session-start'], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8', input: JSON.stringify({ cwd: env.userHome, source: 'startup' }) });
     expect(hook.status).toBe(0);
@@ -359,7 +361,7 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
       execPath: process.execPath,
       daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
       cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
-      env: { HOME: env2.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ', PATH: `${fake.dir}:${process.env.PATH}` },
+      env: { HOME: env2.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ', PATH: `${fake.dir}:${process.env.PATH}`, ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000' },
     });
   }, 30_000);
 
@@ -369,6 +371,16 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     await last?.call('app.shutdown', {}).catch(() => undefined);
     await sleep(300);
     env2.cleanup();
+  });
+
+  it('runs on the Claude login only: an API key in the environment does not switch the panel to API billing', async () => {
+    expect(await c.call('secrets.status', {})).toMatchObject({ apiKey: false, claudeCode: true, engine: 'claude-code' });
+    expect((await c.call('agent.status', {})).engine).toBe('claude-code');
+  });
+
+  it('has no way to store an Anthropic API key', async () => {
+    await expect(c.call('secrets.setAnthropicKey', { key: 'sk-ant-api03-whatever' })).rejects.toThrow(/unknown method/);
+    await expect(c.call('secrets.clearAnthropicKey', {})).rejects.toThrow(/unknown method/);
   });
 
   it('reports whether Claude Code is installed and signed in, and nothing about the account', async () => {

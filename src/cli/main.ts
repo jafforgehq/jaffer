@@ -93,7 +93,6 @@ ${bold('Claude Code')}
 ${bold('Session')}
   jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
   jaffer config get|set <dot.path> <json>
-  jaffer key set|clear                  store/remove your Anthropic API key (Keychain)
 `;
 
 async function main(): Promise<void> {
@@ -266,11 +265,11 @@ async function main(): Promise<void> {
         const hello = await client.call('hello', {});
         const info = await client.call('session.info', {});
         const mem = await client.call('memory.stats', {});
-        const sec = await client.call('secrets.status', {});
+        const auth = await client.call('setup.claude.auth', {});
         console.log(`daemon: ${green('running')} pid ${hello.pid} · v${hello.version} · since ${hello.startedAt}`);
         console.log(`session: cwd ${info.cwd}${info.project ? ` · project ${path.basename(info.project)}${info.branch ? '@' + info.branch : ''}` : ''}${info.busy ? ` · running: ${info.busy}` : ''}`);
         console.log(`memory: ${mem.active} active · ${mem.pinned} pinned · ${mem.skills} skills · ${mem.episodesPending} events pending reflection`);
-        console.log(`agent: ${sec.ready ? green('ready') : red('no API key')} (${sec.source}, ${sec.backend})`);
+        console.log(`claude: ${auth.loggedIn ? green('signed in') : auth.installed ? red('signed out') + dim(' (run `claude auth login`)') : red('Claude Code not installed')}`);
         client.close();
       }
       if (cmd === 'doctor') {
@@ -328,24 +327,6 @@ async function main(): Promise<void> {
         console.log('ok');
       }
       client?.close();
-      return;
-    }
-
-    case 'key': {
-      const client = await ensureDaemon(paths, launcher());
-      if (args[1] === 'set') {
-        let key = args[2];
-        if (!key) {
-          const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-          key = await new Promise<string>((res) => rl.question('Anthropic API key: ', (a) => (rl.close(), res(a))));
-        }
-        const r = await client.call('secrets.setAnthropicKey', { key });
-        console.log(r.verified ? green('key saved and verified') : `key saved (${r.note ?? 'not verified'})`);
-      } else if (args[1] === 'clear') {
-        await client.call('secrets.clearAnthropicKey', {});
-        console.log('key removed');
-      } else throw new Error('Usage: jaffer key set [key] | clear');
-      client.close();
       return;
     }
 
