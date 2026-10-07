@@ -280,6 +280,35 @@ describe('Jaffer UI end to end', () => {
     await sendHook('Stop', { last_assistant_message: 'done' });
   }, 60_000);
 
+  it('Settings → Updates: the version, the automatic-checks switch, Check now, and what a ready update looks like', async () => {
+    const send = (state: object) => page.evaluate((st) => (window as any).__event('update.state', st), state);
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Updates' }).click();
+    expect(await page.textContent('[data-upd-status]')).toMatch(/Jaffer dev/);
+    // the switch is the setting
+    await page.locator('label.field', { hasText: 'Check automatically' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).updates.auto === false, 8_000, 'automatic checks to be switched off');
+    await page.locator('label.field', { hasText: 'Check automatically' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).updates.auto === true, 8_000, 'automatic checks to be switched on again');
+    // Check now answers
+    await page.locator('button', { hasText: 'Check now' }).click();
+    await until(async () => /Up to date/.test((await page.textContent('[data-upd-status]')) ?? ''), 8_000, 'the answer to Check now');
+    // a downloaded update: named, with a button that asks (the real prompt is a native dialog)
+    await send({ status: 'downloading', current: '0.1.1', version: '0.2.0', auto: true });
+    await until(async () => /Downloading 0\.2\.0/.test((await page.textContent('[data-upd-status]')) ?? ''), 8_000, 'the download to show');
+    await send({ status: 'ready', current: '0.1.1', version: '0.2.0', auto: true });
+    await until(async () => /0\.2\.0 is ready/.test((await page.textContent('[data-upd-status]')) ?? ''), 8_000, 'the ready update to show');
+    expect(await page.locator('button', { hasText: 'Install 0.2.0' }).count()).toBe(1);
+    await shot('13-updates');
+    // an unsigned build says why there is nothing to check, and offers no button that cannot work
+    await send({ status: 'unavailable', current: '0.1.1', auto: true });
+    await until(async () => /only the signed release/i.test((await page.textContent('[data-upd-status]')) ?? ''), 8_000, 'the unavailable text');
+    expect(await page.locator('button', { hasText: 'Check now' }).count()).toBe(0);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  });
+
   it('file paths in the panel are shown relative to where Claude is working', async () => {
     const file = '/work/app/src/auth/session.ts';
     await sendHook('SessionStart', { session_id: 'paths-1', cwd: '/work/app' });
@@ -364,7 +393,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code']);
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code', 'Updates']);
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
     for (const section of ['Memory', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);

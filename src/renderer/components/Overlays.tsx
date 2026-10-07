@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, checkClaudeSetup, overlay, patchConfig, setSide, toast, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, checkClaudeSetup, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
+import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock } from './icons';
+import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconShield, IconTerminal, IconX, IconBolt, IconClock, IconDownload } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -214,7 +215,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-type Section = 'appearance' | 'memory' | 'integrations';
+type Section = 'appearance' | 'memory' | 'integrations' | 'updates';
 
 export function Settings(): VNode {
   const c = cfg.value!;
@@ -247,6 +248,7 @@ export function Settings(): VNode {
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
     { id: 'memory', label: 'Memory', icon: <IconBrain size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
+    { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
   ];
 
   return (
@@ -372,9 +374,67 @@ export function Settings(): VNode {
               </Field>
             </>
           )}
+
+          {section === 'updates' && <UpdatesSection auto={c.updates?.auto !== false} onAuto={(v) => set({ updates: { auto: v } })} />}
         </div>
       </div>
     </Modal>
+  );
+}
+
+function updateText(s: UpdateState): string {
+  switch (s.status) {
+    case 'unavailable':
+      return 'Updates are off in this build: only the signed release updates itself.';
+    case 'checking':
+      return 'Checking…';
+    case 'downloading':
+      return `Downloading ${s.version ?? 'the update'}…`;
+    case 'ready':
+      return `${s.version} is ready`;
+    case 'uptodate':
+      return 'Up to date';
+    case 'error':
+      return `Could not check: ${s.error ?? 'unknown error'}`;
+    default:
+      return 'Not checked yet';
+  }
+}
+
+/** Jaffer asks before it updates (a native dialog); this is where to look, switch the background check off, or ask now. */
+function UpdatesSection({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }): VNode {
+  const s = updateState.value;
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    try {
+      updateState.value = await window.jaffer.updates.check();
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const status = s?.status ?? 'idle';
+  return (
+    <>
+      <h4>Updates</h4>
+      <p class="lede">Jaffer looks for new signed releases on GitHub and asks before installing one. Updating restarts Jaffer and ends your terminal session, so it is always your call.</p>
+      <Field label="Check automatically" hint="shortly after launch, then every few hours">
+        <Switch checked={auto} onChange={onAuto} />
+      </Field>
+      <div class="upd-line" data-upd-status={status}>
+        <span>
+          Jaffer {s?.current ?? appVersion.value}
+          <small>{updateText(s ?? { status: 'idle', current: appVersion.value, auto })}</small>
+        </span>
+        {status !== 'unavailable' && (
+          <button class={status === 'ready' ? 'btn primary' : 'btn'} disabled={busy || status === 'checking' || status === 'downloading'} onClick={() => void check()}>
+            {status === 'ready' ? `Install ${s?.version}` : 'Check now'}
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 

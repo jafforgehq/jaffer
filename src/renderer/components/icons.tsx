@@ -143,6 +143,13 @@ export const IconShield = ({ size, class: c }: P): VNode => (
     <path d="M9 12l2.2 2.2L15.5 10" />
   </svg>
 );
+export const IconDownload = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M12 4v11" />
+    <path d="M7.5 11L12 15.5 16.5 11" />
+    <path d="M5 19h14" />
+  </svg>
+);
 export const IconBolt = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M13 3L5 13.5h6L10 21l8-10.5h-6L13 3z" />

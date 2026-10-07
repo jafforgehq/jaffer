@@ -34,6 +34,8 @@ export interface JafferConfig {
   };
   export: { targets: 'claude-code'[]; claudeSkills: boolean };
   ingest: { claudeCode: boolean; backfillDays: number };
+  /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
+  updates: { auto: boolean };
   hotkey: string;
 }
 
@@ -64,6 +66,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   export: { targets: [], claudeSkills: false },
   ingest: { claudeCode: false, backfillDays: 7 },
+  updates: { auto: true },
   hotkey: 'Control+`',
 };
 

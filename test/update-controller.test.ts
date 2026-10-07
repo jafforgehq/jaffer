@@ -126,9 +126,9 @@ describe('UpdateController: asking', () => {
     await c.checkNow();
     await settle();
     expect(asked).toHaveLength(1);
-    expect(asked[0].version).toBe('0.2.0');
-    expect(asked[0].message).toContain('0.2.0');
-    expect(asked[0].detail).toMatch(/claude is working/i);
+    expect(asked[0]!.version).toBe('0.2.0');
+    expect(asked[0]!.message).toContain('0.2.0');
+    expect(asked[0]!.detail).toMatch(/claude is working/i);
     expect(c.state()).toMatchObject({ status: 'ready', version: '0.2.0', current: '0.1.1' });
   });
 

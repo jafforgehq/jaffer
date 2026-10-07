@@ -45,3 +45,17 @@ describe('appearance.animations', () => {
     expect(new ConfigStore(env.paths).get().appearance.animations).toBe(false);
   });
 });
+
+describe('updates.auto', () => {
+  it('is on by default, also for a config file saved before the setting existed', () => {
+    expect(DEFAULT_CONFIG.updates.auto).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().updates.auto).toBe(true);
+  });
+
+  it('can be switched off and stays off', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ updates: { auto: false } });
+    expect(new ConfigStore(env.paths).get().updates.auto).toBe(false);
+  });
+});

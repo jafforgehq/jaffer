@@ -43,8 +43,12 @@ export function signerKind(codesignOutput: string): 'developer-id' | 'adhoc' | '
 /** True when `version` is a higher x.y.z than `current` (a dev build, or any text that is not a version, is never updated). */
 export function isNewer(version: string, current: string): boolean {
   if (!cleanVersion(version) || !cleanVersion(current)) return false;
-  const a = version.split('-')[0].split('.').map(Number);
-  const b = current.split('-')[0].split('.').map(Number);
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  const a = (version.split('-')[0] ?? '').split('.').map(Number);
+  const b = (current.split('-')[0] ?? '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
   return false;
 }

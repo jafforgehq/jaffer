@@ -28,6 +28,7 @@ const SHIM = `(() => {
     if (msg.id !== undefined) { const p = pending.get(msg.id); if (!p) return; pending.delete(msg.id); msg.error ? p.rej(new Error(msg.error)) : p.res(msg.result); }
     else if (msg.event) listeners.forEach((cb) => cb(msg.event, msg.data));
   });
+  window.__event = (event, data) => listeners.forEach((cb) => cb(event, data));
   window.jaffer = {
     call: async (method, params) => { await ready; return new Promise((res, rej) => { const id = nextId++; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); }); },
     onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
@@ -35,6 +36,8 @@ const SHIM = `(() => {
     onFocus: (cb) => { const on = () => cb(true), off = () => cb(false); window.addEventListener('focus', on); window.addEventListener('blur', off); return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); }; },
     notify: async () => {}, openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
     appInfo: async () => ({ version: 'dev', platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
+    // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
+    updates: { state: async () => ({ status: 'idle', current: 'dev', auto: true }), check: async () => ({ status: 'uptodate', current: 'dev', auto: true }) },
     setLoginItem: async () => {}, pathForFile: () => '', platform: 'darwin',
   };
 })();`;

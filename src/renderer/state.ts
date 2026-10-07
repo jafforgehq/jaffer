@@ -2,6 +2,7 @@ import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
 import { shouldRecheckAuth } from '../shared/auth-recheck';
+import type { UpdateState } from '../shared/update-policy';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
@@ -65,6 +66,8 @@ export const commandLog = signal<CommandRec[]>([]);
 export const overlay = signal<Overlay>(null);
 export const windowFocused = signal(true);
 export const appVersion = signal('');
+/** Where the self-update stands (Settings → Updates). Null until the app answers. */
+export const updateState = signal<UpdateState | null>(null);
 export const zoom = signal(0);
 
 export function setSide(s: Side): void {
@@ -264,6 +267,7 @@ export async function bootstrap(): Promise<void> {
         void refreshInfoSoon();
       }
     } else if (event === 'claude.state') applyClaudeState(data.sessions);
+    else if (event === 'update.state') updateState.value = data;
     else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
@@ -288,6 +292,7 @@ export async function bootstrap(): Promise<void> {
     overlay.value = config.onboarded ? null : 'onboarding';
   });
   await Promise.all([refreshInfo(), loadClaudeState()]);
+  void j.updates.state().then((s) => (updateState.value = s)).catch(() => undefined);
   refreshMemory(0);
   ready.value = true;
   if (config.onboarded) {
