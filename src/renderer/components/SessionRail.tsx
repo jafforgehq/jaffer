@@ -75,15 +75,13 @@ export function SessionRail(): VNode {
           </button>
         </section>
 
+        {cmds.length > 0 && (
         <section>
           <div class="rail-h">
             <span>Recent</span>
             <span style={{ fontWeight: 500, letterSpacing: 0, textTransform: 'none' }}>{commandLog.value.length ? `${commandLog.value.length} in this session` : ''}</span>
           </div>
-          {cmds.length === 0 ? (
-            <div class="peek-empty">Commands you run show up here.</div>
-          ) : (
-            <div class="cmd-list">
+          <div class="cmd-list">
               {cmds.map((c, k) => {
                 const bad = c.exit !== null && c.exit !== 0;
                 return (
@@ -99,17 +97,17 @@ export function SessionRail(): VNode {
                   </button>
                 );
               })}
-            </div>
-          )}
+          </div>
         </section>
+        )}
 
+        {peek.length > 0 && (
         <section>
           <div class="rail-h">
             <span>Known here</span>
             <button onClick={() => toggleSide('memory')}>Open</button>
           </div>
           <div class="mem-peek">
-            {peek.length === 0 && <div class="peek-empty">{atHome ? 'Open a project and Jaffer starts learning it.' : 'Nothing learned about this project yet.'}</div>}
             {peek.map((m) => (
               <div key={m.id} class={`peek ${m.pinned ? 'pinned' : ''}`} title={m.text}>
                 <i />
@@ -118,6 +116,7 @@ export function SessionRail(): VNode {
             ))}
           </div>
         </section>
+        )}
       </div>
 
       <Pet />

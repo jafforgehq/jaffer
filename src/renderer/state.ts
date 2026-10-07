@@ -2,6 +2,7 @@ import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
 import { shouldRecheckAuth } from '../shared/auth-recheck';
+import { memoryToast } from '../shared/memory-toast';
 import type { UpdateState } from '../shared/update-policy';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
@@ -98,7 +99,8 @@ export const toasts = signal<Toast[]>([]);
 let toastId = 1;
 export function toast(t: Omit<Toast, 'id'>, ttl = 6000): void {
   const id = toastId++;
-  toasts.value = [...toasts.value.slice(-3), { ...t, id }];
+  // memory notices replace each other instead of piling up over the terminal
+  toasts.value = [...toasts.value.filter((x) => !(t.kind === 'learn' && x.kind === 'learn')).slice(-3), { ...t, id }];
   setTimeout(() => dismissToast(id), ttl);
 }
 export function dismissToast(id: number): void {
@@ -219,13 +221,10 @@ export function refreshMemory(delay = 150): void {
 function onMemoryEvent(e: { type: string; result?: ReflectionResult; items?: MemItemView[]; reason?: string }): void {
   memPulse.value++;
   refreshMemory();
-  if (e.type === 'learned' && e.items?.length) {
-    const it = e.items[0]!;
-    toast({ kind: 'learn', text: `Remembered: ${it.text}`, action: { label: 'Undo', run: () => void jaffer().call('memory.forget', { id: it.id }).then(() => refreshMemory()) } });
-  } else if (e.type === 'reflection' && e.result && e.result.applied > 0 && e.result.mode !== 'consolidate') {
-    const r = e.result;
-    toast({ kind: 'learn', text: r.summary, action: { label: 'Undo', run: () => void jaffer().call('memory.revert', { runId: r.runId }).then(() => refreshMemory()) } }, 8000);
-  }
+  const t = memoryToast(e as Parameters<typeof memoryToast>[0]);
+  if (!t) return; // housekeeping stays in the Memory panel's Activity log
+  const undo = t.undo;
+  toast({ kind: 'learn', text: t.text, action: { label: 'Undo', run: () => void jaffer().call(undo.kind === 'forget' ? 'memory.forget' : 'memory.revert', undo.kind === 'forget' ? { id: undo.id } : { runId: undo.runId }).then(() => refreshMemory()) } }, 8000);
 }
 
 // ------------------------------------------------------------------ pty bus (consumed by terminal views)
