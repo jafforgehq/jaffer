@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -409,5 +409,95 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     await c.call('setup.claude.login', {});
     await waitUntil(async () => (await c.call('setup.claude.auth', {})).loggedIn === true, 10_000);
     expect((await c.call('setup.claude.auth', {})).loginError).toBeUndefined();
+  });
+});
+
+describe('the terminal Claude, live (bundled daemon, hooks through the real jaffer CLI)', () => {
+  let env3: TestEnv;
+  let c: RpcClient;
+  const userHook = { type: 'command', command: 'echo my own hook' };
+  const settings = () => path.join(env3.userHome, '.claude', 'settings.json');
+
+  /** Run `jaffer hook <arg>` as Claude Code would, from inside (or outside) a Jaffer session. */
+  const hookCli = (arg: string, payload: object, inSession = true) =>
+    new Promise<void>((resolve) => {
+      const child = spawn(process.execPath, [path.join(root, 'dist/cli/jaffer.cjs'), 'hook', arg], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, HOME: env3.userHome, JAFFER_HOME: env3.home, JAFFER_SESSION: inSession ? '1' : '', JAFFER_NO_HOOKS: '' } });
+      child.on('close', () => resolve());
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(JSON.stringify(payload));
+    });
+  const ev = (name: string, over: object = {}) => ({ session_id: 'sess-1', hook_event_name: name, cwd: '/work/app', ...over });
+  const states = async () => (await c.call('claude.state', {})).sessions as { id: string; state: string; tool?: { name: string }; notice?: string }[];
+
+  beforeAll(async () => {
+    env3 = makeEnv();
+    // an install from before this feature (only the two memory hooks) next to the user's own hook
+    fs.mkdirSync(path.dirname(settings()), { recursive: true });
+    const old = (arg: string, timeout: number) => [{ hooks: [{ type: 'command', command: `'${env3.home}/bin/jaffer' hook ${arg} # jaffer-managed`, timeout }] }];
+    fs.writeFileSync(settings(), JSON.stringify({ hooks: { SessionStart: old('session-start', 8), Stop: [...old('stop', 5), { hooks: [userHook] }] } }));
+    c = await ensureDaemon(env3.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env3.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ' },
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    c?.close();
+    const last = await tryConnect(env3.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env3.cleanup();
+  });
+
+  it('starts with no session, and an install from before gets the new events without touching the user\'s own hook', async () => {
+    expect(await states()).toEqual([]);
+    const s = JSON.parse(fs.readFileSync(settings(), 'utf8'));
+    for (const e of ['SessionStart', 'Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Notification', 'SessionEnd']) {
+      expect((s.hooks[e] as any[]).some((x) => x.hooks.some((h: any) => String(h.command).includes('# jaffer-managed'))), e).toBe(true);
+    }
+    expect(s.hooks.Stop.some((x: any) => x.hooks.some((h: any) => h.command === userHook.command))).toBe(true);
+  });
+
+  it('events sent through `jaffer hook` inside the session move claude.state working → idle, and are pushed to the app', async () => {
+    const pushed = collect(c, 'claude.state');
+    await hookCli('user-prompt-submit', ev('UserPromptSubmit', { prompt: 'run the tests' }));
+    await hookCli('pre-tool-use', ev('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'toolu_1' }));
+    await waitUntil(async () => (await states())[0]?.tool?.name === 'Bash');
+    expect((await states())[0]).toMatchObject({ id: 'sess-1', state: 'working' });
+    await hookCli('stop', ev('Stop', { last_assistant_message: 'done' }));
+    await waitUntil(async () => (await states())[0]?.state === 'idle');
+    expect(pushed.length).toBeGreaterThanOrEqual(2);
+    expect(pushed[pushed.length - 1].sessions[0]).toMatchObject({ id: 'sess-1', state: 'idle' });
+  });
+
+  it('a hook from outside a Jaffer session changes nothing', async () => {
+    const before = JSON.stringify(await states());
+    await hookCli('user-prompt-submit', ev('UserPromptSubmit', { session_id: 'elsewhere', prompt: 'from another terminal' }), false);
+    await sleep(300);
+    expect(JSON.stringify(await states())).toBe(before);
+  });
+
+  it('a permission request is retracted when the transcript records that the user rejected it in the terminal', async () => {
+    const transcript = path.join(env3.root, 'sess-2.jsonl');
+    fs.writeFileSync(transcript, '{"type":"user","message":"hi"}\n');
+    await c.call('claude.event', ev('PreToolUse', { session_id: 'sess-2', transcript_path: transcript, tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, tool_use_id: 'toolu_9' }));
+    await c.call('claude.event', ev('Notification', { session_id: 'sess-2', transcript_path: transcript, message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }));
+    expect((await states()).find((s) => s.id === 'sess-2')).toMatchObject({ state: 'needs-you', notice: 'Claude needs your permission to use Bash' });
+    fs.appendFileSync(transcript, '{"type":"user","toolUseResult":"User rejected tool use"}\n');
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-2')?.state === 'idle', 5_000);
+  });
+
+  it('running claude in the shell and leaving it ends every session (it also covers a crashed Claude Code)', async () => {
+    await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-3', prompt: 'still going' }));
+    expect((await states()).some((s) => s.state === 'working')).toBe(true);
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await sleep(800);
+    await c.call('pty.write', { data: 'claude() { :; }\r' });
+    await sleep(300);
+    await c.call('pty.write', { data: 'claude --resume\r' });
+    await waitUntil(async () => (await states()).every((s) => s.state === 'ended'), 8_000);
   });
 });

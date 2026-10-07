@@ -20,7 +20,9 @@ import { AnthropicLlm, AnthropicProvider, makeClient, resolveCredentials, type C
 import type { ToolEnv } from '../core/agent/tools';
 import { ClaudeIngestor } from '../core/ingest/claude';
 import { ClaudeCliLlm } from '../core/agent/claude-cli';
-import { claudeStatus, findClaude, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { claudeStatus, findClaude, hooksConnected, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { ClaudeWatcher } from '../core/claude/watcher';
+import { watchRejection } from '../core/claude/transcript-watch';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
@@ -63,6 +65,11 @@ export class JafferService {
   private recentCommands: { cmd: string; exit: number | null; durMs: number; cwd: string; at: number; by: 'user' | 'agent' }[] = [];
   private timers: NodeJS.Timeout[] = [];
   private ingestor: ClaudeIngestor | null = null;
+  /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
+  private claudeWatcher = new ClaudeWatcher();
+  private rejectionWatches = new Map<string, () => void>();
+  private claudePushTimer: NodeJS.Timeout | null = null;
+  private claudePushPending = false;
   private stopping = false;
   private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
@@ -87,6 +94,12 @@ export class JafferService {
     // The API-key engine is off (Claude subscriptions only), so the Keychain is not even read.
     this.apiKey = this.apiEngineEnabled() ? await this.secrets.get(KEY_NAME).catch(() => null) : null;
     this.writeWrapper();
+    try {
+      // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own entries).
+      if (hooksConnected(this.userHome)) installHooks(this.cliWrapper, this.userHome);
+    } catch {
+      /* the user's settings are theirs: never fail startup over them */
+    }
     void ClaudeCliLlm.detect(this.userEnv()).then((l) => (this.cliLlm = l)).catch(() => undefined);
 
     this.memory = new MemoryEngine({
@@ -134,6 +147,8 @@ export class JafferService {
     if (this.stopping) return;
     this.stopping = true;
     for (const t of this.timers) clearInterval(t);
+    for (const stop of this.rejectionWatches.values()) stop();
+    this.rejectionWatches.clear();
     this.memory?.stop();
     await this.agent?.dispose();
     try {
@@ -292,17 +307,58 @@ export class JafferService {
           this.recentCommands.push({ cmd: redactText(ev.cmd).slice(0, 300), exit: ev.exit, durMs: ev.durMs, cwd: ev.cwd, at: Date.now(), by: ev.by });
           if (this.recentCommands.length > 40) this.recentCommands.splice(0, this.recentCommands.length - 40);
         }
+        // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over.
+        if (/^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(ev.cmd)) this.claudeWatcher.endAll();
         const proj = resolveProject(ev.cwd, this.userHome);
         if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output, by: ev.by });
       }
     });
     this.agent.events.on((e) => this.rpc.broadcast('agent.event', e));
+    this.claudeWatcher.changes.on((sessions) => {
+      this.pushClaudeState();
+      this.watchForRejections(sessions);
+    });
     this.memory.events.on((e) => this.rpc.broadcast('memory.event', e));
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
       this.memory.syncExports();
       this.startIngest();
     });
+  }
+
+  /** At most one push per 100 ms, and never fewer than the last state: the trailing push carries the newest snapshot. */
+  private pushClaudeState(): void {
+    if (this.claudePushTimer) {
+      this.claudePushPending = true;
+      return;
+    }
+    this.rpc.broadcast('claude.state', { sessions: this.claudeWatcher.sessions() });
+    this.claudePushTimer = setTimeout(() => {
+      this.claudePushTimer = null;
+      if (this.claudePushPending) {
+        this.claudePushPending = false;
+        this.pushClaudeState();
+      }
+    }, 100);
+    this.claudePushTimer.unref?.();
+  }
+
+  /** Declining a prompt in the terminal fires no hook: while a session waits for the user, read its transcript for that. */
+  private watchForRejections(sessions: { id: string; state: string; transcriptPath?: string }[]): void {
+    for (const s of sessions) {
+      const waiting = s.state === 'needs-you' && !!s.transcriptPath;
+      const watching = this.rejectionWatches.has(s.id);
+      if (waiting && !watching) {
+        const stop = watchRejection(s.transcriptPath!, () => {
+          this.rejectionWatches.delete(s.id);
+          this.claudeWatcher.retractNotice(s.id);
+        });
+        this.rejectionWatches.set(s.id, stop);
+      } else if (!waiting && watching) {
+        this.rejectionWatches.get(s.id)!();
+        this.rejectionWatches.delete(s.id);
+      }
+    }
   }
 
   private startIngest(): void {
@@ -391,6 +447,12 @@ export class JafferService {
       return { items: this.agent.thread.items(), status: this.agent.status() };
     });
     r.handle('agent.status', () => this.agent.status());
+    // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
+    r.handle('claude.event', (p: unknown) => {
+      this.claudeWatcher.handle(p);
+      return { ok: true };
+    });
+    r.handle('claude.state', () => ({ sessions: this.claudeWatcher.sessions() }));
     r.handle('agent.compact', async () => {
       if (this.agent.kind() === 'claude-code') return { compacted: false }; // Claude Code compacts its own context
       const provider = this.credentialsReady() ? new AnthropicProvider(() => this.getClient()) : null;
