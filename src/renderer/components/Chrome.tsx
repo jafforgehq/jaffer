@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { agentEngine, agentUsage, cfg, daemonUp, dismissToast, fmtDuration, info, agentReady, memPulse, memStats, overlay, railOpen, safeCommand, side, tildePath, toasts, toggleRail, toggleSide, turn } from '../state';
+import { claudeAuth, currentClaude, daemonUp, dismissToast, fmtDuration, info, memPulse, memStats, overlay, railOpen, safeCommand, setSide, side, tildePath, toasts, toggleRail, toggleSide } from '../state';
 import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconX } from './icons';
 
 function shortPath(p: string): string {
@@ -11,7 +11,7 @@ function shortPath(p: string): string {
 
 export function TitleBar(): VNode {
   const i = info.value;
-  const busy = !!turn.value;
+  const busy = currentClaude()?.state === 'working'; // a dot on the Claude button while Claude works
   const running = i.busy ?? null;
   return (
     <div class="titlebar">
@@ -64,7 +64,7 @@ export function StatusBar(): VNode {
   const st = memStats.value;
   const i = info.value;
   const last = i.lastCommand;
-  const cost = agentUsage.value?.costUsd ?? 0;
+  const live = currentClaude();
   const claude = !!i.busy && /\bclaude\b/.test(i.busy);
   return (
     <div class="statusbar">
@@ -80,21 +80,27 @@ export function StatusBar(): VNode {
         </span>
       )}
       <div class="grow" />
-      {claude && (
+      {live?.state === 'needs-you' ? (
+        <button class="sb-item sb-btn warn" onClick={() => setSide('agent')} title="Claude is waiting for you in the terminal">
+          <IconInfo size={11} /> Claude needs you
+        </button>
+      ) : live?.state === 'working' ? (
+        <span class="sb-item accent">
+          <IconBolt size={11} /> Claude working{live.tool ? ` · ${live.tool.name}` : ''}
+        </span>
+      ) : claude ? (
         <span class="sb-item accent">
           <IconBolt size={11} /> Claude Code is running
         </span>
-      )}
-      {!agentReady.value && (
+      ) : null}
+      {claudeAuth.value?.installed === false && (
         <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Claude Code needs to be installed and signed in: see Settings">
           <IconInfo size={11} /> set up Claude
         </button>
       )}
-      {cost > 0 && agentEngine.value !== 'claude-code' && <span class="sb-item">${cost.toFixed(2)}</span>}
       <button class="sb-item sb-btn" onClick={() => toggleSide('memory')} title="Open memory">
         <span class="mem-dot" key={memPulse.value} /> {st ? `${st.active} memories · ${st.skills} skills` : 'memory'}
       </button>
-      <span class="sb-item">{agentEngine.value === 'claude-code' ? cfg.value?.agent.cliModel || 'Claude login' : cfg.value?.agent.model}</span>
     </div>
   );
 }

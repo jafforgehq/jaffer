@@ -32,7 +32,7 @@ const SHIM = `(() => {
     call: async (method, params) => { await ready; return new Promise((res, rej) => { const id = nextId++; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); }); },
     onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     onMenu: (cb) => { menu.add(cb); window.__menu = (id) => menu.forEach((f) => f(id)); return () => menu.delete(cb); },
-    onFocus: () => () => {},
+    onFocus: (cb) => { const on = () => cb(true), off = () => cb(false); window.addEventListener('focus', on); window.addEventListener('blur', off); return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); }; },
     notify: async () => {}, openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
     appInfo: async () => ({ version: 'dev', platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false }),
     setLoginItem: async () => {}, pathForFile: () => '', platform: 'darwin',

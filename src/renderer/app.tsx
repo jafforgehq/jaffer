@@ -4,7 +4,7 @@ import { effect } from '@preact/signals';
 import { activePane, cfg, overlay, ready, railOpen, setSide, setSideWidth, side, sideWidth, toggleRail, toggleSide, appVersion } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
-import { AgentPanel } from './components/AgentPanel';
+import { ClaudePanel } from './components/ClaudePanel';
 import { MemoryPanel } from './components/MemoryPanel';
 import { SessionRail } from './components/SessionRail';
 import { DaemonBanner, StatusBar, TitleBar, Toasts } from './components/Chrome';
@@ -79,7 +79,7 @@ export function App(): VNode | null {
           {s && (
             <aside class="side" style={{ width: `${sideWidth.value}px` }}>
               <SideResizer />
-              {s === 'agent' ? <AgentPanel /> : <MemoryPanel />}
+              {s === 'agent' ? <ClaudePanel /> : <MemoryPanel />}
             </aside>
           )}
         </div>

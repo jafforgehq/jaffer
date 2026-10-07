@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { activePane, agentEngine, baseName, clock, commandLog, daemonUp, fmtDuration, fmtUptime, homeDir, info, agentReady, memItems, overlay, safeCommand, setSide, side, thread, tildePath, toggleRail, toggleSide, turn } from '../state';
+import { activePane, baseName, claudeAuth, clock, commandLog, currentClaude, daemonUp, fmtUptime, fmtDuration, homeDir, info, memItems, overlay, safeCommand, setSide, side, tildePath, toggleRail, toggleSide } from '../state';
 import { terminals } from './TerminalView';
 import { IconAgent, IconBolt, IconCheck, IconCommandKey, IconFolder, IconGear, IconBranch, IconPlus, IconSidebar, IconTerminal, IconX } from './icons';
 
@@ -13,10 +13,10 @@ export function SessionRail(): VNode {
   const busy = i.busy ?? null;
   const claude = !!busy && /\bclaude\b/.test(busy);
   const cmds = commandLog.value.slice(-5).reverse();
-  const t = turn.value;
-  const waiting = thread.value.some((i) => i.kind === 'tool' && i.state === 'approval');
-  const via = agentEngine.value === 'claude-code' ? 'Claude Code login' : 'API key';
-  const agentLine = !agentReady.value ? 'not set up yet' : waiting ? 'waiting for your approval' : t ? `working · ${fmtDuration(Math.max(1000, now - t.started))}` : `idle · ${via}`;
+  const live = currentClaude();
+  const waiting = live?.state === 'needs-you';
+  const working = live?.state === 'working';
+  const agentLine = claudeAuth.value?.installed === false ? 'not set up yet' : waiting ? 'waiting for you' : working ? `working · ${live!.tool?.name ?? 'thinking'}` : live ? 'idle' : 'not running';
 
   const projectScope = i.project ? `project:${i.project}` : null;
   const peek = memItems.value
@@ -68,7 +68,7 @@ export function SessionRail(): VNode {
               <span class="row-title">Claude</span>
               <span class={`row-sub ui ${waiting ? 'attn' : ''}`}>{agentLine}</span>
             </span>
-            {waiting ? <span class="row-dot attn" /> : t ? <span class="spinner" /> : null}
+            {waiting ? <span class="row-dot attn" /> : working ? <span class="spinner" /> : null}
           </button>
         </section>
 

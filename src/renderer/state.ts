@@ -2,6 +2,8 @@ import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { AgentEvent, ThreadItem, UsageTotals } from '../core/agent/types';
 import type { AgentStatus } from '../core/agent/runtime';
+import type { ClaudeSession } from '../core/claude/watcher';
+import { shouldRecheckAuth } from '../shared/auth-recheck';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
@@ -123,11 +125,28 @@ export interface ClaudeAuthState {
 }
 /** Where the Claude Code login stands, as last asked (null until the first answer). Asked at startup and after a failed turn, never on a timer. */
 export const claudeAuth = signal<ClaudeAuthState | null>(null);
+let lastAuthCheck = 0;
 export async function checkClaudeAuth(): Promise<void> {
+  lastAuthCheck = Date.now();
   try {
     claudeAuth.value = await jaffer().call('setup.claude.auth', {});
   } catch {
     /* keep the last answer */
+  }
+}
+
+/** What the Claude in the terminal is doing, pushed by the daemon from its hook events (newest change first). */
+export const claudeLive = signal<ClaudeSession[]>([]);
+/** The session the panel shows: the most recently changed one that has not ended. */
+export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
+export function applyClaudeState(sessions: ClaudeSession[]): void {
+  claudeLive.value = sessions;
+}
+async function loadClaudeState(): Promise<void> {
+  try {
+    applyClaudeState((await jaffer().call('claude.state', {})).sessions);
+  } catch {
+    /* the daemon is not there yet; its next push fills this in */
   }
 }
 
@@ -329,7 +348,8 @@ export async function bootstrap(): Promise<void> {
         info.value = { ...info.value, cwd: data.cwd };
         void refreshInfoSoon();
       }
-    } else if (event === 'agent.event') applyAgentEvent(data);
+    } else if (event === 'claude.state') applyClaudeState(data.sessions);
+    else if (event === 'agent.event') applyAgentEvent(data);
     else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') {
       const before = cfg.value?.agent.engine;
@@ -341,18 +361,23 @@ export async function bootstrap(): Promise<void> {
       daemonUp.value = true;
       void refreshInfo();
       void loadThread();
+      void loadClaudeState();
       refreshMemory(0);
       ptyBus.emit({ event: 'daemon.up', data: {} });
     }
   });
-  j.onFocus((f) => (windowFocused.value = f));
+  j.onFocus((f) => {
+    windowFocused.value = f;
+    // Coming back to the window is when a lapsed login is worth a look (see shouldRecheckAuth).
+    if (f && cfg.value?.onboarded && shouldRecheckAuth(claudeAuth.value ? claudeAuth.value.loggedIn : null, lastAuthCheck, Date.now())) void checkClaudeAuth();
+  });
   const [config, app] = await Promise.all([j.call('config.get', {}), j.appInfo()]);
   batch(() => {
     cfg.value = config;
     appVersion.value = app.version;
     overlay.value = config.onboarded ? null : 'onboarding';
   });
-  await Promise.all([refreshInfo(), loadThread(), refreshKeyStatus()]);
+  await Promise.all([refreshInfo(), loadThread(), refreshKeyStatus(), loadClaudeState()]);
   refreshMemory(0);
   ready.value = true;
   if (config.onboarded) void checkClaudeAuth();

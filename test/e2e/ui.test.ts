@@ -48,6 +48,9 @@ async function until<T>(fn: () => Promise<T | false | null | undefined>, ms = 15
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** A Claude Code hook event, as `jaffer hook` would deliver it from inside Jaffer's terminal. */
+const sendHook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'live-1', hook_event_name: name, cwd: '/work/app', ...over });
+
 async function shot(name: string): Promise<void> {
   fs.mkdirSync(shots, { recursive: true });
   await page.screenshot({ path: path.join(shots, `${name}.png`) });
@@ -135,7 +138,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.panel-head').count()).toBe(0);
     await page.click('.seg-btn[title^="Claude"]');
     await page.waitForSelector('.panel-head');
-    expect(await page.textContent('.panel-sub')).toMatch(/This chat is separate from the claude you run there/);
+    expect(await page.textContent('.panel-sub')).toMatch(/Live view of the Claude running in your terminal/);
   }, 90_000);
 
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
@@ -180,18 +183,6 @@ describe('Jaffer UI end to end', () => {
     await until(async () => /false/.test((await page.textContent('.rail .cmd-row.bad')) ?? ''), 10_000, 'the failed command in the rail');
   }, 30_000);
 
-  it('talks to the agent, runs its command in the shared terminal, and shows the answer', async () => {
-    mock.reset().queue({ kind: 'tool', id: 'toolu_ui1', name: 'run_command', input: { command: 'echo agent-ran-this' }, text: 'Let me check.' }, { kind: 'text', text: 'Done — the command printed **agent-ran-this**.' });
-    await page.fill('.composer textarea', 'run a quick echo');
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.msg.user');
-    await until(async () => (await page.$$('.msg.assistant')).length >= 1 && /agent-ran-this/.test((await page.textContent('.thread')) ?? ''), 15_000, 'assistant answer');
-    expect(await termText()).toContain('agent-ran-this'); // it really ran in the user's terminal
-    expect(await page.$('.tool')).toBeTruthy();
-    await until(async () => !(await page.$('.working')), 10_000, 'turn to finish');
-    await shot('03-agent');
-  }, 40_000);
-
   it('there is one Claude in the sidebar; the panel header opens the full Claude Code in the terminal', async () => {
     const titles = await page.$$eval('.rail .row-title', (els) => els.map((e) => e.textContent));
     expect(titles.filter((t) => t === 'Claude')).toHaveLength(1);
@@ -208,18 +199,51 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Enter');
   }, 40_000);
 
-  it('asks for approval in the UI before writing a file, and obeys Allow', async () => {
-    const target = path.join(env.userHome, 'ui-approved.txt');
-    mock.reset().queue({ kind: 'tool', id: 'toolu_ui2', name: 'write_file', input: { path: target, content: 'written via approval' } }, { kind: 'text', text: 'File written.' });
-    await page.fill('.composer textarea', 'please write a file');
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.approval');
-    expect(fs.existsSync(target)).toBe(false);
-    await shot('04-approval');
-    await page.click('.approval .btn.primary');
-    await until(async () => fs.existsSync(target), 10_000, 'file to be written');
-    await until(async () => /File written/.test((await page.textContent('.thread')) ?? ''), 10_000, 'final message');
+  it('the panel is a live companion: no session, then working with its tool, needs you, then idle with the reply', async () => {
+    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
+    await page.waitForSelector('.live-empty');
+    expect(await page.textContent('.live-empty')).toMatch(/Run .?claude.? in the terminal/);
+    expect(await page.textContent('.live-pill')).toBe('No session');
+    expect(await page.locator('.agent textarea').count()).toBe(0); // no prompt box: you talk to Claude in the terminal
+    expect(await page.locator('.composer').count()).toBe(0);
+
+    await sendHook('UserPromptSubmit', { prompt: 'fix the build, my key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' });
+    await sendHook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' });
+    await page.waitForSelector('.live-pill[data-state="working"]');
+    expect(await page.textContent('.live-pill')).toBe('Working');
+    // the daemon pushes at most every 100 ms, so the tool can arrive a moment after the first event
+    await until(async () => /Bash/.test((await page.textContent('.live-now')) ?? '') && /npm test/.test((await page.textContent('.live-now')) ?? ''), 8_000, 'the running tool');
+    expect(await page.textContent('.agent')).not.toContain('sk-ant-api03'); // a secret in a prompt never reaches the screen
+    expect((await page.textContent('.rail')) ?? '').toMatch(/working/i);
+    expect((await page.textContent('.statusbar')) ?? '').toMatch(/working/i);
+
+    await sendHook('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' });
+    await page.waitForSelector('.live-pill[data-state="needs-you"]');
+    expect(await page.textContent('.live-pill')).toBe('Needs you');
+    expect(await page.textContent('.live-needs')).toContain('Claude needs your permission to use Bash');
+    expect((await page.textContent('.rail')) ?? '').toMatch(/waiting for you/i);
+    await shot('03b-needs-you');
+
+    await sendHook('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1', duration_ms: 1500 });
+    await sendHook('Stop', { last_assistant_message: 'All tests pass now.' });
+    await page.waitForSelector('.live-pill[data-state="idle"]');
+    expect(await page.textContent('.live-pill')).toBe('Idle');
+    expect(await page.locator('.live-needs').count()).toBe(0);
+    expect(await page.textContent('.live-activity .live-row[data-status="done"]')).toContain('npm test');
+    expect(await page.textContent('.live-reply')).toContain('All tests pass now.');
+    await shot('03-agent');
   }, 40_000);
+
+  it('the panel lists subagents, and goes back to "No session" when Claude Code ends', async () => {
+    await sendHook('SubagentStart', { agent_id: 'agent-1', agent_type: 'general-purpose' });
+    await page.waitForSelector('.live-subagents');
+    expect(await page.textContent('.live-subagents')).toContain('general-purpose');
+    await sendHook('SubagentStop', { agent_id: 'agent-1', agent_type: 'general-purpose' });
+    await until(async () => /done/i.test((await page.textContent('.live-subagents')) ?? ''), 8_000, 'the subagent to show as done');
+    await sendHook('SessionEnd');
+    await page.waitForSelector('.live-pill[data-state="none"]');
+    expect(await page.textContent('.live-pill')).toBe('No session');
+  });
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
@@ -240,7 +264,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => !(await page.$('.mem')), 8000, 'memory to disappear');
   }, 40_000);
 
-  it('command palette runs actions and can hand free text to the agent', async () => {
+  it('command palette runs actions', async () => {
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await page.keyboard.type('tokyo');
@@ -295,37 +319,6 @@ describe('Jaffer UI end to end', () => {
     expect(box.screen).toBeGreaterThan(box.pane - 60);
   }, 30_000);
 
-  it.skipIf(!CLAUDE)('the Claude panel runs on a Claude Code login: it says so, asks in the UI, and runs commands in the terminal', async () => {
-    const target = path.join(env.userHome, 'claude-made.txt');
-    try {
-      await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'claude-code' } }));
-      if (!(await page.$('.composer textarea'))) await page.click('.seg-btn[title^="Claude"]');
-      await page.waitForSelector('.engine-chip');
-      await until(async () => (await page.textContent('.engine-chip'))?.includes('Claude Code login'), 10_000, 'the engine chip');
-      const main = (b: any) => (b.tools?.length ?? 0) > 0;
-      mock.reset().queue(
-        { kind: 'tool', id: 'toolu_cu1', name: 'mcp__jaffer-session__run_command', input: { command: `touch ${target}` }, text: 'Creating the file.', when: main },
-        { kind: 'text', text: 'Created **claude-made.txt** in your terminal.', when: main },
-      );
-      await page.fill('.composer textarea', 'create a file called claude-made.txt');
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.approval', { timeout: 60_000 });
-      expect(await page.textContent('.approval')).toContain(`touch ${target}`); // the command, before it runs
-      expect(fs.existsSync(target)).toBe(false);
-      await shot('11-claude-code-engine');
-      await page.click('.approval .btn.primary');
-      await until(async () => /Created claude-made\.txt/.test((await page.textContent('.thread')) ?? ''), 60_000, 'the answer');
-      await until(async () => fs.existsSync(target), 10_000, 'the file').catch(async (e) => {
-        const t = await page.evaluate(() => window.jaffer.call('agent.thread', {}));
-        throw new Error(`${e.message}; tool rows: ${JSON.stringify(t.items.filter((i: any) => i.kind === 'tool'))}; panes: ${JSON.stringify(await page.evaluate(() => window.jaffer.call('pane.list', {})))}`);
-      });
-      expect((await termText()).replace(/\n/g, '')).toContain(`touch ${target}`); // it ran in the user's own terminal (a narrow pane wraps the line)
-    } finally {
-      await page.evaluate(() => window.jaffer.call('config.patch', { agent: { engine: 'auto' } }));
-      await until(async () => (await page.evaluate(() => window.jaffer.call('agent.thread', {}))).status.engine === 'api', 10_000, 'back to the API engine');
-    }
-  }, 150_000);
-
   it('reconnecting the page restores the same session (nothing was lost)', async () => {
     const before = await page.evaluate(() => window.jaffer.call('pane.list'));
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
@@ -333,9 +326,6 @@ describe('Jaffer UI end to end', () => {
     await until(async () => /hello-from-the-ui/.test(await termText()), 15_000, 'restored screen');
     const after = await page.evaluate(() => window.jaffer.call('pane.list'));
     expect(after.map((p: any) => p.pid)).toEqual(before.map((p: any) => p.pid));
-    // and the agent conversation is still there (open the agent panel if the memory panel was showing)
-    if (!(await page.$('.thread'))) await page.click('.seg-btn[title^="Claude"]');
-    await until(async () => /agent-ran-this/.test((await page.textContent('.thread')) ?? ''), 10_000, 'restored conversation');
     await shot('10-restored');
   }, 40_000);
 
@@ -354,6 +344,7 @@ describe('Jaffer UI end to end', () => {
   it('a lapsed Claude login shows a lasting banner in the panel; signing in clears it and types nothing into the terminal', async () => {
     fake.setLoggedIn(false); // as when the login expires
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // a fresh start of the app checks on boot
+    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
     await page.waitForSelector('.panel-signin', { timeout: 20_000 });
     expect(await page.textContent('.panel-signin')).toMatch(/signed out/i);
     await shot('01b-panel-signed-out');
@@ -362,22 +353,16 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toMatch(/auth login/);
   }, 60_000);
 
-  it('a failed turn re-checks the login: if Claude turns out to be signed out, the banner comes back', async () => {
-    // Any failed turn triggers the re-check. The API engine fails fast on a 401 (Claude Code would retry it first).
-    await page.waitForSelector('.engine-chip');
-    expect(await page.locator('.panel-signin').count()).toBe(0); // signed in again after the previous test
+
+  it('a signed-out banner clears by itself when the user signs in elsewhere and comes back to the window', async () => {
     fake.setLoggedIn(false);
-    const rejected = { kind: 'error' as const, status: 401, message: 'invalid x-api-key', when: (b: any) => JSON.stringify(b.messages ?? []).includes('hello') };
-    mock.reset().queue(rejected, rejected);
-    await page.fill('.composer textarea', 'hello');
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.panel-signin', { timeout: 30_000 }).catch(async (e) => {
-      const t = await page.evaluate(() => window.jaffer.call('agent.thread', {}));
-      throw new Error(`${e.message}; thread: ${JSON.stringify(t.items.slice(-3))}; engine: ${t.status.engine}; toasts: ${JSON.stringify(await page.locator('.toast').allTextContents())}`);
-    });
-    await page.click('.panel-signin .btn.primary');
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    if (!(await page.$('.agent .panel-head'))) await page.click('.seg-btn[title^="Claude"]');
+    await page.waitForSelector('.panel-signin', { timeout: 20_000 });
+    fake.setLoggedIn(true); // signed in in another terminal
+    await page.evaluate(() => window.dispatchEvent(new Event('focus'))); // the window comes back to the front
     await page.waitForSelector('.panel-signin', { state: 'detached', timeout: 20_000 });
-  }, 90_000);
+  }, 60_000);
 });
 
 void ensureDaemon;
