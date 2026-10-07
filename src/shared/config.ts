@@ -36,6 +36,8 @@ export interface JafferConfig {
   };
   export: { targets: 'claude-code'[]; claudeSkills: boolean };
   ingest: { claudeCode: boolean; backfillDays: number };
+  /** The person chose a plain terminal at first run. Claude stays on offer (the panel), nothing about it nags; connecting it clears this. */
+  claude: { skipped: boolean };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
   hotkey: string;
@@ -69,6 +71,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   export: { targets: [], claudeSkills: false },
   ingest: { claudeCode: false, backfillDays: 7 },
+  claude: { skipped: false },
   updates: { auto: true },
   hotkey: 'Control+`',
 };

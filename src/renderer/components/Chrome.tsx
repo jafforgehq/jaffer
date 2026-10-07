@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { claudeAuth, currentClaude, daemonUp, dismissToast, fmtDuration, info, memPulse, memStats, overlay, railOpen, safeCommand, setSide, side, tildePath, toasts, toggleRail, toggleSide } from '../state';
+import { cfg, claudeAuth, currentClaude, daemonUp, dismissToast, fmtDuration, info, memPulse, memStats, overlay, railOpen, safeCommand, setSide, side, tildePath, toasts, toggleRail, toggleSide } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { IconAgent, IconBolt, IconBrain, IconBranch, IconCheck, IconInfo, IconSidebar, IconX } from './icons';
 
@@ -95,7 +95,7 @@ export function StatusBar(): VNode {
           <IconBolt size={11} /> Claude Code is running
         </span>
       ) : null}
-      {claudeAuth.value?.installed === false && (
+      {claudeAuth.value?.installed === false && !cfg.value?.claude?.skipped && (
         <button class="sb-item sb-btn warn" onClick={() => (overlay.value = 'settings')} title="Claude Code needs to be installed and signed in: see Settings">
           <IconInfo size={11} /> set up Claude
         </button>

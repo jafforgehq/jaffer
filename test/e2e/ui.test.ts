@@ -106,7 +106,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.locator('.ob-checks li[data-state="ok"]').count()) >= 1, 15_000, 'Claude Code to be detected');
     const text = (await page.textContent('.onboard')) ?? '';
     expect(text).toContain('Sign in with Claude');
-    expect(text).not.toMatch(/skip/i);
+    expect(text).toMatch(/plain terminal/i); // Claude is optional: a way past the sign-in is offered, in plain words
     expect(text).not.toMatch(/api key|console/i); // subscriptions only: no key, no pay-per-use account
     expect(await page.locator('.onboard .choices').count()).toBe(0);
     expect(await page.getByText('Get started').count()).toBe(0);
@@ -167,6 +167,36 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.panel-sub')).toMatch(/Live view of the Claude running in your terminal/);
   }, 90_000);
 
+
+  it('first run without Claude: "plain terminal" passes the sign-in, offers no Claude switches, and installs and starts nothing', async () => {
+    const noArgCalls = () => fake.calls().filter((l) => l.startsWith(' HOME=')).length;
+    const before = noArgCalls();
+    await page.evaluate(() => window.jaffer.call('setup.claude.remove', {})); // a Mac where Claude Code is not connected
+    fake.setLoggedIn(false);
+    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.onboard[data-step="signin"]', { timeout: 20_000 });
+    await page.locator('.onboard button', { hasText: 'plain terminal' }).click();
+    await page.waitForSelector('.onboard[data-step="choices"]');
+    const text = (await page.textContent('.onboard')) ?? '';
+    expect(text).toContain('Learn from my sessions');
+    expect(text).not.toMatch(/Start Claude Code|Show what Claude is doing|curate memory/i);
+    expect(text).toMatch(/Claude panel/i); // and how to add Claude later
+    await shot('01b-onboarding-plain-terminal');
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard', { state: 'detached' });
+    await page.waitForSelector('.term .xterm');
+    const cfg = await page.evaluate(() => window.jaffer.call('config.get'));
+    expect(cfg).toMatchObject({ onboarded: true, claude: { skipped: true }, ingest: { claudeCode: false }, memory: { llm: 'off' } }); // nothing is sent to Claude unless they switch it on later
+    expect((await page.evaluate(() => window.jaffer.call('setup.claude.status'))).hooks).toBe(false);
+    await sleep(1_800);
+    expect(noArgCalls()).toBe(before); // no `claude` was typed
+    // adopting Claude later, from the panel: signed in and connected, and "skipped" is gone
+    fake.setLoggedIn(true);
+    await page.evaluate(() => window.jaffer.call('setup.claude.install', { mcp: false }));
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).claude.skipped).toBe(false);
+    await page.evaluate(() => window.jaffer.call('config.patch', { memory: { llm: 'auto' }, ingest: { claudeCode: true } }));
+  }, 60_000);
 
   it('first run with "Start Claude Code" switched off: Get started types nothing into the terminal', async () => {
     const noArgCalls = () => fake.calls().filter((l) => l.startsWith(' HOME=')).length;

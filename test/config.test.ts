@@ -54,6 +54,14 @@ describe('appearance.pet', () => {
   });
 });
 
+describe('claude.skipped', () => {
+  it('is off by default (Claude is offered, not assumed), also for a config file saved before the setting existed', () => {
+    expect(DEFAULT_CONFIG.claude.skipped).toBe(false);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().claude.skipped).toBe(false);
+  });
+});
+
 describe('updates.auto', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.updates.auto).toBe(true);

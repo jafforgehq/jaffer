@@ -329,6 +329,13 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(asked.every((l) => l.endsWith(' KEY='))).toBe(true); // the daemon itself runs with ANTHROPIC_API_KEY set
   });
 
+  it('connecting Claude Code after a plain-terminal first run clears "skipped": the person has adopted it', async () => {
+    await c.call('config.patch', { claude: { skipped: true } });
+    expect((await c.call('config.get', {})).claude.skipped).toBe(true);
+    await c.call('setup.claude.install', { mcp: false });
+    expect((await c.call('config.get', {})).claude.skipped).toBe(false);
+  });
+
   it('connecting for the live panel installs the hooks only: no MCP server is registered unless it is asked for', async () => {
     const before = fake.calls().length;
     const res = await c.call('setup.claude.install', { mcp: false });

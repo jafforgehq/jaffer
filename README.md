@@ -5,7 +5,7 @@
 <h1 align="center">Jaffer</h1>
 <p align="center"><b>The terminal with one session that never ends — and a memory that keeps learning from you.</b></p>
 
-Jaffer is a macOS terminal built for Claude Code. Two ideas set it apart from Ghostty, Orca and friends:
+Jaffer is a macOS terminal that Claude Code feels at home in, and a good terminal without it. Two ideas set it apart from Ghostty, Orca and friends:
 
 1. **One session, always.** There are no tabs of throw-away shells and no "new chat". Your shell, its running processes and your scrollback live in a background daemon. Quit the app, close the lid — you come back to exactly where you were, with a running Claude Code still going. (After a reboot: same folder, same screen above a fresh shell.)
 2. **A memory that evolves by itself.** Jaffer watches what you do, distils what is worth keeping — your preferences, each project's conventions, fixes that cost you an hour, routines you repeat — merges what repeats, lets stale things fade, and hands the result to Claude Code. You can see all of it, edit it, pin it, and **undo any change**.
@@ -40,7 +40,7 @@ git clone https://github.com/jafforgehq/jaffer && cd jaffer
 ./scripts/install-mac.sh        # needs Node 22+; builds and copies Jaffer.app to /Applications
 ```
 
-On first launch Jaffer asks what it may do (sign in to Claude, learn from your sessions, show what Claude is doing in the panel, and start Claude Code in the terminal for you). Nothing is on until you say so, and Claude Code's own questions (trust this folder, allow a tool) are always answered by you, in the terminal.
+On first launch Jaffer asks what it may do (sign in to Claude or use a plain terminal, learn from your sessions, show what Claude is doing in the panel, and start Claude Code in the terminal for you). Nothing is on until you say so, and Claude Code's own questions (trust this folder, allow a tool) are always answered by you, in the terminal.
 
 ## What the window gives you
 
@@ -94,7 +94,7 @@ The Claude panel (`⌘J`) is a live, read-only companion to that Claude. Claude 
 
 It only reports a `claude` running in Jaffer's own terminal, never one in another terminal app, and everything it shows is redacted first. If you answer a permission prompt in the terminal, or stop Claude with `Esc`, the panel notices that too (Claude Code fires no hook for either, so Jaffer reads the moment from its transcript; a turn that goes silent for minutes is shown as idle). The first run can start `claude` in the terminal for you (a switch, on by default); Claude Code's own questions, such as trusting the folder or allowing a tool, are always yours to answer.
 
-Jaffer runs on Claude subscriptions only: there is no API-key option, and an `ANTHROPIC_API_KEY` in your environment is ignored. The first run starts with a **Sign in to Claude** step: it checks that Claude Code is installed and signed in (with `claude auth status`), opens your browser for the sign-in if not (`claude auth login`), and does not let you past until you are signed in. Nothing is typed into your terminal for it. If the login lapses later, the panel shows a banner with the same Sign-in button.
+Jaffer runs on Claude subscriptions only: there is no API-key option, and an `ANTHROPIC_API_KEY` in your environment is ignored. The first run starts with a **Sign in to Claude** step: it checks that Claude Code is installed and signed in (with `claude auth status`) and opens your browser for the sign-in if not (`claude auth login`). Claude is optional: **Use Jaffer as a plain terminal for now** skips it, installs nothing, starts nothing and sends nothing to Claude, and the Claude panel (`⌘J`) connects Claude Code whenever you want it. Nothing is typed into your terminal for the sign-in. If the login lapses later, the panel shows a banner with the same Sign-in button.
 
 How it works: the first run connects Claude Code (the hooks only; the rest is below) and adds hooks to `~/.claude/settings.json` that call `jaffer hook <event>`. They never delay Claude Code (they run asynchronously), print nothing, and do nothing when Claude Code is run outside Jaffer's terminal or when the daemon is not running.
 

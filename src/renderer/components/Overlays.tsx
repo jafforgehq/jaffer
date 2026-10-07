@@ -472,7 +472,7 @@ function UpdatesSection({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) 
 // ------------------------------------------------------------------ onboarding
 
 /** First thing on a first run: is Claude Code installed and signed in? Nothing is typed into the terminal here. */
-function SignInStep({ onDone }: { onDone: () => void }): VNode {
+function SignInStep({ onDone, onSkip }: { onDone: () => void; onSkip: () => void }): VNode {
   const [auth, setAuth] = useState<ClaudeAuthState | null>(null);
   const [busy, setBusy] = useState(false);
   const inflight = useRef(false);
@@ -546,6 +546,13 @@ function SignInStep({ onDone }: { onDone: () => void }): VNode {
         </div>
       )}
       {auth?.loginError && <p class="ob-error">{auth.loginError}</p>}
+      {!auth?.loggedIn && (
+        <div class="ob-actions">
+          <button class="btn ghost" onClick={onSkip}>
+            Use Jaffer as a plain terminal for now
+          </button>
+        </div>
+      )}
       <p class="faint ob-note">
         Sign-in opens your browser. Claude Code needs a Claude Pro, Max, Team or Enterprise plan. Nothing is typed into your terminal during setup.
       </p>
@@ -562,6 +569,7 @@ async function startClaudeWhenReady(): Promise<void> {
 
 export function Onboarding(): VNode {
   const [stage, setStage] = useState<'signin' | 'choices'>('signin');
+  const [plain, setPlain] = useState(false); // chose a terminal without Claude: no Claude choices, nothing installed, nothing typed
   const [learn, setLearn] = useState(true);
   const [curate, setCurate] = useState(true);
   const [claude, setClaude] = useState(true);
@@ -570,6 +578,13 @@ export function Onboarding(): VNode {
   const go = async () => {
     setBusy(true);
     try {
+      if (plain) {
+        // Nothing about Claude is on until the person adds it (the panel offers it): not the hooks, not the curation of memory by Claude
+        await patchConfig({ onboarded: true, memory: { enabled: learn, llm: 'off' }, ingest: { claudeCode: false }, claude: { skipped: true } });
+        overlay.value = null;
+        setSide(null);
+        return;
+      }
       await patchConfig({
         onboarded: true,
         memory: { enabled: learn, llm: curate && learn ? 'auto' : 'off' },
@@ -594,7 +609,7 @@ export function Onboarding(): VNode {
           <h2>Welcome to Jaffer</h2>
           {stage === 'signin' ? (
             <p>
-              A terminal built for <b>Claude Code</b>. First, let’s make sure you are signed in to Claude.
+              A terminal with <b>one session that never ends</b>. <b>Claude Code</b> runs best in it: sign in to Claude to connect it, or start with a plain terminal.
             </p>
           ) : (
             <p>
@@ -603,7 +618,7 @@ export function Onboarding(): VNode {
           )}
         </div>
         {stage === 'signin' ? (
-          <SignInStep onDone={() => setStage('choices')} />
+          <SignInStep onDone={() => setStage('choices')} onSkip={() => (setPlain(true), setStage('choices'))} />
         ) : (
           <>
             <div class="features">
@@ -634,9 +649,12 @@ export function Onboarding(): VNode {
                 <Switch checked={learn} onChange={setLearn} />
                 <span class="t">
                   <b>Learn from my sessions</b>
-                  <small>Commands and conversations are redacted for secrets and stay on this Mac.</small>
+                  <small>{plain ? 'Commands are redacted for secrets and stay on this Mac.' : 'Commands and conversations are redacted for secrets and stay on this Mac.'}</small>
                 </span>
               </label>
+              {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, open the Claude panel (⌘J): it connects Claude Code and shows what it does.</p>}
+              {!plain && (
+              <>
               <label class={learn ? '' : 'off'}>
                 <Switch disabled={!learn} checked={curate && learn} onChange={setCurate} />
                 <span class="t">
@@ -658,6 +676,8 @@ export function Onboarding(): VNode {
                   <small>Types claude for you. Claude Code then asks its own questions (trust this folder, allow a tool) right there in the terminal; Jaffer never answers them for you.</small>
                 </span>
               </label>
+              </>
+              )}
             </div>
             <div class="onboard-foot">
               <button class="btn primary big" onClick={() => void go()} disabled={busy}>
