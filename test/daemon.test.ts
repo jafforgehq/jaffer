@@ -179,6 +179,95 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     void cmds;
   }, 30_000);
 
+  describe('Claude Code that was running when Jaffer stopped', () => {
+    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
+    const OTHER = '0c7e2d63-4b4f-4e1f-8a5b-7a1a9d3a7b22';
+
+    async function inFolder(name: string) {
+      const c = await connect();
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      const dir = path.join(env.userHome, name);
+      fs.mkdirSync(dir, { recursive: true });
+      await c.call('pty.write', { data: `cd ${dir}\r` });
+      await waitUntil(async () => (await c.call('session.info', {})).cwd.endsWith(name));
+      await sleep(300);
+      const real = fs.realpathSync(dir);
+      const transcript = path.join(env.userHome, `${name}.jsonl`);
+      fs.writeFileSync(transcript, '{}\n');
+      const hook = (cl: typeof c, name2: string, id = ID, over: object = {}) => cl.call('claude.event', { session_id: id, hook_event_name: name2, cwd: real, transcript_path: transcript, ...over });
+      return { c, real, hook };
+    }
+    const restart = async (c: Awaited<ReturnType<typeof connect>>) => {
+      await sleep(300);
+      await c.call('app.shutdown', {});
+      await waitUntil(async () => !(await tryConnect(env.paths, 300)), 8000);
+      clients.length = 0;
+      return connect();
+    };
+
+    it('is offered back after a restart, in the folder it ran in, and stops being offered when Claude Code starts again', async () => {
+      const { c, real, hook } = await inFolder('resume-a');
+      await hook(c, 'SessionStart');
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      expect(await c.call('claude.resume', {})).toBeNull(); // it is running: nothing to offer yet
+      const c2 = await restart(c); // no SessionEnd ever came: a reboot, an update or a crash
+      await waitUntil(async () => (await c2.call('claude.resume', {}))?.id === ID, 8000);
+      expect(await c2.call('claude.resume', {})).toMatchObject({ id: ID, cwd: real });
+      const pushed = collect(c2, 'claude.resume');
+      await hook(c2, 'SessionStart'); // the person resumed it (or started Claude Code themselves)
+      await waitUntil(() => pushed.length > 0);
+      expect(pushed.at(-1)).toBeNull();
+      expect(await c2.call('claude.resume', {})).toBeNull();
+    }, 40_000);
+
+    it('is not offered after the conversation was ended on purpose (SessionEnd), even across a restart', async () => {
+      const { c, hook } = await inFolder('resume-b');
+      await hook(c, 'SessionStart');
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      await hook(c, 'SessionEnd');
+      const c2 = await restart(c);
+      await sleep(800);
+      expect(await c2.call('claude.resume', {})).toBeNull();
+      expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(false);
+    }, 40_000);
+
+    it('is offered at once when claude crashes (a non-zero exit), is pushed to the window, and can be dismissed; a normal exit offers nothing', async () => {
+      const { c, hook } = await inFolder('resume-c');
+      await c.call('pty.write', { data: 'claude() { return 1; }\r' });
+      await sleep(400);
+      const pushed = collect(c, 'claude.resume');
+      await hook(c, 'SessionStart');
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      await c.call('pty.write', { data: 'claude\r' });
+      await waitUntil(() => pushed.some((o) => o?.id === ID), 8000); // it died: resume it?
+      await c.call('claude.resume.dismiss', {});
+      await waitUntil(() => pushed.at(-1) === null, 8000);
+      expect(await c.call('claude.resume', {})).toBeNull();
+      // and when it exits normally there is nothing to offer
+      await c.call('pty.write', { data: 'claude() { return 0; }\r' });
+      await sleep(400);
+      await hook(c, 'SessionStart', OTHER);
+      await c.call('pty.write', { data: 'claude\r' });
+      await sleep(1200);
+      expect(await c.call('claude.resume', {})).toBeNull();
+      await c.call('pty.write', { data: 'unset -f claude\r' });
+      await sleep(300);
+    }, 40_000);
+
+    it('is not offered when the person turned it off, and never from a made-up id', async () => {
+      const { c, hook } = await inFolder('resume-d');
+      await c.call('config.patch', { session: { resumeClaude: false } });
+      await hook(c, 'SessionStart');
+      const c2 = await restart(c);
+      await sleep(800);
+      expect(await c2.call('claude.resume', {})).toBeNull();
+      await c2.call('config.patch', { session: { resumeClaude: true } });
+      await hook(c2, 'SessionStart', 'abc; rm -rf /');
+      expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(false); // nothing that could be typed into a shell was kept
+      expect(await c2.call('claude.resume', {})).toBeNull();
+    }, 40_000);
+  });
+
   // Model curation runs through the user's Claude login (`claude -p`), here the real claude against the mock API.
   it.skipIf(!CLAUDE)('memory evolves on its own: rules, model curation and Claude Code transcripts, with no manual trigger', async () => {
     const c = await connect();

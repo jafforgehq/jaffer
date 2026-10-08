@@ -484,6 +484,150 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.getAttribute(main, 'data-effort')) === '0', 8_000, 'the effort to reset when the work stops');
   }, 90_000);
 
+  it('companions: Settings lists all six, choosing one swaps the corner, an unknown one is the mole, and the switch still turns it off', async () => {
+    const setApp = (appearance: object) => page.evaluate((a) => window.jaffer.call('config.patch', { appearance: a }), appearance);
+    const corner = (c: string) => `.pet-corner[data-companion='${c}']`;
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    const cards = page.locator('.companions .companion-card');
+    expect(await cards.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.id))).toEqual(['mole', 'matrix', 'agents', 'warp', 'radar', 'core']);
+    expect(await page.getAttribute('.companions', 'role')).toBe('radiogroup');
+    // the mole is the one in use, and every tile is a live specimen (a scene, or the mole and its helper)
+    expect(await page.getAttribute('.companion-card[data-id="mole"]', 'aria-checked')).toBe('true');
+    expect(await page.locator('.comp-prev .scene').count()).toBe(5);
+    expect(await page.locator('.comp-prev .pet').count()).toBe(2);
+    expect(await page.locator(corner('mole')).count()).toBe(1);
+    await page.locator('.companion-card[data-id="matrix"]').click();
+    await page.waitForSelector(`${corner('matrix')} .scene[data-variant="matrix"]`);
+    expect(await page.locator('.pet-corner .pet').count()).toBe(0); // the mole left
+    expect(await page.getAttribute('.companion-card[data-id="matrix"]', 'aria-checked')).toBe('true');
+    expect(await page.getAttribute('.companion-card[data-id="mole"]', 'aria-checked')).toBe('false');
+    // the keyboard: arrows move through the group and choose
+    await page.focus('.companion-card[data-id="matrix"]');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForSelector(`${corner('agents')} .scene[data-variant="agents"]`);
+    await until(async () => page.evaluate(() => document.activeElement?.getAttribute('data-id') === 'agents'), 3_000, 'focus to follow the choice');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForSelector(`${corner('matrix')} .scene`);
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForSelector(`${corner('mole')} .pet`);
+    await page.keyboard.press('ArrowLeft'); // and round the end of the list: the first one's neighbour is the last
+    await page.waitForSelector(`${corner('core')} .scene`);
+    await page.keyboard.press('ArrowRight');
+    await page.waitForSelector(`${corner('mole')} .pet`);
+    await shot('15-companions');
+    // a value this version does not know (a typo, a variant from a newer one) is the mole
+    await setApp({ companion: 'hologram' });
+    await sleep(300);
+    expect(await page.locator(corner('mole')).count()).toBe(1);
+    expect(await page.locator('.companion-card.on').count()).toBe(1);
+    // the switch still turns the whole thing off, whatever is chosen
+    await setApp({ companion: 'core' });
+    await page.waitForSelector(`${corner('core')} .scene`);
+    await page.locator('label.field', { hasText: 'Companion' }).locator('.switch').click();
+    await until(async () => (await page.locator('.pet-corner').count()) === 0, 5_000, 'the companion to leave');
+    expect(await page.getAttribute('.companions', 'data-off')).toBe('');
+    await page.locator('label.field', { hasText: 'Companion' }).locator('.switch').click();
+    await page.waitForSelector(`${corner('core')} .scene`);
+    await setApp({ companion: 'mole' });
+    await page.waitForSelector(`${corner('mole')} .pet`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
+  it('the scenes: each one works while Claude works, shows an agent for every helper, stays in its corner, and stands still without motion', async () => {
+    const setCompanion = (companion: string) => page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), companion);
+    const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    const endAll = async () => {
+      for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    };
+    const push = (ages: number[]) =>
+      page.evaluate((a) => {
+        const now = Date.now();
+        (window as any).__event('claude.state', {
+          sessions: [{ id: 'scene-1', state: 'working', since: now - 10_000, subagents: (a as number[]).map((age, i) => ({ id: `s${i}`, type: 'Explore', status: 'running', startedAt: now - age })) }],
+        });
+      }, ages);
+    // what moves while it digs, per scene
+    const moving: Record<string, [string, string]> = {
+      matrix: ['.mx-col', 'mx-fall'],
+      agents: ['.ag-packet', 'ag-send'],
+      warp: ['.ws-star', 'ws-fly'],
+      radar: ['.rd-sweep', 'rd-spin'],
+      core: ['.co-ring.outer', 'rd-spin'],
+    };
+    try {
+      await endAll();
+      await sleep(600);
+      for (const [variant, [probe, keyframes]] of Object.entries(moving)) {
+        await setCompanion(variant);
+        const scene = `.pet-corner[data-companion='${variant}'] .scene`;
+        await page.waitForSelector(scene);
+        await until(async () => (await page.getAttribute(scene, 'data-mood')) === 'sleep', 8_000, `${variant}: asleep when nothing runs`);
+        expect(await page.getAttribute(scene, 'data-agents')).toBe('0');
+        // Claude works with two agents in the background
+        await push([5_000, 90_000]);
+        await until(async () => (await page.getAttribute(scene, 'data-mood')) === 'dig', 8_000, `${variant}: working`);
+        await until(async () => (await page.getAttribute(scene, 'data-agents')) === '2', 8_000, `${variant}: an agent for each helper`);
+        expect(await cs(probe, 'animationName'), variant).toContain(keyframes);
+        expect(await page.textContent(`${scene} title`), variant).toMatch(/2 background agents working/); // said in words too
+        // inside the terminal, and never in the way of a click
+        const card = (await page.locator('.terminal-area').boundingBox())!;
+        const box = (await page.locator('.pet-corner').boundingBox())!;
+        expect(box.x, variant).toBeGreaterThanOrEqual(card.x);
+        expect(box.x + box.width, variant).toBeLessThanOrEqual(card.x + card.width + 0.5);
+        expect(box.y + box.height, variant).toBeLessThanOrEqual(card.y + card.height + 0.5);
+        expect(await cs('.pet-corner', 'pointerEvents'), variant).toBe('none');
+        await sleep(400);
+        await shot(`15-scene-${variant}`);
+        // macOS Reduce motion and the Animations switch: the same picture, standing still
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        expect(parseFloat(String(await cs(probe, 'animationDuration'))), variant).toBeLessThan(0.001);
+        await page.emulateMedia({ reducedMotion: null });
+        await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+        await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+        expect(await page.getAttribute(scene, 'data-mood'), variant).toBe('dig');
+        expect(await cs(probe, 'animationName'), variant).toBe('none');
+        await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+        await endAll();
+        await until(async () => (await page.getAttribute(scene, 'data-agents')) === '0', 8_000, `${variant}: the helpers to leave`);
+        await sleep(300);
+      }
+    } finally {
+      await page.emulateMedia({ reducedMotion: null });
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true, companion: 'mole' } }));
+    }
+    await page.waitForSelector(".pet-corner[data-companion='mole'] .pet");
+  }, 120_000);
+
+  it('the scenes show it when Claude needs you and when a turn ends (the same moods as the mole)', async () => {
+    const mood = () => page.getAttribute('.pet-corner .scene', 'data-mood');
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'agents' } }));
+    try {
+      await page.waitForSelector(".pet-corner[data-companion='agents'] .scene");
+      await until(async () => (await mood()) === 'sleep', 8_000, 'asleep to start with');
+      const bash = { session_id: 'scene-2', tool_name: 'Bash', tool_input: { command: 'make' }, tool_use_id: 's1' };
+      await sendHook('PreToolUse', bash);
+      await sendHook('Notification', { session_id: 'scene-2', message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' });
+      await until(async () => (await mood()) === 'alert', 8_000, 'the scene to ask for you');
+      expect(await page.textContent('.pet-corner .scene title')).toMatch(/needs you/);
+      await sleep(250);
+      await shot('15-scene-alert');
+      await sendHook('PostToolUse', bash);
+      await sendHook('Stop', { session_id: 'scene-2', last_assistant_message: 'done' });
+      await until(async () => (await mood()) === 'cheer', 8_000, 'the scene to celebrate');
+      await sleep(150);
+      await shot('15-scene-cheer');
+      await sendHook('SessionEnd', { session_id: 'scene-2' });
+      await until(async () => (await mood()) === 'sleep', 8_000, 'the scene to settle');
+    } finally {
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+    }
+    await page.waitForSelector(".pet-corner[data-companion='mole'] .pet");
+  }, 60_000);
+
   it('what each answer cost: a quiet figure in the title bar after every answer, with the session total, and Settings turns it off', async () => {
     fs.mkdirSync(shots, { recursive: true });
     const transcript = path.join(shots, 'cost-transcript.jsonl');
@@ -582,7 +726,24 @@ describe('Jaffer UI end to end', () => {
       // a <label> around a button forwards a click on its words to the button: "Add memory tools" or "Reset…" by a stray click
       expect(await page.locator('label.field:has(button)').count(), section).toBe(0);
     }
+    // "Claude finished" notifications are on until switched off (the notification itself is the main process's; the switch is the setting)
+    await nav('Claude Code');
+    const finishedSwitch = page.locator('label.field', { hasText: 'Tell me when Claude finishes' });
+    const notif = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).notifications.claudeFinished;
+    expect(await finishedSwitch.locator('input').isChecked()).toBe(true);
+    await finishedSwitch.locator('.switch').click();
+    await until(async () => (await notif()) === false, 5_000, 'the finished notification to be switched off');
+    await finishedSwitch.locator('.switch').click();
+    await until(async () => (await notif()) === true, 5_000, 'and on again');
     await nav('Appearance');
+    // the screen is kept for a restart unless this is switched off
+    const keep = page.locator('label.field', { hasText: 'Keep the screen for a restart' });
+    const restoreScreen = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session.restoreScreen;
+    expect(await keep.locator('input').isChecked()).toBe(true);
+    await keep.locator('.switch').click();
+    await until(async () => (await restoreScreen()) === false, 5_000, 'the screen restore to be switched off');
+    await keep.locator('.switch').click();
+    await until(async () => (await restoreScreen()) === true, 5_000, 'and on again');
     const login = () => page.locator('label.field', { hasText: 'Open at login' }).locator('input');
     expect(await login().isChecked()).toBe(false);
     await page.locator('label.field', { hasText: 'Open at login' }).locator('.switch').click();
@@ -626,6 +787,144 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Enter');
     await until(async () => (await page.evaluate(() => (window as any).__clip.written as string[])).includes('copied by a script'), 8_000, 'the text to reach the clipboard');
   }, 60_000);
+
+  it('risky places: the title bar is tinted on a protected branch (amber) and while ssh runs (red), and Settings can turn it off or change the list', async () => {
+    const bar = '.titlebar';
+    const state = () => page.$eval(bar, (el) => ({ kind: (el as HTMLElement).dataset.danger ?? null, what: (el as HTMLElement).dataset.dangerWhat ?? null, edge: getComputedStyle(el).boxShadow }));
+    const repo = (name: string, branch: string) => {
+      const dir = path.join(env.userHome, 'danger', name);
+      fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`);
+      return dir;
+    };
+    const prod = repo('prod-app', 'main');
+    const work = repo('work-app', 'feature/login');
+    const go = async (dir: string) => {
+      await page.click('.term');
+      await page.keyboard.press('Control+c');
+      await page.keyboard.type(`cd ${dir}`);
+      await page.keyboard.press('Enter');
+    };
+    // a feature branch is calm, main is amber
+    await go(work);
+    await until(async () => /feature\/login/.test((await page.textContent('.session-pill')) ?? ''), 10_000, 'the feature branch in the title bar');
+    expect((await state()).kind).toBeNull();
+    expect((await state()).edge).toBe('none');
+    await go(prod);
+    await until(async () => (await state()).kind === 'branch', 10_000, 'the protected branch to tint the bar');
+    expect(await state()).toMatchObject({ kind: 'branch', what: 'main' });
+    expect((await state()).edge).not.toBe('none');
+    expect(await page.getAttribute('.session-pill', 'title')).toMatch(/protected branch main/);
+    await shot('14i-danger-branch');
+    // ssh outranks the branch, names the host, and ends with the command
+    await page.keyboard.type('ssh() { sleep 30; }');
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    await page.keyboard.type('ssh deploy@prod-db-1');
+    await page.keyboard.press('Enter');
+    await until(async () => (await state()).kind === 'ssh', 10_000, 'ssh to tint the bar');
+    expect(await state()).toMatchObject({ kind: 'ssh', what: 'prod-db-1' });
+    expect(await page.getAttribute('.session-pill', 'title')).toMatch(/ssh to prod-db-1/);
+    await shot('14j-danger-ssh');
+    await page.keyboard.press('Control+c');
+    await until(async () => (await state()).kind === 'branch', 10_000, 'the bar to fall back to the branch when ssh ends');
+    await page.keyboard.type('unset -f ssh');
+    await page.keyboard.press('Enter');
+    // Settings: the switch, and the list
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    const mark = page.locator('label.field', { hasText: 'Mark risky places' });
+    await mark.locator('.switch').click();
+    await until(async () => (await state()).kind === null, 5_000, 'the tint to go when switched off');
+    expect(await page.locator('label.field', { hasText: 'Protected branches' }).locator('input').isDisabled()).toBe(true);
+    await mark.locator('.switch').click();
+    await until(async () => (await state()).kind === 'branch', 5_000, 'and to come back');
+    const list = page.locator('label.field', { hasText: 'Protected branches' }).locator('input');
+    await list.fill('feature/*, staging');
+    await list.press('Tab');
+    await until(async () => (await state()).kind === null, 5_000, 'main to be calm when it is no longer on the list');
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).safety.protectedBranches).toEqual(['feature/*', 'staging']);
+    await page.evaluate(() => window.jaffer.call('config.patch', { safety: { protectedBranches: ['main', 'master', 'production', 'prod', 'release/*'] } }));
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await go(work); // leave the terminal somewhere calm for the tests that follow
+    await until(async () => (await state()).kind === null, 10_000, 'a calm bar again');
+  }, 90_000);
+
+  it('resume: a quiet button when Claude Code can be taken up again, that types only `claude --resume <id>` after a click, hides while the shell is busy, and can be dismissed', async () => {
+    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
+    const offer = (id: string) => page.evaluate((o) => (window as any).__event('claude.resume', o), { id, cwd: '/tmp', at: Date.now() });
+    const chip = '.resume';
+    expect(await page.locator(chip).count()).toBe(0); // nothing to resume: nothing shown
+    await offer(ID);
+    await page.waitForSelector(chip);
+    expect(await page.textContent('.resume-go')).toContain('Resume Claude');
+    expect(await page.getAttribute('.resume-go', 'title')).toMatch(/claude --resume/);
+    await shot('14k-resume');
+    // it fits the title bar, in a narrow window too (the words go, the name stays)
+    for (const w of [1360, 660]) {
+      await page.setViewportSize({ width: w, height: 860 });
+      await sleep(250);
+      const pill = (await page.locator('.session-pill').boundingBox())!;
+      const right = (await page.locator('.tb-right').boundingBox())!;
+      expect(pill.x + pill.width, `pill clear of the right side at ${w}px`).toBeLessThanOrEqual(right.x + 1);
+      expect(right.x + right.width, `right side inside the window at ${w}px`).toBeLessThanOrEqual(w);
+    }
+    expect(await page.locator('.resume-label').isVisible()).toBe(false); // 660 px: icon only
+    expect(await page.getAttribute('.resume-go', 'aria-label')).toBe('Resume Claude Code');
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await sleep(250);
+    // hidden while something runs in the shell, back when it ends
+    await page.click('.term');
+    await page.keyboard.type('sleep 30');
+    await page.keyboard.press('Enter');
+    await until(async () => (await page.locator(chip).count()) === 0, 8_000, 'the button to hide while the shell is busy');
+    await page.keyboard.press('Control+c');
+    await page.waitForSelector(chip, { timeout: 10_000 });
+    // the palette knows it too
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('resume');
+    await page.waitForSelector('.palette >> text=Resume the Claude Code conversation');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.palette input', { state: 'detached' });
+    // a click types the command for that id and nothing else, and the button goes at once. (A shell function stands in for claude,
+    // and says which arguments it was given.)
+    await page.click('.term');
+    await page.keyboard.type('claude() { echo "stand-in claude got: $*"; }');
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    await page.click('.resume-go');
+    await until(async () => (await termText()).includes(`stand-in claude got: --resume ${ID}`), 8_000, 'the command to be typed and run');
+    expect(await page.locator(chip).count()).toBe(0);
+    // an id that is not an id is never typed
+    await offer('abc; echo INJECTED-BY-OFFER');
+    await page.waitForSelector(chip);
+    await page.click('.resume-go');
+    await sleep(600);
+    expect(await termText()).not.toContain('INJECTED-BY-OFFER');
+    // not now: dismissed, and the daemon is told
+    await page.click('.resume-x');
+    await until(async () => (await page.locator(chip).count()) === 0, 5_000, 'the dismissed button to go');
+    await page.click('.term');
+    await page.keyboard.type('unset -f claude');
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    // the setting
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+    const sw = page.locator('label.field', { hasText: 'Offer to resume Claude Code' });
+    const on = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session.resumeClaude;
+    expect(await sw.locator('input').isChecked()).toBe(true);
+    await sw.locator('.switch').click();
+    await until(async () => (await on()) === false, 5_000, 'the resume offer to be switched off');
+    await sw.locator('.switch').click();
+    await until(async () => (await on()) === true, 5_000, 'and on again');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 90_000);
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');

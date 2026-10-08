@@ -89,3 +89,71 @@ describe('claude.showCost', () => {
     expect(new ConfigStore(env.paths).get().claude).toEqual({ skipped: true, showCost: false });
   });
 });
+
+describe('session.restoreScreen', () => {
+  it('is on by default, also for a config file saved before the setting existed, and can be switched off and stays off', () => {
+    expect(DEFAULT_CONFIG.session.restoreScreen).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().session.restoreScreen).toBe(true);
+    store.patch({ session: { restoreScreen: false } });
+    expect(new ConfigStore(env.paths).get().session.restoreScreen).toBe(false);
+  });
+});
+
+describe('safety', () => {
+  it('marks risky places by default (main, master, production, prod, release/*), also for a config file saved before the setting existed', () => {
+    expect(DEFAULT_CONFIG.safety).toEqual({ dangerTint: true, protectedBranches: ['main', 'master', 'production', 'prod', 'release/*'] });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().safety.dangerTint).toBe(true);
+    expect(new ConfigStore(env.paths).get().safety.protectedBranches).toContain('production');
+  });
+
+  it('keeps the list a person set, whole (it replaces the default, it is not added to it), and the switch independently', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ safety: { protectedBranches: ['staging'] } });
+    store.patch({ safety: { dangerTint: false } });
+    const again = new ConfigStore(env.paths).get().safety;
+    expect(again).toEqual({ dangerTint: false, protectedBranches: ['staging'] });
+    store.patch({ safety: { protectedBranches: [] } });
+    expect(new ConfigStore(env.paths).get().safety.protectedBranches).toEqual([]);
+  });
+
+  it('never shares the default list: changing one config does not change another', () => {
+    const a = new ConfigStore(env.paths).get().safety.protectedBranches;
+    a.push('mutated');
+    expect(DEFAULT_CONFIG.safety.protectedBranches).not.toContain('mutated');
+  });
+});
+
+describe('notifications.claudeFinished', () => {
+  it('is on by default, also for a config file saved before the setting existed, and can be switched off and stays off', () => {
+    expect(DEFAULT_CONFIG.notifications.claudeFinished).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().notifications.claudeFinished).toBe(true);
+    store.patch({ notifications: { claudeFinished: false } });
+    expect(new ConfigStore(env.paths).get().notifications.claudeFinished).toBe(false);
+  });
+});
+
+describe('session.resumeClaude', () => {
+  it('is on by default, also for a config file saved before the setting existed (and the screen setting beside it is untouched)', () => {
+    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false } }));
+    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true });
+  });
+});
+
+describe('appearance.companion', () => {
+  it('is the mole by default, also for a config file saved before companions existed, and a choice is kept', () => {
+    expect(DEFAULT_CONFIG.appearance.companion).toBe('mole');
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { pet: false } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().appearance.companion).toBe('mole');
+    expect(store.get().appearance.pet).toBe(false); // the old on/off switch is untouched
+    store.patch({ appearance: { companion: 'matrix' } });
+    expect(new ConfigStore(env.paths).get().appearance.companion).toBe('matrix');
+  });
+});
+

@@ -358,6 +358,48 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.click('.tabs button:has-text("Learned")');
   }, 60_000);
 
+  it('the other companions: the same busy moment in each, and the picker in Settings', async () => {
+    await clearToasts();
+    const sessions = () => page.evaluate(() => window.jaffer.call('claude.state')).then((r: any) => r.sessions as { id: string }[]);
+    const end = (id: string) => page.evaluate(([i, cwd]) => window.jaffer.call('claude.event', { session_id: i, hook_event_name: 'SessionEnd', cwd }), [id, repo] as const);
+    for (const x of await sessions()) await end(x.id);
+    await sleep(700);
+    // Claude has been working for six minutes with three agents of different ages (what the daemon would push, aged the way its clock would)
+    const busy = () =>
+      page.evaluate(() => {
+        const now = Date.now();
+        (window as any).__event('claude.state', {
+          sessions: [{ id: 'demo-2', state: 'working', since: now - 6 * 60_000, subagents: [6 * 60_000, 150_000, 45_000].map((age, i) => ({ id: `c${i}`, type: i ? 'general-purpose' : 'Explore', status: 'running', startedAt: now - age })) }],
+        });
+      });
+    // every crop is the same size (a scene plus a margin): the corner's bottom right, which for the mole is the main one and two helpers
+    const crop = async (name: string) => {
+      const b = (await page.locator('.pet-corner').boundingBox())!;
+      const [w, h, pad] = [256, 96, 8];
+      fs.mkdirSync(OUT!, { recursive: true });
+      await page.screenshot({ path: path.join(OUT!, `${name}.png`), clip: { x: b.x + b.width + pad - w, y: b.y + b.height + pad - h, width: w, height: h } });
+    };
+    for (const companion of ['mole', 'matrix', 'agents', 'warp', 'radar', 'core']) {
+      await page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), companion);
+      await page.waitForSelector(`.pet-corner[data-companion='${companion}']`);
+      await busy();
+      await until(async () => (await page.locator(companion === 'mole' ? '.pet-helper' : '.scene[data-agents="3"]').count()) === (companion === 'mole' ? 3 : 1), 8_000, `${companion}: three agents`);
+      await sleep(1500);
+      await crop(`companion-${companion}`);
+    }
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+    await end('demo-2');
+    // the picker
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.click('.settings-nav button:text-is("Appearance")');
+    await page.locator('.companions').evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    await sleep(400);
+    await shot('15-companions');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 90_000);
+
   it('command palette, themes, settings', async () => {
     await clearToasts();
     if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // the memory drawer was open: the terminal gets the room back

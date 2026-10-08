@@ -1,7 +1,7 @@
 {
   "name": "jaffer",
   "productName": "Jaffer",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "An agentic terminal for macOS with one persistent session and a self-evolving memory.",
   "private": true,
   "license": "MIT",

@@ -15,6 +15,9 @@ import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, tear
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { isTerminalReport } from '../shared/terminal-reports';
+import { isClaudeCommand } from '../shared/process-badge';
+import { isSessionId, type ResumeOffer } from '../shared/claude-resume';
+import { ResumeStore } from '../core/claude/resume';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { detectTargets } from '../core/memory/exports';
@@ -49,6 +52,9 @@ export class JafferService {
   private ingestor: ClaudeIngestor | null = null;
   /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
   private claudeWatcher = new ClaudeWatcher();
+  /** The Claude Code conversation to offer back after a restart (ids and a folder only; see ResumeStore). */
+  private resume: ResumeStore;
+  private lastOffer = 'null';
   private rejectionWatches = new Map<string, () => void>();
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
@@ -69,6 +75,7 @@ export class JafferService {
     this.userHome = opts.userHome ?? os.homedir();
     this.version = opts.version ?? VERSION;
     this.log = opts.log ?? (() => undefined);
+    this.resume = new ResumeStore(path.join(this.paths.sessionDir, 'claude.json'));
     ensureDir(this.paths.home);
     ensureDir(this.paths.runDir);
     this.config = new ConfigStore(this.paths);
@@ -101,6 +108,7 @@ export class JafferService {
     await this.host.start();
     await this.rpc.listen(this.paths.socket);
     this.memory.start(tickMs());
+    this.lastOffer = JSON.stringify(this.resumeOffer()); // the baseline for what changes after this
     this.startIngest();
     this.timers.push(setInterval(() => this.memory.syncExports(), 120_000));
     this.timers[this.timers.length - 1]!.unref?.();
@@ -122,6 +130,7 @@ export class JafferService {
     this.ingestTimers = [];
     this.memory?.stop();
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
+    this.resume.flush();
     try {
       // Learn from whatever is pending before going away.
       await Promise.race([this.memory?.reflect({ force: false, llm: false }), new Promise((r) => setTimeout(r, 3000))]);
@@ -210,12 +219,20 @@ export class JafferService {
         return;
       }
       this.sendPty(e.pane, e.event);
+      // where the shell is, and whether it is busy, decide whether a conversation can be offered back
+      if (e.event.type === 'cwd' || e.event.type === 'start' || e.event.type === 'command') this.pushResume();
       if (e.event.type === 'command') {
         const ev = e.event;
         // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
         // stopped (Ctrl+Z reports 128 + a stop signal): it comes back with `fg`.
         const stopped = ev.exit != null && ev.exit >= 145 && ev.exit <= 150;
-        if (!stopped && /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(ev.cmd)) this.claudeWatcher.endAll();
+        if (!stopped && isClaudeCommand(ev.cmd)) {
+          this.claudeWatcher.endAll();
+          // quit on purpose (exit 0, or Ctrl+C): nothing to offer afterwards. A crash or a kill leaves the offer, and a daemon that is
+          // stopping must not take it away (the shell dying with it is not the person ending the conversation)
+          if (!this.stopping && (ev.exit === 0 || ev.exit === 130)) this.resume.forget();
+          this.pushResume();
+        }
         const proj = resolveProject(ev.cwd, this.userHome);
         if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output });
       }
@@ -223,10 +240,12 @@ export class JafferService {
     this.claudeWatcher.changes.on((sessions) => {
       this.pushClaudeState();
       this.watchForRejections(sessions);
+      this.pushResume();
     });
     this.memory.events.on((e) => this.rpc.broadcast('memory.event', e));
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
+      this.pushResume();
       this.memory.syncExports();
       this.startIngest();
     });
@@ -282,6 +301,36 @@ export class JafferService {
       };
       this.later(300, () => read(true));
     }
+  }
+
+  /** The hooks tell which conversation is alive and where; SessionEnd says the person ended it. */
+  private trackResume(p: unknown): void {
+    if (!p || typeof p !== 'object' || this.stopping) return;
+    const o = p as Record<string, unknown>;
+    const id = typeof o.session_id === 'string' ? o.session_id : '';
+    if (!isSessionId(id)) return;
+    if (o.hook_event_name === 'SessionEnd') this.resume.forget(id);
+    else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined });
+    this.pushResume();
+  }
+
+  private resumeOffer(): ResumeOffer | null {
+    const pane = this.host?.mainPane;
+    return this.resume.offer({
+      shellCwd: pane?.cwd,
+      active: this.claudeWatcher.sessions().some((s) => s.state !== 'ended'),
+      busy: !!pane?.runningCommand,
+      enabled: this.config.get().session.resumeClaude,
+    });
+  }
+
+  /** Tells the window when what can be resumed changes (and only then). */
+  private pushResume(): void {
+    const offer = this.resumeOffer();
+    const key = JSON.stringify(offer);
+    if (key === this.lastOffer) return;
+    this.lastOffer = key;
+    this.rpc.broadcast('claude.resume', offer);
   }
 
   private later(ms: number, fn: () => void): void {
@@ -391,9 +440,21 @@ export class JafferService {
     r.handle('claude.event', (p: unknown) => {
       this.claudeWatcher.handle(p);
       this.trackCost(p);
+      this.trackResume(p);
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
+    r.handle('claude.resume', () => {
+      // what a window has just been told is what the next change is measured against
+      const offer = this.resumeOffer();
+      this.lastOffer = JSON.stringify(offer);
+      return offer;
+    });
+    r.handle('claude.resume.dismiss', () => {
+      this.resume.forget();
+      this.pushResume();
+      return true;
+    });
 
     // ---- memory
     const api = makeMemoryApi(this.memory);

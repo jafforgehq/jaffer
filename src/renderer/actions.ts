@@ -1,5 +1,6 @@
-import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, safeCommand, toast, toggleSide } from './state';
+import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, resumeOffer, safeCommand, toast, toggleSide } from './state';
 import { isClaudeCommand } from '../shared/process-badge';
+import { isSessionId, resumeCommand } from '../shared/claude-resume';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -39,6 +40,30 @@ export async function runClaude(): Promise<void> {
   t.focus();
 }
 
+/** Take the Claude Code conversation that was running when Jaffer stopped back up: types `claude --resume <id>`, after the person's click. */
+export function resumeClaude(): void {
+  const offer = resumeOffer.value;
+  const t = term();
+  if (!offer || !t) {
+    toast({ kind: 'info', text: 'There is no Claude Code conversation to resume here.' });
+    return;
+  }
+  if (!isSessionId(offer.id)) return; // checked again here: this is typed into a shell
+  if (info.value.busy) {
+    toast({ kind: 'info', text: `The terminal is busy running ${safeCommand(info.value.busy)}.` });
+    return;
+  }
+  t.type(`${resumeCommand(offer.id)}\r`);
+  t.focus();
+  resumeOffer.value = null; // gone at once; the daemon's own word follows when Claude Code starts
+}
+
+/** "Not now": forget that conversation. */
+export function dismissResume(): void {
+  resumeOffer.value = null;
+  void window.jaffer.call('claude.resume.dismiss', {}).catch(() => undefined);
+}
+
 async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
   try {
     await fn();
@@ -50,6 +75,7 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 
 export const actions: Action[] = [
   { id: 'toggle-memory', title: 'Memory: show or hide', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
+  { id: 'resume-claude', title: 'Resume the Claude Code conversation that was running here', section: 'Terminal', keywords: 'claude code continue restart', run: resumeClaude },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },

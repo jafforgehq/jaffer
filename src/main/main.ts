@@ -10,6 +10,7 @@ import { readJson, sleep, writeJson } from '../shared/util';
 import { ensureDaemon, tryConnect, type Launcher } from '../core/daemon-client';
 import { commandNotification, needsYouNotification } from '../shared/notify-policy';
 import { isAppUrl, isWebUrl } from '../shared/window-policy';
+import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
@@ -61,7 +62,9 @@ function wireClient(c: RpcClient): void {
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
     if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
+    if (event === 'config.changed') appCfg = data as typeof appCfg;
   });
+  void c.call('config.get', {}).then((x) => (appCfg = x as typeof appCfg)).catch(() => undefined);
   c.onClose.on(() => void onDaemonDown());
 }
 
@@ -110,6 +113,20 @@ async function offerRestart(oldVersion: string): Promise<void> {
 
 let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
+/** The settings the main process acts on itself (kept current from the daemon's config.changed). */
+let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean } } = {};
+
+/** "Claude finished", after a long turn, while you are looking elsewhere. */
+const finished = new FinishedNotifier({
+  enabled: () => appCfg.notifications?.claudeFinished !== false,
+  showCost: () => appCfg.claude?.showCost !== false,
+  windowFocused: () => !!win?.isFocused(),
+  lastTerminalNotifyAt: () => lastTerminalNotifyAt,
+  now: Date.now,
+  notify: (n) => notify(n.title, n.body),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
+});
 
 function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
@@ -119,6 +136,7 @@ function maybeNotify(n: { title: string; body: string }): void {
 
 /** Claude, in the terminal, is waiting for the user and they are looking elsewhere. */
 function onClaudeState(sessions: ClaudeSession[]): void {
+  finished.update(sessions);
   const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
   prevClaude = sessions;
   if (!n) return;

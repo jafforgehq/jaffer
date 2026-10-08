@@ -219,3 +219,89 @@ async function waitUntilTrue(fn: () => boolean, ms: number): Promise<void> {
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+describe('screen restore, and the switch that turns it off', () => {
+  const screenOf = (host: SessionHost) => host.get('main')!.snapshot().data;
+  const shows = async (host: SessionHost, text: string, ms = 10_000) => {
+    const t0 = Date.now();
+    while (!screenOf(host).includes(text)) {
+      if (Date.now() - t0 > ms) throw new Error(`timed out waiting for "${text}" on the screen`);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+  const stop = async (host: SessionHost) => {
+    const main = host.get('main');
+    host.dispose();
+    if (main) await stopShell(main);
+  };
+
+  it('saves the screen and the folder, and a new daemon shows the old screen above a fresh shell in the same folder', async () => {
+    const a = new SessionHost(env.paths, env.config, 'test');
+    await a.start();
+    const folder = path.join(env.userHome, 'restore-here');
+    fs.mkdirSync(folder);
+    a.get('main')!.write(`cd ${JSON.stringify(folder)} && echo screen-marker-one\r`);
+    await shows(a, 'screen-marker-one');
+    await new Promise((r) => setTimeout(r, 600)); // the shell integration reports the new folder
+    a.persist();
+    expect(fs.readFileSync(env.paths.screenSnapshot, 'utf8')).toContain('screen-marker-one');
+    await stop(a);
+    const b = new SessionHost(env.paths, env.config, 'test');
+    await b.start();
+    try {
+      await shows(b, 'screen-marker-one');
+      expect(screenOf(b)).toContain('session restored');
+      expect(b.get('main')!.cwd).toBe(fs.realpathSync(folder));
+    } finally {
+      await stop(b);
+    }
+  }, 40_000);
+
+  it('with the switch off nothing of the screen is kept: what was saved is removed at once, nothing is written, and a new daemon starts with a blank screen in the same folder', async () => {
+    const a = new SessionHost(env.paths, env.config, 'test');
+    await a.start();
+    const folder = path.join(env.userHome, 'blank-here');
+    fs.mkdirSync(folder);
+    a.get('main')!.write(`cd ${JSON.stringify(folder)} && echo screen-marker-two\r`);
+    await shows(a, 'screen-marker-two');
+    await new Promise((r) => setTimeout(r, 600));
+    a.persist();
+    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(true);
+    env.config.patch({ session: { restoreScreen: false } });
+    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false); // gone the moment it is switched off, not at the next save
+    a.get('main')!.write('echo more-output-after\r');
+    await shows(a, 'more-output-after');
+    a.persist();
+    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false); // and it stays gone
+    expect(JSON.parse(fs.readFileSync(env.paths.sessionState, 'utf8')).panes[0].cwd).toBe(fs.realpathSync(folder)); // the folder is still kept
+    await stop(a);
+    const b = new SessionHost(env.paths, env.config, 'test');
+    await b.start();
+    try {
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(screenOf(b)).not.toContain('screen-marker-two');
+      expect(screenOf(b)).not.toContain('session restored');
+      expect(b.get('main')!.cwd).toBe(fs.realpathSync(folder));
+      expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false);
+    } finally {
+      await stop(b);
+    }
+  }, 40_000);
+
+  it('switching it back on starts saving again', async () => {
+    env.config.patch({ session: { restoreScreen: false } });
+    const a = new SessionHost(env.paths, env.config, 'test');
+    await a.start();
+    try {
+      expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false);
+      env.config.patch({ session: { restoreScreen: true } });
+      a.get('main')!.write('echo screen-marker-three\r');
+      await shows(a, 'screen-marker-three');
+      a.persist();
+      expect(fs.readFileSync(env.paths.screenSnapshot, 'utf8')).toContain('screen-marker-three');
+    } finally {
+      await stop(a);
+    }
+  }, 40_000);
+});
+

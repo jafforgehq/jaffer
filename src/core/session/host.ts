@@ -52,6 +52,8 @@ export class SessionHost {
   private backoffMs = RESPAWN_MIN_MS;
   private spawnedAt = 0;
 
+  private offConfig: (() => void) | null = null;
+
   constructor(
     private paths: JafferPaths,
     private config: ConfigStore,
@@ -60,6 +62,16 @@ export class SessionHost {
     ensureDir(paths.sessionDir);
     installShellIntegration(paths);
     ensureDir(paths.binDir);
+    // switched off: what was saved goes at once, not at the next save; switched on: saving starts again
+    this.offConfig = config.onChange.on((c) => {
+      if (c.session.restoreScreen) this.dirty = true;
+      else fs.rmSync(paths.screenSnapshot, { force: true });
+    });
+  }
+
+  /** Is the screen saved so it can come back (Settings → Appearance)? The folder is restored either way. */
+  private keepsScreen(): boolean {
+    return this.config.get().session.restoreScreen;
   }
 
   get mainPane(): PtySession | undefined {
@@ -77,7 +89,7 @@ export class SessionHost {
   /** Start (or restore) the session. Safe to call once at daemon start. */
   async start(): Promise<void> {
     const saved = readJson<SavedState | null>(this.paths.sessionState, null);
-    const screens = readJson<SavedScreens>(this.paths.screenSnapshot, {});
+    const screens = this.keepsScreen() ? readJson<SavedScreens>(this.paths.screenSnapshot, {}) : {};
     // Only the one session is restored; any other pane an older version left in the state file is dropped.
     const def = saved?.panes?.find((p) => p.id === MAIN) ?? { id: MAIN, cwd: os.homedir(), cols: 120, rows: 32 };
     const cwd = fs.existsSync(def.cwd) ? def.cwd : os.homedir();
@@ -161,6 +173,10 @@ export class SessionHost {
         panes: [...this.panes.entries()].filter(([, p]) => p.alive).map(([id, p]) => ({ id, cwd: p.cwd, cols: p.cols, rows: p.rows })),
       };
       writeJson(this.paths.sessionState, state);
+      if (!this.keepsScreen()) {
+        fs.rmSync(this.paths.screenSnapshot, { force: true }); // nothing of the screen is kept on disk
+        return;
+      }
       const screens: SavedScreens = {};
       for (const [id, p] of this.panes) {
         if (!p.alive) continue;
@@ -175,6 +191,7 @@ export class SessionHost {
 
   dispose(): void {
     this.disposed = true;
+    this.offConfig?.();
     if (this.persistTimer) clearInterval(this.persistTimer);
     this.persist();
     for (const p of this.panes.values()) p.dispose();

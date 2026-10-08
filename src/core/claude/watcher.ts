@@ -29,6 +29,8 @@ export interface ClaudeSession {
   id: string;
   state: ClaudeState;
   since: number;
+  /** When the current turn began: a session leaving idle for working. Going to needs-you and back is the same turn. */
+  turnStartedAt?: number;
   /** The tool call Claude is running or asking about: its name and id, never its arguments. */
   tool?: { name: string; id: string };
   /** Claude Code's own words for what it waits for ("Claude needs your permission to use Bash"), redacted. */
@@ -168,6 +170,7 @@ export class ClaudeWatcher {
 
   private setState(s: ClaudeSession, state: ClaudeState): void {
     if (s.state !== state) {
+      if (state === 'working' && s.state !== 'needs-you') s.turnStartedAt = this.now();
       s.state = state;
       s.since = this.now();
     }

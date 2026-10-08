@@ -1,3 +1,5 @@
+import { DEFAULT_PROTECTED_BRANCHES } from './danger-zone';
+import { DEFAULT_COMPANION, type Companion } from './companions';
 import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
 
@@ -18,8 +20,10 @@ export interface JafferConfig {
     renderer: 'webgl' | 'dom';
     /** Decorative motion (the mole, the spinning ring). Off here, or macOS Reduce motion, and everything stands still. */
     animations: boolean;
-    /** A little mole in a corner of the terminal that digs while something runs. */
+    /** A little animation in a corner of the terminal that shows when something runs (Settings → Appearance → Companion). */
     pet: boolean;
+    /** Which one: the mole, or one of the scenes. Anything unknown is the mole. */
+    companion: Companion;
   };
   shell: { path: string; args: string[] };
   memory: {
@@ -42,6 +46,19 @@ export interface JafferConfig {
   };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
+  /** What Jaffer may tell you while it is in the background. */
+  notifications: {
+    /** "Claude finished" when a turn that took half a minute or more ends. */
+    claudeFinished: boolean;
+  };
+  /** Where a slip costs more than usual: the title bar tints on a protected branch and while an ssh session runs. */
+  safety: { dangerTint: boolean; protectedBranches: string[] };
+  session: {
+    /** Save the screen and scrollback so they come back after a reboot or an update. Off: nothing of the screen is kept on disk (the folder is still restored). */
+    restoreScreen: boolean;
+    /** After a restart (a reboot, an update, a crash), offer to resume the Claude Code conversation that was running in this folder. */
+    resumeClaude: boolean;
+  };
   hotkey: string;
 }
 
@@ -60,6 +77,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     renderer: 'webgl',
     animations: true,
     pet: true,
+    companion: DEFAULT_COMPANION,
   },
   shell: { path: '', args: [] },
   memory: {
@@ -75,6 +93,9 @@ export const DEFAULT_CONFIG: JafferConfig = {
   ingest: { claudeCode: false, backfillDays: 7 },
   claude: { skipped: false, showCost: true },
   updates: { auto: true },
+  notifications: { claudeFinished: true },
+  safety: { dangerTint: true, protectedBranches: [...DEFAULT_PROTECTED_BRANCHES] },
+  session: { restoreScreen: true, resumeClaude: true },
   hotkey: 'Control+`',
 };
 
@@ -101,7 +122,7 @@ export class ConfigStore {
   private cfg: JafferConfig;
 
   constructor(private paths: JafferPaths) {
-    this.cfg = supported(merge(DEFAULT_CONFIG, readJson<unknown>(paths.config, {})));
+    this.cfg = supported(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})));
   }
 
   get(): JafferConfig {

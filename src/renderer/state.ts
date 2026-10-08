@@ -1,3 +1,4 @@
+import type { ResumeOffer } from '../shared/claude-resume';
 import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
@@ -109,9 +110,12 @@ export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((
 function applyClaudeState(sessions: ClaudeSession[]): void {
   claudeLive.value = sessions;
 }
+/** Claude Code was running in this folder when Jaffer last stopped, and can be resumed (the daemon decides; null when there is nothing to offer). */
+export const resumeOffer = signal<ResumeOffer | null>(null);
 async function loadClaudeState(): Promise<void> {
   try {
     applyClaudeState((await jaffer().call('claude.state', {})).sessions);
+    resumeOffer.value = (await jaffer().call('claude.resume', {})) ?? null;
   } catch {
     /* the daemon is not there yet; its next push fills this in */
   }
@@ -221,6 +225,7 @@ export async function bootstrap(): Promise<void> {
         void refreshInfoSoon();
       }
     } else if (event === 'claude.state') applyClaudeState(data.sessions);
+    else if (event === 'claude.resume') resumeOffer.value = data ?? null;
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') cfg.value = data;

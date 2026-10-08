@@ -278,7 +278,7 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Stop', { last_assistant_message: `REPLY-SECRET-WORDS ${TOKEN}` }));
     const state = JSON.stringify(w.sessions());
     for (const word of words) expect(state, word).not.toContain(word);
-    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['id', 'since', 'state', 'subagents', 'transcriptPath']); // what is set at all (JSON drops the undefined)
+    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['id', 'since', 'state', 'subagents', 'transcriptPath', 'turnStartedAt']); // what is set at all (JSON drops the undefined)
     expect(only().subagents).toEqual([{ id: 'bg-1', status: 'running', startedAt: 1_000 }]);
   });
 
@@ -287,7 +287,7 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions()[0]!.transcriptPath).toContain('sess-1.jsonl');
     const out = w.view();
     expect(out).toHaveLength(1);
-    expect(out[0]).toEqual({ id: 'sess-1', state: 'working', since: 1_000, tool: { name: 'Bash', id: 'toolu_2' }, subagents: [] });
+    expect(out[0]).toEqual({ id: 'sess-1', state: 'working', since: 1_000, turnStartedAt: 1_000, tool: { name: 'Bash', id: 'toolu_2' }, subagents: [] });
     expect(JSON.stringify(out)).not.toContain('.jsonl');
   });
 
@@ -330,6 +330,43 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('UserPromptSubmit'));
     expect(seen).toHaveLength(2);
     expect(seen[1]![0]!.state).toBe('working');
+  });
+});
+
+describe('ClaudeWatcher turn start', () => {
+  it('notes when a turn began: at the prompt, and it stays the same through a wait for the person and the work after it', () => {
+    w.handle(fx('SessionStart'));
+    expect(only().turnStartedAt).toBeUndefined();
+    t = 5_000;
+    w.handle(fx('UserPromptSubmit'));
+    expect(only().turnStartedAt).toBe(5_000);
+    t = 6_000;
+    w.handle(fx('PreToolUse', bash('rm -rf build')));
+    w.handle(fx('Notification')); // needs-you
+    expect(only().state).toBe('needs-you');
+    t = 90_000;
+    w.handle(fx('PostToolUse', bash('rm -rf build'))); // answered: working again, the same turn
+    expect(only().state).toBe('working');
+    expect(only().turnStartedAt).toBe(5_000);
+    w.handle(fx('Stop'));
+    expect(only().turnStartedAt).toBe(5_000); // kept after the turn: a notification wants to know how long it was
+  });
+
+  it('a new turn, also one nobody prompted (a background agent finished and Claude went on), starts a new count', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('Stop'));
+    t = 50_000;
+    w.handle(fx('UserPromptSubmit'));
+    expect(only().turnStartedAt).toBe(50_000);
+    w.handle(fx('Stop'));
+    t = 80_000;
+    w.handle(fx('PreToolUse', bash('echo again'))); // idle → working with no prompt
+    expect(only().turnStartedAt).toBe(80_000);
+  });
+
+  it('is a number only, and goes out with the view', () => {
+    w.handle(fx('UserPromptSubmit', { prompt: 'SECRET prompt' }));
+    expect(w.view()[0]!.turnStartedAt).toBe(1_000);
   });
 });
 

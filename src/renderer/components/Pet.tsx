@@ -5,6 +5,17 @@ import { processBadge } from '../../shared/process-badge';
 import { petMood, type PetMood } from '../../shared/pet-mood';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
 import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
+import { COMPANIONS, companionOf, type Companion } from '../../shared/companions';
+import { Scene } from './Scenes';
+
+/** What a scene says for itself (the mole's lines are about digging). */
+const SCENE_SAYS: Record<PetMood, string> = {
+  sleep: 'Nothing is running',
+  rest: 'Claude Code is open',
+  dig: 'Something is running',
+  alert: 'Claude needs you!',
+  cheer: 'Done!',
+};
 
 const SAYS: Record<PetMood, string> = {
   sleep: 'Zzz… nothing is running',
@@ -86,6 +97,38 @@ function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: strin
   );
 }
 
+/** A live specimen of one companion for Settings, shown hard at work with two agents so the choice is made on what it does. */
+export function CompanionPreview({ companion }: { companion: Companion }): VNode {
+  const name = COMPANIONS.find((c) => c.id === companion)?.name ?? 'Mole';
+  if (companion !== 'mole') {
+    return (
+      <Scene
+        variant={companion}
+        mood="dig"
+        effort={1}
+        agents={[
+          { mood: 'dig', effort: 0 },
+          { mood: 'dig', effort: 1 },
+        ]}
+        label={`${name} preview`}
+      />
+    );
+  }
+  return (
+    <span class="comp-mole">
+      <svg class="pet-defs" width="0" height="0" aria-hidden="true">
+        <defs>
+          <clipPath id="pet-clip">
+            <rect x="-20" y="-40" width="160" height="110" />
+          </clipPath>
+        </defs>
+      </svg>
+      <Mole mood="dig" effort={1} label={`${name} preview`} />
+      <Mole helper={0} mood="dig" label="Helper mole preview" />
+    </span>
+  );
+}
+
 /**
  * A little mole in a corner of the terminal, and a helper mole beside it for every background agent Claude has running. Pure
  * decoration: every pose is a CSS state, the motion stops with Settings → Animations.
@@ -134,13 +177,29 @@ export function Pet(): VNode | null {
   useEffect(() => () => clearTimeout(leave.current), []);
 
   if (cfg.value?.appearance.pet === false) return null;
+  const companion = companionOf(cfg.value?.appearance.companion);
   const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
   const now = Date.now();
   const effort = mood === 'dig' ? effortLevel(longestRunning([live === 'working' ? session?.since : undefined, busy ? info.value.busySince ?? undefined : undefined], now)) : 0;
   const tired = effort >= 2 ? ' · working hard' : '';
   const crew = running > 0 ? ` · ${running} background agent${running === 1 ? '' : 's'} working` : '';
+  const helpers = crewMoods(running, shown);
+  if (companion !== 'mole') {
+    const name = COMPANIONS.find((c) => c.id === companion)!.name;
+    return (
+      <div class="pet-corner" data-companion={companion}>
+        <Scene
+          variant={companion}
+          mood={mood}
+          effort={effort}
+          agents={helpers.map((m, i) => ({ mood: m, effort: m === 'dig' ? effortLevel(longestRunning([runningAgents[i]?.startedAt], now)) : (0 as Effort) }))}
+          label={`${name}: ${SCENE_SAYS[mood]}${tired}${crew}`}
+        />
+      </div>
+    );
+  }
   return (
-    <div class="pet-corner">
+    <div class="pet-corner" data-companion="mole">
       <svg class="pet-defs" width="0" height="0" aria-hidden="true">
         <defs>
           <clipPath id="pet-clip">
@@ -149,7 +208,7 @@ export function Pet(): VNode | null {
         </defs>
       </svg>
       <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${crew}`} />
-      {crewMoods(running, shown).map((m, i) => (
+      {helpers.map((m, i) => (
         <Mole
           key={i}
           helper={i}

@@ -26,10 +26,14 @@ const LONG_COMMAND_MS = 30_000;
  * "A long command finished", or null. Notification Center keeps what it is shown, so the command goes through the same rules as
  * everywhere else: secrets redacted, a sensitive command (a password on the command line, an ssh key) not named at all.
  */
+/** `45s`, `2 min`: how long something took, for a notification. */
+export function took(ms: number): string {
+  const secs = Math.round(ms / 1000);
+  return secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`;
+}
+
 export function commandNotification(c: { cmd: string; exit: number | null; durMs: number }, ctx: { windowFocused: boolean }): { title: string; body: string } | null {
   if (c.durMs < LONG_COMMAND_MS || ctx.windowFocused || !c.cmd.trim()) return null;
-  const secs = Math.round(c.durMs / 1000);
-  const took = secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs}s`;
   const shown = isSensitiveCommand(c.cmd) ? 'A command' : redactText(c.cmd).replace(/\s+/g, ' ').trim().slice(0, 120);
-  return { title: c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, body: `${shown} — ${took}` };
+  return { title: c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, body: `${shown} — ${took(c.durMs)}` };
 }

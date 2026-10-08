@@ -6,6 +6,9 @@ import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
+import { COMPANIONS, companionOf } from '../../shared/companions';
+import { CompanionPreview } from './Pet';
+import { DEFAULT_PROTECTED_BRANCHES } from '../../shared/danger-zone';
 import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -325,14 +328,65 @@ export function Settings(): VNode {
               <Field label="Animations" hint="a little life while Claude works. Also off when macOS Reduce motion is on">
                 <Switch checked={c.appearance.animations !== false} onChange={(v) => set({ appearance: { animations: v } })} />
               </Field>
-              <Field label="Pet" hint="a little mole in a corner of the terminal: it digs while something runs">
+              <Field label="Companion" hint="a little animation in a corner of the terminal: it works while something runs, and shows when Claude needs you">
                 <Switch checked={c.appearance.pet !== false} onChange={(v) => set({ appearance: { pet: v } })} />
               </Field>
+              <div
+                class="companions"
+                role="radiogroup"
+                aria-label="Companion"
+                data-off={c.appearance.pet === false ? '' : undefined}
+                onKeyDown={(e) => {
+                  const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+                  if (!step) return;
+                  e.preventDefault();
+                  const group = e.currentTarget as HTMLElement; // read now: it is null once the event has finished
+                  const at = COMPANIONS.findIndex((o) => o.id === companionOf(c.appearance.companion));
+                  const next = COMPANIONS[(at + step + COMPANIONS.length) % COMPANIONS.length]!;
+                  set({ appearance: { companion: next.id } });
+                  requestAnimationFrame(() => group.querySelector<HTMLElement>(`[data-id='${next.id}']`)?.focus());
+                }}
+              >
+                {COMPANIONS.map((o) => {
+                  const on = companionOf(c.appearance.companion) === o.id;
+                  return (
+                    <button
+                      key={o.id}
+                      data-id={o.id}
+                      role="radio"
+                      aria-checked={on}
+                      tabIndex={on ? 0 : -1}
+                      class={`companion-card ${on ? 'on' : ''}`}
+                      onClick={() => set({ appearance: { companion: o.id } })}
+                    >
+                      <span class="comp-prev" data-companion={o.id} aria-hidden="true">
+                        <CompanionPreview companion={o.id} />
+                      </span>
+                      <span class="comp-name">{o.name}</span>
+                      <span class="comp-blurb">{o.blurb}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <Field label="GPU rendering" hint="turn off if text looks wrong (applies the next time you open Jaffer)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>
               <Field label="Global hotkey" hint="summons Jaffer from anywhere">
                 <input type="text" value={c.hotkey} onChange={(e) => set({ hotkey: (e.target as HTMLInputElement).value })} />
+              </Field>
+              <Field label="Keep the screen for a restart" hint="saves your screen and scrollback so they come back after a reboot or an update; off keeps nothing of the screen on disk (the folder still comes back)">
+                <Switch checked={c.session?.restoreScreen !== false} onChange={(v) => set({ session: { restoreScreen: v } })} />
+              </Field>
+              <Field label="Mark risky places" hint="tints the title bar on a protected branch (amber) and while an ssh session runs (red), so a command goes where you meant">
+                <Switch checked={c.safety?.dangerTint !== false} onChange={(v) => set({ safety: { dangerTint: v } })} />
+              </Field>
+              <Field label="Protected branches" hint="comma separated; * matches anything, as in release/*">
+                <input
+                  type="text"
+                  disabled={c.safety?.dangerTint === false}
+                  value={(c.safety?.protectedBranches ?? DEFAULT_PROTECTED_BRANCHES).join(', ')}
+                  onChange={(e) => set({ safety: { protectedBranches: (e.target as HTMLInputElement).value.split(',').map((x) => x.trim()).filter(Boolean) } })}
+                />
               </Field>
               <Field label="Open at login" hint="so your session is always one keystroke away">
                 <Switch
@@ -384,6 +438,12 @@ export function Settings(): VNode {
                     </button>
                   )}
                 </span>
+              </Field>
+              <Field label="Tell me when Claude finishes" hint="a notification when a turn that took half a minute or more ends while Jaffer is in the background">
+                <Switch checked={c.notifications?.claudeFinished !== false} onChange={(v) => set({ notifications: { claudeFinished: v } })} />
+              </Field>
+              <Field label="Offer to resume Claude Code" hint="after a restart (a reboot, an update, a crash), a button to take up the Claude Code conversation that was running in this folder; off forgets it">
+                <Switch checked={c.session?.resumeClaude !== false} onChange={(v) => set({ session: { resumeClaude: v } })} />
               </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
