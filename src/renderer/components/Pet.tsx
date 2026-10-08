@@ -25,8 +25,13 @@ const SAYS: Record<PetMood, string> = {
   cheer: 'Done!',
 };
 
+let moleCount = 0;
+
 /** One mole on its own molehill. The main one follows Claude and the terminal; a helper stands for one background agent. */
 function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: string; helper?: number; effort?: Effort }): VNode {
+  const id = useRef(0);
+  if (!id.current) id.current = ++moleCount;
+  const clip = `pet-clip-${id.current}`; // one page can show nine moles: an id may be used once
   return (
     <svg
       class={helper === undefined ? 'pet' : 'pet pet-helper'}
@@ -39,8 +44,13 @@ function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: strin
       aria-label={label}
     >
       <title>{label}</title>
+      <defs>
+        <clipPath id={clip}>
+          <rect x="-20" y="-40" width="160" height="110" />
+        </clipPath>
+      </defs>
       <ellipse class="pet-hole" cx="60" cy="59" rx="27" ry="6" />
-      <g clip-path="url(#pet-clip)">
+      <g clip-path={`url(#${clip})`}>
         <g class="pet-body">
           <ellipse class="pet-ear" cx="45" cy="30" rx="3.4" ry="3.4" />
           <ellipse class="pet-ear" cx="75" cy="30" rx="3.4" ry="3.4" />
@@ -116,13 +126,6 @@ export function CompanionPreview({ companion }: { companion: Companion }): VNode
   }
   return (
     <span class="comp-mole">
-      <svg class="pet-defs" width="0" height="0" aria-hidden="true">
-        <defs>
-          <clipPath id="pet-clip">
-            <rect x="-20" y="-40" width="160" height="110" />
-          </clipPath>
-        </defs>
-      </svg>
       <Mole mood="dig" effort={1} label={`${name} preview`} />
       <Mole helper={0} mood="dig" label="Helper mole preview" />
     </span>
@@ -200,13 +203,6 @@ export function Pet(): VNode | null {
   }
   return (
     <div class="pet-corner" data-companion="mole">
-      <svg class="pet-defs" width="0" height="0" aria-hidden="true">
-        <defs>
-          <clipPath id="pet-clip">
-            <rect x="-20" y="-40" width="160" height="110" />
-          </clipPath>
-        </defs>
-      </svg>
       <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${crew}`} />
       {helpers.map((m, i) => (
         <Mole

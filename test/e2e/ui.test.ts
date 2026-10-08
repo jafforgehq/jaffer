@@ -464,7 +464,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await cs(`${main} .pet-pile`, 'opacity')) === '1', 5_000, 'the pile of dirt');
     expect(await cs(`${main} .pet-sweat`, 'opacity')).not.toBe('0');
     expect(parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')))).toBeLessThan(calm * 0.6); // it digs faster
-    expect(parseFloat(String(await cs(`${helpers}:nth-of-type(5) .pet-body`, 'animationDuration')))).toBeGreaterThan(parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')))); // and the younger agent's mole is calmer
+    expect(parseFloat(String(await cs(`${helpers}:nth-of-type(4) .pet-body`, 'animationDuration')))).toBeGreaterThan(parseFloat(String(await cs(`${main} .pet-body`, 'animationDuration')))); // and the younger agent's mole is calmer
     expect(await page.textContent(`${main} title`)).toMatch(/working hard/);
     await sleep(500);
     await shot('14g-pet-effort');
@@ -498,6 +498,8 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.comp-prev .scene').count()).toBe(5);
     expect(await page.locator('.comp-prev .pet').count()).toBe(2);
     expect(await page.locator(corner('mole')).count()).toBe(1);
+    // seven animations on the page at once (the corner and six previews): no id may exist twice (a clip path or a gradient would be the first one's)
+    expect(await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map((e) => e.id); return ids.filter((id, i) => ids.indexOf(id) !== i); })).toEqual([]);
     await page.locator('.companion-card[data-id="matrix"]').click();
     await page.waitForSelector(`${corner('matrix')} .scene[data-variant="matrix"]`);
     expect(await page.locator('.pet-corner .pet').count()).toBe(0); // the mole left
@@ -517,10 +519,15 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('ArrowRight');
     await page.waitForSelector(`${corner('mole')} .pet`);
     await shot('15-companions');
+    // quick repeats of an arrow key each take one step from where the focus is, not from the last render
+    await page.focus('.companion-card[data-id="mole"]');
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForSelector(`${corner('warp')} .scene`); // mole, matrix, agents, warp
+    await setApp({ companion: 'core' });
+    await page.waitForSelector(`${corner('core')} .scene`);
     // a value this version does not know (a typo, a variant from a newer one) is the mole
     await setApp({ companion: 'hologram' });
-    await sleep(300);
-    expect(await page.locator(corner('mole')).count()).toBe(1);
+    await page.waitForSelector(`${corner('mole')} .pet`);
     expect(await page.locator('.companion-card.on').count()).toBe(1);
     // the switch still turns the whole thing off, whatever is chosen
     await setApp({ companion: 'core' });
@@ -815,6 +822,9 @@ describe('Jaffer UI end to end', () => {
     expect(await state()).toMatchObject({ kind: 'branch', what: 'main' });
     expect((await state()).edge).not.toBe('none');
     expect(await page.getAttribute('.session-pill', 'title')).toMatch(/protected branch main/);
+    // and in words for a screen reader (an aria-label on a plain span is not reliably read): text inside the pill, hidden from the eye
+    expect(await page.getAttribute('.session-pill', 'aria-label')).toBeNull();
+    expect(await page.textContent('.session-pill .sr-only')).toMatch(/protected branch main/);
     await shot('14i-danger-branch');
     // ssh outranks the branch, names the host, and ends with the command
     await page.keyboard.type('ssh() { sleep 30; }');
@@ -907,6 +917,7 @@ describe('Jaffer UI end to end', () => {
     // not now: dismissed, and the daemon is told
     await page.click('.resume-x');
     await until(async () => (await page.locator(chip).count()) === 0, 5_000, 'the dismissed button to go');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.term'))).toBe(true); // focus goes back to the terminal, not to nowhere
     await page.click('.term');
     await page.keyboard.type('unset -f claude');
     await page.keyboard.press('Enter');

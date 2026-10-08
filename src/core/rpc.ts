@@ -30,6 +30,8 @@ export class LineDecoder {
   /** `maxPending`: the most a peer may send without ending a line before it is taken for runaway and dropped. */
   constructor(private maxPending = 64 * 1024 * 1024) {}
   push(chunk: string, onLine: (line: string) => void): void {
+    // finish with the buffer first, then hand the lines on: a handler that throws must not take the rest of the chunk with it
+    const lines: string[] = [];
     let start = 0;
     let i: number;
     while ((i = chunk.indexOf('\n', start)) >= 0) {
@@ -38,7 +40,7 @@ export class LineDecoder {
       this.parts = [];
       this.pending = 0;
       start = i + 1;
-      if (line.trim()) onLine(line);
+      if (line.trim()) lines.push(line);
     }
     if (start < chunk.length) {
       this.parts.push(start ? chunk.slice(start) : chunk);
@@ -48,6 +50,16 @@ export class LineDecoder {
       this.parts = []; // runaway peer
       this.pending = 0;
     }
+    let failed = false;
+    let error: unknown;
+    for (const line of lines) {
+      try {
+        onLine(line);
+      } catch (e) {
+        if (!failed) [failed, error] = [true, e];
+      }
+    }
+    if (failed) throw error;
   }
 }
 

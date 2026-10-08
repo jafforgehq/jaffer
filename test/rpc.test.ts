@@ -47,6 +47,19 @@ describe('LineDecoder', () => {
     expect(Date.now() - t0).toBeLessThan(1500);
   });
 
+  it('a handler that throws loses nothing: the other lines of the chunk are still given, the unfinished one is kept, and the error is not hidden', () => {
+    const d = new LineDecoder();
+    const seen: string[] = [];
+    const onLine = (l: string) => {
+      seen.push(l);
+      if (l === 'a') throw new Error('a listener broke');
+    };
+    expect(() => d.push('a\nb\nc\npart', onLine)).toThrow('a listener broke');
+    expect(seen).toEqual(['a', 'b', 'c']);
+    d.push('ial\n', onLine);
+    expect(seen).toEqual(['a', 'b', 'c', 'partial']);
+  });
+
   it('drops a runaway peer that never ends a line, and carries on with the next line after it', () => {
     expect(lines(['x'.repeat(50), 'y'.repeat(50), 'ok\n'], 80)).toEqual(['ok']); // the first 100 were over the limit; "ok" starts a fresh buffer
   });

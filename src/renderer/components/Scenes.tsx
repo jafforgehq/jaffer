@@ -1,4 +1,5 @@
 import type { ComponentChildren, VNode } from 'preact';
+import { useRef } from 'preact/hooks';
 import type { Companion } from '../../shared/companions';
 import type { CrewMood } from '../../shared/pet-crew';
 import type { Effort } from '../../shared/pet-effort';
@@ -42,13 +43,17 @@ export interface SceneProps {
   label: string;
 }
 
+/** What every scene draws from: the props, and the id its clip path, scan lines and gradient go by (one page can show seven scenes). */
+type Inner = SceneProps & { uid: string };
+let sceneCount = 0;
+
 const px = (n: number): string => n.toFixed(1);
 
 /**
  * The frame every scene shares: a dark panel in the corner of the terminal. Everything about how it moves is CSS keyed on
  * `data-mood`, `data-effort` and `data-density`, as the mole's is, so it stands still under Animations off and Reduce motion.
  */
-function Frame({ p, children }: { p: SceneProps; children: ComponentChildren }): VNode {
+function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNode {
   return (
     <svg
       class="scene"
@@ -64,21 +69,21 @@ function Frame({ p, children }: { p: SceneProps; children: ComponentChildren }):
     >
       <title>{p.label}</title>
       <defs>
-        <clipPath id="scene-clip">
+        <clipPath id={`${p.uid}-clip`}>
           <rect x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />
         </clipPath>
-        <pattern id="scene-scan" width="4" height="3" patternUnits="userSpaceOnUse">
-          <rect width="4" height="1" />
+        <pattern id={`${p.uid}-scan`} width="4" height="3" patternUnits="userSpaceOnUse">
+          <rect class="scan-line" width="4" height="1" />
         </pattern>
-        <linearGradient id="rd-sweep-fill" x1="0" x2="1" y1="0" y2="0">
+        <linearGradient id={`${p.uid}-sweep`} x1="0" x2="1" y1="0" y2="0">
           <stop offset="0" style={{ stopColor: 'var(--ok)', stopOpacity: 0 }} />
           <stop offset="1" style={{ stopColor: 'var(--ok)', stopOpacity: 0.55 }} />
         </linearGradient>
       </defs>
       <rect class="scene-bg" x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />
-      <g class="scene-art" clip-path="url(#scene-clip)">
+      <g class="scene-art" clip-path={`url(#${p.uid}-clip)`}>
         {children}
-        <rect class="scene-scan" x="0" y="0" width={SCENE_W} height={SCENE_H} fill="url(#scene-scan)" />
+        <rect class="scene-scan" x="0" y="0" width={SCENE_W} height={SCENE_H} fill={`url(#${p.uid}-scan)`} />
       </g>
       <rect class="scene-edge" x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />
     </svg>
@@ -89,7 +94,7 @@ function Frame({ p, children }: { p: SceneProps; children: ComponentChildren }):
 
 const COLUMNS = matrixColumns();
 
-function Matrix({ p }: { p: SceneProps }): VNode {
+function Matrix({ p }: { p: Inner }): VNode {
   const shown = matrixShown(sceneDensity(p.mood, p.effort));
   const colX = (slot: number) => COLUMNS[MATRIX_AGENT_COLUMNS[slot]!]!.x;
   return (
@@ -138,7 +143,7 @@ function Matrix({ p }: { p: SceneProps }): VNode {
 const STARS_FAR = constellation();
 const AGENT_HUES = ['info', 'violet', 'ok'] as const;
 
-function Agents({ p }: { p: SceneProps }): VNode {
+function Agents({ p }: { p: Inner }): VNode {
   const nodes = agentNodes(p.agents.length);
   const edges = agentEdges(p.agents.length);
   const per = packetsPerLink(p.mood, p.effort);
@@ -198,7 +203,7 @@ function Agents({ p }: { p: SceneProps }): VNode {
 const STARS = warpStars();
 const SHIP = 'M0 -7 L6 6 L0 3 L-6 6 Z';
 
-function Warp({ p }: { p: SceneProps }): VNode {
+function Warp({ p }: { p: Inner }): VNode {
   const stars = STARS.slice(0, starsShown(sceneDensity(p.mood, p.effort)));
   const ships = warpShips(p.agents.length);
   return (
@@ -259,7 +264,7 @@ function load(mood: PetMood, effort: Effort): number {
   return mood === 'dig' ? effort + 1 : mood === 'rest' ? 1 : mood === 'sleep' ? 0 : 4;
 }
 
-function Readout({ p, x }: { p: SceneProps; x: number }): VNode {
+function Readout({ p, x }: { p: Inner; x: number }): VNode {
   const lit = load(p.mood, p.effort);
   return (
     <g class="hud-read" transform={`translate(${x} 0)`}>
@@ -279,7 +284,7 @@ function Readout({ p, x }: { p: SceneProps; x: number }): VNode {
   );
 }
 
-function Radar({ p }: { p: SceneProps }): VNode {
+function Radar({ p }: { p: Inner }): VNode {
   const blips = radarBlips(p.agents.length);
   return (
     <Frame p={p}>
@@ -290,7 +295,7 @@ function Radar({ p }: { p: SceneProps }): VNode {
         <line class="rd-cross" x1={SCOPE.x - SCOPE.r} y1={SCOPE.y} x2={SCOPE.x + SCOPE.r} y2={SCOPE.y} />
         <line class="rd-cross" x1={SCOPE.x} y1={SCOPE.y - SCOPE.r} x2={SCOPE.x} y2={SCOPE.y + SCOPE.r} />
         <g class="rd-sweep">
-          <path class="rd-wedge" d={WEDGE} />
+          <path class="rd-wedge" d={WEDGE} fill={`url(#${p.uid}-sweep)`} />
           <line class="rd-line" x1={SCOPE.x} y1={SCOPE.y} x2={SCOPE.x} y2={SCOPE.y - SCOPE.r} />
         </g>
         <circle class="rd-ping" cx={SCOPE.x} cy={SCOPE.y} r="10" />
@@ -309,7 +314,7 @@ function Radar({ p }: { p: SceneProps }): VNode {
 
 const BAR_SHAPE = Array.from({ length: CORE_BARS }, (_, i) => 0.35 + 0.65 * Math.abs(Math.sin(i * 0.9 + 0.4)));
 
-function Core({ p }: { p: SceneProps }): VNode {
+function Core({ p }: { p: Inner }): VNode {
   const sats = coreSatellites(p.agents.length);
   return (
     <Frame p={p}>
@@ -344,7 +349,10 @@ function Core({ p }: { p: SceneProps }): VNode {
 // ----------------------------------------------------------------------------------------------------------------
 
 /** One of the scenes that can replace the mole. */
-export function Scene(p: SceneProps): VNode {
+export function Scene(props: SceneProps): VNode {
+  const uid = useRef('');
+  if (!uid.current) uid.current = `sc${++sceneCount}`;
+  const p: Inner = { ...props, uid: uid.current };
   switch (p.variant) {
     case 'matrix':
       return <Matrix p={p} />;

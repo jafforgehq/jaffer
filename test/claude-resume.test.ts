@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
-import { isSessionId, resumeCommand } from '../src/shared/claude-resume';
+import { endsConversation, isSessionId, resumeCommand } from '../src/shared/claude-resume';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -158,5 +158,56 @@ describe('ResumeStore', () => {
       fs.writeFileSync(file(), content);
       expect(new ResumeStore(file(), () => now).offer(ctx('/tmp')), content).toBeNull();
     }
+  });
+});
+
+describe('a conversation that ended on purpose stays ended', () => {
+  const store = () => new ResumeStore(path.join(env.home, 'resume.json'), () => now);
+  const folder = () => {
+    const dir = path.join(env.userHome, 'proj');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  const ask = (s: ResumeStore, dir: string) => s.offer({ shellCwd: dir, active: false, busy: false, enabled: true });
+
+  it('ignores a late hook of it (the hooks after a tool call are asynchronous and can arrive after the exit), until Claude Code starts it again', () => {
+    const dir = folder();
+    const s = store();
+    s.note({ id: ID, cwd: dir });
+    s.forget(); // `claude` exited normally
+    s.note({ id: ID, cwd: dir }); // a PostToolUse that was already on its way
+    expect(ask(s, dir)).toBeNull();
+    expect(fs.existsSync(path.join(env.home, 'resume.json'))).toBe(false);
+    s.note({ id: ID, cwd: dir, starts: true }); // SessionStart: the person is back in it
+    expect(ask(s, dir)?.id).toBe(ID);
+  });
+
+  it('also holds for an id that was ended before it was ever noted (SessionEnd, then a straggler)', () => {
+    const dir = folder();
+    const s = store();
+    s.forget(ID);
+    s.note({ id: ID, cwd: dir });
+    expect(ask(s, dir)).toBeNull();
+  });
+
+  it('is only about that conversation: another one is noted as usual, and the list of ended ones stays small', () => {
+    const dir = folder();
+    const s = store();
+    s.forget(ID);
+    s.note({ id: 'f0f0f0f0-aaaa-bbbb-cccc-111122223333', cwd: dir });
+    expect(ask(s, dir)?.id).toBe('f0f0f0f0-aaaa-bbbb-cccc-111122223333');
+    for (let i = 0; i < 500; i++) s.forget(`ended-session-${i}`);
+    s.note({ id: ID, cwd: dir }); // the oldest of 500 has been let go: remembering them all would grow without end
+    expect(ask(s, dir)?.id).toBe(ID);
+  });
+});
+
+describe('endsConversation: which `claude` commands, when they finish, mean the conversation is over', () => {
+  it('is every way of running Claude Code itself', () => {
+    for (const c of ['claude', 'claude --resume abcdef12', 'claude -c', 'claude "fix the build"', 'claude -p "hi"', 'FOO=1 claude', '/usr/local/bin/claude --model opus', 'command claude']) expect(endsConversation(c), c).toBe(true);
+  });
+
+  it('is not the commands that only ask or manage (they must not drop an offer that is waiting)', () => {
+    for (const c of ['claude --version', 'claude -v', 'claude --help', 'claude -h', 'claude mcp list', 'claude update', 'claude doctor', 'claude config get theme', 'claude auth status', 'claude plugin list', 'claude --debug mcp list']) expect(endsConversation(c), c).toBe(false);
   });
 });

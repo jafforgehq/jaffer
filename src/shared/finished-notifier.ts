@@ -49,7 +49,7 @@ export class FinishedNotifier {
         continue;
       }
       const was = before.get(s.id);
-      if (was?.state === 'working' && s.state === 'idle' && was.turnStartedAt !== undefined && now - was.turnStartedAt >= FINISHED_MIN_MS && this.d.enabled()) {
+      if (was?.state === 'working' && s.state === 'idle' && !s.cutShort && was.turnStartedAt !== undefined && now - was.turnStartedAt >= FINISHED_MIN_MS && this.d.enabled()) {
         this.pending.set(s.id, { durMs: now - was.turnStartedAt, answersBefore: was.cost?.answers ?? 0, timer: this.d.setTimer(() => this.fire(s.id), COST_WAIT_MS) });
       }
     }

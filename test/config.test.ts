@@ -157,3 +157,46 @@ describe('appearance.companion', () => {
   });
 });
 
+
+describe('a config file or patch with values of the wrong kind', () => {
+  const load = (raw: unknown) => {
+    fs.writeFileSync(env.paths.config, JSON.stringify(raw));
+    return new ConfigStore(env.paths);
+  };
+
+  it('loads, with the default for what does not fit: a section that is not an object, a switch that is not a boolean, a list that is not a list of text', () => {
+    const cfg = load({ session: null, safety: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
+    expect(cfg.session).toEqual({ restoreScreen: true, resumeClaude: true });
+    expect(cfg.safety).toEqual(DEFAULT_CONFIG.safety);
+    expect(cfg.notifications).toEqual({ claudeFinished: true });
+    expect(cfg.appearance.pet).toBe(true);
+    expect(cfg.appearance.fontSize).toBe(13);
+    expect(cfg.shell.args).toEqual([]);
+  });
+
+  it('keeps the default branch list when the saved one is a string ("main,prod" is what `jaffer config set` stores) or has anything but text in it', () => {
+    expect(load({ safety: { protectedBranches: 'main,prod' } }).get().safety.protectedBranches).toEqual(DEFAULT_CONFIG.safety.protectedBranches);
+    expect(load({ safety: { protectedBranches: ['wip', 3, null] } }).get().safety.protectedBranches).toEqual(DEFAULT_CONFIG.safety.protectedBranches);
+    expect(load({ safety: { protectedBranches: ['wip', 'dev/*'] } }).get().safety.protectedBranches).toEqual(['wip', 'dev/*']);
+  });
+
+  it('refuses a patch of the wrong kind and keeps what was there, on disk too', () => {
+    const store = load({});
+    store.patch({ safety: { protectedBranches: ['wip'] } });
+    store.patch({ safety: { protectedBranches: 'main,prod' as never }, session: { restoreScreen: 'off' as never } });
+    expect(store.get().safety.protectedBranches).toEqual(['wip']);
+    expect(store.get().session.restoreScreen).toBe(true);
+    const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
+    expect(saved.safety.protectedBranches).toEqual(['wip']);
+    expect(saved.session.restoreScreen).toBe(true);
+    store.patch({ session: { restoreScreen: false } }); // a value of the right kind still goes through
+    expect(store.get().session.restoreScreen).toBe(false);
+  });
+
+  it('keeps keys it does not know (a newer version wrote them) and bounds the branch list', () => {
+    const store = load({ future: { x: 1 }, safety: { protectedBranches: Array.from({ length: 500 }, (_, i) => `b${i}`.padEnd(400, 'x')) } });
+    expect((store.get() as any).future).toEqual({ x: 1 });
+    expect(store.get().safety.protectedBranches).toHaveLength(100);
+    expect(store.get().safety.protectedBranches.every((b) => b.length <= 200)).toBe(true);
+  });
+});

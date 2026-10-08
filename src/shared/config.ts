@@ -112,9 +112,37 @@ function merge<T>(base: T, over: unknown): T {
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] };
 
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isTextList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/**
+ * `value` with every key the reference knows brought to the reference's kind: a section stays an object, a switch a boolean, a
+ * list a list of text. What does not fit becomes the reference's own value. Keys the reference does not know (a newer version
+ * wrote them) pass through. A hand-edited file, or `jaffer config set safety.protectedBranches main,prod` (stored as the string
+ * "main,prod"), must not be able to crash the window or stop the daemon starting, nor quietly keep a privacy setting from working.
+ */
+function conform(value: unknown, ref: unknown): unknown {
+  if (isRecord(ref)) {
+    if (!isRecord(value)) return structuredClone(ref);
+    const out: Record<string, unknown> = { ...value };
+    for (const [k, r] of Object.entries(ref)) out[k] = k in value ? conform(value[k], r) : structuredClone(r);
+    return out;
+  }
+  if (Array.isArray(ref)) return isTextList(value) ? value : structuredClone(ref);
+  return typeof value === typeof ref ? value : ref;
+}
+
+/** The most branch patterns, and the longest one, that are kept: every one is run against the branch name on each title-bar update. */
+const MAX_BRANCH_PATTERNS = 100;
+const MAX_BRANCH_PATTERN_LENGTH = 200;
+
 /** Jaffer is for Claude Code only. Targets saved by earlier builds for other agents are dropped when a config is loaded. */
 function supported(cfg: JafferConfig): JafferConfig {
-  return { ...cfg, export: { ...cfg.export, targets: cfg.export.targets.filter((t) => t === 'claude-code') } };
+  return {
+    ...cfg,
+    export: { ...cfg.export, targets: cfg.export.targets.filter((t) => t === 'claude-code') },
+    safety: { ...cfg.safety, protectedBranches: cfg.safety.protectedBranches.slice(0, MAX_BRANCH_PATTERNS).map((b) => b.slice(0, MAX_BRANCH_PATTERN_LENGTH)) },
+  };
 }
 
 export class ConfigStore {
@@ -122,7 +150,7 @@ export class ConfigStore {
   private cfg: JafferConfig;
 
   constructor(private paths: JafferPaths) {
-    this.cfg = supported(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})));
+    this.cfg = supported(conform(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})), DEFAULT_CONFIG) as JafferConfig);
   }
 
   get(): JafferConfig {
@@ -130,7 +158,7 @@ export class ConfigStore {
   }
 
   patch(p: DeepPartial<JafferConfig>): JafferConfig {
-    this.cfg = supported(merge(this.cfg, p));
+    this.cfg = supported(conform(merge(this.cfg, p), this.cfg) as JafferConfig); // a value of the wrong kind leaves what was there
     writeJson(this.paths.config, this.cfg);
     this.onChange.emit(this.cfg);
     return this.cfg;

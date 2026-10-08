@@ -108,3 +108,48 @@ describe('dangerZone', () => {
     for (const b of ['develop', 'feature/prod-fix', 'staging', 'fix/main-menu']) expect(branchMatches(b, DEFAULT_PROTECTED_BRANCHES), b).toBe(false);
   });
 });
+
+describe('a branch list that is not a list of text (a hand-edited config)', () => {
+  it('protects nothing and does not throw', () => {
+    expect(branchMatches('main', 'main,prod' as never)).toBe(false);
+    expect(branchMatches('main', undefined as never)).toBe(false);
+    expect(branchMatches('main', [3, null, 'main'] as never)).toBe(true); // the text in it still counts
+  });
+});
+
+describe('the host of a command the UI hides', () => {
+  it('is not given away: a command that is sensitive (a leading space, a key file) still tints the bar, but names no host', () => {
+    expect(dangerZone({ running: ' ssh secret-host', patterns: [] })).toEqual({ kind: 'ssh', what: 'a remote machine' });
+    expect(dangerZone({ running: 'ssh secret-host cat ~/.ssh/id_rsa', patterns: [] })).toEqual({ kind: 'ssh', what: 'a remote machine' });
+    expect(dangerZone({ running: 'ssh deploy@prod-1', patterns: [] })).toEqual({ kind: 'ssh', what: 'prod-1' });
+  });
+
+  it('is redacted like any other text that reaches the window', () => {
+    const token = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+    expect(dangerZone({ running: `ssh ${token}`, patterns: [] })?.what).not.toContain(token);
+  });
+});
+
+describe('sshHost reads the destination through clustered flags and wrappers', () => {
+  it('finds the host after a cluster of short flags, with the port attached or as the next word', () => {
+    expect(sshHost('ssh -vp 2222 host')).toBe('host');
+    expect(sshHost('ssh -p2222 host')).toBe('host');
+    expect(sshHost('ssh -vvv host')).toBe('host');
+    expect(sshHost('ssh -Nf -L 8080:localhost:80 jump')).toBe('jump');
+    expect(sshHost('ssh -qi key.pem deploy@prod-1')).toBe('prod-1');
+  });
+
+  it('sees through sudo, env, nice and the like, with their own options', () => {
+    expect(sshHost('sudo -iu deploy ssh h')).toBe('h');
+    expect(sshHost('sudo -u deploy env A=1 ssh prod')).toBe('prod');
+    expect(sshHost('env X=1 ssh h')).toBe('h');
+    expect(sshHost('env -i X=1 ssh h')).toBe('h');
+    expect(sshHost('nice ssh h')).toBe('h');
+    expect(sshHost('nice -n 5 ssh h')).toBe('h');
+    expect(sshHost('nohup ssh h')).toBe('h');
+  });
+
+  it('still says "not ssh" for what only mentions it', () => {
+    for (const c of ['sudo apt install ssh', 'env X=1 echo ssh prod', 'nice make', 'ssh-keygen -t ed25519', 'echo ssh prod']) expect(sshHost(c), c).toBeUndefined();
+  });
+});

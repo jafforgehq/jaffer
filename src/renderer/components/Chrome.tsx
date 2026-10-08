@@ -44,7 +44,8 @@ export function TitleBar(): VNode {
     <div class="titlebar" data-danger={danger?.kind} data-danger-what={danger?.what}>
       <div class="tb-left" />
       <div class="tb-center">
-        <span class="session-pill" title={why ? `${why}\n${i.cwd}` : i.cwd} aria-label={why}>
+        <span class="session-pill" title={why ? `${why}\n${i.cwd}` : i.cwd}>
+          {why && <span class="sr-only">{why}. </span>}
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
           <span class="cwd">{shortPath(i.cwd) || 'Jaffer'}</span>
           {i.branch && (

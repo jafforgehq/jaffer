@@ -71,6 +71,13 @@ describe('FinishedNotifier', () => {
     expect(sent).toHaveLength(1); // and not again when the timer would have fired
   });
 
+  it('says nothing for a turn that was cut short (Esc, a declined prompt, an API error that went quiet): it did not finish', () => {
+    notifier.update([working(7 * 60_000)]);
+    notifier.update([session('idle', { turnStartedAt: now - 7 * 60_000, cutShort: true })]);
+    advance(COST_WAIT_MS + 5_000);
+    expect(sent).toEqual([]);
+  });
+
   it('says it without the cost when the cost never arrives', () => {
     notifier.update([working(90_000)]);
     notifier.update([session('idle')]);

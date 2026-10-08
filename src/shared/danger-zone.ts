@@ -3,6 +3,8 @@
  * easiest way to type a command into the wrong machine). The title bar tints for it; nothing else changes. Pure, so it is tested.
  */
 
+import { isSensitiveCommand, redactText } from './redact';
+
 export const DEFAULT_PROTECTED_BRANCHES = ['main', 'master', 'production', 'prod', 'release/*'];
 
 export interface Danger {
@@ -34,18 +36,29 @@ function glob(pattern: string, text: string): boolean {
 }
 
 export function branchMatches(branch: string, patterns: string[]): boolean {
-  if (!branch) return false;
+  if (!branch || !Array.isArray(patterns)) return false;
   const b = branch.toLowerCase();
   return patterns.some((raw) => {
-    const p = raw.trim().toLowerCase();
+    const p = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
     return p !== '' && glob(p, b);
   });
 }
 
 /** ssh options that take the next word as their value (`-p 2222`). */
-const VALUE_OPTIONS = new Set('BbcDEeFIiJLlmOopQRSWw'.split(''));
+const VALUE_OPTIONS = 'BbcDEeFIiJLlmOopQRSWw';
 const MOSH_VALUE_OPTIONS = new Set(['--port', '--ssh', '--server', '--client', '--predict', '--bind-server', '--family']);
-const WRAPPERS = new Set(['command', 'exec', 'time', 'sudo']);
+/** Programs that run the next command: with the short options that take the next word as their value (`sudo -u deploy`, `nice -n 5`). */
+const WRAPPERS: Record<string, string> = { command: '', exec: '', time: '', nohup: '', sudo: 'ugCDhpRrtTU', env: 'uSC', nice: 'n' };
+const isAssignment = (w: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
+
+/**
+ * Where `-vp 2222` or `-iu deploy` ends: a cluster of short options, of which the first that takes a value either has it attached
+ * (`-p2222`) or, when it is the last one, takes the next word. Returns how many words the option uses.
+ */
+function optionWords(w: string, takesValue: string): number {
+  for (let k = 1; k < w.length; k++) if (takesValue.includes(w[k]!)) return k === w.length - 1 ? 2 : 1;
+  return 1;
+}
 
 /**
  * Where an `ssh` or `mosh` command line connects to: the host, without user, port or options. `null` when it is ssh but the
@@ -54,11 +67,18 @@ const WRAPPERS = new Set(['command', 'exec', 'time', 'sudo']);
 export function sshHost(cmd: string): string | null | undefined {
   const words = cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
   let i = 0;
-  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++; // FOO=1 ssh …
-  while (i < words.length && WRAPPERS.has(words[i]!)) {
-    const sudo = words[i] === 'sudo';
-    i++;
-    while (i < words.length && words[i]!.startsWith('-')) i += sudo && /^-[ug]$/.test(words[i]!) ? 2 : 1; // sudo -u deploy ssh …
+  while (i < words.length && isAssignment(words[i]!)) i++; // FOO=1 ssh …
+  while (i < words.length && Object.hasOwn(WRAPPERS, words[i]!)) {
+    const takes = WRAPPERS[words[i++]!]!;
+    while (i < words.length) {
+      const w = words[i]!;
+      if (isAssignment(w)) i++; // env X=1 ssh …
+      else if (w === '--') {
+        i++;
+        break;
+      } else if (w.startsWith('-') && w.length > 1) i += w.startsWith('--') ? 1 : optionWords(w, takes);
+      else break;
+    }
   }
   const program = (words[i] ?? '').split('/').pop();
   if (program !== 'ssh' && program !== 'mosh') return undefined;
@@ -74,7 +94,7 @@ export function sshHost(cmd: string): string | null | undefined {
       continue;
     }
     if (w.startsWith('-') && w.length > 1) {
-      if (w.length === 2 && VALUE_OPTIONS.has(w[1]!)) j++;
+      j += optionWords(w, VALUE_OPTIONS) - 1;
       continue;
     }
     dest = w;
@@ -89,10 +109,13 @@ export function sshHost(cmd: string): string | null | undefined {
   return host || null;
 }
 
-/** ssh outranks the branch: being on the wrong machine is the bigger mistake. */
+/**
+ * ssh outranks the branch: being on the wrong machine is the bigger mistake. The host goes to the window (a tooltip, a label), so
+ * it is held to the same rule as the command beside it: a command the window hides as sensitive names no host, the rest is redacted.
+ */
 export function dangerZone(o: { branch?: string | null; running?: string | null; patterns: string[] }): Danger | null {
   const host = o.running ? sshHost(o.running) : undefined;
-  if (host !== undefined) return { kind: 'ssh', what: host ?? 'a remote machine' };
+  if (host !== undefined) return { kind: 'ssh', what: host === null || isSensitiveCommand(o.running!) ? 'a remote machine' : redactText(host) };
   if (o.branch && branchMatches(o.branch, o.patterns)) return { kind: 'branch', what: o.branch };
   return null;
 }

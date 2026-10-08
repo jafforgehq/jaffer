@@ -7,6 +7,8 @@ import { readJson, writeJson } from '../../shared/util';
 const MAX_AGE_MS = 14 * 86_400_000;
 /** The hooks fire on every tool call: "still going" is written at most this often, a changed point at once. */
 const WRITE_EVERY_MS = 30_000;
+/** How many ended conversations are remembered as ended (the newest): a straggler comes within moments, not weeks. */
+const MAX_ENDED = 50;
 
 interface Point {
   id: string;
@@ -35,6 +37,11 @@ const sameFolder = (a: string, b: string): boolean => {
 export class ResumeStore {
   private point: Point | null;
   private writtenAt = 0;
+  /**
+   * Conversations that ended on purpose. The hooks after a tool call are asynchronous, so one can arrive after the exit that ended
+   * the conversation: without this it would write the point back and a conversation the person quit would be offered after a restart.
+   */
+  private ended = new Set<string>();
 
   constructor(
     private file: string,
@@ -61,9 +68,11 @@ export class ResumeStore {
     }
   }
 
-  /** Claude Code is alive in this conversation. */
-  note(p: { id: string; cwd?: string; transcriptPath?: string }): void {
+  /** Claude Code is alive in this conversation. `starts`: this is its SessionStart, so a conversation that had ended is back. */
+  note(p: { id: string; cwd?: string; transcriptPath?: string; starts?: boolean }): void {
     if (!isSessionId(p.id)) return;
+    if (p.starts) this.ended.delete(p.id);
+    else if (this.ended.has(p.id)) return;
     const same = this.point?.id === p.id;
     const cwd = same ? this.point!.cwd : p.cwd; // where it began, not wherever it later wandered
     if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || cwd.length > 400) return;
@@ -76,6 +85,12 @@ export class ResumeStore {
 
   /** The conversation ended on purpose (or the person dismissed the offer). No id: whatever is kept. */
   forget(id?: string): void {
+    const gone = id ?? this.point?.id;
+    if (gone !== undefined && isSessionId(gone)) {
+      this.ended.delete(gone);
+      this.ended.add(gone); // newest last
+      if (this.ended.size > MAX_ENDED) this.ended.delete(this.ended.values().next().value as string);
+    }
     if (!this.point || (id !== undefined && this.point.id !== id)) return;
     this.point = null;
     this.write();

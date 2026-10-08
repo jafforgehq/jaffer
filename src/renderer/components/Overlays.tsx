@@ -340,11 +340,13 @@ export function Settings(): VNode {
                   const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
                   if (!step) return;
                   e.preventDefault();
-                  const group = e.currentTarget as HTMLElement; // read now: it is null once the event has finished
-                  const at = COMPANIONS.findIndex((o) => o.id === companionOf(c.appearance.companion));
+                  // one step from the card that has the focus (not from the last render: a held key repeats faster than the config comes back)
+                  const group = e.currentTarget as HTMLElement;
+                  const here = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset.id ?? companionOf(c.appearance.companion);
+                  const at = Math.max(0, COMPANIONS.findIndex((o) => o.id === here));
                   const next = COMPANIONS[(at + step + COMPANIONS.length) % COMPANIONS.length]!;
+                  group.querySelector<HTMLElement>(`[data-id='${next.id}']`)?.focus();
                   set({ appearance: { companion: next.id } });
-                  requestAnimationFrame(() => group.querySelector<HTMLElement>(`[data-id='${next.id}']`)?.focus());
                 }}
               >
                 {COMPANIONS.map((o) => {

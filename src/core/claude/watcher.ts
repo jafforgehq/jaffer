@@ -31,6 +31,8 @@ export interface ClaudeSession {
   since: number;
   /** When the current turn began: a session leaving idle for working. Going to needs-you and back is the same turn. */
   turnStartedAt?: number;
+  /** The turn went idle without finishing: the person stopped it (Esc, a declined prompt), or it went quiet for minutes (an API error, a crash). */
+  cutShort?: boolean;
   /** The tool call Claude is running or asking about: its name and id, never its arguments. */
   tool?: { name: string; id: string };
   /** Claude Code's own words for what it waits for ("Claude needs your permission to use Bash"), redacted. */
@@ -111,6 +113,7 @@ export class ClaudeWatcher {
     const e = this.map.get(sessionId);
     if (!e || !(e.s.state === 'working' || e.s.state === 'needs-you')) return;
     this.setState(e.s, 'idle');
+    e.s.cutShort = true;
     e.s.notice = undefined;
     e.s.tool = undefined;
     this.changes.emit(this.sessions());
@@ -129,6 +132,7 @@ export class ClaudeWatcher {
       const quiet = t - e.touched;
       if (s.state === 'working' && quiet >= (s.tool ? STALE_TOOL_MS : STALE_MS) && !alive({ ...s })) {
         this.setState(s, 'idle');
+        s.cutShort = true;
         s.tool = undefined;
         changed = true;
       }
@@ -170,7 +174,10 @@ export class ClaudeWatcher {
 
   private setState(s: ClaudeSession, state: ClaudeState): void {
     if (s.state !== state) {
-      if (state === 'working' && s.state !== 'needs-you') s.turnStartedAt = this.now();
+      if (state === 'working' && s.state !== 'needs-you') {
+        s.turnStartedAt = this.now();
+        s.cutShort = undefined;
+      }
       s.state = state;
       s.since = this.now();
     }

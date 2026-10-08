@@ -145,6 +145,22 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(hook.stdout).toContain('linter before committing');
   });
 
+  it('`jaffer config set` says so when a value is not of the right kind, instead of storing it and printing ok', async () => {
+    const cli = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8', cwd: env.userHome });
+    const bad = cli('config', 'set', 'safety.protectedBranches', 'main,prod'); // the string "main,prod", not a list
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/safety\.protectedBranches/);
+    expect(bad.stdout).not.toContain('ok');
+    const off = cli('config', 'set', 'session.restoreScreen', 'off'); // not a boolean: it must not look as if the screen were no longer kept
+    expect(off.status).not.toBe(0);
+    expect(JSON.parse(cli('config', 'get', 'session.restoreScreen').stdout)).toBe(true);
+    expect(JSON.parse(cli('config', 'get', 'safety.protectedBranches').stdout)).toContain('main');
+    const good = cli('config', 'set', 'safety.protectedBranches', '["wip","release/*"]');
+    expect(good.status, good.stderr).toBe(0);
+    expect(JSON.parse(cli('config', 'get', 'safety.protectedBranches').stdout)).toEqual(['wip', 'release/*']);
+    expect(cli('config', 'set', 'session.restoreScreen', 'true').status).toBe(0);
+  });
+
   it('puts a working `jaffer` command on the PATH of the session shell', async () => {
     const c = await connect();
     const cmds = collect(c, 'pty.command');
@@ -251,6 +267,55 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       await sleep(1200);
       expect(await c.call('claude.resume', {})).toBeNull();
       await c.call('pty.write', { data: 'unset -f claude\r' });
+      await sleep(300);
+    }, 40_000);
+
+    it('turning the offer off forgets the conversation (as Settings says), so it is not back when it is turned on again', async () => {
+      const { c, hook } = await inFolder('resume-e');
+      const file = path.join(env.paths.sessionDir, 'claude.json');
+      await hook(c, 'SessionStart');
+      await waitUntil(() => fs.existsSync(file), 8000);
+      await c.call('config.patch', { session: { resumeClaude: false } });
+      await waitUntil(() => !fs.existsSync(file), 8000); // nothing of it is kept while it is off
+      await c.call('config.patch', { session: { resumeClaude: true } });
+      const c2 = await restart(c);
+      await sleep(800);
+      expect(await c2.call('claude.resume', {})).toBeNull();
+    }, 40_000);
+
+    it('a hook that arrives after the person quit does not bring the conversation back, and Claude Code starting it again does', async () => {
+      const { c, hook } = await inFolder('resume-f');
+      const file = path.join(env.paths.sessionDir, 'claude.json');
+      await c.call('pty.write', { data: 'claude() { return 0; }\r' });
+      await sleep(400);
+      await hook(c, 'SessionStart');
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      await waitUntil(() => fs.existsSync(file), 8000);
+      await c.call('pty.write', { data: 'claude\r' });
+      await waitUntil(() => !fs.existsSync(file), 8000); // quit on purpose: forgotten
+      await hook(c, 'PostToolUse', ID, { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'late-1' }); // already on its way when it quit
+      await sleep(400);
+      expect(fs.existsSync(file)).toBe(false);
+      expect(await c.call('claude.resume', {})).toBeNull();
+      await hook(c, 'SessionStart'); // `claude --resume` by hand
+      await waitUntil(() => fs.existsSync(file), 8000);
+      await c.call('pty.write', { data: 'unset -f claude\r' });
+      await sleep(300);
+    }, 40_000);
+
+    it('an offer that is waiting survives `claude --version` (a command that only asks is not the conversation ending)', async () => {
+      const { c, hook } = await inFolder('resume-g');
+      await hook(c, 'SessionStart', OTHER); // its own id: the home is shared by these tests, and a conversation keeps the folder it began in
+      await hook(c, 'UserPromptSubmit', OTHER, { prompt: 'go' });
+      const c2 = await restart(c); // a reboot
+      await waitUntil(async () => (await c2.call('claude.resume', {}))?.id === OTHER, 8000);
+      await c2.call('session.attach', { cols: 100, rows: 30 });
+      await c2.call('pty.write', { data: 'claude() { return 0; }\r' });
+      await sleep(400);
+      await c2.call('pty.write', { data: 'claude --version\r' });
+      await sleep(1200);
+      expect((await c2.call('claude.resume', {}))?.id).toBe(OTHER);
+      await c2.call('pty.write', { data: 'unset -f claude\r' });
       await sleep(300);
     }, 40_000);
 

@@ -61,6 +61,7 @@ export function resumeClaude(): void {
 /** "Not now": forget that conversation. */
 export function dismissResume(): void {
   resumeOffer.value = null;
+  term()?.focus(); // the button that had the focus is gone: it goes back to the terminal, not to nowhere
   void window.jaffer.call('claude.resume.dismiss', {}).catch(() => undefined);
 }
 

@@ -402,3 +402,32 @@ describe('ClaudeWatcher cost', () => {
     expect(only().cost!.last.output).toBe(20);
   });
 });
+
+describe('ClaudeWatcher: a turn that did not end on its own', () => {
+  it('is marked when it was cut short (Esc or a declined prompt, or a silence that sweeps it to idle), and not when Claude finished it', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('Stop'));
+    expect(only().cutShort).toBeUndefined(); // Claude's own Stop: it finished
+
+    w.handle(fx('UserPromptSubmit'));
+    w.interrupted('sess-1');
+    expect(only().state).toBe('idle');
+    expect(only().cutShort).toBe(true);
+
+    w.handle(fx('UserPromptSubmit')); // the next turn starts clean
+    expect(only().cutShort).toBeUndefined();
+    t += 6 * 60_000;
+    w.sweep(() => false); // an API error or a crash: nothing came for minutes
+    expect(only().state).toBe('idle');
+    expect(only().cutShort).toBe(true);
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('Stop'));
+    expect(only().cutShort).toBeUndefined();
+  });
+
+  it('is a flag and nothing else, and goes out with the view', () => {
+    w.handle(fx('UserPromptSubmit', { prompt: 'SECRET prompt' }));
+    w.interrupted('sess-1');
+    expect(w.view()[0]!.cutShort).toBe(true);
+  });
+});

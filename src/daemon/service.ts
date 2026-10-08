@@ -16,7 +16,7 @@ import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { isSessionId, type ResumeOffer } from '../shared/claude-resume';
+import { endsConversation, isSessionId, type ResumeOffer } from '../shared/claude-resume';
 import { ResumeStore } from '../core/claude/resume';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
@@ -230,7 +230,7 @@ export class JafferService {
           this.claudeWatcher.endAll();
           // quit on purpose (exit 0, or Ctrl+C): nothing to offer afterwards. A crash or a kill leaves the offer, and a daemon that is
           // stopping must not take it away (the shell dying with it is not the person ending the conversation)
-          if (!this.stopping && (ev.exit === 0 || ev.exit === 130)) this.resume.forget();
+          if (!this.stopping && (ev.exit === 0 || ev.exit === 130) && endsConversation(ev.cmd)) this.resume.forget();
           this.pushResume();
         }
         const proj = resolveProject(ev.cwd, this.userHome);
@@ -245,6 +245,7 @@ export class JafferService {
     this.memory.events.on((e) => this.rpc.broadcast('memory.event', e));
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
+      if (!c.session.resumeClaude) this.resume.forget(); // off forgets it, as Settings says: nothing of the conversation stays on disk
       this.pushResume();
       this.memory.syncExports();
       this.startIngest();
@@ -310,7 +311,7 @@ export class JafferService {
     const id = typeof o.session_id === 'string' ? o.session_id : '';
     if (!isSessionId(id)) return;
     if (o.hook_event_name === 'SessionEnd') this.resume.forget(id);
-    else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined });
+    else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
     this.pushResume();
   }
 

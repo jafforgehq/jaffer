@@ -319,8 +319,13 @@ async function main(): Promise<void> {
         }
         const patch: any = {};
         key.split('.').reduce((o, k, i, a) => (o[k] = i === a.length - 1 ? value : {}), patch);
-        if (client) await client.call('config.patch', patch);
-        else cfgStore.patch(patch);
+        const after: any = client ? await client.call('config.patch', patch) : cfgStore.patch(patch);
+        const kept = key.split('.').reduce((o: any, k) => o?.[k], after);
+        // a value of the wrong kind is refused by the config (a switch is true or false, a list is a JSON list): say so
+        if (JSON.stringify(kept) !== JSON.stringify(value)) {
+          client?.close();
+          throw new Error(`${key} was not changed: ${JSON.stringify(value)} is not a valid value for it (it stays ${JSON.stringify(kept)}). Switches are true or false, lists are JSON, e.g. '["main","prod"]'.`);
+        }
         console.log('ok');
       }
       client?.close();
