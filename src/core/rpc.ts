@@ -21,24 +21,32 @@ export interface RpcEvent {
 export type RpcMessage = RpcRequest | RpcResponse | RpcEvent;
 
 export class LineDecoder {
-  private buf = '';
-  /** Where the next search for a newline starts: what was searched already holds none, so a long line is not scanned again for every chunk. */
-  private scanned = 0;
+  /**
+   * The unfinished line, as the chunks it arrived in. They are joined only when its newline arrives: appending to one string
+   * and searching it made V8 copy the whole growing line on every chunk (a second for 25 MB here, three on a CI Mac).
+   */
+  private parts: string[] = [];
+  private pending = 0;
   /** `maxPending`: the most a peer may send without ending a line before it is taken for runaway and dropped. */
   constructor(private maxPending = 64 * 1024 * 1024) {}
   push(chunk: string, onLine: (line: string) => void): void {
-    this.buf += chunk;
+    let start = 0;
     let i: number;
-    while ((i = this.buf.indexOf('\n', this.scanned)) >= 0) {
-      const line = this.buf.slice(0, i);
-      this.buf = this.buf.slice(i + 1);
-      this.scanned = 0;
+    while ((i = chunk.indexOf('\n', start)) >= 0) {
+      const tail = chunk.slice(start, i);
+      const line = this.parts.length ? this.parts.join('') + tail : tail;
+      this.parts = [];
+      this.pending = 0;
+      start = i + 1;
       if (line.trim()) onLine(line);
     }
-    this.scanned = this.buf.length;
-    if (this.buf.length > this.maxPending) {
-      this.buf = ''; // runaway peer
-      this.scanned = 0;
+    if (start < chunk.length) {
+      this.parts.push(start ? chunk.slice(start) : chunk);
+      this.pending += chunk.length - start;
+    }
+    if (this.pending > this.maxPending) {
+      this.parts = []; // runaway peer
+      this.pending = 0;
     }
   }
 }

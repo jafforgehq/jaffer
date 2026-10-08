@@ -35,7 +35,7 @@ describe('LineDecoder', () => {
     for (let i = 0; i < 400; i++) d.push(chunk, () => lines++); // 25 MB, never a newline
     d.push('end\n', () => lines++);
     expect(lines).toBe(1);
-    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(Date.now() - t0).toBeLessThan(300); // about 10 ms; joining the buffer on every chunk took a second here and three on a CI Mac
   });
 
   it('gives each of many small lines in one big chunk in time that does not grow with the square', () => {
