@@ -149,6 +149,14 @@ describe('sshHost reads the destination through clustered flags and wrappers', (
     expect(sshHost('nohup ssh h')).toBe('h');
   });
 
+  it('sees through the long options of sudo, env and nice whose value is a separate word', () => {
+    expect(sshHost('sudo --user deploy ssh h')).toBe('h');
+    expect(sshHost('env --unset FOO ssh h')).toBe('h');
+    expect(sshHost('nice --adjustment 5 ssh h')).toBe('h');
+    expect(sshHost('sudo --user=deploy --preserve-env ssh h')).toBe('h');
+    expect(sshHost('sudo --user deploy make')).toBeUndefined();
+  });
+
   it('still says "not ssh" for what only mentions it', () => {
     for (const c of ['sudo apt install ssh', 'env X=1 echo ssh prod', 'nice make', 'ssh-keygen -t ed25519', 'echo ssh prod']) expect(sshHost(c), c).toBeUndefined();
   });

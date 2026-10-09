@@ -1,5 +1,5 @@
 import { COMMAND_HEAD } from '../../shared/claude-resume';
-import { optionWords, WRAPPER_OPTIONS } from '../../shared/danger-zone';
+import { optionWords, WRAPPER_LONG_OPTIONS, WRAPPER_OPTIONS } from '../../shared/danger-zone';
 import { STAY_AWAKE } from '../../shared/keep-running';
 
 /**
@@ -15,6 +15,7 @@ const INTERACTIVE = new Set(['ssh', 'mosh', 'vim', 'nvim', 'vi', 'less', 'man', 
  * values those take, to find the program. The table `sshHost` uses (danger-zone), and `builtin`, which takes none.
  */
 const wrapperOptions = (w: string): string | undefined => (Object.hasOwn(WRAPPER_OPTIONS, w) ? WRAPPER_OPTIONS[w] : w === 'builtin' ? '' : undefined);
+const wrapperLongOptions = (w: string): ReadonlySet<string> | undefined => (Object.hasOwn(WRAPPER_LONG_OPTIONS, w) ? WRAPPER_LONG_OPTIONS[w] : undefined);
 
 const isSpace = (ch: string) => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
 const isEnvAssignment = (w: string) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
@@ -58,7 +59,8 @@ function interactiveWords(words: string[]): boolean {
   let i = 0;
   // variables and wrappers (with their options, and the values of those) come before the program: `sudo -u vim make` runs make
   while (i < words.length && isEnvAssignment(words[i]!)) i++;
-  for (let takes = wrapperOptions(words[i] ?? ''); takes !== undefined; takes = wrapperOptions(words[i] ?? '')) {
+  for (let wrapper = words[i] ?? '', takes = wrapperOptions(wrapper); takes !== undefined; wrapper = words[i] ?? '', takes = wrapperOptions(wrapper)) {
+    const long = wrapperLongOptions(wrapper);
     i++;
     while (i < words.length) {
       const w = words[i]!;
@@ -66,7 +68,7 @@ function interactiveWords(words: string[]): boolean {
       else if (w === '--') {
         i++;
         break;
-      } else if (w.startsWith('-') && w.length > 1) i += w.startsWith('--') ? 1 : optionWords(w, takes);
+      } else if (w.startsWith('-') && w.length > 1) i += optionWords(w, takes, long);
       else break;
     }
   }

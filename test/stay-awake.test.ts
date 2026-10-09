@@ -480,8 +480,37 @@ describe('isInteractiveCommand', () => {
     }
   });
 
+  it('skips the long options of sudo, env and nice that take their value as a separate word; `--opt=value` and the ones with no value are one word', () => {
+    for (const cmd of [
+      'sudo --user deploy vim',
+      'env --unset FOO ssh h',
+      'nice --adjustment 5 top',
+      'sudo --group staff --user deploy vim x',
+      'sudo --chdir /tmp --host h --prompt pw: tmux',
+      'sudo --role r --type t --other-user u --close-from 5 --command-timeout 10 less x',
+      'env --chdir /tmp htop',
+      'sudo --user deploy -- vim x',
+      'sudo --user=deploy vim',
+      'sudo --preserve-env vim',
+      'env --unset=FOO --ignore-environment ssh h',
+    ]) {
+      expect(isInteractiveCommand(cmd), cmd).toBe(true);
+    }
+    for (const cmd of ['sudo --user deploy make', 'sudo --preserve-env make', 'env --unset FOO make', 'nice --adjustment 5 make', 'sudo --user vim make', 'env --unset ssh make', 'nice --adjustment top make', 'sudo --user=deploy make', 'sudo --group staff --user deploy ./build.sh']) {
+      expect(isInteractiveCommand(cmd), cmd).toBe(false);
+    }
+  });
+
   it('reads a crafted line of a megabyte of wrapper options in a blink too', () => {
     for (const line of ['sudo -u ' + 'a'.repeat(1_000_000), 'nice ' + '-n 5 '.repeat(200_000) + 'top', 'env ' + '-uX '.repeat(250_000) + 'vim', 'sudo ' + '-'.repeat(1_000_000), 'time ' + '-p '.repeat(330_000) + 'vim', 'env ' + 'A=1 -u B '.repeat(110_000)]) {
+      const t0 = performance.now();
+      isInteractiveCommand(line);
+      expect(performance.now() - t0, line.slice(0, 20)).toBeLessThan(100);
+    }
+  });
+
+  it('reads a crafted line of a megabyte of long wrapper options in a blink too', () => {
+    for (const line of ['sudo ' + '--user a '.repeat(110_000) + 'vim', 'env ' + '--unset a '.repeat(100_000) + 'ssh h', 'nice ' + '--adjustment 5 '.repeat(70_000) + 'top', 'sudo ' + '--user '.repeat(150_000)]) {
       const t0 = performance.now();
       isInteractiveCommand(line);
       expect(performance.now() - t0, line.slice(0, 20)).toBeLessThan(100);

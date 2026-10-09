@@ -52,13 +52,24 @@ const MOSH_VALUE_OPTIONS = new Set(['--port', '--ssh', '--server', '--client', '
  * `isInteractiveCommand` (stay-awake) reads a command line through the same table.
  */
 export const WRAPPER_OPTIONS: Readonly<Record<string, string>> = { command: '', exec: '', time: '', nohup: '', sudo: 'ugCDhpRrtTU', env: 'uSC', nice: 'n' };
+/**
+ * The long options of those programs that take the next word as their value (`sudo --user deploy`, `nice --adjustment 5`). The
+ * `--user=deploy` form is one word and is not listed; neither are the long options that take no value (`--preserve-env`).
+ */
+export const WRAPPER_LONG_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  sudo: new Set(['--user', '--group', '--host', '--prompt', '--chdir', '--role', '--type', '--other-user', '--close-from', '--command-timeout']),
+  env: new Set(['--unset', '--chdir']),
+  nice: new Set(['--adjustment']),
+};
 const isAssignment = (w: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
 
 /**
  * Where `-vp 2222` or `-iu deploy` ends: a cluster of short options, of which the first that takes a value either has it attached
- * (`-p2222`) or, when it is the last one, takes the next word. Returns how many words the option uses.
+ * (`-p2222`) or, when it is the last one, takes the next word. A long option (`--user deploy`) takes the next word when `longValue`
+ * lists it (`--user=deploy` and the ones that take no value are one word). Returns how many words the option uses.
  */
-export function optionWords(w: string, takesValue: string): number {
+export function optionWords(w: string, takesValue: string, longValue?: ReadonlySet<string>): number {
+  if (w.startsWith('--')) return longValue?.has(w) ? 2 : 1;
   for (let k = 1; k < w.length; k++) if (takesValue.includes(w[k]!)) return k === w.length - 1 ? 2 : 1;
   return 1;
 }
@@ -72,14 +83,16 @@ export function sshHost(cmd: string): string | null | undefined {
   let i = 0;
   while (i < words.length && isAssignment(words[i]!)) i++; // FOO=1 ssh …
   while (i < words.length && Object.hasOwn(WRAPPER_OPTIONS, words[i]!)) {
-    const takes = WRAPPER_OPTIONS[words[i++]!]!;
+    const wrapper = words[i++]!;
+    const takes = WRAPPER_OPTIONS[wrapper]!;
+    const long = Object.hasOwn(WRAPPER_LONG_OPTIONS, wrapper) ? WRAPPER_LONG_OPTIONS[wrapper] : undefined;
     while (i < words.length) {
       const w = words[i]!;
       if (isAssignment(w)) i++; // env X=1 ssh …
       else if (w === '--') {
         i++;
         break;
-      } else if (w.startsWith('-') && w.length > 1) i += w.startsWith('--') ? 1 : optionWords(w, takes);
+      } else if (w.startsWith('-') && w.length > 1) i += optionWords(w, takes, long);
       else break;
     }
   }
