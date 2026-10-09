@@ -58,8 +58,6 @@ export interface JafferConfig {
     restoreScreen: boolean;
     /** After a restart (a reboot, an update, a crash), offer to resume the Claude Code conversation that was running in this folder. */
     resumeClaude: boolean;
-    /** When the shell comes back after a restart and the Claude Code conversation had not been ended, resume it by itself (a few tries, then the offer by hand). Off: only the offer. */
-    autoResume: boolean;
     /** Keep the session and Claude Code running after the window is closed and across a login: the daemon starts at login (a user LaunchAgent). Off by default: it is installed only on a click. */
     keepRunning: boolean;
     /** Keep the Mac from idle sleep while Claude works (and while a long command runs). Takes no admin rights and lets go when the work stops. */
@@ -101,7 +99,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   updates: { auto: true },
   notifications: { claudeFinished: true },
   safety: { dangerTint: true, protectedBranches: [...DEFAULT_PROTECTED_BRANCHES] },
-  session: { restoreScreen: true, resumeClaude: true, autoResume: true, keepRunning: false, stayAwake: true },
+  session: { restoreScreen: true, resumeClaude: true, keepRunning: false, stayAwake: true },
   hotkey: 'Control+`',
 };
 

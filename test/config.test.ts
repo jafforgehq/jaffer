@@ -139,27 +139,40 @@ describe('notifications.claudeFinished', () => {
 
 describe('session.resumeClaude', () => {
   it('is on by default, also for a config file saved before the setting existed (and the screen setting beside it is untouched)', () => {
-    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true, autoResume: true, keepRunning: false, stayAwake: true });
+    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true, keepRunning: false, stayAwake: true });
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false } }));
-    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true, autoResume: true, keepRunning: false, stayAwake: true });
+    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: true });
   });
 });
 
 describe('session.autoResume, session.keepRunning and session.stayAwake', () => {
-  it('are on, off and on by default, also for a config file saved before they existed, and a choice is kept', () => {
-    expect(DEFAULT_CONFIG.session.autoResume).toBe(true);
+  it('autoResume is gone (0.5.1): not a setting and not a default; an old file that has it loads, keeps it after a patch of another key, and nothing reads it', () => {
+    expect('autoResume' in DEFAULT_CONFIG.session).toBe(false);
+    // @ts-expect-error resuming by itself is not a setting any more: no code can read it from the config's type
+    void DEFAULT_CONFIG.session.autoResume;
+    // what a 0.5.0 left behind, with resuming by itself on
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, autoResume: true } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().session).toMatchObject({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: true });
+    store.patch({ session: { stayAwake: false } });
+    const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
+    expect(saved.session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: false, autoResume: true }); // kept as it was, like any key a config does not know
+    expect(new ConfigStore(env.paths).get().session.stayAwake).toBe(false);
+  });
+
+  it('keepRunning and stayAwake are off and on by default, also for a config file saved before they existed, and a choice is kept', () => {
     expect(DEFAULT_CONFIG.session.keepRunning).toBe(false);
     expect(DEFAULT_CONFIG.session.stayAwake).toBe(true);
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, resumeClaude: false } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session).toMatchObject({ autoResume: true, keepRunning: false, stayAwake: true });
-    store.patch({ session: { autoResume: false, keepRunning: true, stayAwake: false } });
-    expect(new ConfigStore(env.paths).get().session).toMatchObject({ autoResume: false, keepRunning: true, stayAwake: false });
+    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: true });
+    store.patch({ session: { keepRunning: true, stayAwake: false } });
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ keepRunning: true, stayAwake: false });
   });
 
   it('keep the default when the saved value is not a boolean (the switch stays a switch)', () => {
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { autoResume: 'yes', keepRunning: 1, stayAwake: null } }));
-    expect(new ConfigStore(env.paths).get().session).toMatchObject({ autoResume: true, keepRunning: false, stayAwake: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { keepRunning: 1, stayAwake: null } }));
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ keepRunning: false, stayAwake: true });
   });
 });
 
