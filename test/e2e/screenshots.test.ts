@@ -5,6 +5,7 @@ import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MockAnthropic } from '../helpers/mock-anthropic';
+import { cleanEnv } from '../helpers/env';
 import { fakeClaude } from '../helpers/fake-claude';
 import { makePaths } from '../../src/shared/paths';
 import { tryConnect } from '../../src/core/daemon-client';
@@ -93,12 +94,6 @@ async function clearToasts(): Promise<void> {
 const remember = (text: string, kind: string, extra: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('memory.remember', p), { text, kind, ...extra });
 
 /** The caller's environment minus anything that would change how Claude Code or the shell behaves in the demo. */
-function cleanEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) if (!/^(CCR_|CLAUDE|ANTHROPIC_|JAFFER_|ZDOTDIR|HISTFILE)/.test(k)) env[k] = v;
-  return env;
-}
-
 function git(...args: string[]): void {
   execFileSync('git', args, { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: 'Maya Chen', GIT_AUTHOR_EMAIL: 'maya@acme.dev', GIT_COMMITTER_NAME: 'Maya Chen', GIT_COMMITTER_EMAIL: 'maya@acme.dev' }, stdio: 'ignore' });
 }

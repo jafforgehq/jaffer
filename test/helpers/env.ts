@@ -37,3 +37,14 @@ export class FakeLlm implements LlmClient {
 export function makeEngine(env: TestEnv, llm?: LlmClient, clock?: () => number): MemoryEngine {
   return new MemoryEngine({ paths: env.paths, config: env.config, llm: llm ? () => llm : undefined, home: env.userHome, clock, env: { platform: 'darwin', arch: 'arm64', shell: '/bin/zsh', home: env.userHome } });
 }
+
+/**
+ * The environment without what belongs to a Claude Code, an Anthropic setup or a Jaffer this test run may itself run inside of (started
+ * from a Jaffer terminal, or by Claude Code), for a daemon that must see only what the test gives it. The kill switch
+ * `JAFFER_NO_LAUNCHCTL` stays: no daemon a test starts may ever reach the real launchd.
+ */
+export function cleanEnv(from: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(from)) if (k === 'JAFFER_NO_LAUNCHCTL' || !/^(CCR_|CLAUDE|ANTHROPIC_|JAFFER_|ZDOTDIR|HISTFILE)/.test(k)) env[k] = v;
+  return env;
+}

@@ -255,6 +255,24 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(false);
     }, 40_000);
 
+    it('a SessionEnd whose reason is "other" (Claude Code stopped by a logout or a shutdown before Jaffer was) keeps the conversation; the ends the person chose forget it', async () => {
+      const { c, hook } = await inFolder('resume-reason');
+      const file = path.join(env.paths.sessionDir, 'claude.json');
+      await hook(c, 'SessionStart');
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      await hook(c, 'SessionEnd', ID, { reason: 'other' });
+      await sleep(300);
+      expect(fs.existsSync(file)).toBe(true);
+      expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button now, and the same after the reboot
+      for (const reason of ['prompt_input_exit', 'clear', 'logout']) {
+        await hook(c, 'SessionStart'); // the same conversation once more
+        await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+        await hook(c, 'SessionEnd', ID, { reason });
+        await waitUntil(async () => (await c.call('claude.resume', {})) === null, 5000);
+        expect(fs.existsSync(file), reason).toBe(false);
+      }
+    }, 40_000);
+
     it('is offered at once when claude crashes (a non-zero exit), is pushed to the window, and can be dismissed; a normal exit offers nothing', async () => {
       const { c, hook } = await inFolder('resume-c');
       await c.call('pty.write', { data: 'claude() { return 1; }\r' });

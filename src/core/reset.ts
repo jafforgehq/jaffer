@@ -91,13 +91,18 @@ function isLink(p: string): boolean {
 
 /**
  * The switch "Keep my session running in the background" off in Jaffer's config file, so that a daemon that starts while the reset runs
- * (an open app reconnecting) does not put the agent back. Only a config that is there is written: a reset makes no folder.
+ * (an open app reconnecting) does not put the agent back. Only a config that is there is written: a reset makes no folder. A config
+ * that cannot be written (a full disk) stops nothing: what comes next (the agent away, the session ended) matters more.
  */
 function keepRunningOffOnDisk(home: string): void {
-  const paths = makePaths(home);
-  if (!fs.existsSync(paths.config)) return;
-  const config = new ConfigStore(paths);
-  if (config.get().session.keepRunning) config.patch({ session: { keepRunning: false } });
+  try {
+    const paths = makePaths(home);
+    if (!fs.existsSync(paths.config)) return;
+    const config = new ConfigStore(paths);
+    if (config.get().session.keepRunning) config.patch({ session: { keepRunning: false } });
+  } catch {
+    /* carry on */
+  }
 }
 
 /**

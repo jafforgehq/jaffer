@@ -8,6 +8,7 @@ import { AGENT_LABEL, APP_BUNDLE_ID, agentStatusText } from '../src/shared/keep-
 import { KeepRunning } from '../src/daemon/keep-running';
 import { daemonAgent, defaultDaemonAgent, ensureDaemon, launchDaemon, type Launcher } from '../src/core/daemon-client';
 import { makePaths } from '../src/shared/paths';
+import { cleanEnv } from './helpers/env';
 
 /**
  * Nothing here ever runs the real `launchctl` or touches the real ~/Library/LaunchAgents: the agent is driven through a recording fake
@@ -910,6 +911,12 @@ describe('safety: a development run gets no agent, and the tests can never reach
       if (before === undefined) delete process.env.JAFFER_NO_LAUNCHCTL;
       else process.env.JAFFER_NO_LAUNCHCTL = before;
     }
+  });
+
+  it('a test that cleans the environment for the daemon it starts (the README screenshots) keeps the kill switch', () => {
+    const env = cleanEnv({ PATH: '/usr/bin:/bin', JAFFER_NO_LAUNCHCTL: '1', JAFFER_HOME: '/x/.jaffer', JAFFER_SESSION: '1', CLAUDECODE: '1', ANTHROPIC_API_KEY: 'k', ZDOTDIR: '/z' });
+    expect(env).toEqual({ PATH: '/usr/bin:/bin', JAFFER_NO_LAUNCHCTL: '1' });
+    expect(fs.readFileSync(path.resolve(__dirname, 'e2e', 'screenshots.test.ts'), 'utf8')).toMatch(/import \{ cleanEnv \} from '\.\.\/helpers\/env'/);
   });
 
   it('every test run has the kill switch on (vitest.config.ts, vitest.e2e.config.ts), and what the tests spawn inherits it, the daemon too', async () => {

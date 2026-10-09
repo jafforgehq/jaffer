@@ -197,6 +197,20 @@ describe('ResumeStore: the times of automatic resume attempts', () => {
     expect(s.attempts(ID)).toEqual([]);
   });
 
+  it('does not count a time in the future (a clock that was set back): it would hold one of the three attempts until it aged out', () => {
+    const s = open();
+    withPoint(s);
+    const saved = now;
+    now += 30 * 60_000; // attempts made, then the clock is set back half an hour
+    s.recordAttempt(ID);
+    now = saved;
+    expect(s.attempts(ID)).toEqual([]);
+    s.recordAttempt(ID);
+    expect(s.attempts(ID)).toEqual([now]);
+    // and one read back from the file is not counted either
+    expect(open().attempts(ID)).toEqual([now]);
+  });
+
   it('survives a restart: the next daemon reads the same attempts from the same file', () => {
     const a = open();
     withPoint(a);

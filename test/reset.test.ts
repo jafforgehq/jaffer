@@ -199,6 +199,34 @@ describe('resetJaffer and the login agent that keeps the session running (a fake
     expect(fs.existsSync(env.home)).toBe(false);
   });
 
+  it('a config file that cannot be written (a full disk, a locked folder) does not stop the reset: the agent is still taken away and the session ended', async () => {
+    lived();
+    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
+    const { plist, wrapper } = agentOnDisk();
+    const order: string[] = [];
+    const f = fakeLaunchctl({ code: 0, out: '' }, () => {
+      fs.chmodSync(env.home, 0o700); // (the folder can be written again from here on)
+      order.push('bootout');
+    });
+    try {
+      const res = await resetJaffer({
+        home: env.home,
+        userHome: env.userHome,
+        env: claudeEnv(),
+        backup: true,
+        launchctl: f.launchctl,
+        uid: 501,
+        keepRunningOff: async () => fs.chmodSync(env.home, 0o500), // writing the switch off into the config file fails now
+        endSession: async () => void order.push('session ends'),
+      });
+      expect(order).toEqual(['bootout', 'session ends']);
+      expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
+      expect(res.backupDir).toBeDefined();
+    } finally {
+      if (fs.existsSync(env.home)) fs.chmodSync(env.home, 0o700);
+    }
+  });
+
   it('says what launchd answered when it had nothing loaded (the result of the bootout is told, not hidden)', async () => {
     lived();
     agentOnDisk();

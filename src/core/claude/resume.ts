@@ -71,7 +71,10 @@ export class ResumeStore {
     return { id: raw.id, cwd: raw.cwd, transcriptPath: t, at: raw.at };
   }
 
-  /** A block that is not an id and a list of finite times is not read at all: a limit that is too strict is better than a broken one. */
+  /**
+   * A block that is not an id and a list of finite times is not read at all, so that conversation's attempts start over (a few more
+   * automatic tries at most) rather than a broken list deciding.
+   */
   private readAttempts(raw: unknown): Attempts | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const { id, at } = raw as { id?: unknown; at?: unknown };
@@ -79,10 +82,10 @@ export class ResumeStore {
     return { id, at: (at as number[]).slice(-MAX_ATTEMPT_TIMES) };
   }
 
-  /** The times that still count: within the window, oldest first. */
+  /** The times that still count: within the window, oldest first. A time in the future (the clock was set back) does not count. */
   private recent(at: number[]): number[] {
     const now = this.now();
-    return at.filter((t) => now - t < AUTO_RESUME.windowMs).sort((a, b) => a - b);
+    return at.filter((t) => t <= now && now - t < AUTO_RESUME.windowMs).sort((a, b) => a - b);
   }
 
   private write(): void {
