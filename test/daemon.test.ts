@@ -319,6 +319,26 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       await sleep(300);
     }, 40_000);
 
+    it('a shell that is restarted takes Claude with it, and the conversation can be resumed afterwards', async () => {
+      const RESTARTED = '0d8f3e74-5c5f-4f20-9b6c-8b2b0e4b8c33'; // its own id: the home is shared by these tests, and a conversation keeps the folder it began in
+      const { c, real, hook } = await inFolder('resume-h');
+      await hook(c, 'SessionStart', RESTARTED);
+      await hook(c, 'UserPromptSubmit', RESTARTED, { prompt: 'go' });
+      expect(await c.call('claude.resume', {})).toBeNull(); // it is running: nothing to offer yet
+      const before = (await c.call('pane.list', {}))[0];
+      await c.call('session.restart', {});
+      await waitUntil(async () => {
+        const p = (await c.call('pane.list', {}))[0];
+        return p.alive && p.pid !== before.pid;
+      }, 10_000);
+      // the old shell took its Claude with it: no conversation counts as running any more
+      await waitUntil(async () => (await c.call('claude.state', {})).sessions.every((s: any) => s.state === 'ended'), 8000);
+      // and the resume point was not forgotten with it
+      await waitUntil(async () => (await c.call('claude.resume', {}))?.id === RESTARTED, 8000);
+      expect(await c.call('claude.resume', {})).toMatchObject({ id: RESTARTED, cwd: real });
+      expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(true);
+    }, 40_000);
+
     it('is not offered when the person turned it off, and never from a made-up id', async () => {
       const { c, hook } = await inFolder('resume-d');
       await c.call('config.patch', { session: { resumeClaude: false } });

@@ -221,6 +221,12 @@ export class JafferService {
       this.sendPty(e.pane, e.event);
       // where the shell is, and whether it is busy, decide whether a conversation can be offered back
       if (e.event.type === 'cwd' || e.event.type === 'start' || e.event.type === 'command') this.pushResume();
+      // The shell is gone and took its Claude with it: no conversation is running any more. The resume point stays (a dying shell is
+      // not the person ending the conversation), and a daemon that is stopping leaves everything as it is.
+      if (e.event.type === 'exit' && !this.stopping) {
+        this.claudeWatcher.endAll();
+        this.pushResume();
+      }
       if (e.event.type === 'command') {
         const ev = e.event;
         // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
