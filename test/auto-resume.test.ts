@@ -559,6 +559,22 @@ describe('AutoResumer in 0.5.1: only what Restart Claude Code needs', () => {
     expect(typed).toEqual([]);
   });
 
+  it('a check without the request (past the types, by a cast or from plain JavaScript) starts nothing: no notice, no timer, nothing typed', () => {
+    const r = make();
+    const loose = r as unknown as { check(request?: unknown): void };
+    for (const request of [undefined, {}, { explicit: false }, { explicit: 'true' }, { explicit: 1 }, null]) {
+      loose.check(request);
+      expect(events, JSON.stringify(request)).toEqual([]);
+      expect(liveTimers(), JSON.stringify(request)).toBe(0);
+    }
+    advance(600_000);
+    expect(typed).toEqual([]);
+    // and a check the person asked for still goes ahead
+    r.check({ explicit: true });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
   it('Restart Claude three times in a row resumes three times: nothing is counted, and nothing gives up', () => {
     const r = make();
     for (let i = 1; i <= 3; i++) {

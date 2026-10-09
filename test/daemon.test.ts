@@ -2001,6 +2001,45 @@ describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, 
       }
     }, 60_000);
 
+    // (the config's change forgets the conversation, the offer goes with it, and the offer going ends the notice: config.onChange ->
+    // forget -> pushResume -> endNotice)
+    it('turning "Offer to resume Claude Code" off during Restart Claude\'s notice ends it there and then: nothing is typed, the conversation is forgotten, and on again brings nothing back', async () => {
+      const ID = tag(44);
+      const { c, hook } = await inFolder5('rs-off');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        let acted: Promise<unknown> | undefined;
+        c.on('claude.autoresume', (d) => {
+          if (d.state === 'pending' && !acted) acted = setSession(c, { resumeClaude: false });
+        });
+        const before = await panePid(c);
+        expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+        await newShell(c, before);
+        await waitUntil(() => events.some((e) => e.state === 'cancelled'), 10_000);
+        await acted;
+        const [notice, end] = events;
+        expect(notice).toMatchObject({ state: 'pending', id: ID });
+        expect(end).toMatchObject({ state: 'cancelled', id: ID });
+        expect(end!.seenAt).toBeLessThan(notice!.typesAt!); // ended there and then, not when its time came
+        await settle();
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(await c.call('claude.resume', {})).toBeNull();
+        expect(fs.existsSync(path.join(env5.paths.sessionDir, 'claude.json'))).toBe(false); // off forgets it, as Settings says
+        await setSession(c, { resumeClaude: true });
+        await sleep(T.quietMs + T.noticeMs + 600);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+      } finally {
+        await setSession(c, { resumeClaude: true });
+        c.close();
+      }
+    }, 40_000);
+
     it('Restart Claude three times in a row resumes the conversation each time: no attempts are counted, and nothing gives up', async () => {
       const ID = tag(42);
       const { c, hook } = await inFolder5('rs-thrice');

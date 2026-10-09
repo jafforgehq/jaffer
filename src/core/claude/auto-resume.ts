@@ -112,9 +112,11 @@ export class AutoResumer {
   /**
    * The person asked for it (Restart Claude Code): the conversation offered now is typed after the notice, if the rules allow. A
    * repeat while it waits is the same request (announced once). It lasts only until its first idle (a shell not at a prompt yet), so
-   * the caller repeats it until it is typed or cancelled. There is no other way to start anything.
+   * the caller repeats it until it is typed or cancelled. There is no other way to start anything: a call without the request (past
+   * the types, by a cast or from plain JavaScript) starts nothing.
    */
-  check(_request: { explicit: true }): void {
+  check(request: { explicit: true }): void {
+    if ((request as { explicit?: unknown } | null | undefined)?.explicit !== true) return;
     this.step(true);
   }
 
