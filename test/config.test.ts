@@ -139,9 +139,27 @@ describe('notifications.claudeFinished', () => {
 
 describe('session.resumeClaude', () => {
   it('is on by default, also for a config file saved before the setting existed (and the screen setting beside it is untouched)', () => {
-    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true });
+    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true, autoResume: true, keepRunning: false, stayAwake: true });
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false } }));
-    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true });
+    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true, autoResume: true, keepRunning: false, stayAwake: true });
+  });
+});
+
+describe('session.autoResume, session.keepRunning and session.stayAwake', () => {
+  it('are on, off and on by default, also for a config file saved before they existed, and a choice is kept', () => {
+    expect(DEFAULT_CONFIG.session.autoResume).toBe(true);
+    expect(DEFAULT_CONFIG.session.keepRunning).toBe(false);
+    expect(DEFAULT_CONFIG.session.stayAwake).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, resumeClaude: false } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().session).toMatchObject({ autoResume: true, keepRunning: false, stayAwake: true });
+    store.patch({ session: { autoResume: false, keepRunning: true, stayAwake: false } });
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ autoResume: false, keepRunning: true, stayAwake: false });
+  });
+
+  it('keep the default when the saved value is not a boolean (the switch stays a switch)', () => {
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { autoResume: 'yes', keepRunning: 1, stayAwake: null } }));
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ autoResume: true, keepRunning: false, stayAwake: true });
   });
 });
 
@@ -166,7 +184,7 @@ describe('a config file or patch with values of the wrong kind', () => {
 
   it('loads, with the default for what does not fit: a section that is not an object, a switch that is not a boolean, a list that is not a list of text', () => {
     const cfg = load({ session: null, safety: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
-    expect(cfg.session).toEqual({ restoreScreen: true, resumeClaude: true });
+    expect(cfg.session).toEqual(DEFAULT_CONFIG.session);
     expect(cfg.safety).toEqual(DEFAULT_CONFIG.safety);
     expect(cfg.notifications).toEqual({ claudeFinished: true });
     expect(cfg.appearance.pet).toBe(true);

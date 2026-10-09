@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
 import { endsConversation, isSessionId, resumeCommand } from '../src/shared/claude-resume';
+import { AUTO_RESUME } from '../src/shared/keep-running';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -158,6 +159,150 @@ describe('ResumeStore', () => {
       fs.writeFileSync(file(), content);
       expect(new ResumeStore(file(), () => now).offer(ctx('/tmp')), content).toBeNull();
     }
+  });
+});
+
+describe('ResumeStore: the times of automatic resume attempts', () => {
+  const file = () => path.join(env.root, 'session', 'claude.json');
+  const OTHER = '0c7e2d63-4b4f-4e1f-8a5b-7a1a9d3a7b22';
+  const open = () => new ResumeStore(file(), () => now);
+  const withPoint = (s: ResumeStore) => s.note({ id: ID, cwd: env.userHome });
+
+  it('remembers the times of the attempts for the conversation, and no others', () => {
+    const s = open();
+    withPoint(s);
+    expect(s.attempts(ID)).toEqual([]);
+    s.recordAttempt(ID);
+    now += 1000;
+    s.recordAttempt(ID);
+    now += 1000;
+    s.recordAttempt(ID);
+    expect(s.attempts(ID)).toEqual([now - 2000, now - 1000, now]);
+    expect(s.attempts(OTHER)).toEqual([]);
+  });
+
+  it('counts only the attempts within the window (ten minutes)', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt(ID);
+    const first = now;
+    now += 5 * 60_000;
+    s.recordAttempt(ID);
+    now = first + AUTO_RESUME.windowMs - 1;
+    expect(s.attempts(ID)).toHaveLength(2);
+    now = first + AUTO_RESUME.windowMs + 1;
+    expect(s.attempts(ID)).toEqual([first + 5 * 60_000]);
+    now += 10 * 60_000;
+    expect(s.attempts(ID)).toEqual([]);
+  });
+
+  it('survives a restart: the next daemon reads the same attempts from the same file', () => {
+    const a = open();
+    withPoint(a);
+    a.recordAttempt(ID);
+    now += 1000;
+    a.recordAttempt(ID);
+    const b = open();
+    expect(b.attempts(ID)).toEqual([now - 1000, now]);
+    expect(b.offer({ shellCwd: env.userHome, active: false, busy: false, enabled: true })?.id).toBe(ID); // the point is as it was
+    expect(fs.statSync(file()).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps them through the "still going" notes of the same conversation and through a flush', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt(ID);
+    now += 40_000;
+    withPoint(s); // written again (more than half a minute): the attempts are written with it
+    expect(open().attempts(ID)).toEqual([now - 40_000]);
+    s.flush();
+    expect(open().attempts(ID)).toEqual([now - 40_000]);
+  });
+
+  it('keeps them for one conversation only: the last one named replaces the other\'s', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt(ID);
+    s.recordAttempt(OTHER);
+    expect(s.attempts(ID)).toEqual([]);
+    expect(s.attempts(OTHER)).toEqual([now]);
+    expect(open().attempts(OTHER)).toEqual([now]);
+    expect(open().attempts(ID)).toEqual([]);
+  });
+
+  it('are only in memory while there is no point (the file is the point\'s), and are written once there is one', () => {
+    const s = open();
+    s.recordAttempt(ID);
+    expect(s.attempts(ID)).toEqual([now]);
+    expect(fs.existsSync(file())).toBe(false);
+    withPoint(s);
+    expect(open().attempts(ID)).toEqual([now]);
+  });
+
+  it('can be cleared, on disk too', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt(ID);
+    s.recordAttempt(ID);
+    s.clearAttempts(OTHER); // not this one: nothing happens
+    expect(s.attempts(ID)).toHaveLength(2);
+    s.clearAttempts(ID);
+    expect(s.attempts(ID)).toEqual([]);
+    expect(open().attempts(ID)).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).not.toHaveProperty('attempts');
+  });
+
+  it('is gone with the point: forget() of the only point removes the file, attempts and all', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt(ID);
+    s.forget(ID);
+    expect(fs.existsSync(file())).toBe(false);
+    expect(s.attempts(ID)).toEqual([]);
+    expect(open().attempts(ID)).toEqual([]);
+  });
+
+  it('ignores an id that is not a session id', () => {
+    const s = open();
+    withPoint(s);
+    s.recordAttempt('abc; rm -rf /');
+    expect(s.attempts('abc; rm -rf /')).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).not.toHaveProperty('attempts');
+  });
+
+  it('ignores an attempts block that is bad or missing, and keeps the point', () => {
+    fs.mkdirSync(path.dirname(file()), { recursive: true });
+    const point = { id: ID, cwd: env.userHome, at: now };
+    const blocks: unknown[] = [
+      undefined,
+      'nope',
+      null,
+      [],
+      { id: ID },
+      { id: ID, at: 'x' },
+      { id: ID, at: { 0: now } },
+      { id: ID, at: [now, 'x'] },
+      { id: ID, at: [now, null] },
+      { id: ID, at: [now, Number.POSITIVE_INFINITY] },
+      { id: 'abc; rm -rf /', at: [now] },
+      { id: 7, at: [now] },
+    ];
+    for (const attempts of blocks) {
+      fs.writeFileSync(file(), JSON.stringify({ version: 1, point, attempts }));
+      const s = open();
+      expect(s.attempts(ID), JSON.stringify(attempts)).toEqual([]);
+      expect(s.offer({ shellCwd: env.userHome, active: false, busy: false, enabled: true })?.id, JSON.stringify(attempts)).toBe(ID);
+    }
+  });
+
+  it('reads a good block, drops the times that no longer count, and keeps the list small', () => {
+    fs.mkdirSync(path.dirname(file()), { recursive: true });
+    const old = now - AUTO_RESUME.windowMs - 1;
+    fs.writeFileSync(file(), JSON.stringify({ version: 1, point: { id: ID, cwd: env.userHome, at: now }, attempts: { id: ID, at: [now - 10, old, now - 20] } }));
+    const s = open();
+    expect(s.attempts(ID)).toEqual([now - 20, now - 10]);
+    for (let i = 0; i < 100; i++) s.recordAttempt(ID);
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8')).attempts.at.length).toBeLessThanOrEqual(20);
   });
 });
 
