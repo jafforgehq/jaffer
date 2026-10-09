@@ -252,6 +252,8 @@ describe('Jaffer UI end to end', () => {
     expect(await keepBox().count()).toBe(1);
     expect(await keepBox().isChecked()).toBe(true);
     expect((await page.textContent('.onboard')) ?? '').toMatch(/restart it automatically after a crash or a reboot/i);
+    // and from when: the agent is written now, and launchd takes over at the next login or restart (0.5.1)
+    expect((await page.locator('.onboard .choices label', { hasText: 'Keep my session running in the background' }).textContent()) ?? '').toMatch(/next login or restart/i);
     await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click(); // (nothing is typed in this test)
     await spy();
     await page.click('.onboard .btn.primary');
@@ -1084,6 +1086,47 @@ describe('Jaffer UI end to end', () => {
         const w = window as any;
         w.jaffer.call = w.__realCall;
         w.jaffer.keepRunningOff = w.__realOff;
+        delete w.__keepRunningOffAsk;
+      });
+      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
+    }
+  }, 60_000);
+
+  // 0.5.1: the line under the switch was what Settings read when it opened; after a Cancel it is read again (the daemon was asked how
+  // it stands for the question, and things may have changed while the question was up).
+  it('Settings: after Cancel in the question before turning it off, the keep-running line is read again from the daemon', async () => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.__statusCalls = 0;
+      w.__svc = { state: 'running', pid: 4242 };
+      w.jaffer.call = (m: string, p: unknown) => {
+        if (!m.startsWith('service.')) return w.__realCall(m, p);
+        if (m === 'service.status') w.__statusCalls++;
+        return Promise.resolve(w.__svc);
+      };
+      w.__keepRunningOffAsk = async () => {
+        w.__svc = { state: 'running', pid: 5151 }; // meanwhile launchd brought the session back with another pid
+        return false; // Cancel
+      };
+    });
+    try {
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
+      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
+      await keep.locator('.switch').click();
+      await until(async () => (await line()).includes('running (pid 5151)'), 5_000, 'the line read again after Cancel');
+      expect(await keep.locator('input').isChecked()).toBe(true);
+      expect(await page.evaluate(() => (window as any).__statusCalls)).toBeGreaterThanOrEqual(3); // when it opened, for the question, after Cancel
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__realCall;
         delete w.__keepRunningOffAsk;
       });
       if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');

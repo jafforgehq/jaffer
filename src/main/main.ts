@@ -389,9 +389,9 @@ function buildMenu(): void {
             if (r.response === 0) {
               quitting = true;
               // ending the session on purpose: the next start does not bring the Claude Code conversation back by itself (also with a
-              // daemon from before 0.5, which ignores forgetConversation: see endSessionCalls)
+              // daemon from before 0.5, which ignores forgetConversation: see endSessionCalls). 5 s each, and a hung one is let go of.
               const c = client;
-              if (c) await endSessionCalls((m, p) => c.call(m, p));
+              if (c) await endSessionCalls((m, p, timeoutMs) => c.call(m, p, timeoutMs));
               app.quit();
             }
           },

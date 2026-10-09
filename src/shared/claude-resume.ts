@@ -84,21 +84,28 @@ export interface ResumeOffer {
   at: number;
 }
 
+/** How long Quit and End Session waits for each of its two calls. */
+export const END_SESSION_CALL_MS = 5_000;
+
 /**
  * What *Quit and End Session* asks of the daemon: forget the Claude Code conversation, then end, so the next start does not bring it
  * back. `claude.resume.dismiss` comes first because a daemon from before 0.5 ignores `forgetConversation` (it would keep the point, and
  * the next daemon would resume the conversation the person ended) but knows `claude.resume.dismiss`. A failure of either stops nothing:
- * the app quits all the same.
+ * the app quits all the same. Each gets `END_SESSION_CALL_MS` (the call is told, and is let go of after it if it has not answered): a
+ * daemon that hangs does not hold the quit up for the RPC's usual 30 s twice.
  */
-export async function endSessionCalls(call: (method: string, params: object) => Promise<unknown>): Promise<void> {
+export async function endSessionCalls(call: (method: string, params: object, timeoutMs: number) => Promise<unknown>): Promise<void> {
   for (const [method, params] of [
     ['claude.resume.dismiss', {}],
     ['app.shutdown', { forgetConversation: true }],
   ] as const) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await call(method, params);
+      await Promise.race([call(method, params, END_SESSION_CALL_MS), new Promise((resolve) => (timer = setTimeout(resolve, END_SESSION_CALL_MS)))]);
     } catch {
       /* an older daemon, or one that is gone: go on */
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

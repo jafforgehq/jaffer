@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
-import { endSessionCalls, endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
+import { END_SESSION_CALL_MS, endSessionCalls, endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
 import { isClaudeCommand } from '../src/shared/process-badge';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -348,5 +348,37 @@ describe('endSessionCalls (what Quit and End Session asks of the daemon)', () =>
     });
     expect(calls).toEqual(['claude.resume.dismiss', 'app.shutdown']);
     await expect(endSessionCalls(async () => Promise.reject(new Error('gone')))).resolves.toBeUndefined(); // (the app quits either way)
+  });
+
+  // 0.5.1: each call was the RPC's 30 s, one after the other: a daemon that hangs held Quit and End Session for a minute
+  it('each call gets 5 s and a hung one is let go of: a claude.resume.dismiss that never answers holds app.shutdown up 5 s, no more, and a hung app.shutdown the quit as long (fake timers)', async () => {
+    vi.useFakeTimers();
+    try {
+      expect(END_SESSION_CALL_MS).toBe(5_000);
+      const t0 = Date.now();
+      const calls: { m: string; at: number; timeoutMs: unknown }[] = [];
+      let done = false;
+      const ended = endSessionCalls((m, _p, timeoutMs) => {
+        calls.push({ m, at: Date.now() - t0, timeoutMs });
+        return new Promise(() => undefined); // neither ever answers
+      }).then(() => void (done = true));
+      await vi.advanceTimersByTimeAsync(END_SESSION_CALL_MS - 1);
+      expect(calls.map((c) => c.m)).toEqual(['claude.resume.dismiss']);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls.map((c) => c.m)).toEqual(['claude.resume.dismiss', 'app.shutdown']);
+      expect(calls[1]!.at).toBe(END_SESSION_CALL_MS);
+      expect(calls.every((c) => c.timeoutMs === END_SESSION_CALL_MS)).toBe(true); // (the RPC itself is told too, so nothing waits 30 s)
+      await vi.advanceTimersByTimeAsync(END_SESSION_CALL_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      await ended;
+      // one that answers goes on at once
+      const quick: string[] = [];
+      await endSessionCalls(async (m) => void quick.push(m));
+      expect(quick).toEqual(['claude.resume.dismiss', 'app.shutdown']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

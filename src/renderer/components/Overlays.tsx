@@ -526,7 +526,13 @@ function KeepRunningField({ flag }: { flag: boolean }): VNode {
         // every switch-off goes through the app, which asks the daemon how it stands now (what this field read when it opened may be
         // out of date) and, when launchd runs this session, the person first: taking the agent away ends it (Cancel leaves it all)
         const r = await window.jaffer.keepRunningOff();
-        if (r.cancelled || !r.status) return;
+        if (r.cancelled || !r.status) {
+          // nothing was changed, but the line is read again: the daemon was asked how it stands for the question, and it may have
+          // changed while the question was up (launchd brought the session back with another pid, or the agent went)
+          const now = await call<AgentStatus>('service.status', {}).catch(() => null); // (a no is not an error: one reading it is not news)
+          if (now) setStatus(now);
+          return;
+        }
         s = r.status;
       } else s = await call<AgentStatus>('service.install', {});
       setStatus(s);
@@ -853,7 +859,7 @@ export function Onboarding(): VNode {
                 <Switch checked={keepOn} onChange={setKeep} />
                 <span class="t">
                   <b>Keep my session running in the background</b>
-                  <small>Restart it automatically after a crash or a reboot.</small>
+                  <small>Restart it automatically after a crash or a reboot. Active from your next login or restart.</small>
                 </span>
               </label>
               {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}

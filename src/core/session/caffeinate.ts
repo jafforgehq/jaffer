@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { StayAwakeDeps } from './stay-awake';
+import type { Hold, StayAwakeDeps } from './stay-awake';
 
 /**
  * The real hold behind `StayAwake`, kept apart from it so it is easy to see everything that can touch the Mac: `/usr/bin/caffeinate`, run
@@ -36,7 +36,7 @@ export function isDefaultHome(home: string): boolean {
  * - `JAFFER_TEST_HOLD_LOG=<file>` (tests): nothing is run; every hold and release is appended to the file as a line of JSON,
  *   `{"op":"hold"|"release","args":[...]}`. It stands in for macOS, so that the daemon can be tested anywhere without a real hold.
  * - a home that is not the default one: no platform, so nothing is ever held.
- * - otherwise `/usr/bin/caffeinate`, and letting go kills it.
+ * - otherwise `/usr/bin/caffeinate` (`spawnHold`): letting go kills it, and its end, by itself too, is reported.
  */
 export function caffeinateHold(home: string, env: NodeJS.ProcessEnv = process.env): Pick<StayAwakeDeps, 'platform' | 'hold'> {
   const logFile = env.JAFFER_TEST_HOLD_LOG;
@@ -51,12 +51,35 @@ export function caffeinateHold(home: string, env: NodeJS.ProcessEnv = process.en
     };
   }
   if (!isDefaultHome(home)) return { platform: 'not-the-default-home', hold: () => ({ release: () => undefined }) };
+  return { platform: process.platform, hold: (args) => spawnHold(CAFFEINATE, args) };
+}
+
+/**
+ * A hold: `program` (`/usr/bin/caffeinate`; tests run a harmless program in its place) running with `args`. `onExit` says when it ended,
+ * also by itself (killed, crashed), or that it could not start (the error), so that `StayAwake` holds again while the work goes on.
+ * Letting go kills it, and is harmless once it has ended.
+ */
+export function spawnHold(program: string, args: string[]): Required<Hold> {
+  const child = execFile(program, args, () => undefined);
+  child.unref();
+  let end: { error?: unknown } | null = null;
+  const waiting: ((error?: unknown) => void)[] = [];
+  const ended = (error?: unknown) => {
+    if (end) return;
+    end = error === undefined ? {} : { error };
+    for (const cb of waiting.splice(0)) cb(error);
+  };
+  child.once('exit', () => ended());
+  child.once('error', (e) => ended(e)); // (a program that cannot start gives no 'exit')
   return {
-    platform: process.platform,
-    hold: (args) => {
-      const child = execFile(CAFFEINATE, args, () => undefined); // (its end, or its failure to start, is no news: the next hold starts another)
-      child.unref();
-      return { release: () => void child.kill() };
+    release: () => {
+      if (end) return;
+      try {
+        child.kill();
+      } catch {
+        /* gone */
+      }
     },
+    onExit: (cb) => (end ? cb(end.error) : void waiting.push(cb)),
   };
 }

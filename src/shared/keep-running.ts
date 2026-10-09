@@ -36,6 +36,12 @@ export const STAY_AWAKE = {
   releaseDelayMs: 15_000,
   /** A command alone never holds the Mac awake longer than this (six hours). */
   commandCapMs: 21_600_000,
+  /** A hold that ended by itself (`caffeinate` killed or crashed) while the work goes on is taken up again after this wait... */
+  holdAgainFirstMs: 1_000,
+  /** ...which doubles each time it ends again, up to this... */
+  holdAgainMaxMs: 30_000,
+  /** ...and starts over after a clean minute. */
+  holdCleanMs: 60_000,
 } as const;
 
 /** The launchd label of the daemon's login agent. */

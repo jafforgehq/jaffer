@@ -190,6 +190,7 @@ export class JafferService {
     this.stayAwake = new StayAwake({
       ...caffeinateHold(this.paths.home),
       pid: process.pid,
+      log: (m) => this.log(`stay awake: ${m}`), // (a hold that cannot start, said once)
       now: () => Date.now(),
       setTimer: (fn, ms) => {
         const t = setTimeout(fn, ms);

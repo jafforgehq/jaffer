@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { caffeinateHold, isDefaultHome } from '../src/core/session/caffeinate';
+import { caffeinateHold, isDefaultHome, spawnHold } from '../src/core/session/caffeinate';
 import { isInteractiveCommand, StayAwake, type Work } from '../src/core/session/stay-awake';
 import { STAY_AWAKE } from '../src/shared/keep-running';
 import { makeEnv, type TestEnv } from './helpers/env';
@@ -223,6 +223,180 @@ describe('StayAwake: the switch, stopping, the platform and failures', () => {
   });
 });
 
+// 0.5.1: `caffeinate` can end by itself (killed by someone, crashed): the controller hears it (`onExit`) and holds again while the work
+// goes on, waiting 1 s, then 2 s, 4 s ... up to 30 s between tries, and from 1 s again after a hold that lasted a minute. A hold that
+// cannot even start is logged once.
+describe('StayAwake: a hold that ends by itself', () => {
+  /** Holds that can end by themselves (`exit()`), or fail to start (`spawnError`), as the real one reports it through onExit. */
+  let live: { args: string[]; released: boolean; exit: (error?: Error) => void; exited: boolean }[] = [];
+  let logs: string[] = [];
+  const makeDying = () =>
+    new StayAwake({
+      platform: 'darwin',
+      pid: PID,
+      hold: (args) => {
+        let cb: ((error?: Error) => void) | undefined;
+        const h = {
+          args,
+          released: false,
+          exited: false,
+          exit: (error?: Error) => {
+            h.exited = true;
+            cb?.(error);
+          },
+        };
+        live.push(h);
+        return {
+          release: () => {
+            h.released = true;
+            if (h.exited) return; // a dead hold: nothing to let go of, and no harm
+          },
+          onExit: (fn) => void (cb = fn),
+        };
+      },
+      log: (m) => void logs.push(m),
+      now: () => now,
+      setTimer: (fn, ms) => {
+        const t = { fn, at: now + ms, id: timers.length, live: true };
+        timers.push(t);
+        return t.id;
+      },
+      clearTimer: (id) => {
+        const t = timers[id as number];
+        if (t) t.live = false;
+      },
+    });
+  let d: StayAwake;
+  beforeEach(() => {
+    live = [];
+    logs = [];
+    d = makeDying();
+  });
+
+  it('a hold that ends while the work goes on is held again after 1 s, and the next one that ends after 2 s', () => {
+    d.update(working);
+    expect(live).toHaveLength(1);
+    advance(5_000);
+    live[0]!.exit();
+    expect(d.holding).toBe(false);
+    d.update(working); // the work goes on: an update in the wait does not hold at once (a hold that keeps dying must not spin)
+    advance(999);
+    expect(live).toHaveLength(1);
+    advance(1);
+    expect(live).toHaveLength(2);
+    expect(d.holding).toBe(true);
+    expect(live[1]!.args).toEqual(ARGS);
+    live[1]!.exit(); // at once again
+    advance(1_999);
+    expect(live).toHaveLength(2);
+    advance(1);
+    expect(live).toHaveLength(3);
+    live[2]!.exit();
+    advance(4_000);
+    expect(live).toHaveLength(4);
+  });
+
+  it('the wait doubles up to 30 s, and a hold that lasted a minute starts it over at 1 s', () => {
+    d.update(working);
+    const waits: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const before = now;
+      live.at(-1)!.exit();
+      const n = live.length;
+      for (let k = 0; k < 600 && live.length === n; k++) advance(100); // (bounded: a minute at most)
+      waits.push(now - before);
+    }
+    expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+    advance(60_000); // a clean minute
+    const before = now;
+    live.at(-1)!.exit();
+    const n = live.length;
+    for (let k = 0; k < 600 && live.length === n; k++) advance(100);
+    expect(now - before).toBe(1_000);
+  });
+
+  it('no hold again after stop(), or once the work stopped, or with the switch off', () => {
+    d.update(working);
+    live[0]!.exit();
+    d.stop();
+    advance(60_000);
+    expect(live).toHaveLength(1);
+    expect(timers.filter((t) => t.live)).toHaveLength(0);
+    // the work stopped during the wait
+    const w = makeDying();
+    w.update(working);
+    live.at(-1)!.exit();
+    const n = live.length;
+    w.update(none);
+    advance(60_000);
+    expect(live).toHaveLength(n);
+    expect(w.holding).toBe(false);
+    // the switch turned off during the wait
+    const s = makeDying();
+    s.update(working);
+    live.at(-1)!.exit();
+    const m = live.length;
+    s.update({ ...working, enabled: false });
+    advance(60_000);
+    expect(live).toHaveLength(m);
+    // a hold that ends during the delay of a release (the work had stopped) is not held again either
+    const r = makeDying();
+    r.update(working);
+    r.update(none);
+    advance(5_000);
+    live.at(-1)!.exit();
+    const k = live.length;
+    advance(60_000);
+    expect(live).toHaveLength(k);
+    expect(r.holding).toBe(false);
+  });
+
+  it('a hold let go of on purpose is not "ended by itself": its exit afterwards starts nothing', () => {
+    d.update(working);
+    d.update({ ...working, enabled: false }); // released
+    live[0]!.exit(); // (the real caffeinate reports its exit after the kill)
+    d.update({ ...working, enabled: false });
+    advance(60_000);
+    expect(live).toHaveLength(1);
+    // and after a release by its delay, the same
+    d.update(working);
+    d.update(none);
+    advance(STAY_AWAKE.releaseDelayMs);
+    live[1]!.exit();
+    advance(60_000);
+    expect(live).toHaveLength(2);
+  });
+
+  it('release() of a hold that is already dead is harmless, wherever it comes from (the switch, the delay, stop)', () => {
+    d.update(working);
+    live[0]!.exit();
+    advance(1_000); // held again
+    live[1]!.exited = true; // dead, and its exit not heard yet
+    expect(() => d.update({ ...working, enabled: false })).not.toThrow();
+    expect(live[1]!.released).toBe(true);
+    expect(() => d.stop()).not.toThrow();
+  });
+
+  it('a hold that cannot start (a spawn error) is logged once, however often it is tried', () => {
+    d.update(working);
+    live[0]!.exit(Object.assign(new Error('spawn /usr/bin/caffeinate ENOENT'), { code: 'ENOENT' }));
+    for (let i = 0; i < 6; i++) {
+      advance(30_000);
+      live.at(-1)!.exit(Object.assign(new Error('spawn /usr/bin/caffeinate ENOENT'), { code: 'ENOENT' }));
+    }
+    expect(live.length).toBeGreaterThan(5); // it kept trying, with its waits
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/ENOENT/);
+    // hold() itself throwing is the same news, told once by a controller (and each try is still made at the next update)
+    const t = new StayAwake({ platform: 'darwin', pid: PID, hold: () => { throw new Error('EAGAIN'); }, log: (m) => void logs.push(m), now: () => now, setTimer: () => 0, clearTimer: () => undefined });
+    t.update(working);
+    t.update(working);
+    t.update(working);
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatch(/EAGAIN/);
+  });
+});
+
 describe('StayAwake: a command that runs a long time', () => {
   it('holds only once it has run 30 s', () => {
     sa.update(running('npm run build'));
@@ -294,6 +468,23 @@ describe('isInteractiveCommand', () => {
   it('sees through a path, variables and the usual wrappers', () => {
     for (const cmd of ['/usr/bin/ssh host', './vim x', 'EDITOR=vi ssh host', 'FOO=1 BAR=2 less x', 'sudo vim /etc/hosts', 'sudo -E vim x', 'command ssh host', 'env FOO=1 htop', 'time ssh host', 'nice top', 'exec tmux', 'nohup claude']) {
       expect(isInteractiveCommand(cmd), cmd).toBe(true);
+    }
+  });
+
+  it('skips the options of sudo, env, nice, time and nohup and their values (the tables sshHost uses) before it looks at the program', () => {
+    for (const cmd of ['sudo -u deploy vim', 'nice -n 10 top', 'env -u FOO ssh host', 'sudo -iu deploy ssh h', 'time -p vim', 'sudo -u deploy -- vim x', 'env -i PATH=/bin less x', 'sudo -g staff env FOO=1 nice -n 5 htop', 'nohup nice -n 19 tmux', 'sudo -Hu deploy -E vim x', 'sudo --user=deploy vim']) {
+      expect(isInteractiveCommand(cmd), cmd).toBe(true);
+    }
+    for (const cmd of ['sudo -u deploy make', 'nice -n 10 make', 'env -u FOO make', 'sudo -iu deploy ./build.sh', 'time -p npm test', 'sudo -u vim make', 'nice -n top make', 'env -u ssh make']) {
+      expect(isInteractiveCommand(cmd), cmd).toBe(false);
+    }
+  });
+
+  it('reads a crafted line of a megabyte of wrapper options in a blink too', () => {
+    for (const line of ['sudo -u ' + 'a'.repeat(1_000_000), 'nice ' + '-n 5 '.repeat(200_000) + 'top', 'env ' + '-uX '.repeat(250_000) + 'vim', 'sudo ' + '-'.repeat(1_000_000), 'time ' + '-p '.repeat(330_000) + 'vim', 'env ' + 'A=1 -u B '.repeat(110_000)]) {
+      const t0 = performance.now();
+      isInteractiveCommand(line);
+      expect(performance.now() - t0, line.slice(0, 20)).toBeLessThan(100);
     }
   });
 
@@ -369,6 +560,21 @@ describe('which hold a daemon gets (caffeinate itself is never run by a test)', 
       { op: 'hold', args: ['-i', '-w', '78'] },
       { op: 'release', args: ['-i', '-w', '78'] },
     ]);
+  });
+
+  it('the real hold reports its end through onExit (a harmless program runs in place of caffeinate), also a program that cannot start; letting go of a dead one is harmless', async () => {
+    const quick = spawnHold('/bin/sh', ['-c', 'exit 0']);
+    expect(await new Promise<unknown>((resolve) => quick.onExit!((e) => resolve(e ?? 'ended')))).toBe('ended');
+    expect(() => quick.release()).not.toThrow();
+    expect(await new Promise<unknown>((resolve) => quick.onExit!((e) => resolve(e ?? 'heard late')))).toBe('heard late'); // asked after the end: still told
+    const missing = spawnHold(path.join(env.root, 'no-such-caffeinate'), ['-i']);
+    expect(String(await new Promise<unknown>((resolve) => missing.onExit!((e) => resolve(e))))).toMatch(/ENOENT/);
+    expect(() => missing.release()).not.toThrow();
+    const long = spawnHold('/bin/sleep', ['30']);
+    const ended = new Promise<unknown>((resolve) => long.onExit!((e) => resolve(e ?? 'ended')));
+    long.release(); // killed: its end is reported too (the controller knows it let go of it)
+    expect(await ended).toBe('ended');
+    expect(() => long.release()).not.toThrow();
   });
 
   it('a home that is not the default one (a test, a second install) never holds: its platform is none', () => {

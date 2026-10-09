@@ -47,15 +47,18 @@ export function branchMatches(branch: string, patterns: string[]): boolean {
 /** ssh options that take the next word as their value (`-p 2222`). */
 const VALUE_OPTIONS = 'BbcDEeFIiJLlmOopQRSWw';
 const MOSH_VALUE_OPTIONS = new Set(['--port', '--ssh', '--server', '--client', '--predict', '--bind-server', '--family']);
-/** Programs that run the next command: with the short options that take the next word as their value (`sudo -u deploy`, `nice -n 5`). */
-const WRAPPERS: Record<string, string> = { command: '', exec: '', time: '', nohup: '', sudo: 'ugCDhpRrtTU', env: 'uSC', nice: 'n' };
+/**
+ * Programs that run the next command: with the short options that take the next word as their value (`sudo -u deploy`, `nice -n 5`).
+ * `isInteractiveCommand` (stay-awake) reads a command line through the same table.
+ */
+export const WRAPPER_OPTIONS: Readonly<Record<string, string>> = { command: '', exec: '', time: '', nohup: '', sudo: 'ugCDhpRrtTU', env: 'uSC', nice: 'n' };
 const isAssignment = (w: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w);
 
 /**
  * Where `-vp 2222` or `-iu deploy` ends: a cluster of short options, of which the first that takes a value either has it attached
  * (`-p2222`) or, when it is the last one, takes the next word. Returns how many words the option uses.
  */
-function optionWords(w: string, takesValue: string): number {
+export function optionWords(w: string, takesValue: string): number {
   for (let k = 1; k < w.length; k++) if (takesValue.includes(w[k]!)) return k === w.length - 1 ? 2 : 1;
   return 1;
 }
@@ -68,8 +71,8 @@ export function sshHost(cmd: string): string | null | undefined {
   const words = cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
   let i = 0;
   while (i < words.length && isAssignment(words[i]!)) i++; // FOO=1 ssh …
-  while (i < words.length && Object.hasOwn(WRAPPERS, words[i]!)) {
-    const takes = WRAPPERS[words[i++]!]!;
+  while (i < words.length && Object.hasOwn(WRAPPER_OPTIONS, words[i]!)) {
+    const takes = WRAPPER_OPTIONS[words[i++]!]!;
     while (i < words.length) {
       const w = words[i]!;
       if (isAssignment(w)) i++; // env X=1 ssh …
