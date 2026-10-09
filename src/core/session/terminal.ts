@@ -97,7 +97,8 @@ export class ForegroundCheck {
     } catch {
       shell = false;
     }
-    this.last = { at: now, shell };
+    // (stamped when the read is done: the answer is as old as that moment, so a `ps` slower than the cache lives is still reused after it)
+    this.last = { at: this.d.now(), shell };
     return shell;
   }
 

@@ -389,6 +389,28 @@ describe('the foreground check: the system is asked, at most every 250 ms, and n
     expect(t.reads).toHaveLength(2);
   });
 
+  it('the answer is as old as the moment its read finished: a `ps` slower than 250 ms is still reused for 250 ms after it ended', () => {
+    let now = 1_000_000;
+    const reads: number[] = [];
+    const fg = new ForegroundCheck({
+      pid: () => SHELL_PID,
+      alive: () => true,
+      readGroup: (pid) => {
+        reads.push(pid);
+        now += FOREGROUND_CACHE_MS + 100; // a machine under load: the read itself takes longer than the cache lives
+        return SHELL_PID;
+      },
+      now: () => now,
+    });
+    expect(fg.isShell()).toBe(true);
+    now += FOREGROUND_CACHE_MS - 1; // just under 250 ms after the read ended
+    expect(fg.isShell()).toBe(true);
+    expect(reads).toHaveLength(1); // (stamped before the read, the answer was already older than 250 ms: it read again)
+    now += 1; // 250 ms after it ended: asked again
+    expect(fg.isShell()).toBe(true);
+    expect(reads).toHaveLength(2);
+  });
+
   it('`fresh: true` always reads, and its answer is the one reused afterwards', () => {
     let group: number | null = SHELL_PID;
     const t = check({ group: () => group });
