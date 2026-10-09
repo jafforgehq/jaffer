@@ -1159,7 +1159,19 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
     await c.call('pty.write', { data: ' done\r' });
     await waitUntil(() => cmds.some((x) => x.cmd.startsWith('echo half')), 8000);
     expect(cmds.find((x) => x.cmd.startsWith('echo half'))).toMatchObject({ cmd: 'echo half done', exit: 0 }); // their line, as they typed it
-    // back at a prompt of its own, after a quiet moment, it goes ahead: told first, typed once the time it announced had come
+    // typing during the notice said no, as Cancel does: the clean prompts after their commands stay quiet, and the button is left
+    await sleep(T.quietMs + T.noticeMs + 800);
+    await c.call('pty.write', { data: 'echo next\r' });
+    await waitUntil(() => cmds.some((x) => x.cmd === 'echo next'), 8000);
+    await sleep(T.quietMs + T.noticeMs + 800);
+    expect(states(events)).toEqual(['pending', 'cancelled']);
+    expect(term.count(`RESUMED: --resume ${ID}`)).toBe(0);
+    expect((await c.call('claude.resume', {}))?.id).toBe(ID);
+    // Claude crashes again later (a run ended, so what was said before is history): told first, typed once the time it announced had come
+    fake.exitWith(1);
+    await c.call('pty.write', { data: 'claude\r' });
+    await waitUntil(() => cmds.filter((x) => x.cmd === 'claude' && x.exit === 1).length >= 2, 8000);
+    fake.exitWith(0);
     term.watch(`RESUMED: --resume ${ID}`);
     await waitUntil(() => term.count(`RESUMED: --resume ${ID}`) > 0, 10_000);
     expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'typed']);

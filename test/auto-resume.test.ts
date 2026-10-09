@@ -823,4 +823,74 @@ describe('AutoResumer', () => {
     r.check();
     expect(asked).toBeGreaterThan(0);
   });
+
+  /** The person types during the notice: the key sits in the shell's line, so the prompt is no longer clean (as the daemon sees it). */
+  const typesDuringNotice = () => {
+    lastInputAt = now;
+    promptReady = false;
+  };
+  /** Their command runs and ends: a clean prompt again, the person quiet for a while. */
+  const theirCommandRan = () => {
+    busy = true;
+    r.check();
+    advance(5_000);
+    busy = false;
+    promptReady = true;
+    r.check();
+  };
+
+  it('the person typing during the notice is a no, as Cancel is: nothing is typed, and the clean prompts after their commands stay quiet for that offer (the button is left)', () => {
+    r.check();
+    advance(1_000);
+    typesDuringNotice();
+    advance(2_000);
+    expect(typed).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    for (let i = 0; i < 3; i++) {
+      theirCommandRan();
+      advance(600_000);
+    }
+    r.check();
+    expect(typed).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    expect(tries.get(ID)).toBeUndefined();
+    // another conversation is offered: it is announced
+    offer = { id: OTHER };
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: OTHER, typesAt: now + 3_000 });
+  });
+
+  it('that no clears as Cancel does: a Claude run that ends, or the shell dying, brings the same offer back', () => {
+    r.check();
+    advance(1_000);
+    typesDuringNotice();
+    advance(2_000);
+    theirCommandRan();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    ended(1, 5_000); // a Claude run crashed since: the history starts again
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(1_000);
+    typesDuringNotice();
+    advance(2_000);
+    theirCommandRan();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled', 'pending', 'cancelled']);
+    r.shellDied(); // the shell died: a new one's prompt may bring it back
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+  });
+
+  it('a notice that ends without the person typing (their prompt went away by itself, the offer went) is not a no: the next clean prompt announces again', () => {
+    r.check();
+    advance(1_000);
+    promptReady = false; // (no key: the shell was not at a prompt for a moment)
+    advance(2_000);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    promptReady = true;
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    offer = null; // the offer goes for a moment, the person typed nothing
+    r.check();
+    offer = { id: ID };
+    r.check();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled', 'pending', 'cancelled', 'pending']);
+  });
 });

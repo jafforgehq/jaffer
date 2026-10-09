@@ -107,7 +107,7 @@ export class AutoResumer {
   // The two marks below hold until another conversation is offered or a Claude run ends (or the daemon restarts). An offer that is
   // missing for a while (a command running, a `cd` elsewhere and back) does not clear them: the person was told once, and Cancel
   // leaves the button.
-  /** The offer the person cancelled. */
+  /** The offer the person cancelled, or typed over while its notice ran (see `dropChecked`). */
   private cancelledId: string | undefined;
   /** The offer it gave up on, told once: no automatic try for it, even once old attempts age out. */
   private gaveUpId: string | undefined;
@@ -169,7 +169,7 @@ export class AutoResumer {
     if (id !== undefined && this.cancelledId !== id) this.cancelledId = undefined;
     if (id !== undefined && this.gaveUpId !== id) this.gaveUpId = undefined;
     if (this.explicitId !== id) this.explicitId = undefined;
-    if (this.pending && this.pending.id !== id) this.drop();
+    if (this.pending && this.pending.id !== id) this.dropChecked();
     if (explicit && id !== undefined) {
       // a request begins here (a repeat of one that is waiting is not another): the earlier automatic attempts are forgotten
       if (this.explicitId !== id && isSessionId(id)) this.d.clearAttempts(id);
@@ -197,7 +197,7 @@ export class AutoResumer {
       this.t,
     );
     if (s.kind === 'idle' || s.kind === 'give-up' || id === undefined) {
-      this.drop();
+      this.dropChecked();
       this.explicitId = undefined;
       if (s.kind === 'give-up' && id !== undefined && this.gaveUpId !== id) {
         this.gaveUpId = id;
@@ -225,6 +225,17 @@ export class AutoResumer {
     this.d.recordAttempt(id);
     this.d.type(`${resumeCommand(id)}\r`);
     this.d.emit({ state: 'typed', id });
+  }
+
+  /**
+   * A check ends the notice without typing. When the person typed while it ran, that was their answer: what they typed sits in the
+   * shell's line, or became a command of theirs, and that offer stays quiet as after Cancel (the button is left, and the mark clears as
+   * Cancel's does). Otherwise the next clean prompt announces it again.
+   */
+  private dropChecked(): void {
+    const p = this.pending;
+    if (p && this.d.lastInputAt() >= p.since) this.cancelledId = p.id;
+    this.drop();
   }
 
   /** The notice, if there was one, is over without typing. */
