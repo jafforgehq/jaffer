@@ -29,7 +29,7 @@
 
 ## Why Jaffer
 
-- **One session, always.** No tabs of throw-away shells and no "new chat". Your shell, its processes and your scrollback live in a background daemon. Quit the app or close the lid and you come back to exactly where you were, with a running Claude Code still going. After a reboot you get the same folder and the same screen above a fresh shell.
+- **One session, always.** No tabs of throw-away shells and no "new chat". Your shell, its processes and your scrollback live in a background daemon. Quit the app and you come back to exactly where you were, with a running Claude Code still going (a closed lid sleeps the Mac and pauses everything until it wakes: [more below](#keeps-running)). After a reboot you get the same folder and, with *Keep the screen for a restart* on, the last saved screen above a fresh shell, with Claude Code resumed; programs that were running are gone.
 - **A memory that evolves by itself.** Jaffer distils what is worth keeping from what you do (preferences, each project's conventions, fixes that cost you an hour, routines you repeat), merges what repeats, lets stale things fade and hands the result to Claude Code. You can see it, edit it, pin it and undo any change.
 - **Life when something happens.** A small animation in the corner works while a command or Claude works, sits up when Claude needs you and celebrates when a turn ends. Choose a mole, digital rain, an agent network, a starfield, a radar or a reactor core.
 
@@ -43,7 +43,7 @@ To build it yourself (a local build opens with no warnings): `./scripts/install-
 
 **Updates ask first.** The signed app checks for a new release, downloads it in the background and then asks *Update and restart* or *Later*. Updating ends your terminal session, so the prompt says so, and nothing installs without your yes, not even on quit. The background check can be switched off in *Settings → Updates*.
 
-On first launch Jaffer asks what it may do: sign in to Claude or use a plain terminal, learn from your sessions, follow Claude Code, start `claude` for you. Nothing is on until you say so.
+On first launch Jaffer asks what it may do: sign in to Claude or use a plain terminal, learn from your sessions, follow Claude Code, start `claude` for you, keep your session running in the background (a login agent). Nothing is on until you say so.
 
 ## Features
 
@@ -105,24 +105,28 @@ Your own hooks and settings are never touched, only entries tagged `jaffer-manag
 
 ## Keeps running
 
-The shell lives in a background daemon, so closing or quitting the app changes nothing. Switch on *Keep my session running in the background* and macOS (a login agent) also starts that daemon at login and again if it dies; Claude Code comes back with it.
+The shell lives in a background daemon, so closing or quitting the app changes nothing. Switch on *Keep my session running in the background* and macOS (a login agent) also starts that daemon at login and again if it dies; Claude Code comes back with it. What comes back is the folder, the screen as last saved (with *Keep the screen for a restart* on, the default) above a fresh shell, and the Claude Code conversation. Programs that were running in the shell stop and are not restarted.
+
+Turning the switch on while a session is already running (the first-run switch too) only installs the agent: Settings then reads *installed, active from the next login or restart*, and launchd takes over at your next login or the next time Jaffer starts the session. Until then a crashed daemon is not restarted.
 
 | What happens | What you get |
 |---|---|
-| The app quits or is killed | Nothing changes: the shell and Claude Code run on in the daemon. |
-| The daemon crashes or is killed | With the switch on, launchd starts it again (it waits at least 5 s between starts): same folder, same screen, Claude resumed. With it off, it comes back the next time you open Jaffer or run `jaffer`. |
-| The Mac restarts, or loses power | With the switch on, the daemon starts when you log in; otherwise when you open Jaffer. Whatever ran in the shell is gone; you get the folder, the last saved screen (kept every few seconds) above a fresh shell, and Claude resumed. |
+| The app quits or is killed | Nothing changes: the shell, its programs and Claude Code run on in the daemon. |
+| The daemon crashes or is killed | The shell and what ran in it are gone. Once launchd runs the daemon (switch on), launchd starts it again (it waits at least 5 s between starts): same folder, the last saved screen, Claude resumed. With the switch off, that happens the next time you open Jaffer or run `jaffer`. |
+| The Mac restarts, or loses power | The same, with the daemon started at your login (switch on) or when you open Jaffer. |
 | An update | The new version starts the daemon the same way and Claude is resumed. Updating ends the running shell, which is why the prompt asks first. |
-| *Quit and End Session*, Reset, `claude` quit with `/exit` or Ctrl+C | It ends and stays ended: nothing restarts the session and Claude is not resumed. |
+| `claude` quit with `/exit` or Ctrl+C | Only Claude ends; the shell stays, and Claude is not resumed. |
+| *Quit and End Session* | The session ends, launchd does not bring it back, and Claude is not resumed. |
+| Reset | Everything of Jaffer is removed (the agent too) and a fresh Jaffer starts. |
 
 The rows that involve launchd are built and tested against a stand-in for `launchctl`; how the real one behaves is on the by-hand list under *Not verified here*.
 
 - **Claude comes back by itself.** After a restart Jaffer types `claude --resume <id>` for the conversation that was running, announced with a 3-second notice and a **Cancel**. It does so only at an empty prompt once you have been quiet for 2 seconds, and never adds to a line you started typing. At most 3 attempts in 10 minutes, then it stops and leaves the **Resume Claude** button. It never resumes a conversation you ended yourself (`/exit`, Ctrl+C, *End Session*) or a `claude -p` run. Claude Code's own questions (trust, permissions) stay in the terminal; Jaffer answers none of them.
 - **Restart Claude Code.** After Claude Code updates itself, a running Claude keeps the old version until it restarts. *Restart Claude Code, to use an update* (command palette, or *Settings → Claude Code*) asks first, restarts your shell in the same folder and takes up the same conversation on the new version. It works with automatic resume off. Anything else running in the shell stops, which is why it asks.
 - **Awake while Claude works.** While Claude (or a background agent) works, or a command has run for 30 seconds or more (not an interactive program such as `ssh`, `vim` or `tail -f`; capped at 6 hours), Jaffer holds the Mac off idle sleep with `caffeinate -i`, no admin rights and no password, and lets go 15 seconds after the work stops. The screen can still sleep. **It does not override the lid:** a laptop on its own with the lid closed still sleeps, and everything pauses until it wakes. With power, an external display and a keyboard or mouse (macOS's closed-display mode) it keeps working; that has not been checked on a real Mac yet.
-- **Two Claudes.** If a second Claude conversation starts while another is running, a notice says so once. Jaffer ends neither, and after a restart resumes the newest.
+- **Two Claudes.** If a second Claude conversation starts while another is running, a notice says so once. Jaffer ends neither, and after a restart resumes the most recently active conversation.
 
-The switches: *Settings → Appearance → Keep my session running in the background* (off; the first-run step offers it on, and a plain terminal leaves it off), *Keep my Mac awake while Claude works* (on); *Settings → Claude Code → Offer to resume Claude Code* (on), *Resume Claude automatically* (on) and the *Restart Claude Code* button. The agent is `~/Library/LaunchAgents/com.jafforge.jaffer.daemon.plist` and a small script, `~/.jaffer/bin/jafferd`; it is installed only for the usual `~/.jaffer`, and not for an app run from a disk image. Turning it off while macOS is running your session ends that session, so Jaffer asks first. `jaffer service [status|install|remove]` does the same from the command line, and Reset removes the agent.
+The switches: *Settings → Appearance → Keep my session running in the background* (off; the first-run step offers it on, and a plain terminal leaves it off), *Keep my Mac awake while Claude works* (on); *Settings → Claude Code → Offer to resume Claude Code* (on), *Resume Claude automatically* (on) and the *Restart Claude Code* button. The agent is `~/Library/LaunchAgents/com.jafforge.jaffer.daemon.plist` and a small script, `~/.jaffer/bin/jafferd`; it is installed only for the usual `~/.jaffer`, and not for an app run from a disk image or a temporary location, nor for a development run. Turning it off while macOS is running your session ends that session, so Jaffer asks first. `jaffer service [status|install|remove]` does the same from the command line, and Reset removes the agent.
 
 ## Memory
 
@@ -165,7 +169,7 @@ scripts/release-mac.sh         # on your Mac: build, sign, notarize, verify; --p
 
 **Not verified here:** a real Claude sign-in (tests use the real `claude` binary against a mock API and a stand-in for the login page); the companions and the cost figure against a real Claude Code session (their inputs were checked against real hook payloads and transcript fields, then driven by scripted events); `claude --resume` against a real conversation; clicking *Update and restart* through to the new version; and, needing a person at a Mac, notifications, the global hotkey and the WebGL renderer on your GPU.
 
-**Also not verified, by hand on your Mac** (the launchd and power parts are tested against stand-ins, because the real ones would touch your LaunchAgents and power settings; the generated plist is linted with `plutil` and the wrapper with `sh -n` on macOS): launchd restarting a killed daemon in about 5 s with the screen back and Claude resumed; `launchctl kickstart` on a job that already runs; `launchctl bootout` from inside the job it ends (turning the switch off while launchd runs the session); launchd's minimal environment for the daemon (`PATH`, the login shell); `pmset -g assertions` showing the hold while Claude works and not after; a closed lid with and without power and an external display; a reboot; and an update with the agent on.
+**Also not verified, by hand on your Mac** (the launchd and power parts are tested against stand-ins, because the real ones would touch your LaunchAgents and power settings; on macOS the generated plist is only linted with `plutil` and the wrapper with `sh -n`): a real `launchctl bootstrap` of the generated plist, and a real bootout and uninstall; launchd restarting a killed daemon in about 5 s with the screen back and Claude resumed (once launchd runs the daemon: after the next login or restart of the session with the switch on); `launchctl kickstart` on a job that already runs; `launchctl bootout` from inside the job it ends (turning the switch off while launchd runs the session); launchd's minimal environment for the daemon (`PATH`, the login shell); logging out and in, which is what loads the agent when it was installed into a running session; the wrapper taking the agent away when the app it was written for is deleted or moved (no test runs that branch); `pmset -g assertions` showing the hold while Claude works and not after; a closed lid with and without power and an external display; a reboot; and an update with the agent on.
 
 ## Limitations
 

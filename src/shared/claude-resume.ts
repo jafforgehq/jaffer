@@ -11,6 +11,13 @@ export function resumeCommand(id: string): string {
 const ASKS = new Set(['mcp', 'update', 'upgrade', 'doctor', 'config', 'install', 'setup-token', 'auth', 'plugin', 'plugins', 'agents', 'migrate-installer']);
 const ASK_FLAGS = new Set(['--version', '-v', '--help', '-h']);
 
+/**
+ * How much of a command line is read. The line comes from the terminal (the shell's marks, which any output can forge), so it can be
+ * any length; the options that matter are at its start. Every helper that reads a command line (`endsConversation`, `isPrintMode`,
+ * `isClaudeCommand`, `isInteractiveCommand`) cuts its input to this head itself, whoever calls it.
+ */
+export const COMMAND_HEAD = 4096;
+
 /** A command line that runs `claude` (after variables, `command` or a path), and what follows it. */
 const CLAUDE_LINE = /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s+([\s\S]*))?$/;
 
@@ -19,18 +26,12 @@ const CLAUDE_LINE = /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s+([\
  * `claude mcp list`: after a reboot they must not drop the conversation that is waiting to be resumed.
  */
 export function endsConversation(cmd: string): boolean {
-  const m = CLAUDE_LINE.exec(cmd);
+  const m = CLAUDE_LINE.exec(cmd.slice(0, COMMAND_HEAD));
   const args = (m?.[1] ?? '').trim().split(/\s+/).filter(Boolean);
   if (args.some((a) => ASK_FLAGS.has(a))) return false;
   const first = args.find((a) => !a.startsWith('-'));
   return first === undefined || !ASKS.has(first);
 }
-
-/**
- * How much of a command line is read. The line comes from the terminal (the shell's marks, which any output can forge), so it can be
- * any length; the options that matter are at its start.
- */
-export const COMMAND_HEAD = 4096;
 
 /**
  * The words of a command line as the shell splits them: single quotes, double quotes (with backslash escapes inside) and a backslash

@@ -44,3 +44,25 @@ describe('isClaudeCommand', () => {
   });
 });
 
+describe('isClaudeCommand on a forged line (the terminal can say any command line, at any length, and the window reads it too)', () => {
+  const MB = 1_000_000;
+  const crafted: Record<string, string> = {
+    'a=b ': 'a=b '.repeat((8 * MB) / 4),
+    'command ': 'command '.repeat((8 * MB) / 8),
+    'A=1 ... claude': 'A=1 '.repeat((8 * MB) / 4) + 'claude',
+    'a=\n\t': 'a=\n\t'.repeat((8 * MB) / 4),
+  };
+  for (const [what, line] of Object.entries(crafted)) {
+    it(`does not throw and stays fast on 8 MB of ${what}, in isClaudeCommand and in processBadge`, () => {
+      const t0 = performance.now();
+      expect(() => isClaudeCommand(line)).not.toThrow();
+      expect(() => processBadge(line, 'working')).not.toThrow();
+      expect(performance.now() - t0).toBeLessThan(500);
+    });
+  }
+
+  it('reads a line by its head: a line that begins with claude is claude however long it is', () => {
+    expect(isClaudeCommand('claude ' + 'x '.repeat(MB))).toBe(true);
+    expect(isClaudeCommand(' '.repeat(5000) + 'claude')).toBe(false);
+  });
+});

@@ -1,4 +1,5 @@
 import type { ClaudeState } from '../core/claude/watcher';
+import { COMMAND_HEAD } from './claude-resume';
 
 export interface ProcessBadge {
   kind: 'none' | 'claude' | 'command';
@@ -6,9 +7,13 @@ export interface ProcessBadge {
   spin: boolean;
 }
 
-/** Is this command line Claude Code itself (`claude`, `FOO=1 claude -c`, `command claude`, `/usr/local/bin/claude`), and not just a line that mentions claude? */
+/**
+ * Is this command line Claude Code itself (`claude`, `FOO=1 claude -c`, `command claude`, `/usr/local/bin/claude`), and not just a line that
+ * mentions claude? The line can come from the terminal's forgeable marks at any length (the window reads it too), so only its first
+ * `COMMAND_HEAD` characters are read.
+ */
 export function isClaudeCommand(cmd: string): boolean {
-  return /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(cmd);
+  return /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(cmd.slice(0, COMMAND_HEAD));
 }
 
 /**

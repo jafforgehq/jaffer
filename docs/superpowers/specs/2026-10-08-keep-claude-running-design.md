@@ -51,7 +51,7 @@ The goal, in the person's words: the Claude session is resumed every time, there
 ### 3. One Claude
 
 - The terminal stays single: `SessionHost` spawns only `main`, and the daemon has no RPC to create another (unchanged, and still tested).
-- When a second Claude conversation becomes active while another is, a toast says so once per pair of conversations: *Two Claude conversations are running. After a restart Jaffer resumes the newest.* "Newest" is the conversation whose hooks were seen last, which is the one `ResumeStore` already keeps. Background agents are not conversations and do not count. Nothing is ended.
+- When a second Claude conversation becomes active while another is, a toast says so once per pair of conversations: *Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.* The most recently active conversation is the one whose hooks were seen last, which is the one `ResumeStore` already keeps. Background agents are not conversations and do not count. Nothing is ended.
 
 ### 4. Stay awake while something works
 
@@ -117,9 +117,9 @@ The goal, in the person's words: the Claude session is resumed every time, there
 
 What the code does now, where it differs from or settles the text above (the numbers are the rulings in the implementation ledger).
 
-- **R6.** An explicit request (Restart Claude) overrides an earlier Cancel of that conversation; a Cancel said during its own notice still stops it.
+- **R6.** An explicit request (Restart Claude) overrides an earlier Cancel and an earlier give-up for that conversation (R15a); a Cancel said during its own notice still stops it.
 - **R9.** The Cancel mark and the give-up mark clear only when a different conversation is offered, when a `claude` run ends, or with a new daemon; an offer that is missing for a moment (a command running, a `cd`) does not clear them. Exactly one `gave-up` per episode.
-- **R10.** Only *Quit and End Session* forgets the conversation (`app.shutdown` with `forgetConversation: true`); updates, *Restart session*, Reset and `jaffer daemon stop` keep it, so an update resumes. The End Session dialog says Claude is not resumed automatically.
+- **R10.** Only *Quit and End Session* forgets the conversation (`app.shutdown` with `forgetConversation: true`); updates, *Restart session* and `jaffer daemon stop` keep it, so an update resumes (Reset removes `~/.jaffer`, so nothing is left to resume). The End Session dialog says Claude is not resumed automatically.
 - **R11.** `claude -p` / `--print` is a one-shot and never a conversation to resume: whenever such a run ends, however it ended, the daemon forgets the resume point.
 - **R12.** A window that connects after the notice began is told of it: RPC `claude.autoresume.state` returns the current `pending` event (or null), read at start and when the daemon comes back; a late notice reads at least "in 1 s".
 - **R13.** `AutoResumer.shellDied()` clears only the Cancel mark and checks again; the daemon calls it when the main shell exits. A give-up stays: a new shell is not a new try.

@@ -4,7 +4,7 @@
  */
 
 /** What the window tells the person when a second conversation is running. */
-export const TWO_RUNNING_NOTICE = 'Two Claude conversations are running. After a restart Jaffer resumes the newest.';
+export const TWO_RUNNING_NOTICE = 'Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.';
 
 /**
  * When two or more Claude conversations are active (idle, working or waiting for the person; an ended one does not count, and

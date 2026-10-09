@@ -840,7 +840,7 @@ export class JafferService {
     });
 
     // `forgetConversation`: the person ends the session (Quit and End Session), so the Claude Code conversation is not resumed at
-    // the next start. An update, Restart session, Reset or `jaffer daemon stop` shut down plainly: the conversation comes back.
+    // the next start. An update, Restart session or `jaffer daemon stop` shut down plainly: the conversation comes back (Reset removes the file it is in).
     r.handle('app.shutdown', (p: { forgetConversation?: boolean } | undefined) => {
       if (p?.forgetConversation === true) {
         this.resume.forget();
