@@ -88,10 +88,10 @@ export class JafferService {
   private lastShellExitAt = 0;
   /** Types `claude --resume <id>` for a Restart Claude Code the person asked for, after its notice (cancellable). Nothing is resumed by itself. */
   private autoResume: AutoResumer;
-  /** When the person last typed (the quiet moment auto-resume waits for). */
+  /** When the person last typed (the quiet moment Restart Claude Code waits for before it types). */
   private lastInputAt = 0;
   /**
-   * Keystrokes written to the main shell so far (the person's, and what auto-resume typed): counted, so that two in the same millisecond
+   * Keystrokes written to the main shell so far (the person's, and what Restart Claude Code typed): counted, so that two in the same millisecond
    * still differ. `lineEmptyAt` is that count when the shell's line was last known to be empty: it was just spawned, or a command began
    * (the keys before that were the command itself). Any keystroke after it sits in the shell's line, as bash and zsh keep what was typed
    * during startup or while a command ran and show it at the next prompt: nothing is ever added to such a line.
@@ -144,18 +144,14 @@ export class JafferService {
           return !!pane && pane.runningCommand !== null; // (a command the marks gave no line for runs all the same)
         },
         lastInputAt: () => this.lastInputAt,
-        // nothing is resumed by itself: only a request the person made (Restart Claude Code, `restartCheck`) goes ahead. An old config's
-        // `session.autoResume` is kept in the file and read by nothing.
-        enabled: () => false,
+        // (nothing is resumed by itself: only a request the person made, Restart Claude Code's (`restartPrompt`), starts anything. An old
+        // config's `session.autoResume` is kept in the file and read by nothing.)
         stopping: () => this.stopping,
         // looked at again at the moment of typing
         mayType: () => {
           const pane = this.host?.mainPane;
           return !!pane && pane.alive && pane.foregroundIsShell();
         },
-        attempts: (id) => this.resume.attempts(id),
-        recordAttempt: (id) => this.resume.recordAttempt(id),
-        clearAttempts: (id) => this.resume.clearAttempts(id),
         // straight to the shell: this is not the person typing (no `lastInputAt`) and not an answer to Claude (no `userAnswered`); until
         // the shell runs it, its line is not empty
         type: (text) => {
@@ -167,7 +163,7 @@ export class JafferService {
           }
         },
         emit: (e) => {
-          this.autoNotice = e.state === 'pending' ? e : null; // typed, cancelled or given up: no notice runs any more
+          this.autoNotice = e.state === 'pending' ? e : null; // typed or cancelled: no notice runs any more
           if (e.state !== 'pending' && this.restartHold?.armed) this.releaseRestartHold(); // the request has had its answer
           this.rpc.broadcast('claude.autoresume', e);
         },
@@ -259,7 +255,7 @@ export class JafferService {
     this.releaseRestartHold();
     if (this.foregroundTimer) clearTimeout(this.foregroundTimer);
     this.foregroundTimer = null;
-    this.autoResume.check(); // nothing is typed while stopping: a notice that is running ends now, and the window is told
+    this.autoResume.endNotice(); // nothing is typed while stopping: a notice that is running ends now, and the window is told
     for (const t of this.timers) clearInterval(t);
     for (const stop of this.rejectionWatches.values()) stop();
     this.rejectionWatches.clear();
@@ -406,7 +402,7 @@ export class JafferService {
         this.lastShellExitAt = Date.now();
         // a notice that is running (Restart Claude Code's) was for the shell that is gone: it ends here, and only a request the person
         // made goes ahead in the new shell (nothing is resumed by itself)
-        this.autoResume.shellDied();
+        this.autoResume.endNotice();
         this.claudeWatcher.endAll();
         this.pushResume();
       }
@@ -601,9 +597,10 @@ export class JafferService {
     if (key === this.lastOffer) return;
     this.lastOffer = key;
     this.rpc.broadcast('claude.resume', offer);
-    // Restart Claude Code's notice, if one runs: an offer that went or changed (a command began, "Not now", the setting off) ends it.
-    // Nothing else is asked: an offer that comes is the Resume button, never typed by itself.
-    if (this.autoNotice) this.autoResume.check();
+    // Restart Claude Code's notice, if one runs: an offer that went or is another conversation now (a command began, "Not now", the
+    // offer switched off) ends it. The same conversation seen again (a later time) leaves it running. Nothing else is asked: an offer
+    // that comes is the Resume button, never typed by itself.
+    if (this.autoNotice && offer?.id !== this.autoNotice.id) this.autoResume.endNotice();
   }
 
   /**
@@ -624,14 +621,13 @@ export class JafferService {
    * else ever makes it type: a prompt with a conversation to offer shows the Resume button, and a click on it is the person typing.
    */
   private restartPrompt(): void {
-    const request = this.restartCheck();
-    if (request.explicit) this.autoResume.check(request);
+    if (this.restartCheck().explicit) this.autoResume.check({ explicit: true });
   }
 
   /**
    * What Restart Claude Code left to do: the person asked, so the first prompt of the new shell is the conversation's cue. The request
-   * is repeated at each prompt of that shell until it is typed, cancelled or given up on (or it is stale): the resumer itself forgets an
-   * explicit request the first time it has to wait. A prompt of the shell it was asked in is not the cue.
+   * is repeated at each prompt of that shell until it is typed or cancelled (or it is stale): the resumer itself forgets the request
+   * the first time it has to wait for a prompt. A prompt of the shell it was asked in is not the cue.
    */
   private restartCheck(): { explicit?: boolean } {
     const hold = this.restartHold;
@@ -965,7 +961,7 @@ function stoppedExit(exit: number | null): boolean {
   return exit != null && exit >= 145 && exit <= 150;
 }
 
-/** The waits of auto-resume: the real ones, or (tests only, `JAFFER_TEST_AUTORESUME_FAST=1`) the same rules in milliseconds. */
+/** The notice and the quiet moment of Restart Claude Code: the real ones, or (tests only, `JAFFER_TEST_AUTORESUME_FAST=1`) the same in milliseconds. */
 function autoResumeTiming(): AutoResumeTiming {
   return process.env.JAFFER_TEST_AUTORESUME_FAST === '1' ? AUTO_RESUME_TEST : AUTO_RESUME;
 }

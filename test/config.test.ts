@@ -145,7 +145,7 @@ describe('session.resumeClaude', () => {
   });
 });
 
-describe('session.autoResume, session.keepRunning and session.stayAwake', () => {
+describe('session.keepRunning and session.stayAwake, and the autoResume an old config may still have', () => {
   it('autoResume is gone (0.5.1): not a setting and not a default; an old file that has it loads, keeps it after a patch of another key, and nothing reads it', () => {
     expect('autoResume' in DEFAULT_CONFIG.session).toBe(false);
     // @ts-expect-error resuming by itself is not a setting any more: no code can read it from the config's type

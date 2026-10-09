@@ -1,34 +1,23 @@
 /**
- * The numbers behind keeping the one session and Claude Code running: the automatic resume of a conversation that died with the
- * shell, and the hold that keeps the Mac from idle sleep while Claude works. One place, so the daemon, the window and the tests agree.
+ * The numbers behind keeping the one session and Claude Code running: the notice before Restart Claude Code resumes the conversation,
+ * and the hold that keeps the Mac from idle sleep while Claude works. One place, so the daemon, the window and the tests agree.
  */
 
-/** Resuming the Claude Code conversation by itself after the shell came back (a reboot, an update, a crash). */
+/** Restart Claude Code resuming the conversation in the new shell (the person confirmed it; nothing is resumed by itself). */
 export const AUTO_RESUME = {
   /** How long the window says "resuming" before `claude --resume` is typed, so the person can stop it. */
   noticeMs: 3_000,
   /** The terminal must have been quiet this long before anything is typed. */
   quietMs: 2_000,
-  /** At most this many automatic attempts for one conversation within `windowMs`, then it is offered by hand. */
-  maxAttempts: 3,
-  windowMs: 600_000,
-  /** How long to wait before the first, second and third attempt. */
-  waitsMs: [3_000, 20_000, 120_000],
-  /** Claude Code alive this long after an attempt means it worked: the attempts are forgotten. */
-  healthyMs: 30_000,
 } as const;
 
 /**
  * The same rules on a scale of milliseconds, for the daemon tests only: the daemon uses them when it is started with
- * `JAFFER_TEST_AUTORESUME_FAST=1`, and never otherwise. The window is wide enough for three crashes of a real process to fit in it.
+ * `JAFFER_TEST_AUTORESUME_FAST=1`, and never otherwise.
  */
 export const AUTO_RESUME_TEST = {
   noticeMs: 600,
   quietMs: 500,
-  maxAttempts: 3,
-  windowMs: 120_000,
-  waitsMs: [600, 800, 1_000],
-  healthyMs: 1_500,
 } as const;
 
 /**

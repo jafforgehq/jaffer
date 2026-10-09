@@ -1373,6 +1373,19 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('a "gave-up" from a daemon older than 0.5.1 only takes the notice away: there is no give-up any more, so nothing else is shown', async () => {
+    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
+    const send = (e: object) => page.evaluate((x) => (window as any).__event('claude.autoresume', x), e);
+    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
+    expect(await page.locator('.toast').count()).toBe(0);
+    await send({ state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
+    await notice.waitFor();
+    await send({ state: 'gave-up', id: ID });
+    await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
+    await sleep(500);
+    expect(await page.locator('.toast').count()).toBe(0);
+  }, 30_000);
+
   it('auto-resume: a window that opens while the notice runs asks the daemon, and shows it with Cancel all the same', async () => {
     const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
     // The window opens after the daemon announced (a reboot, the app reconnecting after an update): no event reaches it, so it

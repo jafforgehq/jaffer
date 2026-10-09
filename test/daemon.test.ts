@@ -29,6 +29,11 @@ beforeAll(async () => {
   execFileSync(process.execPath, [path.join(root, 'scripts/build.mjs'), '--only=cli'], { stdio: 'ignore' });
   env = makeEnv();
   fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
+  // The session shell finds a stand-in `claude` first (the person's own startup file, read after the system's): whatever a test here
+  // leaves offered, nothing typed into this shell can start the `claude` this machine has. (The daemon's own `claude -p`, for memory
+  // curation, is found on the daemon's PATH, not the shell's.)
+  const standIn = standInClaude(path.join(env.root, 'stand-in'));
+  fs.writeFileSync(path.join(env.userHome, '.bash_profile'), `PATH='${standIn.dir}':"$PATH"\n`);
   mock = new MockAnthropic();
   const url = await mock.listen();
   launcher = {
@@ -201,7 +206,17 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     const OTHER = '0c7e2d63-4b4f-4e1f-8a5b-7a1a9d3a7b22';
 
     // These are about the offer (the Resume button), the way back after a restart: nothing types `claude --resume` by itself (the suite
-    // below, with a stand-in `claude` on the shell's PATH, shows it), so whatever `claude` this machine has is never started here.
+    // below shows it). The shell here has a stand-in `claude` on its PATH (see the top `beforeAll`), so that even a regression that
+    // typed it could never start whatever `claude` this machine has.
+    beforeAll(async () => {
+      const c = await connect();
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      const cmds = collect(c, 'pty.command');
+      await c.call('pty.write', { data: 'command -v claude\r' });
+      await waitUntil(() => cmds.some((x) => x.cmd === 'command -v claude'), 8000);
+      expect(cmds.find((x) => x.cmd === 'command -v claude')!.output).toContain(path.join(env.root, 'stand-in', 'claude')); // not a real Claude Code
+    }, 20_000);
 
     async function inFolder(name: string) {
       const c = await connect();
@@ -917,7 +932,7 @@ function standInSsh(dir: string) {
   };
 }
 
-describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, the timing on a millisecond scale)', () => {
+describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, a stand-in claude, the timing on a millisecond scale)', () => {
   const T = AUTO_RESUME_TEST;
   let env5: TestEnv;
   let fake: ReturnType<typeof standInClaude>;
@@ -1127,7 +1142,8 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
   // way back; only Restart Claude Code, which the person confirms, types it (below). A 0.5.0 config that still says `autoResume: true`
   // changes nothing: the key is kept in the file and read by nothing.
   describe('nothing comes back by itself: the Resume button is the way back', () => {
-    const quietFor = () => sleep(T.quietMs + T.waitsMs[2]! + 1500); // past the quiet moment and the longest wait an automatic try had
+    // past the quiet moment, a notice, and the longest wait an automatic retry of 0.5.0 had on this scale (1 s)
+    const quietFor = () => sleep(T.quietMs + T.noticeMs + 2000);
     const offered = async (c: RpcClient, id: string) => waitUntil(async () => (await c.call('claude.resume', {}))?.id === id, 10_000);
 
     it('after a restart (an update, a reboot) it types nothing and gives no notice, also with an old config that says autoResume: true; the button offers the conversation', async () => {
@@ -1216,6 +1232,63 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
       await c.call('claude.resume.dismiss', {});
       c.close();
     }, 40_000);
+
+    it('a config change while the button offers the conversation types nothing and gives no notice, an old autoResume: true among them', async () => {
+      const ID = '1a2b3c4d-0000-4a00-8a00-000000000204';
+      const { c, real, hook } = await inFolder5('none-d');
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      await hook(c, 'SessionStart', ID);
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      fake.exitWith(1);
+      await c.call('pty.write', { data: 'claude\r' }); // Claude Code crashes: the button offers it
+      await waitUntil(() => cmds.some((x) => x.cmd === 'claude' && x.exit === 1), 8000);
+      fake.exitWith(0);
+      await offered(c, ID);
+      // 0.5.0 looked again at every change of the config: the old key, the offer's own switch, and one that has nothing to do with it
+      await c.call('config.patch', { session: { autoResume: true } });
+      await c.call('config.patch', { session: { resumeClaude: true } });
+      await c.call('config.patch', { claude: { showCost: false } });
+      await c.call('config.patch', { claude: { showCost: true } });
+      await quietFor();
+      expect(events).toEqual([]);
+      expect(await c.call('claude.autoresume.state', {})).toBeNull();
+      expect(term.text()).not.toContain('--resume');
+      expect(cmds.filter((x) => x.cmd.includes('--resume'))).toEqual([]);
+      expect(await c.call('claude.resume', {})).toMatchObject({ id: ID, cwd: real }); // still the button
+      await c.call('claude.resume.dismiss', {});
+      c.close();
+    }, 40_000);
+
+    it('a claude.json that 0.5.0 left with its attempts block is read: the button offers the conversation, nothing is typed, and the block is gone at the next write', async () => {
+      const ID = '1a2b3c4d-0000-4a00-8a00-000000000205';
+      const file = path.join(env5.paths.sessionDir, 'claude.json');
+      const { c, real } = await inFolder5('none-e');
+      await sleep(300);
+      await c.call('app.shutdown', {});
+      await waitUntil(async () => !(await tryConnect(env5.paths, 300)), 8000);
+      // three automatic tries a moment ago: 0.5.0 would have given up on this one
+      const at = Date.now();
+      fs.writeFileSync(file, JSON.stringify({ version: 1, point: { id: ID, cwd: real, at }, attempts: { id: ID, at: [at - 3000, at - 2000, at - 1000] } }), { mode: 0o600 });
+      const c2 = await connect5();
+      const events = track(c2);
+      const term = terminal(c2);
+      await c2.call('session.attach', { cols: 100, rows: 30 });
+      await offered(c2, ID);
+      await quietFor();
+      expect(events).toEqual([]);
+      expect(term.text()).not.toContain('--resume');
+      expect(await c2.call('claude.resume', {})).toMatchObject({ id: ID, cwd: real });
+      await sleep(300);
+      await c2.call('app.shutdown', {}); // a plain shutdown (an update) writes the point again
+      await waitUntil(async () => !(await tryConnect(env5.paths, 300)), 8000);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ version: 1, point: { id: ID, cwd: real, at } });
+      const c3 = await connect5();
+      await offered(c3, ID); // and it is still offered
+      await c3.call('claude.resume.dismiss', {});
+      c3.close();
+    }, 40_000);
   });
 
   // Restart Claude Code (the palette, Settings): the shell restarts in the same folder and the same conversation comes back
@@ -1270,7 +1343,7 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
       c.close();
     }, 30_000);
 
-    it('restarts the shell in the same folder and resumes the same conversation, also with "Resume Claude automatically" off', async () => {
+    it('restarts the shell in the same folder and resumes the same conversation after its notice', async () => {
       const ID = tag(2);
       const { c, real, hook } = await inFolder5('rs-a');
       await endSessions(c, hook);
@@ -1425,7 +1498,7 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
         await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
         expect(await again).toEqual({ resumable: true });
         expect(await panePid(c)).not.toBe(first);
-        // the first notice died with its shell; the third shell is announced and resumed, by the request (the setting is off)
+        // the first notice died with its shell; the third shell is announced and resumed, by the second request
         expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'typed']);
         await settle();
         expect(term.count(resumed(ID))).toBe(1);
@@ -1602,7 +1675,7 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
 
     // The marks are output, and a program can print them: what the daemon types must reach the shell itself, never a program it runs
     // (the shell's foreground process is looked at, not the marks), and the Resume button waits for that too.
-    it('the same for Restart Claude: an ssh typed ahead into the new shell gets nothing at its remote prompt; the shell\'s own prompt after it is resumed', async () => {
+    it('Restart Claude: an ssh typed ahead into the new shell gets nothing at its remote prompt; the shell\'s own prompt after it is resumed', async () => {
       const ID = tag(31);
       const { c, hook } = await inFolder5('fg-b');
       await endSessions(c, hook);
@@ -1640,9 +1713,14 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
       const events = track(c);
       const term = terminal(c);
       const cmds = commands(c);
+      // the new shell's first prompt mark: a prompt of the shell it replaces does not count (the new one is spawned before any of its output)
+      let spawned = false;
       let promptAt = 0;
+      c.on('session.lifecycle', (e) => {
+        if (e.lifecycle === 'spawned') spawned = true;
+      });
       c.on('pty.prompt', () => {
-        if (!promptAt) promptAt = Date.now();
+        if (spawned && !promptAt) promptAt = Date.now();
       });
       try {
         fake.exitWith(0);
@@ -1664,6 +1742,198 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
         c.close();
       }
     }, 40_000);
+
+    // A window that opens or reconnects while the notice runs (the app restarting for an update) got no event: it asks.
+    it("a window that connects while Restart Claude's notice runs is told of it (claude.autoresume.state) and its Cancel works; once typed or cancelled it is told nothing", async () => {
+      const ID = tag(40);
+      const { c, hook } = await inFolder5('rs-late');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      const late: RpcClient[] = [];
+      /** On the next notice: a window connects and asks what runs; `then` is what it does next, while the notice still runs. */
+      const onNextNotice = (then: (w: RpcClient) => Promise<unknown> = async () => undefined) =>
+        new Promise<{ w: RpcClient; told: any }>((resolve, reject) => {
+          let done = false;
+          c.on('claude.autoresume', (d) => {
+            if (d.state !== 'pending' || done) return;
+            done = true;
+            void (async () => {
+              const w = (await tryConnect(env5.paths))!;
+              late.push(w);
+              const told = await w.call('claude.autoresume.state', {});
+              await then(w);
+              resolve({ w, told });
+            })().catch(reject);
+          });
+        });
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        // typed: told of the notice while it ran, nothing after
+        let before = await panePid(c);
+        let next = onNextNotice();
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        const first = await next;
+        expect(first.told).toEqual({ state: 'pending', id: ID, typesAt: events.find((e) => e.state === 'pending')!.typesAt });
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(await first.w.call('claude.autoresume.state', {})).toBeNull();
+        expect(await c.call('claude.autoresume.state', {})).toBeNull();
+        // cancelled from the window that connected late: told of it, then nothing; nothing is typed
+        await waitUntil(() => cmds.some((x) => x.cmd === `claude --resume ${ID}`), 8000); // (the stand-in has quit)
+        await hook(c, 'SessionStart', ID); // the resumed conversation says it is back, as a real Claude Code does
+        before = await panePid(c);
+        next = onNextNotice((w) => w.call('claude.autoresume.cancel', {}));
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        const second = await next;
+        expect(second.told).toMatchObject({ state: 'pending', id: ID });
+        await waitUntil(() => events.filter((e) => e.state === 'cancelled').length > 0, 5000);
+        await settle();
+        expect(states(events)).toEqual(['pending', 'typed', 'pending', 'cancelled']);
+        expect(term.count(resumed(ID))).toBe(1);
+        expect(await second.w.call('claude.autoresume.state', {})).toBeNull();
+        expect(await c.call('claude.autoresume.state', {})).toBeNull();
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button is left
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        for (const w of late) w.close();
+        c.close();
+      }
+    }, 40_000);
+
+    it("keys typed during Restart Claude's notice are the person's: nothing is added to their line, the notice ends, and the button is left", async () => {
+      const ID = tag(41);
+      const { c, hook } = await inFolder5('rs-keys');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        const before = await panePid(c);
+        let keys: Promise<unknown> | undefined;
+        c.on('claude.autoresume', (d) => {
+          if (d.state === 'pending' && !keys) keys = c.call('pty.write', { data: 'echo mine' }); // during the notice, and no Enter
+        });
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        await waitUntil(() => events.some((e) => e.state === 'cancelled'), 10_000);
+        await keys;
+        await settle();
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(term.text()).not.toContain('claude --resume');
+        expect(await c.call('claude.autoresume.state', {})).toBeNull();
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button is left
+        await c.call('pty.write', { data: '\r' });
+        await waitUntil(() => cmds.some((x) => x.cmd.startsWith('echo mine')), 8000);
+        expect(cmds.find((x) => x.cmd.startsWith('echo mine'))).toMatchObject({ cmd: 'echo mine', exit: 0 }); // exactly what they typed
+        // and the prompt after their command does not bring it back: the request had its answer
+        await sleep(T.quietMs + T.noticeMs + 800);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        c.close();
+      }
+    }, 40_000);
+
+    it("Restart Claude's notice ends the moment its shell dies, its offer goes (\"Not now\") or the daemon stops: before the time it said, and nothing is typed then or later", async () => {
+      const ID = tag(43);
+      const { c, hook } = await inFolder5('rs-end');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      /** Restart Claude, and `then` the moment its notice is announced: the notice, and what ended it. */
+      const restartThen = async (then: () => Promise<unknown>) => {
+        const from = events.length;
+        let acted: Promise<unknown> | undefined;
+        c.on('claude.autoresume', (d) => {
+          if (d.state === 'pending' && !acted) acted = then();
+        });
+        const before = await panePid(c);
+        expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+        await newShell(c, before);
+        await waitUntil(() => events.slice(from).some((e) => e.state === 'cancelled'), 10_000);
+        await acted;
+        const [notice, end] = events.slice(from);
+        expect(notice).toMatchObject({ state: 'pending', id: ID });
+        expect(end).toMatchObject({ state: 'cancelled', id: ID });
+        expect(end!.seenAt).toBeLessThan(notice!.typesAt!); // ended there and then, not when its time came
+      };
+      let c2: RpcClient | undefined;
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        // the palette's plain Restart shell during the notice: the shell it was for is gone, and the next one is not asked about
+        await restartThen(() => c.call('session.restart', {}));
+        await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+        await settle();
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button
+        // "Not now" on the button during the notice: the offer goes, and the notice with it
+        await restartThen(() => c.call('claude.resume.dismiss', {}));
+        await settle();
+        expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'cancelled']);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(await c.call('claude.resume', {})).toBeNull();
+        // the daemon stops during the notice (an update): it ends, and the next daemon types nothing for it
+        await hook(c, 'SessionStart', ID); // the conversation is back (Claude Code started it again)
+        await restartThen(() => c.call('app.shutdown', {}));
+        await waitUntil(async () => !(await tryConnect(env5.paths, 300)), 8000);
+        expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'cancelled', 'pending', 'cancelled']);
+        c2 = await connect5();
+        const events2 = track(c2);
+        const term2 = terminal(c2);
+        await c2.call('session.attach', { cols: 100, rows: 30 });
+        await waitUntil(async () => (await c2!.call('pane.list', {}))[0].alive);
+        await sleep(1000 + T.quietMs + T.noticeMs + 1500);
+        expect(events2).toEqual([]);
+        expect(term.count(resumed(ID)) + term2.count(resumed(ID))).toBe(0);
+        expect((await c2.call('claude.resume', {}))?.id).toBe(ID); // only the button
+        await c2.call('claude.resume.dismiss', {});
+      } finally {
+        (c2 ?? c).close();
+      }
+    }, 60_000);
+
+    it('Restart Claude three times in a row resumes the conversation each time: no attempts are counted, and nothing gives up', async () => {
+      const ID = tag(42);
+      const { c, hook } = await inFolder5('rs-thrice');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+        for (let round = 1; round <= 3; round++) {
+          const before = await panePid(c);
+          expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+          await newShell(c, before);
+          await waitUntil(() => term.count(resumed(ID)) >= round, 15_000);
+          await waitUntil(() => cmds.filter((x) => x.cmd === `claude --resume ${ID}`).length >= round, 8000); // (the stand-in has quit)
+          // the resumed conversation says it is back, as a real Claude Code does
+          await hook(c, 'SessionStart', ID);
+          await hook(c, 'UserPromptSubmit', ID, { prompt: `round ${round}` });
+        }
+        await settle();
+        expect(term.count(resumed(ID))).toBe(3);
+        expect(states(events)).toEqual(['pending', 'typed', 'pending', 'typed', 'pending', 'typed']);
+        expect(events.every((e) => e.id === ID)).toBe(true);
+      } finally {
+        await endSessions(c, hook);
+        await c.call('claude.resume.dismiss', {});
+        c.close();
+      }
+    }, 60_000);
   });
 });
 
