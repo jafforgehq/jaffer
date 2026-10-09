@@ -78,7 +78,7 @@ ${bold('Claude Code')}
 ${bold('Session')}
   jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
   jaffer service [status|install|remove]    keep the session running in the background (a login agent; macOS, ~/.jaffer only)
-  jaffer config get|set <dot.path> <json>
+  jaffer config get|set <dot.path> <json>   (session.keepRunning false ends a session launchd runs: typed in it, it needs --yes)
 `;
 
 const SERVICE_HELP = `Usage: jaffer service [status|install|remove]
