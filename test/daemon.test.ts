@@ -854,7 +854,10 @@ function standInClaude(dir: string) {
   // how many seconds it waits for a line typed into it before it exits, like Claude's own prompt (none: an empty file)
   const hold = path.join(dir, 'hold');
   fs.writeFileSync(hold, '');
-  fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/bash\necho "RESUMED: $*"\nh="$(cat '${hold}')"\nif [ -n "$h" ]; then read -t "$h" -r _ || true; fi\nexit "$(cat '${code}')"\n`, { mode: 0o755 });
+  // how many seconds it sleeps without reading anything, like `claude update` or `claude --version` while they run (none: an empty file)
+  const nap = path.join(dir, 'nap');
+  fs.writeFileSync(nap, '');
+  fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/bash\necho "RESUMED: $*"\nn="$(cat '${nap}')"\nif [ -n "$n" ]; then sleep "$n"; fi\nh="$(cat '${hold}')"\nif [ -n "$h" ]; then read -t "$h" -r _ || true; fi\nexit "$(cat '${code}')"\n`, { mode: 0o755 });
   // how many seconds the person's startup file keeps a new shell from its first prompt (none: an empty file)
   const slow = path.join(dir, 'slow-start');
   fs.writeFileSync(slow, '');
@@ -864,6 +867,7 @@ function standInClaude(dir: string) {
     exitWith: (n: number) => fs.writeFileSync(code, String(n)),
     startsAfter: (seconds: number) => fs.writeFileSync(slow, seconds ? String(seconds) : ''),
     waitsForALine: (seconds: number) => fs.writeFileSync(hold, seconds ? String(seconds) : ''),
+    sleeps: (seconds: number) => fs.writeFileSync(nap, seconds ? String(seconds) : ''),
   };
 }
 
@@ -1256,6 +1260,7 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
     afterEach(() => {
       fake.startsAfter(0);
       fake.waitsForALine(0);
+      fake.sleeps(0);
     });
 
     it('the plan says whether a conversation would come back and whether it is working, and restarts nothing', async () => {
@@ -1703,6 +1708,45 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
       c.close();
     }, 40_000);
 
+    it('keys typed ahead while `claude update` or `claude --version` runs are the shell\'s, not Claude\'s: the prompt after it stays dirty and nothing is added', async () => {
+      const { c, hook } = await inFolder5('rs-t');
+      await endSessions(c, hook);
+      const term = terminal(c);
+      const cmds = commands(c);
+      const starts = collect(c, 'pty.start') as { cmd: string }[];
+      await setSession(c, { autoResume: false });
+      try {
+        for (const [n, sub] of ['update', '--version'].entries()) {
+          const ID = tag(21 + n);
+          const events = track(c);
+          const line = `claude ${sub}`;
+          await setSession(c, { autoResume: false });
+          await crashedConversation(c, hook, ID);
+          fake.sleeps(2); // it reads nothing from the terminal while it runs
+          await c.call('pty.write', { data: `${line}\r` });
+          await waitUntil(() => starts.some((x) => x.cmd === line), 8000);
+          await c.call('pty.write', { data: 'echo ahead' }); // typed ahead: it waits in the shell's line
+          await setSession(c, { autoResume: true }); // (a command runs: nothing yet)
+          await waitUntil(() => cmds.some((x) => x.cmd === line), 8000);
+          fake.sleeps(0);
+          await sleep(T.quietMs + T.noticeMs + 1200);
+          expect(events, line).toEqual([]);
+          expect(term.count(resumed(ID)), line).toBe(0);
+          expect((await c.call('claude.resume', {}))?.id, line).toBe(ID); // the conversation is still the button's
+          await c.call('pty.write', { data: '\r' });
+          await waitUntil(() => cmds.some((x) => x.cmd.startsWith('echo ahead') && x.exit === 0), 8000);
+          expect(cmds.filter((x) => x.cmd.includes('echo ahead')).at(-1), line).toMatchObject({ cmd: 'echo ahead', exit: 0 }); // exactly theirs
+          await waitUntil(() => term.count(resumed(ID)) > 0, 10_000); // theirs has run: clean again, and it goes ahead as a line of its own
+          expect(states(events), line).toEqual(['pending', 'typed']);
+          await settle();
+        }
+      } finally {
+        fake.sleeps(0);
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 60_000);
+
     it('a different conversation that gets an offer while the new shell starts is not resumed for this request', async () => {
       const ID = tag(14);
       const OTHER = tag(15);
@@ -1797,4 +1841,33 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
       }
     }, 40_000);
   });
+});
+
+describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {
+  it('leaves hooks that point at a different wrapper exactly as they were', async () => {
+    const env4 = makeEnv();
+    try {
+      const file = path.join(env4.userHome, '.claude', 'settings.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      // the user's real install, pointing at their real ~/.jaffer; this daemon runs with a different (temporary) Jaffer home
+      const theirs = (arg: string) => [{ hooks: [{ type: 'command', command: `'/Users/someone/.jaffer/bin/jaffer' hook ${arg} # jaffer-managed`, timeout: 5 }] }];
+      const before = JSON.stringify({ hooks: { SessionStart: theirs('session-start'), Stop: theirs('stop') } });
+      fs.writeFileSync(file, before);
+      const c4 = await ensureDaemon(env4.paths, {
+        execPath: process.execPath,
+        daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+        cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+        env: { HOME: env4.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ' },
+      });
+      await c4.call('hello', {});
+      await sleep(300);
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+      c4.close();
+      const last = await tryConnect(env4.paths);
+      await last?.call('app.shutdown', {}).catch(() => undefined);
+      await sleep(300);
+    } finally {
+      env4.cleanup();
+    }
+  }, 30_000);
 });

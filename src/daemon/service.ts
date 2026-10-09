@@ -437,14 +437,15 @@ export class JafferService {
   }
 
   /**
-   * The person typed. That holds auto-resume off for a quiet moment, and the key may now sit in the shell's line (see `inputSeq`), unless
-   * a running `claude` takes it: its own prompt reads what is typed into it, and a crash of it must still be resumed after the person
-   * has been using it.
+   * The person typed. That holds auto-resume off for a quiet moment, and the key may now sit in the shell's line (see `inputSeq`),
+   * unless a running interactive `claude` takes it: its own prompt reads what is typed into it, and a crash of it must still be resumed
+   * after the person has been using it. `claude update`, `claude --version`, `claude mcp ...` and `claude -p` read nothing from the
+   * terminal: what is typed while they run waits in the shell's line like behind any other command.
    */
   private noteKeystroke(): void {
     this.lastInputAt = Date.now();
-    const running = this.host?.mainPane?.runningCommand;
-    if (running && isClaudeCommand(running.slice(0, COMMAND_HEAD))) return;
+    const head = this.host?.mainPane?.runningCommand?.slice(0, COMMAND_HEAD) ?? '';
+    if (head && isClaudeCommand(head) && endsConversation(head) && !isPrintMode(head)) return;
     this.inputSeq++;
   }
 
