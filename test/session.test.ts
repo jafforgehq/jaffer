@@ -121,6 +121,48 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     const res = await runInShell(sh, 'echo "[${ELECTRON_RUN_AS_NODE-unset}] [$TERM] [$COLORTERM] [$TERM_PROGRAM] [$JAFFER_SESSION]"');
     expect(res.output).toBe('[unset] [xterm-256color] [truecolor] [Jaffer] [1]');
   });
+
+  // The marks (OSC 133) are output, and any program can print them: a remote shell over ssh with an integration of its own (fish 4,
+  // iTerm2's, kitty's) does. What the shell's own prompt is, the terminal's foreground process says: the shell itself, and no program.
+  it('the foreground process is the shell only at its own prompt: not while a command, a script of the same shell or a subshell runs, whatever marks they print', async () => {
+    sh = startShell(env, { shell });
+    await untilReady(sh);
+    const s = sh;
+    /** What foregroundIsShell() says once it has settled (a command takes a moment to be started, and the shell to take the terminal back). */
+    const settles = async (want: boolean, ms = 4000) => {
+      const t0 = Date.now();
+      while (s.foregroundIsShell() !== want && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25));
+      return s.foregroundIsShell();
+    };
+    expect(await settles(true)).toBe(true);
+    // a script of this very shell (its process has the shell's name) that prints what a remote shell prints: its prompt, a command
+    // with no command line, its end and the next prompt; then it waits, as ssh would
+    const remote = path.join(env.root, 'remote-shell');
+    fs.writeFileSync(remote, `#!${shell}\nprintf '\\033]133;D;0\\007\\033]133;A\\007\\033]133;C\\007\\033]133;D;0\\007\\033]133;A\\007'\nsleep 3\n`, { mode: 0o755 });
+    let ranNothing = false; // the command with no command line has ended: the prompt after it is the one the script printed
+    const forged = waitFor(s, (e) => {
+      if (e.type === 'command' && e.cmd === '') ranNothing = true;
+      return e.type === 'prompt' && ranNothing;
+    });
+    s.write(`'${remote}'\r`);
+    await forged;
+    // the marks say: at a prompt, nothing running; the foreground says otherwise
+    expect(s.promptReady).toBe(true);
+    expect(s.runningCommand).toBeNull();
+    expect(s.foregroundIsShell()).toBe(false);
+    expect(await settles(true, 6000)).toBe(true); // it ended: the shell's own prompt
+    s.write('sleep 2\r');
+    expect(await settles(false)).toBe(false);
+    expect(await settles(true, 6000)).toBe(true);
+    s.write('( sleep 2; true )\r'); // a subshell: a process of the shell's name, in a group of its own
+    expect(await settles(false)).toBe(false);
+    expect(await settles(true, 6000)).toBe(true);
+    // the shell replaced by another program keeps its pid and its place in the foreground, but it is no longer the shell
+    s.write('exec sleep 2\r');
+    expect(await settles(false)).toBe(false);
+    await waitFor(s, (e) => e.type === 'exit', 8000);
+    expect(s.foregroundIsShell()).toBe(false); // and a shell that is gone is not one either
+  }, 40_000);
 });
 
 describe('shell integration regressions (found by macOS CI)', () => {

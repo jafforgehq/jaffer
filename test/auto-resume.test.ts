@@ -119,6 +119,8 @@ describe('AutoResumer', () => {
   let lastInputAt: number;
   let enabled: boolean;
   let stopping: boolean;
+  /** The shell itself has the terminal (the daemon asks the system: no program it runs, whatever the marks say). */
+  let shellInFront: boolean;
   let tries: Map<string, number[]>;
   let cleared: string[];
   let typed: string[];
@@ -145,6 +147,7 @@ describe('AutoResumer', () => {
     lastInputAt: () => lastInputAt,
     enabled: () => enabled,
     stopping: () => stopping,
+    mayType: () => shellInFront,
     // like ResumeStore: the times that still count
     attempts: (id) => (tries.get(id) ?? []).filter((t) => now - t < AUTO_RESUME.windowMs),
     recordAttempt: (id) => void tries.set(id, [...(tries.get(id) ?? []), now]),
@@ -178,6 +181,7 @@ describe('AutoResumer', () => {
     lastInputAt = 0;
     enabled = true;
     stopping = false;
+    shellInFront = true;
     tries = new Map();
     cleared = [];
     typed = [];
@@ -785,5 +789,38 @@ describe('AutoResumer', () => {
     ended(1, 30); // healthy at 30 ms
     expect(cleared).toEqual([ID]);
     expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3 });
+  });
+
+  it('looks again the moment it would type: with a program in front of the shell (one that printed a prompt) nothing is typed, the notice ends, and no attempt is counted or given up', () => {
+    r.check();
+    advance(2_999);
+    shellInFront = false; // the marks still say "a prompt, nothing running"
+    advance(1);
+    expect(typed).toEqual([]);
+    expect(events).toEqual([
+      { state: 'pending', id: ID, typesAt: T0 + 3_000 },
+      { state: 'cancelled', id: ID },
+    ]);
+    expect(tries.get(ID)).toBeUndefined();
+    expect(gaveUp()).toEqual([]);
+    expect(liveTimers()).toBe(0);
+    // nobody said no: at the shell's own prompt later it goes ahead
+    shellInFront = true;
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('asks whether the shell is at a prompt or busy only when there is a conversation to resume (the daemon asks the system for it)', () => {
+    let asked = 0;
+    r = new AutoResumer({ ...deps(), promptReady: () => (asked++, promptReady), busy: () => (asked++, busy) });
+    offer = null;
+    r.check();
+    r.check();
+    expect(asked).toBe(0);
+    offer = { id: ID };
+    r.check();
+    expect(asked).toBeGreaterThan(0);
   });
 });

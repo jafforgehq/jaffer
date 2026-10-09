@@ -53,6 +53,10 @@ const STAY_AWAKE_TICK_MS = 5000;
 /** A Claude killed with its shell may say SessionEnd (an async hook) a moment after the shell's exit was seen: that is not the person quitting. */
 const SHELL_EXIT_GRACE_MS = 5000;
 
+/** How often, and how many times, a prompt whose shell does not have the terminal yet is looked at again (see `settleAfterPrompt`). */
+const FOREGROUND_SETTLE_MS = 200;
+const FOREGROUND_SETTLE_TRIES = 10;
+
 export class JafferService {
   readonly paths: JafferPaths;
   readonly config: ConfigStore;
@@ -102,6 +106,8 @@ export class JafferService {
    * prompt has made the request (so what the notice then says is about it).
    */
   private restartHold: { id: string; from: PtySession | undefined; armed: boolean; timer: NodeJS.Timeout } | null = null;
+  /** A prompt whose shell did not have the terminal yet, looked at again (see `settleAfterPrompt`). */
+  private foregroundTimer: NodeJS.Timeout | null = null;
   /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
   private stayAwake: StayAwake;
   /** Looks at a running command every few seconds, so that it counts once it has run half a minute; only while one runs. */
@@ -127,18 +133,27 @@ export class JafferService {
       {
         now: () => Date.now(),
         offer: () => this.resumeOffer(),
-        // at its prompt with an empty line: what we type must never be added to a line the person (or this) has started
+        // at its prompt with an empty line: what we type must never be added to a line the person (or this) has started. The marks
+        // that say "a prompt" are output any program can print (a remote shell over ssh): the shell itself must have the terminal.
         promptReady: () => {
           const pane = this.host?.mainPane;
-          return !!pane && pane.alive && pane.promptReady && this.inputSeq === this.lineEmptyAt;
+          return !!pane && pane.alive && pane.promptReady && this.inputSeq === this.lineEmptyAt && pane.foregroundIsShell();
         },
-        busy: () => !!this.host?.mainPane?.runningCommand,
+        busy: () => {
+          const pane = this.host?.mainPane;
+          return !!pane && pane.runningCommand !== null; // (a command the marks gave no line for runs all the same)
+        },
         lastInputAt: () => this.lastInputAt,
         enabled: () => {
           const s = this.config.get().session;
           return s.autoResume && s.resumeClaude;
         },
         stopping: () => this.stopping,
+        // looked at again at the moment of typing
+        mayType: () => {
+          const pane = this.host?.mainPane;
+          return !!pane && pane.alive && pane.foregroundIsShell();
+        },
         attempts: (id) => this.resume.attempts(id),
         recordAttempt: (id) => this.resume.recordAttempt(id),
         clearAttempts: (id) => this.resume.clearAttempts(id),
@@ -244,6 +259,8 @@ export class JafferService {
     this.stopping = true;
     this.stopStayAwake(); // first: nothing below may keep the Mac awake
     this.releaseRestartHold();
+    if (this.foregroundTimer) clearTimeout(this.foregroundTimer);
+    this.foregroundTimer = null;
     this.autoResume.check(); // nothing is typed while stopping: a notice that is running ends now, and the window is told
     for (const t of this.timers) clearInterval(t);
     for (const stop of this.rejectionWatches.values()) stop();
@@ -401,8 +418,13 @@ export class JafferService {
         this.claudeWatcher.endAll();
         this.pushResume();
       }
-      // at its prompt again (a new shell, a command finished): the moment a conversation can be resumed by itself
-      if (e.event.type === 'prompt') this.autoResume.check(this.restartCheck());
+      // at its prompt again (a new shell, a command finished): the moment a conversation can be resumed by itself. What can be offered
+      // also depends on the shell having the terminal, which no mark tells (see `resumeOffer`): the window is told here too.
+      if (e.event.type === 'prompt') {
+        this.autoResume.check(this.restartCheck());
+        this.pushResume();
+        this.settleAfterPrompt();
+      }
       if (e.event.type === 'command') {
         const ev = e.event;
         // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
@@ -543,12 +565,24 @@ export class JafferService {
     this.pushResume();
   }
 
+  /**
+   * The conversation that can be resumed now (the Resume button, and what auto-resume types): the saved one, with nothing running in the
+   * shell. "Nothing running" is what the marks say and what the terminal's foreground says: a program (ssh into a server whose shell
+   * prints marks of its own) can make the marks say "a prompt, nothing running". A shell that is gone is not asked (a new one comes).
+   */
   private resumeOffer(): ResumeOffer | null {
+    const offer = this.savedOffer();
+    const pane = this.host?.mainPane;
+    return offer && pane?.alive && !pane.foregroundIsShell() ? null : offer;
+  }
+
+  /** The same, by the marks alone. */
+  private savedOffer(): ResumeOffer | null {
     const pane = this.host?.mainPane;
     return this.resume.offer({
       shellCwd: pane?.cwd,
       active: this.claudeWatcher.sessions().some((s) => s.state !== 'ended'),
-      busy: !!pane?.runningCommand,
+      busy: !!pane && pane.runningCommand !== null,
       enabled: this.config.get().session.resumeClaude,
     });
   }
@@ -586,12 +620,36 @@ export class JafferService {
     const pane = this.host?.mainPane;
     if (!hold || !pane || pane === hold.from) return {};
     // the conversation it was asked for, and no other: with that one gone, or another offered since, there is nothing the person asked for
-    if (this.resumeOffer()?.id !== hold.id) {
+    if (this.savedOffer()?.id !== hold.id) {
       this.releaseRestartHold();
       return {};
     }
+    // a prompt a program printed (ssh, typed ahead into the new shell) is not the new shell's: the request waits for the shell's own
+    if (!pane.foregroundIsShell()) return {};
     hold.armed = true;
     return { explicit: true };
+  }
+
+  /**
+   * The prompt mark comes a moment before the shell has finished its prompt: bash runs the person's own PROMPT_COMMAND after it, which may
+   * run a program in the foreground for a moment. While there is something to resume and the marks say "a prompt" but the shell does not
+   * have the terminal (yet), it is looked at again a few times, and the prompt's checks are made once it has. (A program that prints
+   * marks of its own keeps it looking for about two seconds, nothing more.)
+   */
+  private settleAfterPrompt(tries = FOREGROUND_SETTLE_TRIES): void {
+    if (this.foregroundTimer) clearTimeout(this.foregroundTimer);
+    this.foregroundTimer = null;
+    const pane = this.host?.mainPane;
+    if (this.stopping || tries <= 0 || !pane?.alive || !pane.promptReady) return;
+    if ((!this.restartHold && !this.savedOffer()) || pane.foregroundIsShell()) return;
+    this.foregroundTimer = setTimeout(() => {
+      this.foregroundTimer = null;
+      if (this.stopping || this.host?.mainPane !== pane || !pane.alive || !pane.promptReady) return;
+      if (!pane.foregroundIsShell()) return this.settleAfterPrompt(tries - 1);
+      this.autoResume.check(this.restartCheck());
+      this.pushResume();
+    }, FOREGROUND_SETTLE_MS);
+    this.foregroundTimer.unref?.();
   }
 
   /** The request is over (answered, stale, replaced or the daemon is stopping): no later prompt makes it again. */

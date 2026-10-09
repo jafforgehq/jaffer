@@ -49,6 +49,11 @@ export interface AutoResumeDeps {
   lastInputAt(): number;
   enabled(): boolean;
   stopping(): boolean;
+  /**
+   * The shell itself has the terminal right now, not a program it runs (whatever the marks say: a program can print them). Asked once
+   * more the moment it would type; a no there types nothing.
+   */
+  mayType(): boolean;
   attempts(id: string): number[];
   recordAttempt(id: string): void;
   clearAttempts(id: string): void;
@@ -174,12 +179,13 @@ export class AutoResumer {
     }
     const asked = id !== undefined && id === this.explicitId;
     const now = this.d.now();
+    // (with nothing to offer neither matters, and the daemon asks the system to know whether the shell is at its prompt)
     const s = nextStep(
       {
         now,
         offer: id === undefined ? null : { id },
-        promptReady: this.d.promptReady(),
-        busy: this.d.busy(),
+        promptReady: id !== undefined && this.d.promptReady(),
+        busy: id !== undefined && this.d.busy(),
         lastInputAt: this.d.lastInputAt(),
         enabled: asked || this.d.enabled(),
         stopping: this.d.stopping(),
@@ -211,6 +217,9 @@ export class AutoResumer {
     this.explicitId = undefined;
     // checked where it is kept, by the decision, and here again where it is typed
     if (!isSessionId(id)) return this.drop();
+    // and the shell is looked at again: a program it runs is never typed into. Nothing was tried and nobody said no: no attempt is
+    // counted, nothing is given up, and the shell's own prompt later may bring it back.
+    if (!this.d.mayType()) return this.drop();
     this.pending = undefined;
     this.tried = id;
     this.d.recordAttempt(id);

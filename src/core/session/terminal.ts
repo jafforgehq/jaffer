@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
@@ -33,6 +36,36 @@ function unescapeOsc(s: string): string {
 }
 
 /**
+ * A process name as the system keeps it: the last part of a path, without the `-` a login shell puts in front, and only as long as
+ * macOS (16 characters) and Linux (15) keep it.
+ */
+function procName(s: string): string {
+  return path.basename(s).replace(/^-/, '').slice(0, 15);
+}
+
+/** The names the shell of a pane shows as: the file it was started from, and what that file is a link to. */
+function shellNames(file: string): Set<string> {
+  const names = new Set([procName(file)]);
+  try {
+    names.add(procName(fs.realpathSync(file)));
+  } catch {
+    /* not a path that resolves: the name alone */
+  }
+  return names;
+}
+
+/** The terminal's foreground process group, as the system says it for this process (`ps -o tpgid`); null when it cannot be read. */
+function foregroundGroup(pid: number): number | null {
+  try {
+    const out = execFileSync('/bin/ps', ['-o', 'tpgid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const n = Number.parseInt(out.trim(), 10);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * One pseudo-terminal running the user's shell, mirrored into a headless xterm so we can
  * (a) hand a faithful screen snapshot to any client that attaches later, (b) read command
  * output as clean text, and (c) track prompt/command state from the shell-integration marks.
@@ -55,9 +88,12 @@ export class PtySession {
   private flushTimer: NodeJS.Timeout | null = null;
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
+  /** What the shell itself is called (see `foregroundIsShell`). */
+  private readonly shellNames: Set<string>;
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
+    this.shellNames = shellNames(opts.file);
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
@@ -101,6 +137,28 @@ export class PtySession {
 
   get altScreen(): boolean {
     return this.term.buffer.active.type === 'alternate';
+  }
+
+  /**
+   * Is the shell itself what has the terminal right now (at its own prompt), and not a program it runs? The marks below cannot say: they
+   * are output, and any program prints them if it likes (a remote shell over ssh with an integration of its own does). Two things the
+   * program cannot change: the terminal's foreground process group is the shell's own (a command, a script, a subshell each get a group
+   * of their own: the system's answer, read with `ps`), and the process there still is the shell (not a program it `exec`ed into, which
+   * keeps its pid). Anything that cannot be read is a no: what depends on this types into the terminal.
+   */
+  foregroundIsShell(): boolean {
+    if (!this._alive) return false;
+    let name: unknown;
+    try {
+      name = this.pty.process;
+    } catch {
+      return false;
+    }
+    if (typeof name !== 'string' || !name) return false;
+    // on macOS the name is the process's own (never a path); a path is node-pty saying it could not tell (the shell is still starting)
+    if (process.platform === 'darwin' && name.includes('/')) return false;
+    if (!this.shellNames.has(procName(name))) return false;
+    return foregroundGroup(this.pty.pid) === this.pty.pid;
   }
 
   // ------------------------------------------------------------------ io

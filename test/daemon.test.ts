@@ -871,6 +871,34 @@ function standInClaude(dir: string) {
   };
 }
 
+/**
+ * A stand-in for `ssh` into a server whose shell has an integration of its own (fish 4 by default; iTerm2's, kitty's, WezTerm's on a
+ * server): it prints what that shell prints, the marks of a prompt, a command with no command line, its end and the next prompt, so
+ * that by the marks alone the shell is at a prompt with nothing running. Then, for the seconds in its `stay` file, it keeps every line
+ * typed into it in its `got` file: what the remote shell would have run. Put next to the stand-in `claude`, on the shell's PATH.
+ */
+function standInSsh(dir: string) {
+  const got = path.join(dir, 'ssh-got');
+  const stay = path.join(dir, 'ssh-stay');
+  fs.writeFileSync(got, '');
+  fs.writeFileSync(stay, '3');
+  const script = [
+    '#!/bin/bash',
+    "printf '\\033]133;D;0\\007\\033]133;A\\007'",
+    "printf '\\033]133;C\\007'",
+    "printf '\\033]133;D;0\\007\\033]133;A\\007'",
+    `end=$((SECONDS + $(cat '${stay}')))`,
+    `while [ "$SECONDS" -lt "$end" ]; do if IFS= read -r -t 1 line; then printf '%s\\n' "$line" >> '${got}'; fi; done`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'ssh'), script, { mode: 0o755 });
+  return {
+    got: () => fs.readFileSync(got, 'utf8'),
+    staysFor: (seconds: number) => fs.writeFileSync(stay, String(seconds)),
+    clear: () => fs.writeFileSync(got, ''),
+  };
+}
+
 describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, the timing on a millisecond scale)', () => {
   const T = AUTO_RESUME_TEST;
   let env5: TestEnv;
@@ -1838,6 +1866,104 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
         const last = c2 ?? c;
         await setSession(last, { autoResume: true });
         last.close();
+      }
+    }, 40_000);
+
+    // The marks are output, and a program can print them: what the daemon types must reach the shell itself, never a program it runs
+    // (the shell's foreground process is looked at, not the marks), and the Resume button waits for that too.
+    it('an ssh whose remote shell prints a prompt of its own is not the shell: nothing is typed into it, the button waits, and the shell\'s own prompt afterwards resumes', async () => {
+      const ID = tag(30);
+      const { c, hook } = await inFolder5('fg-a');
+      await endSessions(c, hook);
+      const ssh = standInSsh(fake.dir);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      await setSession(c, { autoResume: false });
+      try {
+        await crashedConversation(c, hook, ID); // the conversation is offered in this folder
+        ssh.clear();
+        ssh.staysFor(4);
+        await c.call('pty.write', { data: 'ssh server\r' });
+        // by the marks: ssh ended, a prompt, a command with no line ended, a prompt: nothing runs and the line is empty
+        await waitUntil(() => cmds.some((x) => x.cmd === ''), 8000);
+        await sleep(300);
+        expect(await c.call('claude.resume', {})).toBeNull(); // no Resume button while ssh runs
+        await setSession(c, { autoResume: true }); // (a check, at what the marks call a clean prompt)
+        await sleep(T.quietMs + T.noticeMs + 1200);
+        expect(ssh.got()).toBe(''); // nothing reached the remote shell
+        expect(events).toEqual([]);
+        expect(term.count(resumed(ID))).toBe(0);
+        // ssh ends: the shell's own prompt, and the conversation comes back there
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(ssh.got()).toBe('');
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('the same for Restart Claude: an ssh typed ahead into the new shell gets nothing at its remote prompt; the shell\'s own prompt after it is resumed', async () => {
+      const ID = tag(31);
+      const { c, hook } = await inFolder5('fg-b');
+      await endSessions(c, hook);
+      const ssh = standInSsh(fake.dir);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        fake.startsAfter(1); // the new shell takes a second to its first prompt: what is typed meanwhile runs there
+        ssh.clear();
+        ssh.staysFor(2);
+        await hook(c, 'SessionStart', ID);
+        const before = await panePid(c);
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        await c.call('pty.write', { data: 'ssh server\r' });
+        await waitUntil(() => cmds.some((x) => x.cmd === ''), 8000); // the remote prompt
+        await sleep(T.quietMs + T.noticeMs + 600);
+        expect(ssh.got()).toBe('');
+        expect(term.count(resumed(ID))).toBe(0);
+        // ssh ends within the request's time: the new shell's own prompt brings the conversation back
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(ssh.got()).toBe('');
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it("a program the person's own PROMPT_COMMAND runs just after the prompt mark only delays it: once the shell has the terminal it goes ahead", async () => {
+      const ID = tag(32);
+      const { c, hook } = await inFolder5('fg-c');
+      await endSessions(c, hook);
+      const cmds = commands(c);
+      const prompts = collect(c, 'pty.prompt');
+      // bash runs PROMPT_COMMAND after Jaffer's prompt mark: this one keeps a program in front of the shell for 1.2 s at every prompt
+      await c.call('pty.write', { data: 'PROMPT_COMMAND="${PROMPT_COMMAND%;__jaffer_prompt_end};/bin/sleep 1.2;__jaffer_prompt_end"\r' });
+      await waitUntil(() => cmds.some((x) => x.cmd.startsWith('PROMPT_COMMAND=')), 8000);
+      await sleep(1600);
+      const events = track(c);
+      const term = terminal(c);
+      let crashedAt = 0;
+      c.on('pty.command', (d) => {
+        if (d.cmd === 'claude' && d.exit === 1 && !crashedAt) crashedAt = Date.now();
+      });
+      try {
+        const seen = prompts.length;
+        await crashedConversation(c, hook, ID); // a crash: the prompt after it comes while that program runs
+        await waitUntil(() => term.count(resumed(ID)) > 0, 10_000);
+        expect(prompts.length).toBeGreaterThan(seen);
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(events[0]!.seenAt - crashedAt).toBeGreaterThanOrEqual(1000); // announced once the shell had the terminal back
+      } finally {
+        await c.call('pty.write', { data: 'PROMPT_COMMAND="${PROMPT_COMMAND//;\\/bin\\/sleep 1.2/}"\r' });
+        await waitUntil(() => cmds.filter((x) => x.cmd.startsWith('PROMPT_COMMAND=')).length >= 2, 8000);
+        c.close();
       }
     }, 40_000);
   });
