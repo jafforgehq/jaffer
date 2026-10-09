@@ -19,7 +19,7 @@ export interface AutoResumeInput {
   now: number;
   /** The conversation the daemon would offer back (`ResumeStore.offer`), or null. */
   offer: { id: string } | null;
-  /** The shell is at its prompt (OSC 133). */
+  /** The shell is at its prompt (OSC 133) and its line is empty: nothing typed since the shell began or its last command, so what is typed here is not added to anything. */
   promptReady: boolean;
   /** Something runs in the shell. */
   busy: boolean;
@@ -115,9 +115,10 @@ export class AutoResumer {
   ) {}
 
   /**
-   * `explicit`: the person asked for it (Restart Claude): it does not need the setting on, and it overrides an earlier Cancel and an
-   * earlier give-up. Each explicit check is that request: at the attempt limit it says so (`gave-up`) once for it, so the click is never
-   * silent. The request lasts only until its first idle, so the caller repeats it until it is typed, cancelled or given up on.
+   * `explicit`: the person asked for it (Restart Claude). It does not need the setting on, and it overrides an earlier Cancel and an
+   * earlier give-up. The limit on attempts is for crash loops nobody asked for: a request starts that conversation's attempts over, so
+   * it announces the short notice (never the 20 s or 2 min waits of a retry) and then counts as one attempt. It lasts only until its
+   * first idle (a shell not at a prompt yet), so the caller repeats it until it is typed, cancelled or given up on.
    */
   check(opts: { explicit?: boolean } = {}): void {
     this.step(opts.explicit === true);
@@ -165,9 +166,11 @@ export class AutoResumer {
     if (this.explicitId !== id) this.explicitId = undefined;
     if (this.pending && this.pending.id !== id) this.drop();
     if (explicit && id !== undefined) {
+      // a request begins here (a repeat of one that is waiting is not another): the earlier automatic attempts are forgotten
+      if (this.explicitId !== id && isSessionId(id)) this.d.clearAttempts(id);
       this.explicitId = id;
       this.cancelledId = undefined;
-      this.gaveUpId = undefined; // told once before, and told again for this request below
+      this.gaveUpId = undefined;
     }
     const asked = id !== undefined && id === this.explicitId;
     const now = this.d.now();

@@ -398,7 +398,8 @@ describe('Jaffer UI end to end', () => {
         const w = window as any;
         w.jaffer.restartClaude = w.__origRestart;
       });
-      for (let i = 0; i < 2; i++) await page.keyboard.press('Escape'); // (a failure above must not leave a dialog over the next test)
+      // (a failure above must not leave a dialog over the next test; and with none open, Escape would go to the shell)
+      for (let i = 0; i < 2 && (await page.locator('.settings, .palette').count()) > 0; i++) await page.keyboard.press('Escape');
     }
   }, 40_000);
 

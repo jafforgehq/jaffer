@@ -375,35 +375,83 @@ describe('AutoResumer', () => {
     expect(events.map((e) => e.state)).toEqual(['pending', 'typed', 'pending', 'typed', 'pending', 'typed', 'gave-up']);
   });
 
-  it('Restart Claude at the attempt limit answers the click: it says so once for that request, types nothing, and later checks stay quiet', () => {
-    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
-    r.check(); // an earlier give-up: told once
-    r.check();
-    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
-    r.check({ explicit: true }); // the person asks: the click must not be silent
-    expect(gaveUp()).toEqual([
-      { state: 'gave-up', id: ID },
-      { state: 'gave-up', id: ID },
-    ]);
-    expect(events.at(-1)).toEqual({ state: 'gave-up', id: ID });
-    // and that is all: automatic checks, prompts and time passing tell nothing more and type nothing
-    r.check();
-    advance(60_000);
-    r.check();
-    expect(gaveUp()).toHaveLength(2);
-    expect(typed).toEqual([]);
-    expect(liveTimers()).toBe(0);
-  });
-
-  it('Restart Claude at the limit with no earlier give-up says so once', () => {
+  it('Restart Claude is not held to the crash-loop limit: at the limit it clears the attempts, announces the short notice and types, as one attempt', () => {
     tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
     enabled = false; // (it does not need the setting)
     r.check({ explicit: true });
-    expect(events).toEqual([{ state: 'gave-up', id: ID }]);
-    r.check();
-    advance(60_000);
-    expect(events).toHaveLength(1);
+    expect(cleared).toEqual([ID]);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]); // 3 s, not the 2 min of a third retry
+    advance(2_999);
     expect(typed).toEqual([]);
+    advance(1);
+    expect(typed).toEqual([RESUME]);
+    expect(tries.get(ID)).toEqual([now]); // it counts as one attempt, the first
+    expect(gaveUp()).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']);
+  });
+
+  it('Restart Claude announces the short notice after earlier crashes too, never the 20 s or 2 min waits', () => {
+    for (const before of [[T0 - 30_000], [T0 - 90_000, T0 - 30_000]]) {
+      tries.set(ID, before);
+      events.length = 0;
+      typed.length = 0;
+      r = new AutoResumer(deps());
+      r.check({ explicit: true });
+      expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+      advance(3_000);
+      expect(typed).toEqual([RESUME]);
+      busy = false;
+      promptReady = true;
+    }
+  });
+
+  it('what follows an explicit request is one attempt: its crash is tried again after the second wait', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check({ explicit: true });
+    advance(3_000);
+    ended(1, 5_000); // crashed within seconds
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 20_000 });
+    advance(20_000);
+    expect(typed).toEqual([RESUME, RESUME]);
+  });
+
+  it('repeating the same explicit request while it waits is one request: attempts are cleared once and the notice is announced once', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    lastInputAt = T0 - 500; // the person typed: it waits for quiet
+    r.check({ explicit: true });
+    r.check({ explicit: true });
+    expect(cleared).toEqual([ID]);
+    advance(1_500);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+    r.check({ explicit: true }); // (the daemon repeats it at each prompt)
+    expect(events).toHaveLength(1);
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+    expect(tries.get(ID)).toEqual([now]);
+  });
+
+  it('a request that finds the shell not at a prompt is the same request at the next one: it announces the short notice then', () => {
+    tries.set(ID, [T0 - 3, T0 - 2]);
+    promptReady = false;
+    r.check({ explicit: true });
+    expect(events).toEqual([]);
+    expect(typed).toEqual([]);
+    promptReady = true;
+    r.check({ explicit: true }); // the same request again at the next prompt
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+  });
+
+  it('a give-up mark does not block Restart Claude: the attempts are still at the limit, and it clears both; automatic checks keep their word until then', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    expect(typed).toEqual([]);
+    r.check({ explicit: true });
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+    expect(gaveUp()).toHaveLength(1); // told once, then never again for this
   });
 
   it('a give-up whose attempts have aged out no longer blocks Restart Claude; automatic checks still stay quiet', () => {
@@ -421,16 +469,6 @@ describe('AutoResumer', () => {
     advance(3_000);
     expect(typed).toEqual([RESUME]);
     expect(gaveUp()).toHaveLength(1);
-  });
-
-  it('a Restart Claude that was given up on is over: a later automatic check does not carry it on', () => {
-    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
-    r.check({ explicit: true });
-    advance(AUTO_RESUME.windowMs + 1);
-    r.check(); // the attempts aged out, but the request ended with its give-up
-    advance(60_000);
-    expect(typed).toEqual([]);
-    expect(events.map((e) => e.state)).toEqual(['gave-up']);
   });
 
   it('a new offer after giving up starts over', () => {
@@ -666,12 +704,6 @@ describe('AutoResumer', () => {
     advance(600_000);
     r.check();
     expect(typed).toEqual([]);
-
-    tries.set(ID, [now - 3, now - 2, now - 1]); // the attempt limit
-    r.check({ explicit: true });
-    advance(600_000);
-    expect(typed).toEqual([]);
-    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
   });
 
   it('asking again (explicit) after an earlier Cancel resumes; a later automatic check stays cancelled', () => {
