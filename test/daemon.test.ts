@@ -2126,7 +2126,7 @@ describe('the Resume button with a shell of another name (SHELL=/bin/sh: bash on
     }
   }, 40_000);
 
-  // This sh prints no marks (nor does any shell besides zsh, bash and fish, or one that `exec`s into tmux from its startup file): when a
+  // This sh prints no marks (nor does any shell besides zsh, bash and fish): when a
   // program takes the terminal no event says so, nothing works the offer out again, and the window keeps the button it was shown. So a
   // click asks again (`claude.resume` with `fresh: true`, see `resumeClaude`) and types only if the same conversation comes back. That ask
   // looks at the terminal then: never an answer kept from before the program took it.

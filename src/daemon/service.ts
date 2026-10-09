@@ -924,8 +924,8 @@ export class JafferService {
       return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
     });
 
-    // `forgetConversation`: the person ends the session (Quit and End Session), so the Claude Code conversation is not resumed at
-    // the next start. An update, Restart session or `jaffer daemon stop` shut down plainly: the conversation comes back (Reset removes the file it is in).
+    // `forgetConversation`: the person ends the session (Quit and End Session), so the Claude Code conversation is not offered at
+    // the next start. An update, Restart session or `jaffer daemon stop` shut down plainly: the Resume button offers it again (Reset removes the file it is in).
     r.handle('app.shutdown', (p: { forgetConversation?: boolean } | undefined) => {
       if (p?.forgetConversation === true) {
         this.resume.forget();

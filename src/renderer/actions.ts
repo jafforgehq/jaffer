@@ -47,7 +47,7 @@ let resumeAsking = false;
 /**
  * Take the Claude Code conversation that was running when Jaffer stopped back up: types `claude --resume <id>`, after the person's click.
  * The daemon is asked again first, with a fresh look at the terminal (`claude.resume`, `fresh: true`): in a shell that prints no prompt
- * marks (`/bin/sh`, any shell besides zsh, bash and fish, one that `exec`s into tmux) nothing tells the window that a program took the
+ * marks (`/bin/sh`, any shell besides zsh, bash and fish) nothing tells the window that a program took the
  * terminal, so the button can be from before vim started. Only the same conversation coming back is typed; nothing is typed on an error.
  */
 export async function resumeClaude(): Promise<void> {
