@@ -2313,4 +2313,27 @@ describe('the login agent in a test home: refused, and nothing is touched (bundl
     expect(fs.existsSync(agentsDir())).toBe(false);
     expect((await (await connect()).call('config.get', {})).session.keepRunning).toBe(false);
   }, 30_000);
+
+  it('`jaffer service remove` needs no daemon: with none answering it starts none and takes the agent away itself (in this test home: refused, and nothing is touched, not even the switch)', async () => {
+    const e2 = makeEnv(); // a home whose daemon is not running (or cannot start)
+    const cli2 = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, HOME: e2.userHome, JAFFER_HOME: e2.home }, encoding: 'utf8', cwd: e2.userHome, timeout: 30_000 });
+    try {
+      fs.mkdirSync(e2.home, { recursive: true });
+      fs.writeFileSync(e2.paths.config, JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
+      const t0 = Date.now();
+      const rm = cli2('service', 'remove');
+      expect(rm.status, rm.stderr).toBe(0);
+      expect(rm.stdout + rm.stderr).toMatch(REASON); // this test home is not the person's own: nothing of launchd's is touched
+      expect(Date.now() - t0).toBeLessThan(8000); // it did not wait for a daemon to come up
+      expect(await tryConnect(e2.paths, 300)).toBeNull(); // and none was started for it
+      expect(JSON.parse(fs.readFileSync(e2.paths.config, 'utf8')).session.keepRunning).toBe(true); // (refused: as the daemon's own service.remove)
+      expect(fs.existsSync(path.join(e2.userHome, 'Library', 'LaunchAgents'))).toBe(false);
+    } finally {
+      const started = await tryConnect(e2.paths, 300);
+      await started?.call('app.shutdown', {}).catch(() => undefined);
+      started?.close();
+      await sleep(300);
+      e2.cleanup();
+    }
+  }, 60_000);
 });

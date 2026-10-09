@@ -27,6 +27,8 @@ export interface DaemonAgent {
   kickstart(): Promise<boolean>;
   /** Load the job from its plist (its RunAtLoad starts the daemon); true when launchd did. */
   bootstrap(): Promise<boolean>;
+  /** launchd runs a process for the job right now (`launchctl print` shows its pid). */
+  running(): Promise<boolean>;
 }
 
 export interface Launcher {
@@ -44,7 +46,16 @@ export interface Launcher {
   agent?: DaemonAgent | null;
   /** How the detached daemon is spawned (tests). */
   spawn?: (command: string, args: readonly string[], options: SpawnOptions & { env?: NodeJS.ProcessEnv }) => { unref(): void };
+  /** How long launchd gets to bring the daemon up before it is spawned detached (default `LAUNCHD_GRACE_MS`; tests). */
+  launchdGraceMs?: number;
 }
+
+/**
+ * How long launchd gets, once it took the start, before the app or the CLI starts the daemon itself: when no daemon answers by then and
+ * launchd shows no process for it (a daemon that cannot start crash-loops under launchd, which throttles it; the person may have
+ * disallowed it in Login Items), the session must not depend on launchd.
+ */
+export const LAUNCHD_GRACE_MS = 6_000;
 
 /** A `DaemonAgent` from a `LaunchAgent` and where its plist is. */
 export function daemonAgent(a: { agent: LaunchAgent; plistPath: string; exists?: (file: string) => boolean }): DaemonAgent {
@@ -53,6 +64,7 @@ export function daemonAgent(a: { agent: LaunchAgent; plistPath: string; exists?:
     installed: () => exists(a.plistPath),
     kickstart: () => a.agent.kickstart(),
     bootstrap: () => a.agent.bootstrap(a.plistPath),
+    running: async () => (await a.agent.runningPid()) !== null,
   };
 }
 
@@ -112,12 +124,16 @@ export async function ensureDaemon(paths: JafferPaths, l: Launcher, waitMs = 12_
   const agent = agentOf(paths, l);
   let spawned = (await launchDaemon(paths, { ...l, agent })) === 'spawned';
   const t0 = Date.now();
+  const grace = l.launchdGraceMs ?? LAUNCHD_GRACE_MS;
   while (Date.now() - t0 < waitMs) {
     await sleep(120);
     const c = await tryConnect(paths, 600);
     if (c) return c;
-    // the agent's wrapper takes the agent away when the app it was written for is gone (moved, deleted): then launchd starts nothing
-    if (!spawned && agent && !agent.installed()) {
+    if (spawned || !agent) continue;
+    // the agent's wrapper takes the agent away when the app it was written for is gone (moved, deleted): then launchd starts nothing.
+    // Or launchd took the start and no daemon came: with no process of launchd's for it, the daemon is spawned here (its own start
+    // rewrites the wrapper, and a launchd instance that starts later finds the socket taken and exits 0, which launchd leaves alone).
+    if (!agent.installed() || (Date.now() - t0 >= grace && !(await agent.running()))) {
       spawnDetached(paths, l);
       spawned = true;
     }

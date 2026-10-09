@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { removeAgentForReset, resetJaffer } from '../src/core/reset';
+import { removeAgentForReset, removeAgentWithoutDaemon, resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
 import { applyBlock, BEGIN, END, SKILL_MARKER } from '../src/core/memory/exports';
 import type { Launchctl } from '../src/core/service/launch-agent';
@@ -224,6 +224,29 @@ describe('resetJaffer and the login agent that keeps the session running (a fake
     expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
     expect(await removeAgentForReset({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 })).toEqual([]);
     expect(f.calls).toEqual([['bootout', TARGET]]);
+  });
+
+  it('`jaffer service remove` with no daemon to answer (none runs, or one cannot start): the switch off in the config file first, then the agent away as Reset does it', async () => {
+    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true, stayAwake: false } }));
+    const { plist, wrapper } = agentOnDisk();
+    const config = () => JSON.parse(fs.readFileSync(path.join(env.home, 'config.json'), 'utf8'));
+    let atBootout: boolean | null = null;
+    const f = fakeLaunchctl({ code: 0, out: '' }, () => (atBootout = config().session.keepRunning));
+    const { status, messages: said } = await removeAgentWithoutDaemon({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 });
+    expect(status).toEqual({ state: 'not-installed' });
+    expect(said.join('\n')).toMatch(/background/i);
+    expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
+    expect(f.calls).toEqual([['bootout', TARGET]]);
+    expect(atBootout).toBe(false); // off before launchd was touched: a daemon that starts now does not put the agent back
+    expect(config().session).toMatchObject({ keepRunning: false, stayAwake: false }); // and nothing else of the person's settings changed
+    expect(fs.existsSync(path.join(env.home, 'config.json'))).toBe(true);
+    // a home that is not the person's own (this test home, no launchctl given) is refused, and nothing is touched, the switch neither
+    mk(path.join(env.home, 'config.json'), JSON.stringify({ session: { keepRunning: true } }));
+    const again = agentOnDisk();
+    const refused = await removeAgentWithoutDaemon({ home: env.home, userHome: env.userHome });
+    expect(refused).toEqual({ status: { state: 'refused', reason: expect.stringMatching(/~\/\.jaffer|macOS only/) }, messages: [] });
+    expect(fs.existsSync(again.plist) && fs.existsSync(again.wrapper)).toBe(true);
+    expect(config().session.keepRunning).toBe(true);
   });
 
   it('in a home that is not the person\'s own (this test home), a reset leaves launchd and the agent\'s plist alone by default', async () => {

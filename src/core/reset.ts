@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { teardownClaude } from './integrations/claude';
 import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
-import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, type Launchctl } from './service/launch-agent';
+import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, REFUSED_NOT_MAC, REFUSED_OTHER_HOME, type AgentStatus, type Launchctl } from './service/launch-agent';
 import { isDefaultHome } from './session/caffeinate';
 import { ConfigStore } from '../shared/config';
 import { makePaths } from '../shared/paths';
@@ -114,6 +114,20 @@ export async function removeAgentForReset(o: Pick<ResetOptions, 'home' | 'userHo
   const agent = new LaunchAgent({ launchctl, uid: o.uid ?? process.getuid?.() ?? -1, fs });
   const r = await agent.remove(files);
   return [`Removed the background agent that kept the session running (${files.plistPath.replace(o.userHome ?? os.homedir(), '~')}); ${bootoutNote(r)}`];
+}
+
+/**
+ * `jaffer service remove` when no daemon answers (none runs, or one that cannot start crash-loops under launchd, and Settings needs a
+ * daemon too): the switch off in the config file first, so a daemon that starts later does not put the agent back, then the agent away
+ * as Reset does it. Starts nothing. A home that is not the person's own (or not a Mac) is refused and nothing is touched, not even the
+ * switch, as the daemon's `service.remove` does it.
+ */
+export async function removeAgentWithoutDaemon(o: Pick<ResetOptions, 'home' | 'userHome' | 'launchctl' | 'uid'>): Promise<{ status: AgentStatus; messages: string[] }> {
+  const home = path.resolve(o.home);
+  const ours = o.launchctl !== undefined ? o.launchctl !== null : process.platform === 'darwin' && isDefaultHome(home);
+  if (!ours) return { status: { state: 'refused', reason: process.platform === 'darwin' ? REFUSED_OTHER_HOME : REFUSED_NOT_MAC }, messages: [] };
+  keepRunningOffOnDisk(home);
+  return { status: { state: 'not-installed' }, messages: await removeAgentForReset({ ...o, home }) };
 }
 
 /**

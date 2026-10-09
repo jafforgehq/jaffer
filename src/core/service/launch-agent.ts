@@ -56,6 +56,9 @@ export type LaunchAgentFs = Pick<typeof import('node:fs'), 'writeFileSync' | 'mk
 /** Why an app run from the repository (`npm run dev`: Electron from node_modules) gets no agent: it must never point the real one there. */
 export const REFUSED_DEV_RUN = 'This is a development run of Jaffer: use the installed app.';
 
+/** Why there is no agent off macOS. */
+export const REFUSED_NOT_MAC = 'Keeping the session running in the background works on macOS only.';
+
 /** Why a home other than the person's own `~/.jaffer` gets no agent. */
 export const REFUSED_OTHER_HOME = 'Only the usual Jaffer folder (~/.jaffer) can be kept running by macOS; this Jaffer uses another folder (JAFFER_HOME).';
 
@@ -102,7 +105,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
  * failure: a deliberate end exits 0), where the log goes and `JAFFER_HOME`, nothing else.
  */
 export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
-  if (i.platform !== 'darwin') return { refused: 'Keeping the session running in the background works on macOS only.' };
+  if (i.platform !== 'darwin') return { refused: REFUSED_NOT_MAC };
   if (i.home !== i.defaultHome) return { refused: REFUSED_OTHER_HOME };
   if ([i.home, i.userHome, i.execPath, i.daemonScript].some((p) => CONTROL.test(p))) return { refused: 'A folder name with a control character cannot be used for the background agent.' };
   if (i.execPath.includes('/AppTranslocation/') || i.execPath.startsWith('/Volumes/')) {
@@ -312,6 +315,11 @@ export class LaunchAgent {
     const current = this.fs.existsSync(plan.plistPath) && this.read(plan.plistPath) === plan.plist && this.read(plan.wrapperPath) === plan.wrapper;
     if (!current) await this.install(plan, { load: o.load });
     return this.status(plan);
+  }
+
+  /** The pid of the job's process when launchd runs one right now (`launchctl print`), else null. */
+  async runningPid(): Promise<number | null> {
+    return (await this.probe()).pid ?? null;
   }
 
   /** Start the job now (no `-k`: one that runs is not touched). True when launchd did. */

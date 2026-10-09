@@ -9,7 +9,7 @@ import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
-import { resetJaffer } from '../core/reset';
+import { removeAgentWithoutDaemon, resetJaffer } from '../core/reset';
 import { agentStatusText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
@@ -85,7 +85,8 @@ const SERVICE_HELP = `Usage: jaffer service [status|install|remove]
   jaffer service status    whether macOS keeps your session running in the background: not installed, installed (active from the
                            next login or restart), running (pid), installed but not loaded, or refused (and why)
   jaffer service install   install the login agent: launchd starts the session at login and again after a crash
-  jaffer service remove    remove it (when launchd runs the session, that ends the session now)
+  jaffer service remove    remove it (when launchd runs the session, that ends the session now; with no session
+                           running, or one that cannot start, it is removed without starting one)
 `;
 
 async function main(): Promise<void> {
@@ -325,7 +326,15 @@ async function main(): Promise<void> {
       }
       const method = { status: 'service.status', install: 'service.install', remove: 'service.remove' }[sub];
       if (!method) throw new Error(SERVICE_HELP.trimEnd());
-      const client = await ensureDaemon(paths, launcher());
+      // Turning it off needs no daemon: with none answering (none runs, or one that cannot start crash-loops under launchd), the agent
+      // is taken away here, as Reset does it, and no daemon is started for it.
+      const client = sub === 'remove' ? await tryConnect(paths) : await ensureDaemon(paths, launcher());
+      if (!client) {
+        const off = await removeAgentWithoutDaemon({ home: paths.home });
+        for (const m of off.messages) console.log(m);
+        console.log(agentStatusText(off.status));
+        return;
+      }
       let s: AgentStatus;
       try {
         // turned off while launchd runs the session, it ends: asked for here, so said first (the app asks in a dialog)

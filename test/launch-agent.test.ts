@@ -843,6 +843,26 @@ describe('launchDaemon: launchd starts the daemon when the agent is installed, a
     expect(t.spawned).toHaveLength(1);
   });
 
+  it('ensureDaemon: launchd took the start, but no daemon answers and launchd shows no process for it (one that cannot start, crash-looping or not allowed): after a few seconds it spawns the daemon detached', async () => {
+    const t = setup({ installed: true, start: { loaded: true, pid: null } }); // kickstart answers 0, and nothing runs
+    const at: number[] = [];
+    const spawn = t.launcher.spawn!;
+    const t0 = Date.now();
+    const launcher: Launcher = { ...t.launcher, launchdGraceMs: 400, spawn: (c, a, o) => (at.push(Date.now() - t0), spawn(c, a, o)) };
+    await expect(ensureDaemon(t.paths, launcher, 1800)).rejects.toThrow(/Could not start/); // (no daemon here: only the choice is tested)
+    expect(t.calls[0]).toEqual(['kickstart', TARGET]);
+    expect(t.calls.some((c) => c[0] === 'print')).toBe(true); // launchd was asked whether it runs one
+    expect(t.spawned).toHaveLength(1);
+    expect(at[0]).toBeGreaterThanOrEqual(400); // not before launchd had its few seconds
+  });
+
+  it('ensureDaemon: while launchd shows a process for the job (a daemon that is still starting) it gets the whole wait, and nothing is spawned beside it', async () => {
+    const t = setup({ installed: true, start: { loaded: true, pid: 4242 } });
+    await expect(ensureDaemon(t.paths, { ...t.launcher, launchdGraceMs: 300 }, 1500)).rejects.toThrow(/Could not start/);
+    expect(t.calls[0]).toEqual(['kickstart', TARGET]);
+    expect(t.spawned).toEqual([]);
+  });
+
   it('the agent by default is none for any home but the person\'s own: a test home never runs launchctl', () => {
     expect(defaultDaemonAgent(path.join(os.tmpdir(), 'jaffer-test-x', '.jaffer'))).toBeNull();
   });
