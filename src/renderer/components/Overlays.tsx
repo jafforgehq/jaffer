@@ -447,6 +447,9 @@ export function Settings(): VNode {
               <Field label="Offer to resume Claude Code" hint="after a restart (a reboot, an update, a crash), a button to take up the Claude Code conversation that was running in this folder; off forgets it">
                 <Switch checked={c.session?.resumeClaude !== false} onChange={(v) => set({ session: { resumeClaude: v } })} />
               </Field>
+              <Field label="Resume Claude automatically" hint="instead of waiting for a click, types claude --resume for that conversation by itself, after a few seconds’ notice you can cancel; after 3 tries in 10 minutes it stops and leaves the button">
+                <Switch disabled={c.session?.resumeClaude === false} checked={c.session?.autoResume !== false && c.session?.resumeClaude !== false} onChange={(v) => set({ session: { autoResume: v } })} />
+              </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
               </Field>

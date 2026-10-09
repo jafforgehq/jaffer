@@ -62,6 +62,8 @@ function wireClient(c: RpcClient): void {
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
     if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
+    // resuming Claude by itself stopped after a few crashes: said once, whether or not the window is open
+    if (event === 'claude.autoresume' && (data as { state?: string } | null)?.state === 'gave-up') notify('Claude keeps stopping', 'Resume it from the button when you are ready.');
     if (event === 'config.changed') appCfg = data as typeof appCfg;
   });
   void c.call('config.get', {}).then((x) => (appCfg = x as typeof appCfg)).catch(() => undefined);

@@ -937,6 +937,84 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 90_000);
 
+  it('auto-resume: a notice with Cancel before Claude is resumed by itself, kept as long as the wait, and its switch under the offer', async () => {
+    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
+    const send = (e: object) => page.evaluate((x) => (window as any).__event('claude.autoresume', x), e);
+    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
+    const asked = async () => (await page.evaluate(() => (window as any).__asked)) as [string, unknown][];
+    // what the window asks the daemon, and what the daemon answers
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__origCall = w.jaffer.call;
+      w.__asked = [];
+      w.jaffer.call = async (m: string, p: unknown) => {
+        const r = await w.__origCall(m, p);
+        w.__asked.push([m, r]);
+        return r;
+      };
+    });
+    try {
+      expect(await notice.count()).toBe(0);
+      await send({ state: 'pending', id: ID, typesAt: Date.now() + 3000 });
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain('Resuming Claude in 3 s');
+      await shot('14l-autoresume');
+      await notice.locator('button', { hasText: 'Cancel' }).click();
+      await until(async () => (await asked()).some(([m]) => m === 'claude.autoresume.cancel'), 5_000, 'Cancel to reach the daemon');
+      expect((await asked()).find(([m]) => m === 'claude.autoresume.cancel')![1]).toBe(true);
+      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
+      // a longer wait (a retry) keeps the notice up as long as it runs, not the few seconds of an ordinary toast; typing ends it
+      await send({ state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain('Resuming Claude in 20 s');
+      await sleep(6_500);
+      expect(await notice.count()).toBe(1);
+      await send({ state: 'typed', id: ID });
+      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go once it was typed');
+      // the daemon ending the notice by itself (the shell got busy, the offer went) takes it away too
+      await send({ state: 'pending', id: ID, typesAt: Date.now() + 3000 });
+      await notice.waitFor();
+      await send({ state: 'cancelled', id: ID });
+      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go when the daemon drops it');
+      expect(await page.locator('.toast').count()).toBe(0);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__origCall;
+      });
+    }
+    // the setting: right under the offer, on by default
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+    const sw = page.locator('label.field', { hasText: 'Resume Claude automatically' });
+    const offer = page.locator('label.field', { hasText: 'Offer to resume Claude Code' });
+    const session = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session;
+    const next = await page.evaluate(() => {
+      const fields = [...document.querySelectorAll('.settings .field')];
+      return fields[fields.findIndex((f) => f.textContent?.includes('Offer to resume Claude Code')) + 1]?.textContent ?? '';
+    });
+    expect(next).toContain('Resume Claude automatically');
+    expect(await sw.locator('input').isChecked()).toBe(true);
+    expect(await sw.locator('input').isDisabled()).toBe(false);
+    await sw.locator('.switch').click();
+    await until(async () => (await session()).autoResume === false, 5_000, 'auto-resume to be switched off');
+    await sw.locator('.switch').click();
+    await until(async () => (await session()).autoResume === true, 5_000, 'and on again');
+    // it works through the offer: while that is off, it is off and cannot be changed
+    await offer.locator('.switch').click();
+    await until(async () => (await session()).resumeClaude === false, 5_000, 'the offer to be switched off');
+    await until(async () => sw.locator('input').isDisabled(), 5_000, 'the switch to be disabled');
+    expect(await sw.locator('input').isChecked()).toBe(false);
+    expect((await session()).autoResume).toBe(true); // the choice itself is kept for when the offer comes back
+    await offer.locator('.switch').click();
+    await until(async () => (await session()).resumeClaude === true, 5_000, 'the offer to be switched on again');
+    await until(async () => !(await sw.locator('input').isDisabled()), 5_000, 'the switch to be enabled again');
+    expect(await sw.locator('input').isChecked()).toBe(true);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
     await page.waitForSelector('.memory');

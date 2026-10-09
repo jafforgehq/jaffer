@@ -18,6 +18,19 @@ export const AUTO_RESUME = {
   healthyMs: 30_000,
 } as const;
 
+/**
+ * The same rules on a scale of milliseconds, for the daemon tests only: the daemon uses them when it is started with
+ * `JAFFER_TEST_AUTORESUME_FAST=1`, and never otherwise. The window is wide enough for three crashes of a real process to fit in it.
+ */
+export const AUTO_RESUME_TEST = {
+  noticeMs: 600,
+  quietMs: 500,
+  maxAttempts: 3,
+  windowMs: 120_000,
+  waitsMs: [600, 800, 1_000],
+  healthyMs: 1_500,
+} as const;
+
 /** Keeping the Mac awake (an idle-sleep assertion, no admin rights) while Claude works. */
 export const STAY_AWAKE = {
   /** A command running this long in the shell holds the Mac awake too. */

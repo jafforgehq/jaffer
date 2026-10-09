@@ -85,11 +85,13 @@ export interface Toast {
 }
 export const toasts = signal<Toast[]>([]);
 let toastId = 1;
-export function toast(t: Omit<Toast, 'id'>, ttl = 6000): void {
+/** Shows a toast for `ttl` ms (or until it is dismissed); returns its id, for `dismissToast`. */
+export function toast(t: Omit<Toast, 'id'>, ttl = 6000): number {
   const id = toastId++;
   // memory notices replace each other instead of piling up over the terminal
   toasts.value = [...toasts.value.filter((x) => !(t.kind === 'learn' && x.kind === 'learn')).slice(-3), { ...t, id }];
   setTimeout(() => dismissToast(id), ttl);
+  return id;
 }
 export function dismissToast(id: number): void {
   toasts.value = toasts.value.filter((t) => t.id !== id);
@@ -112,6 +114,18 @@ function applyClaudeState(sessions: ClaudeSession[]): void {
 }
 /** Claude Code was running in this folder when Jaffer last stopped, and can be resumed (the daemon decides; null when there is nothing to offer). */
 export const resumeOffer = signal<ResumeOffer | null>(null);
+/** The notice before the daemon types `claude --resume` by itself: one at a time, with Cancel, until it types, drops it or gives up. */
+let autoResumeToast: number | null = null;
+function onAutoResume(e: { state?: string; typesAt?: number } | null): void {
+  if (autoResumeToast !== null) dismissToast(autoResumeToast);
+  autoResumeToast = null;
+  if (e?.state !== 'pending' || typeof e.typesAt !== 'number') return;
+  const left = Math.max(0, e.typesAt - Date.now());
+  const s = Math.ceil(left / 1000);
+  const when = s < 60 ? `${s} s` : `${Math.round(s / 60)} min`;
+  // up for as long as the wait (a retry waits minutes), a little past it: the daemon's next word takes it away
+  autoResumeToast = toast({ kind: 'info', text: `Resuming Claude in ${when}`, action: { label: 'Cancel', run: () => void jaffer().call('claude.autoresume.cancel', {}).catch(() => undefined) } }, Math.max(6000, left + 2000));
+}
 async function loadClaudeState(): Promise<void> {
   try {
     applyClaudeState((await jaffer().call('claude.state', {})).sessions);
@@ -226,12 +240,15 @@ export async function bootstrap(): Promise<void> {
       }
     } else if (event === 'claude.state') applyClaudeState(data.sessions);
     else if (event === 'claude.resume') resumeOffer.value = data ?? null;
+    else if (event === 'claude.autoresume') onAutoResume(data);
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
-    else if (event === 'daemon.down') daemonUp.value = false;
-    else if (event === 'daemon.up') {
+    else if (event === 'daemon.down') {
+      daemonUp.value = false;
+      onAutoResume(null); // a daemon that is gone types nothing
+    } else if (event === 'daemon.up') {
       daemonUp.value = true;
       void refreshInfo();
       void loadClaudeState();
