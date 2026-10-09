@@ -1,6 +1,6 @@
 # Keep the session and Claude running
 
-Date: 2026-10-08 · Status: design approved in conversation (auto-resume every time; a LaunchAgent that keeps the daemon alive; a notice, never a kill, for a second Claude conversation; stay awake while something works). This document is the written spec, for review before a plan is written.
+Date: 2026-10-08 · Status: design approved in conversation (auto-resume every time; a LaunchAgent that keeps the daemon alive; a notice, never a kill, for a second Claude conversation; stay awake while something works; a Restart Claude action for after Claude Code has updated). This document is the written spec, for review before a plan is written.
 
 ## Why
 
@@ -11,7 +11,8 @@ The product promise is one session that never ends. Today it survives the app qu
 3. Resuming is a click (`Resume Claude`), and only when a list of conditions holds, so after an update or a reboot the person lands in a fresh shell and has to notice and click.
 4. Nothing says when a second Claude conversation has started, which is the case that makes "resume the right one" ambiguous.
 
-5. Closing the lid or walking away puts the Mac to sleep, and while it sleeps nothing runs: a long Claude task simply pauses (and a network connection can drop meanwhile).
+5. Claude Code updates itself, but a running Claude keeps the old version until it restarts, and Jaffer gives no clear way to restart it into the new one (the palette's *Restart shell* is easy to miss and does not say Claude comes back; exiting Claude is treated as ending it on purpose, so nothing offers to resume).
+6. Closing the lid or walking away puts the Mac to sleep, and while it sleeps nothing runs: a long Claude task simply pauses (and a network connection can drop meanwhile).
 
 The goal, in the person's words: the Claude session is resumed every time, there is only one session, it cannot be killed, and it keeps working when the laptop is left alone or closed. The honest form of the last part: **it cannot be lost by accident** (app quit or kill, daemon crash or `kill -9`, update, reboot). It still ends when the person ends it on purpose, and when a power cut or an administrator removes the launchd job. Nothing in this design claims more.
 
@@ -21,6 +22,7 @@ The goal, in the person's words: the Claude session is resumed every time, there
 - **launchd owns the daemon**, installed with the person's consent. Nothing is installed silently.
 - **Two Claude conversations: tell, do not kill.** Jaffer never ends a process the person started.
 - **Stay awake while something works**, with no admin rights: an idle-sleep assertion, on by default. Not the `pmset disablesleep` route (it needs a password, and a closed laptop under load overheats), not a remote daemon (a separate project).
+- **Restart Claude**: one explicit action to restart the terminal after Claude Code was updated, bringing the same conversation back on the new version.
 - One terminal stays one terminal; this adds no panes, tabs or second sessions.
 
 ## Behaviour
@@ -59,7 +61,15 @@ The goal, in the person's words: the Claude session is resumed every time, there
 - **What it does not do.** It does not override the lid. On a MacBook that is on its own, closing the lid still sleeps the Mac and everything pauses, then resumes on wake, as today. In macOS's closed-display setup (power, external display, keyboard or mouse) the Mac stays awake by itself and this keeps it from sleeping when idle, so work continues with the lid closed. How far the assertion goes on a given model and macOS version is **to be verified by hand** on the owner's Mac before the README says more than the hint above.
 - Visible where macOS already shows it (the battery menu names `caffeinate` as preventing sleep); Jaffer adds no indicator to the calm window.
 
-### 5. What the person gets
+### 5. Restart Claude (after Claude Code was updated)
+
+- **Where.** The command palette (*Restart Claude Code, to use an update*) and a button in *Settings → Claude Code* (*Restart Claude Code*). Nothing in the title bar: the window stays calm. No shortcut.
+- **Flow.** A native confirmation, always (it ends whatever runs in the shell): "This restarts your shell in the same folder. Claude Code comes back in the same conversation; anything else running in the shell stops." An extra line when Claude is working or waiting at that moment ("Claude is working right now: that work stops"). Buttons: **Restart** / **Cancel**. When there is no conversation to bring back, the text says so ("No Claude Code conversation is running; this only restarts the shell") and it is a plain shell restart.
+- **What happens.** `claude.restart` (RPC): the daemon notes the conversation it would resume (the active session's id, else the saved point), restarts the main shell (`restartMain`, the shell comes back in the same folder with its screen), and once the new shell is at a prompt it resumes the conversation through the same path as auto-resume, with the same 3-second notice and Cancel. Because the person asked for it, it **does not need `session.autoResume` on**; it does need the conversation to be known (so not when *Offer to resume* is off, where nothing is kept). It counts as one attempt for the loop guard. It never starts a conversation that is not there.
+- **A shell that dies takes Claude with it.** Today the watcher keeps the old conversation as active after the main shell exits (only the `claude` command ending, or SessionEnd, ends it), which would hide the resume offer after a shell restart. New rule: when the main shell exits, for any reason, the daemon ends every Claude session in the watcher (`endAll`) but leaves the resume point alone (it is not a deliberate end); the usual offer and auto-resume conditions then apply to the new shell. This also fixes the palette's *Restart shell* leaving Claude un-resumable.
+- **What it does not do.** It does not detect that an update is waiting (that would need the version from the transcript or Claude's own banner; a possible later addition), it does not type `/exit` or anything else into Claude's own prompt, and it does not restart the daemon (a Jaffer update has its own *Restart session* prompt).
+
+### 6. What the person gets
 
 | What happens | Result |
 |---|---|
@@ -67,14 +77,15 @@ The goal, in the person's words: the Claude session is resumed every time, there
 | The daemon crashes or is killed | back in about 5 s: same folder, screen restored, Claude resumed |
 | The Mac reboots | back at login, Claude resumed |
 | An update | the new version starts the daemon, Claude resumed |
+| Claude Code was updated | *Restart Claude Code* (palette or Settings): shell restarts in the same folder, the same conversation resumes on the new version |
 | The person walks away mid-task | the Mac stays awake while Claude works, then sleeps normally |
 | The lid is closed on a laptop on its own | sleeps and pauses as today, resumes on wake; with power, an external display and a keyboard it keeps working |
 | *End Session*, Reset, `claude` exited normally, a power cut, an administrator removing the job | ends, stays ended (no restart, no resume after a deliberate one) |
 
 ## Interfaces
 
-- **Config** (`src/shared/config.ts`, with defaults so `conform` keeps them the right kind): `session.keepRunning: boolean` (false), `session.autoResume: boolean` (true), `session.stayAwake: boolean` (true).
-- **RPC**: `service.status`, `service.install`, `service.remove` (daemon; also behind `jaffer service`), `claude.autoresume.cancel`. **Events**: `claude.autoresume` `{ state: 'pending' | 'typed' | 'cancelled' | 'gave-up', id?, typesAt? }`.
+- **Config** (`src/shared/config.ts`, with defaults so `conform` keeps them the right kind): `session.keepRunning: boolean` (false), `session.autoResume: boolean` (true), `session.stayAwake: boolean` (true). Restart Claude adds no setting.
+- **RPC**: `service.status`, `service.install`, `service.remove` (daemon; also behind `jaffer service`), `claude.autoresume.cancel`, `claude.restart`. `claude.restart`. **Events**: `claude.autoresume` `{ state: 'pending' | 'typed' | 'cancelled' | 'gave-up', id?, typesAt? }`.
 - **Code**: `src/core/service/launch-agent.ts` (plist and wrapper text, paths, refusal rules; `launchctl` through an injected runner), `src/core/claude/auto-resume.ts` (the decision as a pure function of state and time; the daemon supplies prompt, busy, input and clock), `src/core/session/stay-awake.ts` (the controller: work in, hold on or off out; the process spawner and clock are injected), `ResumeStore` keeps `attempts` (times) beside the point. Renderer: toasts in `state.ts`, two switches in `Overlays.tsx`, the first-run switch.
 - `src/daemon/main.ts`: `SIGTERM` exits 143 and `SIGINT` 130 after saving state; `app.shutdown` stays 0. `src/core/daemon-client.ts`: `launchDaemon` uses `kickstart` when the agent is loaded. `src/core/reset.ts`: removes the agent first.
 
@@ -86,14 +97,15 @@ The goal, in the person's words: the Claude session is resumed every time, there
 
 ## Testing
 
-- **Unit (no real launchd):** plist and wrapper text; the refusal rules (translocated path, non-default home); the reconcile table (flag × plist present or stale); exit codes for `app.shutdown`, `SIGTERM`, `SIGINT`; the auto-resume decision table (offer present or not, prompt ready or not, busy, typing in the last 2 s, tombstoned, setting off, daemon stopping, retries and waits, the 30-second failure rule, the loop guard across a restart); the second-conversation rule; the stay-awake controller (starts on the first work, one hold only, the 15-second delayed release, the 6-hour cap for commands only, the interactive-program list, `needs-you` is not work, setting off and daemon stop release, no hold off macOS).
+- **Unit (no real launchd):** plist and wrapper text; the refusal rules (translocated path, non-default home); the reconcile table (flag × plist present or stale); exit codes for `app.shutdown`, `SIGTERM`, `SIGINT`; the auto-resume decision table (offer present or not, prompt ready or not, busy, typing in the last 2 s, tombstoned, setting off, daemon stopping, retries and waits, the 30-second failure rule, the loop guard across a restart); the second-conversation rule; the main shell exiting ends the watcher's sessions but keeps the resume point; the stay-awake controller (starts on the first work, one hold only, the 15-second delayed release, the 6-hour cap for commands only, the interactive-program list, `needs-you` is not work, setting off and daemon stop release, no hold off macOS).
 - **Daemon (real processes, the shell-function stand-in for `claude` that echoes its arguments):** after a restart the typed line is exactly `claude --resume <id>` and only for a non-ended conversation; Cancel stops it; a crashed `claude` is resumed up to three times and then not; a deliberate exit is never resumed; a person typing delays it.
-- **UI (Chromium against the real daemon):** the toast and its Cancel action, the two switches (and `autoResume` disabled while the offer is off), the first-run switch, the two-conversations notice, the stay-awake switch and its hint.
+- **Restart Claude (daemon, stand-in `claude`):** with a recorded conversation it restarts the shell in the same folder (new pid), types exactly `claude --resume <id>` after the notice, also with `autoResume` off, and Cancel stops it; with no conversation it only restarts the shell; the palette's *Restart shell* leaves the conversation resumable.
+- **UI (Chromium against the real daemon):** the toast and its Cancel action, the palette entry, the confirmation text (with and without a running Claude) and the Settings button, the two switches (and `autoResume` disabled while the offer is off), the first-run switch, the two-conversations notice, the stay-awake switch and its hint.
 - **Not testable in CI, to be checked by hand on a Mac, with the owner's say-so before any LaunchAgent is touched:** install the agent, `kill -9` the daemon and watch it return in about 5 s with the screen and a resumed Claude; log out and in; reboot; update with the agent on; `bootout` and uninstall; and stay-awake: that `pmset -g assertions` shows the hold while Claude works and not after, and what a closed lid does with and without power and an external display. On macOS CI a `plutil -lint` of the generated plist is the one automatic check.
 
 ## Out of scope
 
-- Overriding the lid on a laptop on its own (`pmset disablesleep` needs admin rights; Jaffer neither runs it nor asks for a password); running the daemon on another machine; ending or limiting Claude processes the person started; answering Claude Code's prompts; any other agent than Claude Code; resuming conversations Jaffer's hooks did not see (a `claude` in another terminal); keeping a running program alive across a reboot or an update (impossible); surviving an administrator who removes the launchd job; Linux and Windows.
+- Detecting that a Claude Code update is waiting, typing into Claude's own prompt, restarting the daemon from this action; overriding the lid on a laptop on its own (`pmset disablesleep` needs admin rights; Jaffer neither runs it nor asks for a password); running the daemon on another machine; ending or limiting Claude processes the person started; answering Claude Code's prompts; any other agent than Claude Code; resuming conversations Jaffer's hooks did not see (a `claude` in another terminal); keeping a running program alive across a reboot or an update (impossible); surviving an administrator who removes the launchd job; Linux and Windows.
 
 ## Open points for the review
 
