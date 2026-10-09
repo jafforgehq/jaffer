@@ -9,6 +9,7 @@ import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { DEFAULT_PROTECTED_BRANCHES } from '../../shared/danger-zone';
+import { agentStatusText, type AgentStatus } from '../../shared/keep-running';
 import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -216,12 +217,17 @@ export function FindBar(): VNode {
 
 // ------------------------------------------------------------------ settings
 
-function Field({ label, hint, children, buttons }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean }): VNode {
+function Field({ label, hint, status, children, buttons }: { label: string; hint?: string; status?: { text: string; state: string }; children: preact.ComponentChildren; buttons?: boolean }): VNode {
   const body = (
     <>
       <span class="field-label">
         {label}
         {hint && <small>{hint}</small>}
+        {status && (
+          <small class="field-status" data-state={status.state}>
+            {status.text}
+          </small>
+        )}
       </span>
       <span class="field-ctl">{children}</span>
     </>
@@ -379,6 +385,7 @@ export function Settings(): VNode {
               <Field label="Keep the screen for a restart" hint="saves your screen and scrollback so they come back after a reboot or an update; off keeps nothing of the screen on disk (the folder still comes back)">
                 <Switch checked={c.session?.restoreScreen !== false} onChange={(v) => set({ session: { restoreScreen: v } })} />
               </Field>
+              <KeepRunningField flag={c.session?.keepRunning === true} />
               <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
                 <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />
               </Field>
@@ -487,6 +494,42 @@ export function Settings(): VNode {
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The switch's line under it: launchd's own state in words, or why it cannot be here. */
+function keepRunningLine(s: AgentStatus): { text: string; state: string } {
+  return { text: s.state === 'refused' ? s.reason : agentStatusText(s), state: s.state };
+}
+
+/**
+ * Settings → Appearance: *Keep my session running in the background*, the login agent (launchd) that starts the session at login and
+ * again after a crash. What it shows comes from the daemon (launchd and the plist on disk), not from the switch alone; where it cannot be
+ * (not the person's own ~/.jaffer, an app run from a disk image) it is off, cannot be turned on, and says why.
+ */
+function KeepRunningField({ flag }: { flag: boolean }): VNode {
+  const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => void call<AgentStatus>('service.status', {}).then(setStatus).catch(() => undefined), []);
+  const refused = status?.state === 'refused';
+  const on = status ? status.state === 'running' || status.state === 'installed' || status.state === 'not-loaded' : flag;
+  const toggle = async (v: boolean) => {
+    setBusy(true);
+    try {
+      const s = await call<AgentStatus>(v ? 'service.install' : 'service.remove', {});
+      setStatus(s);
+      if (s.state === 'refused') toast({ kind: 'error', text: s.reason });
+      else if (s.note) toast({ kind: 'info', text: s.note }, 10_000);
+    } catch (e) {
+      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Field label="Keep my session running in the background" hint="macOS starts your session at login and again after a crash or a reboot, with or without the window open (a login agent); off takes the agent away" status={status ? keepRunningLine(status) : { text: '…', state: 'unknown' }}>
+      <Switch checked={on && !refused} disabled={busy || !status || refused} onChange={(v) => void toggle(v)} />
+    </Field>
   );
 }
 
@@ -679,13 +722,22 @@ export function Onboarding(): VNode {
   const [curate, setCurate] = useState(true);
   const [claude, setClaude] = useState(true);
   const [start, setStart] = useState(true);
+  // on in the Claude path; the plain terminal installs nothing unless the person turns it on (`null`: not touched, so it follows the path)
+  const [keep, setKeep] = useState<boolean | null>(null);
+  const keepOn = keep ?? !plain;
   const [busy, setBusy] = useState(false);
+  /** Asks the daemon to keep the session running. It never holds up Get started: a refusal or a failure is a toast with the reason. */
+  const keepRunning = () =>
+    void call<AgentStatus>('service.install', {})
+      .then((s) => s.state === 'refused' && toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${s.reason}` }, 10_000))
+      .catch((e) => toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${e instanceof Error ? e.message : String(e)}` }, 10_000));
   const go = async () => {
     setBusy(true);
     try {
       if (plain) {
         // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks, not the curation of memory by Claude
         await patchConfig({ onboarded: true, memory: { enabled: learn, llm: 'off' }, ingest: { claudeCode: false }, claude: { skipped: true } });
+        if (keepOn) keepRunning(); // (only when the person turned it on here)
         overlay.value = null;
         setSide(null);
         return;
@@ -696,6 +748,7 @@ export function Onboarding(): VNode {
         ingest: { claudeCode: claude && learn },
       });
       if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude; the memory tools are a Settings choice
+      if (keepOn) keepRunning();
       overlay.value = null;
       setSide(null); // just the terminal at first
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
@@ -759,7 +812,6 @@ export function Onboarding(): VNode {
                   <small>{plain ? 'Commands are redacted for secrets and stay on this Mac.' : 'Commands and conversations are redacted for secrets and stay on this Mac.'}</small>
                 </span>
               </label>
-              {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}
               {!plain && (
               <>
               <label class={learn ? '' : 'off'}>
@@ -785,6 +837,14 @@ export function Onboarding(): VNode {
               </label>
               </>
               )}
+              <label>
+                <Switch checked={keepOn} onChange={setKeep} />
+                <span class="t">
+                  <b>Keep my session running in the background</b>
+                  <small>Restart it automatically after a crash or a reboot.</small>
+                </span>
+              </label>
+              {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}
             </div>
             <div class="onboard-foot">
               <button class="btn primary big" onClick={() => void go()} disabled={busy}>

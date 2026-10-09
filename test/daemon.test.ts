@@ -2068,4 +2068,78 @@ describe('the exit code of the daemon tells launchd whether to bring it back (bu
       e.cleanup();
     }
   }, 40_000);
+
+  it('the first reason to stop wins: more signals while it stops neither cut the save short nor change the code, and a SIGTERM during app.shutdown keeps 0', async () => {
+    const e = makeEnv();
+    try {
+      const { child, exited, c } = await start(e);
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      c.close();
+      await sleep(600);
+      const sent = Date.now();
+      child.kill('SIGTERM');
+      for (const ms of [5, 20, 40]) {
+        await sleep(ms);
+        if (child.exitCode === null) child.kill(ms === 20 ? 'SIGINT' : 'SIGTERM');
+      }
+      expect(await exited).toEqual({ code: 143, signal: null });
+      expect(savedAt(e)).toBeGreaterThanOrEqual(sent); // the first stop finished saving before the process ended
+    } finally {
+      e.cleanup();
+    }
+    const e2 = makeEnv();
+    try {
+      const { child, exited, c } = await start(e2);
+      await c.call('app.shutdown', {});
+      for (const ms of [10, 60, 120]) {
+        await sleep(ms);
+        if (child.exitCode === null) child.kill('SIGTERM');
+      }
+      expect(await exited).toEqual({ code: 0, signal: null }); // the person ended it: launchd must not bring it back
+      c.close();
+    } finally {
+      e2.cleanup();
+    }
+  }, 60_000);
+});
+
+describe('the login agent in a test home: refused, and nothing is touched (bundled daemon and CLI)', () => {
+  const cli = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8', cwd: env.userHome });
+  const agentsDir = () => path.join(env.userHome, 'Library', 'LaunchAgents');
+  /** Why: this is not the person's own ~/.jaffer (or, off macOS, not a Mac). */
+  const REASON = /~\/\.jaffer|another folder|macOS only/;
+
+  it("service.status, service.install and service.remove say why, leave the switch off, and create nothing under the user's Library/LaunchAgents", async () => {
+    const c = await connect();
+    for (const m of ['service.status', 'service.install', 'service.remove', 'service.status']) {
+      expect(await c.call(m, {}), m).toEqual({ state: 'refused', reason: expect.stringMatching(REASON) });
+    }
+    expect((await c.call('config.get', {})).session.keepRunning).toBe(false);
+    expect(fs.existsSync(agentsDir())).toBe(false);
+    expect(fs.existsSync(path.join(env.home, 'bin', 'jafferd'))).toBe(false); // no wrapper either
+  });
+
+  it('`jaffer service status` prints the refusal in words, `jaffer service install` exits non-zero with the reason, and the group has a usage', async () => {
+    const st = cli('service', 'status');
+    expect(st.status, st.stderr).toBe(0);
+    expect(st.stdout).toMatch(/refused: /);
+    expect(st.stdout).toMatch(REASON);
+    expect(cli('service').stdout).toMatch(/refused: /); // status is what it shows by default
+    const inst = cli('service', 'install');
+    expect(inst.status).not.toBe(0);
+    expect(inst.stderr).toMatch(REASON);
+    const rm = cli('service', 'remove');
+    expect(rm.stdout + rm.stderr).toMatch(REASON);
+    const help = cli('service', '--help');
+    expect(help.status).toBe(0);
+    expect(help.stdout).toMatch(/jaffer service install/);
+    expect(help.stdout).toMatch(/remove/);
+    const bad = cli('service', 'frobnicate');
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/Usage: jaffer service/);
+    expect(cli('--help').stdout).toMatch(/jaffer service/);
+    expect(fs.existsSync(agentsDir())).toBe(false);
+    expect((await (await connect()).call('config.get', {})).session.keepRunning).toBe(false);
+  }, 30_000);
 });

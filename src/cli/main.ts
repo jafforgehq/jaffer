@@ -9,7 +9,8 @@ import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
-import { resetJaffer } from '../core/reset';
+import { removeAgentForReset, resetJaffer } from '../core/reset';
+import { agentStatusText, type AgentStatus } from '../shared/keep-running';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
 
@@ -76,7 +77,15 @@ ${bold('Claude Code')}
 
 ${bold('Session')}
   jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
+  jaffer service [status|install|remove]    keep the session running in the background (a login agent; macOS, ~/.jaffer only)
   jaffer config get|set <dot.path> <json>
+`;
+
+const SERVICE_HELP = `Usage: jaffer service [status|install|remove]
+  jaffer service status    whether macOS keeps your session running in the background: not installed, installed (active from the
+                           next login or restart), running (pid), installed but not loaded, or refused (and why)
+  jaffer service install   install the login agent: launchd starts the session at login and again after a crash
+  jaffer service remove    remove it (when launchd runs the session, that ends the session now)
 `;
 
 async function main(): Promise<void> {
@@ -240,6 +249,8 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // the login agent first: launchd must not start the session again while it is being reset (when launchd runs it, this ends it)
+      for (const m of await removeAgentForReset({ home: paths.home })) console.log(m);
       const running = await tryConnect(paths);
       if (running) {
         await running.call('app.shutdown', {}).catch(() => undefined);
@@ -286,8 +297,8 @@ async function main(): Promise<void> {
           console.log('already running');
           client.close();
         } else {
-          launchDaemon(paths, launcher());
-          console.log('starting…');
+          const how = await launchDaemon(paths, launcher());
+          console.log(how === 'launchd' ? 'starting (through launchd, the login agent)…' : 'starting…');
         }
       } else if (sub === 'stop') {
         if (!client) console.log('not running');
@@ -297,6 +308,28 @@ async function main(): Promise<void> {
         }
       } else console.log(client ? green('running') : red('not running'));
       client?.close();
+      return;
+    }
+
+    // The login agent that keeps the session running, through the daemon (started like any other command that needs it).
+    case 'service': {
+      const sub = args[1] ?? 'status';
+      if (flag('help') || sub === 'help') {
+        process.stdout.write(SERVICE_HELP);
+        return;
+      }
+      const method = { status: 'service.status', install: 'service.install', remove: 'service.remove' }[sub];
+      if (!method) throw new Error(SERVICE_HELP.trimEnd());
+      const client = await ensureDaemon(paths, launcher());
+      let s: AgentStatus;
+      try {
+        s = await client.call(method, {}, 30_000);
+      } finally {
+        client.close();
+      }
+      if (sub === 'install' && s.state === 'refused') throw new Error(`Not installed: ${s.reason}`);
+      console.log(agentStatusText(s));
+      if (s.note) console.log(dim(s.note));
       return;
     }
 

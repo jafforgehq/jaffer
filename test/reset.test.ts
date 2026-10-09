@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { resetJaffer } from '../src/core/reset';
+import { removeAgentForReset, resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
 import { applyBlock, BEGIN, END, SKILL_MARKER } from '../src/core/memory/exports';
+import type { Launchctl } from '../src/core/service/launch-agent';
+import { AGENT_LABEL } from '../src/shared/keep-running';
 
 let env: TestEnv;
 beforeEach(() => (env = makeEnv()));
@@ -129,6 +131,83 @@ describe('resetJaffer', () => {
     const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true });
     expect(res.backupDir).toBeUndefined();
     expect(res.messages.join('\n')).toMatch(/nothing/i);
+  });
+});
+
+describe('resetJaffer and the login agent that keeps the session running (a fake launchctl; the real one is never run)', () => {
+  const TARGET = `gui/501/${AGENT_LABEL}`;
+  /** The agent as the switch leaves it: the plist in the person's LaunchAgents, the wrapper in Jaffer's folder. */
+  function agentOnDisk(): { plist: string; wrapper: string } {
+    const plist = path.join(env.userHome, 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`);
+    const wrapper = path.join(env.home, 'bin', 'jafferd');
+    mk(plist, '<?xml version="1.0"?><plist version="1.0"><dict/></plist>\n');
+    mk(wrapper, '#!/bin/sh\n');
+    return { plist, wrapper };
+  }
+  function fakeLaunchctl(bootout: { code: number; out: string } = { code: 0, out: '' }, onBootout?: () => void) {
+    const calls: string[][] = [];
+    const launchctl: Launchctl = {
+      async run(args) {
+        calls.push(args);
+        if (args[0] !== 'bootout') return { code: 1, out: `unexpected: ${args.join(' ')}` };
+        onBootout?.();
+        return bootout;
+      },
+    };
+    return { launchctl, calls };
+  }
+
+  it('removes the agent first: deletes its plist and wrapper and boots it out before the folder is moved away, and says what launchd did', async () => {
+    lived();
+    const { plist, wrapper } = agentOnDisk();
+    let atBootout: { plist: boolean; wrapper: boolean; folder: boolean } | null = null;
+    const f = fakeLaunchctl({ code: 0, out: '' }, () => (atBootout = { plist: fs.existsSync(plist), wrapper: fs.existsSync(wrapper), folder: fs.existsSync(path.join(env.home, 'config.json')) }));
+    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
+    expect(f.calls).toEqual([['bootout', TARGET]]);
+    // the files go first (the bootout ends the daemon when launchd runs it), and Jaffer's folder is still where it was
+    expect(atBootout).toEqual({ plist: false, wrapper: false, folder: true });
+    expect(fs.existsSync(plist)).toBe(false);
+    expect(fs.existsSync(path.join(res.backupDir!, 'bin', 'jafferd'))).toBe(false); // nothing of it in the backup either
+    const said = res.messages.join('\n');
+    expect(said).toMatch(/background/i);
+    expect(said).toMatch(/launchd/);
+    expect(said.indexOf('background')).toBeLessThan(said.indexOf('backup')); // the first thing it did
+  });
+
+  it('says what launchd answered when it had nothing loaded (the result of the bootout is told, not hidden)', async () => {
+    lived();
+    agentOnDisk();
+    const f = fakeLaunchctl({ code: 3, out: 'Boot-out failed: 3: No such process\n' });
+    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
+    expect(res.messages.join('\n')).toContain('No such process');
+  });
+
+  it('is a no-op without an agent: launchd is not asked, and nothing about it is said', async () => {
+    lived();
+    const f = fakeLaunchctl();
+    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
+    expect(f.calls).toEqual([]);
+    expect(res.messages.join('\n')).not.toMatch(/background|launchd/i);
+  });
+
+  it('what `jaffer reset` and Settings → Reset run before they end the session does the same, once: a second time it is silent', async () => {
+    lived();
+    const { plist, wrapper } = agentOnDisk();
+    const f = fakeLaunchctl();
+    const said = await removeAgentForReset({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 });
+    expect(said.join('\n')).toMatch(/background/i);
+    expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
+    expect(await removeAgentForReset({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 })).toEqual([]);
+    expect(f.calls).toEqual([['bootout', TARGET]]);
+  });
+
+  it('in a home that is not the person\'s own (this test home), a reset leaves launchd and the agent\'s plist alone by default', async () => {
+    lived();
+    const { plist } = agentOnDisk();
+    await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true }); // no launchctl given
+    expect(fs.existsSync(plist)).toBe(true);
+    expect(await removeAgentForReset({ home: env.home, userHome: env.userHome })).toEqual([]);
+    expect(fs.existsSync(plist)).toBe(true);
   });
 });
 

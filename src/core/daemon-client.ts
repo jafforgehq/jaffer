@@ -1,8 +1,11 @@
-import { spawn } from 'node:child_process';
+import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import type { JafferPaths } from '../shared/paths';
 import { ensureDir, sleep } from '../shared/util';
 import { RpcClient } from './rpc';
+import { agentPaths, execLaunchctl, LaunchAgent } from './service/launch-agent';
+import { isDefaultHome } from './session/caffeinate';
 
 export async function tryConnect(paths: JafferPaths, timeoutMs = 1200): Promise<RpcClient | null> {
   if (!fs.existsSync(paths.socket)) return null;
@@ -16,6 +19,16 @@ export async function tryConnect(paths: JafferPaths, timeoutMs = 1200): Promise<
   }
 }
 
+/** The login agent, as far as starting the daemon goes (`daemonAgent` makes one from a `LaunchAgent`). */
+export interface DaemonAgent {
+  /** The person turned it on: its plist is on disk. */
+  installed(): boolean;
+  /** Start the job now; true when launchd did. */
+  kickstart(): Promise<boolean>;
+  /** Load the job from its plist (its RunAtLoad starts the daemon); true when launchd did. */
+  bootstrap(): Promise<boolean>;
+}
+
 export interface Launcher {
   /** Binary to run (Electron's own binary with ELECTRON_RUN_AS_NODE, or node). */
   execPath: string;
@@ -24,28 +37,90 @@ export interface Launcher {
   electron?: boolean;
   /** Extra environment for the daemon (tests, packaging). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * The login agent that owns the daemon when the person turned it on. Left out: the real one, for the person's own home on macOS only
+   * (`defaultDaemonAgent`); `null`: none. Tests pass a fake, so they never run `launchctl`.
+   */
+  agent?: DaemonAgent | null;
+  /** How the detached daemon is spawned (tests). */
+  spawn?: (command: string, args: readonly string[], options: SpawnOptions & { env?: NodeJS.ProcessEnv }) => { unref(): void };
+}
+
+/** A `DaemonAgent` from a `LaunchAgent` and where its plist is. */
+export function daemonAgent(a: { agent: LaunchAgent; plistPath: string; exists?: (file: string) => boolean }): DaemonAgent {
+  const exists = a.exists ?? ((f: string) => fs.existsSync(f));
+  return {
+    installed: () => exists(a.plistPath),
+    kickstart: () => a.agent.kickstart(),
+    bootstrap: () => a.agent.bootstrap(a.plistPath),
+  };
+}
+
+/**
+ * The real agent, with the real `launchctl`: only on macOS and only for the person's own `~/.jaffer` (`isDefaultHome`). Any other home (a
+ * test, a development home) has none, so it never runs `launchctl`.
+ */
+export function defaultDaemonAgent(home: string): DaemonAgent | null {
+  if (process.platform !== 'darwin' || !isDefaultHome(home)) return null;
+  try {
+    const { plistPath } = agentPaths({ home, userHome: os.userInfo().homedir });
+    return daemonAgent({ agent: new LaunchAgent({ launchctl: execLaunchctl(), uid: process.getuid!(), fs }), plistPath });
+  } catch {
+    return null;
+  }
+}
+
+function agentOf(paths: JafferPaths, l: Launcher): DaemonAgent | null {
+  return l.agent === undefined ? defaultDaemonAgent(paths.home) : l.agent;
 }
 
 /** Start the daemon detached so it outlives whoever launched it (the app, a CLI call, a hook). */
-export function launchDaemon(paths: JafferPaths, l: Launcher): void {
-  ensureDir(paths.runDir);
+function spawnDetached(paths: JafferPaths, l: Launcher): void {
   const env: NodeJS.ProcessEnv = { ...process.env, ...l.env, JAFFER_HOME: paths.home };
   if (l.electron) env.ELECTRON_RUN_AS_NODE = '1';
   if (l.cliScript) env.JAFFER_CLI_SCRIPT = l.cliScript;
-  const child = spawn(l.execPath, [l.daemonScript], { detached: true, stdio: 'ignore', env });
+  delete env.JAFFER_LAUNCHD; // a daemon spawned here is never launchd's job (a CLI run inside a launchd-run session inherits the marker)
+  const child = (l.spawn ?? nodeSpawn)(l.execPath, [l.daemonScript], { detached: true, stdio: 'ignore', env });
   child.unref();
+}
+
+/**
+ * Start the daemon. With the login agent installed (the person's switch, the default home only), launchd starts it: `kickstart` for a
+ * job it knows, and a plist it does not know (the switch was turned on in a daemon that was not launchd's, or after a person's
+ * `launchctl bootout`) is bootstrapped first (its RunAtLoad starts the daemon). Which way it went is decided by what launchd answered, not
+ * by `status` (a loaded job with no process reads as not loaded); only when launchd will not start it, the detached spawn as without the
+ * agent. Without the agent, the detached spawn.
+ */
+export async function launchDaemon(paths: JafferPaths, l: Launcher): Promise<'launchd' | 'spawned'> {
+  ensureDir(paths.runDir);
+  const agent = agentOf(paths, l);
+  if (agent?.installed()) {
+    if (await agent.kickstart()) return 'launchd';
+    if (await agent.bootstrap()) {
+      await agent.kickstart(); // (RunAtLoad has started it already; this does not start a second one)
+      return 'launchd';
+    }
+  }
+  spawnDetached(paths, l);
+  return 'spawned';
 }
 
 /** Connect to the running daemon, starting one if needed. */
 export async function ensureDaemon(paths: JafferPaths, l: Launcher, waitMs = 12_000): Promise<RpcClient> {
   const existing = await tryConnect(paths);
   if (existing) return existing;
-  launchDaemon(paths, l);
+  const agent = agentOf(paths, l);
+  let spawned = (await launchDaemon(paths, { ...l, agent })) === 'spawned';
   const t0 = Date.now();
   while (Date.now() - t0 < waitMs) {
     await sleep(120);
     const c = await tryConnect(paths, 600);
     if (c) return c;
+    // the agent's wrapper takes the agent away when the app it was written for is gone (moved, deleted): then launchd starts nothing
+    if (!spawned && agent && !agent.installed()) {
+      spawnDetached(paths, l);
+      spawned = true;
+    }
   }
   throw new Error(`Could not start the Jaffer session daemon (see ${paths.logFile}).`);
 }

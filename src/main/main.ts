@@ -17,7 +17,7 @@ import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
-import { resetJaffer } from '../core/reset';
+import { removeAgentForReset, resetJaffer } from '../core/reset';
 import { restartClaudeText } from '../shared/restart-claude';
 
 /**
@@ -488,6 +488,8 @@ ipcMain.handle('jaffer:reset', async (e) => {
   quitting = true; // from here the app is on its way out and must not reconnect to the session it is ending
   updates?.stop();
   await client?.call('setup.claude.remove', {}).catch(() => undefined); // the daemon finds `claude` the way the terminal does
+  // the login agent before the session ends: launchd must not start it again (when launchd runs the daemon, this is what ends it)
+  await removeAgentForReset({ home: paths.home }).catch(() => undefined);
   await client?.call('app.shutdown', {}).catch(() => undefined);
   client?.close();
   for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);

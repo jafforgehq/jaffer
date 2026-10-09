@@ -51,3 +51,34 @@ export const STAY_AWAKE = {
 
 /** The launchd label of the daemon's login agent. */
 export const AGENT_LABEL = 'com.jafforge.jaffer.daemon';
+
+/**
+ * How the login agent that keeps the session running stands, as the daemon tells it (`service.status`, `service.install`,
+ * `service.remove`): from launchd and the plist on disk, not from the switch alone.
+ * - `not-installed`: no plist.
+ * - `installed`: the files are in place and launchd is not running this daemon: it takes over at the next login, or the next time the
+ *   session starts (the app or `jaffer` then loads the job and starts the daemon through launchd). What a daemon that was started
+ *   detached says after the switch was turned on: launchd's own instance would have found the socket taken and stopped.
+ * - `running`: launchd runs the daemon, with this pid.
+ * - `not-loaded`: the plist is there but launchd runs nothing for it (from `LaunchAgent.status`; the daemon says `installed` instead
+ *   when it is not launchd's own).
+ * - `refused`: it cannot be here, and why (not macOS, not the person's own `~/.jaffer`, an app run from a disk image).
+ * `note`: something the person should know about what was just done (for example that turning it off ends the session now).
+ */
+export type AgentStatus = ({ state: 'not-installed' } | { state: 'installed' } | { state: 'running'; pid: number } | { state: 'not-loaded' } | { state: 'refused'; reason: string }) & { note?: string };
+
+/** The state in words, as `jaffer service status` prints it and Settings shows it. */
+export function agentStatusText(s: AgentStatus): string {
+  switch (s.state) {
+    case 'not-installed':
+      return 'not installed';
+    case 'installed':
+      return 'installed, active from the next login or restart';
+    case 'running':
+      return `running (pid ${s.pid})`;
+    case 'not-loaded':
+      return 'installed but not loaded';
+    case 'refused':
+      return `refused: ${s.reason}`;
+  }
+}

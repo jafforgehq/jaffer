@@ -230,6 +230,58 @@ describe('Jaffer UI end to end', () => {
     await sleep(2_500); // long enough for a typed command to have run
     expect(noArgCalls()).toBe(before);
   }, 60_000);
+
+  it('first run: "Keep my session running in the background" is on in the Claude path and off in the plain one; only on asks the daemon, and a refusal never holds up Get started', async () => {
+    const reload = () => page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    const keepBox = () => page.locator('.onboard .choices label', { hasText: 'Keep my session running in the background' }).locator('input[type=checkbox]');
+    /** Notes every call the page makes to the daemon from here on (and still makes it). */
+    const spy = () =>
+      page.evaluate(() => {
+        const w = window as any;
+        const real = w.jaffer.call;
+        w.__calls = [];
+        w.jaffer.call = (m: string, p: unknown) => (w.__calls.push(m), real(m, p));
+      });
+    const calls = (): Promise<string[]> => page.evaluate(() => (window as any).__calls);
+    const agentsDir = path.join(env.userHome, 'Library', 'LaunchAgents');
+
+    // with Claude (already signed in: straight to the choices): on by default, said plainly
+    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
+    await reload();
+    await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
+    expect(await keepBox().count()).toBe(1);
+    expect(await keepBox().isChecked()).toBe(true);
+    expect((await page.textContent('.onboard')) ?? '').toMatch(/restart it automatically after a crash or a reboot/i);
+    await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click(); // (nothing is typed in this test)
+    await spy();
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard', { state: 'detached' }); // not held up by the refusal of this test home
+    await until(async () => (await calls()).includes('service.install'), 5_000, 'Get started to ask the daemon to keep the session running');
+    await page.locator('.toast', { hasText: /~\/\.jaffer|another folder|macOS only/ }).waitFor({ timeout: 5_000 }); // and why it could not, in a toast
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).session.keepRunning).toBe(false);
+    expect(fs.existsSync(agentsDir)).toBe(false);
+
+    // the plain terminal: off by default (that path installs nothing), and Get started asks the daemon for nothing of the kind
+    fake.setLoggedIn(false);
+    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
+    await reload();
+    await page.waitForSelector('.onboard[data-step="signin"]', { timeout: 20_000 });
+    await page.locator('.onboard button', { hasText: 'plain terminal' }).click();
+    await page.waitForSelector('.onboard[data-step="choices"]');
+    expect(await keepBox().count()).toBe(1);
+    expect(await keepBox().isChecked()).toBe(false);
+    await spy();
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard', { state: 'detached' });
+    await sleep(1_000);
+    expect((await calls()).filter((m) => m.startsWith('service.'))).toEqual([]);
+    expect(fs.existsSync(agentsDir)).toBe(false);
+
+    // back to a Mac where Claude Code is connected, as the tests after this one expect
+    fake.setLoggedIn(true);
+    await page.evaluate(() => window.jaffer.call('setup.claude.install', { mcp: false }));
+    await page.evaluate(() => window.jaffer.call('config.patch', { memory: { llm: 'auto' }, ingest: { claudeCode: true } }));
+  }, 90_000);
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     await page.click('.term');
@@ -852,10 +904,10 @@ describe('Jaffer UI end to end', () => {
     expect(await awake.count()).toBe(1);
     expect(await stayAwake()).toBe(true);
     expect(await awake.locator('input').isChecked()).toBe(true);
-    // next to "Keep the screen for a restart"
+    // by "Keep the screen for a restart": right after it comes "Keep my session running in the background", then this one
     const next = await page.evaluate(() => {
       const fields = [...document.querySelectorAll('.settings .field')];
-      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 1]?.textContent ?? '';
+      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 2]?.textContent ?? '';
     });
     expect(next).toContain('Keep my Mac awake while Claude works');
     // the hint says what it does and what it does not do (a closed lid)
@@ -871,6 +923,77 @@ describe('Jaffer UI end to end', () => {
     expect(await awake.locator('input').isChecked()).toBe(true);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
+  it('Settings: "Keep my session running in the background" follows the screen switch, shows what the daemon says, and in this test home is off, disabled and says why', async () => {
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+    expect(await keep.count()).toBe(1);
+    const next = await page.evaluate(() => {
+      const fields = [...document.querySelectorAll('.settings .field')];
+      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 1]?.textContent ?? '';
+    });
+    expect(next).toContain('Keep my session running in the background');
+    // a hint like its neighbours', and under it a line from the daemon: here, why it cannot be (not the person's own ~/.jaffer)
+    expect((await keep.locator('.field-label small').first().textContent()) ?? '').toMatch(/after a crash or a reboot/);
+    const status = await page.evaluate(() => window.jaffer.call('service.status', {}));
+    expect(status).toEqual({ state: 'refused', reason: expect.stringMatching(/~\/\.jaffer|another folder|macOS only/) });
+    await until(async () => ((await keep.locator('.field-status').textContent()) ?? '').includes(status.reason), 5_000, 'the reason under the switch');
+    expect(await keep.locator('input').isDisabled()).toBe(true);
+    expect(await keep.locator('input').isChecked()).toBe(false);
+    await keep.scrollIntoViewIfNeeded();
+    await shot('08b-settings-keep-running-refused');
+    await keep.locator('.field-label').click({ force: true }); // a click on its words does nothing either (forced: Playwright waits for a disabled control's label)
+    await sleep(400);
+    expect(await keep.locator('input').isChecked()).toBe(false);
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).session.keepRunning).toBe(false);
+    expect(fs.existsSync(path.join(env.userHome, 'Library', 'LaunchAgents'))).toBe(false);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
+  it('Settings: the keep-running line says what launchd does, and the switch asks the daemon to install or remove the agent (the daemon\'s answers stood in for)', async () => {
+    // a Mac where the agent can be: the daemon's three answers are played here, so nothing reaches launchd
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.__svcCalls = [];
+      w.__svc = { state: 'running', pid: 4242 };
+      w.jaffer.call = (m: string, p: unknown) => {
+        if (!m.startsWith('service.')) return w.__realCall(m, p);
+        w.__svcCalls.push(m);
+        if (m === 'service.install') w.__svc = { state: 'installed' };
+        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'The session ends now: launchd was running it.' };
+        return Promise.resolve(w.__svc);
+      };
+    });
+    try {
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
+      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
+      expect(await keep.locator('input').isDisabled()).toBe(false);
+      expect(await keep.locator('input').isChecked()).toBe(true);
+      await keep.locator('.switch').click(); // off
+      await until(async () => (await line()).includes('not installed'), 5_000, 'the removed line');
+      expect(await keep.locator('input').isChecked()).toBe(false);
+      await page.locator('.toast', { hasText: 'The session ends now' }).waitFor({ timeout: 5_000 }); // what the daemon said about it
+      await keep.locator('.switch').click(); // on again
+      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
+      expect(await keep.locator('input').isChecked()).toBe(true);
+      expect(await page.evaluate(() => (window as any).__svcCalls)).toEqual(['service.status', 'service.remove', 'service.install']);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__realCall;
+      });
+    }
   }, 60_000);
 
   it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {

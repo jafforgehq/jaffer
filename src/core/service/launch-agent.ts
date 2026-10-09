@@ -1,14 +1,17 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { AGENT_LABEL } from '../../shared/keep-running';
+import { AGENT_LABEL, type AgentStatus } from '../../shared/keep-running';
+
+export type { AgentStatus };
 
 /**
  * The login agent that owns the daemon (`~/Library/LaunchAgents/com.jafforge.jaffer.daemon.plist`, loaded into the person's `gui/<uid>`
  * domain): the text of the plist and of the wrapper it runs, the rules that refuse it, and the install / remove / reconcile / status
  * steps. `launchctl` and the file system are injected, so the tests never touch the real ones.
  *
- * The decision comes from the person's switch (`session.keepRunning`) and happens only for the default home: Task 9 wires the switch,
- * the RPCs and `jaffer service`. Nothing in this file reads the config or starts a daemon.
+ * The decision comes from the person's switch (`session.keepRunning`) and happens only for the default home: the daemon's `service.*`
+ * RPCs and its start (`src/daemon/keep-running.ts`), `jaffer service`, Reset (`src/core/reset.ts`) and the start of the daemon by the app
+ * or the CLI (`launchDaemon` in `src/core/daemon-client.ts`) use it. Nothing in this file reads the config or starts a daemon.
  */
 
 export interface PlanInput {
@@ -38,10 +41,20 @@ export interface Launchctl {
   run(args: string[]): Promise<{ code: number; out: string }>;
 }
 
-export type AgentStatus = { state: 'not-installed' } | { state: 'running'; pid: number } | { state: 'not-loaded' } | { state: 'refused'; reason: string };
+/** The agent's two files: what `remove` takes away (a plan has them, and so has an agent installed from where the app was before). */
+export type AgentFiles = Pick<AgentPlan, 'plistPath' | 'wrapperPath'>;
+
+/** What `launchctl bootout` did: its exit code and what it printed. */
+export interface Bootout {
+  code: number;
+  out: string;
+}
 
 /** What the agent needs from the file system (a fake in the tests). */
-export type LaunchAgentFs = Pick<typeof import('node:fs'), 'writeFileSync' | 'mkdirSync' | 'rmSync' | 'existsSync' | 'chmodSync' | 'readFileSync'>;
+export type LaunchAgentFs = Pick<typeof import('node:fs'), 'writeFileSync' | 'mkdirSync' | 'rmSync' | 'existsSync' | 'chmodSync' | 'readFileSync' | 'renameSync'>;
+
+/** Why a home other than the person's own `~/.jaffer` gets no agent. */
+export const REFUSED_OTHER_HOME = 'Only the usual Jaffer folder (~/.jaffer) can be kept running by macOS; this Jaffer uses another folder (JAFFER_HOME).';
 
 /** Where the agent's files are: the plist in the person's LaunchAgents folder, the wrapper in the Jaffer home. */
 export function agentPaths(i: Pick<PlanInput, 'home' | 'userHome'>): { plistPath: string; wrapperPath: string } {
@@ -49,6 +62,23 @@ export function agentPaths(i: Pick<PlanInput, 'home' | 'userHome'>): { plistPath
     plistPath: path.join(i.userHome, 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`),
     wrapperPath: path.join(i.home, 'bin', 'jafferd'),
   };
+}
+
+/**
+ * Where the files of an agent of this home are, when an agent can belong to it at all: on macOS, for the default home, with no control
+ * character in either folder. Unlike `planAgent` it does not look at where the app runs, so an agent installed earlier can still be taken
+ * away by an app that is now run from a disk image or a translocated copy. `null`: nothing there is this Jaffer's to touch.
+ */
+export function agentFiles(i: PlanInput): AgentFiles | null {
+  if (i.platform !== 'darwin' || i.home !== i.defaultHome || CONTROL.test(i.home) || CONTROL.test(i.userHome)) return null;
+  return agentPaths(i);
+}
+
+/** What a bootout means for the person, in a sentence's end ("...; launchd unloaded it."). Its output is clipped to one short line. */
+export function bootoutNote(r: Bootout): string {
+  if (r.code === 0) return 'launchd unloaded it.';
+  const said = r.out.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 160);
+  return `launchd had nothing loaded for it (launchctl bootout: ${said || `exit ${r.code}`}).`;
 }
 
 /** Text for an XML element: the five characters XML reserves are written as entities. */
@@ -70,7 +100,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
  */
 export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
   if (i.platform !== 'darwin') return { refused: 'Keeping the session running in the background works on macOS only.' };
-  if (i.home !== i.defaultHome) return { refused: 'Only the usual Jaffer folder (~/.jaffer) can be kept running by macOS; this Jaffer uses another folder (JAFFER_HOME).' };
+  if (i.home !== i.defaultHome) return { refused: REFUSED_OTHER_HOME };
   if ([i.home, i.userHome, i.execPath, i.daemonScript].some((p) => CONTROL.test(p))) return { refused: 'A folder name with a control character cannot be used for the background agent.' };
   if (i.execPath.includes('/AppTranslocation/') || i.execPath.startsWith('/Volumes/')) {
     return { refused: 'Jaffer is running from a disk image or a temporary location. Move Jaffer to Applications first.' };
@@ -124,6 +154,8 @@ export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
     `  /bin/launchctl bootout gui/${i.uid}/${AGENT_LABEL} >/dev/null 2>&1`,
     '  exit 0',
     'fi',
+    '# the daemon knows launchd runs it: taking the agent away from it ends it, so it answers first',
+    'export JAFFER_LAUNCHD=1',
     `${i.electron ? 'ELECTRON_RUN_AS_NODE=1 ' : ''}exec ${app} ${shq(i.daemonScript)}`,
     '',
   ].join('\n');
@@ -195,20 +227,43 @@ export class LaunchAgent {
   }
 
   /**
-   * Write the wrapper, then the plist (it never points at a missing wrapper), and load the job. A job that runs is left as it is, with
-   * the new files for its next start: booting out the job from the daemon it runs would end that daemon, and the session with it.
-   * Throws, with what `launchctl` said, when launchd will not load the job; the files stay, for the next try.
+   * A file written whole: under a temporary name in the same folder, then renamed over the old one, so launchd never runs a wrapper or
+   * reads a plist that was cut off (a cut-off wrapper would fail, and be restarted every 5 s with no daemon). The temporary name does
+   * not end in `.plist`: launchd loads every plist in LaunchAgents at login. A failure leaves no temporary file behind.
    */
-  async install(plan: AgentPlan): Promise<void> {
+  private writeWhole(file: string, data: string, mode: number): void {
+    const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+    try {
+      this.fs.writeFileSync(tmp, data, { mode });
+      this.fs.chmodSync(tmp, mode); // (the umask must not narrow it)
+      this.fs.renameSync(tmp, file);
+    } catch (e) {
+      try {
+        this.fs.rmSync(tmp, { force: true });
+      } catch {
+        /* nothing more to do */
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Write the wrapper, then the plist (it never points at a missing wrapper), each whole, and load the job. A job that runs is left as it
+   * is, with the new files for its next start: booting out the job from the daemon it runs would end that daemon, and the session with
+   * it. `load: false` writes the files only: a daemon that launchd does not run must not load the job (launchd's instance would find the
+   * socket taken, exit 0 and supervise nothing), and the one it runs only refreshes them; launchd loads the job at the next login, and the
+   * app or the CLI loads it at the next start of the session (`launchDaemon`). Throws, with what `launchctl` said, when launchd will not
+   * load the job; the files stay, and the job is loaded at the next login or the next start of the session.
+   */
+  async install(plan: AgentPlan, o: { load?: boolean } = {}): Promise<void> {
     const { fs } = this;
     const home = path.dirname(path.dirname(plan.wrapperPath));
     fs.mkdirSync(path.dirname(plan.plistPath), { recursive: true });
     fs.mkdirSync(path.dirname(plan.wrapperPath), { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.join(home, 'run'), { recursive: true, mode: 0o700 }); // launchd opens the log file before it starts the job
-    fs.writeFileSync(plan.wrapperPath, plan.wrapper, { mode: 0o755 });
-    fs.chmodSync(plan.wrapperPath, 0o755); // (the umask must not narrow it)
-    fs.writeFileSync(plan.plistPath, plan.plist, { mode: 0o644 });
-    fs.chmodSync(plan.plistPath, 0o644);
+    this.writeWhole(plan.wrapperPath, plan.wrapper, 0o755);
+    this.writeWhole(plan.plistPath, plan.plist, 0o644);
+    if (o.load === false) return;
     const job = await this.probe();
     if (job.pid !== undefined) return;
     if (job.loaded) await this.launchctl.run(['bootout', this.target]); // bootstrap fails on a job that is loaded; if this fails, bootstrap says why
@@ -217,34 +272,45 @@ export class LaunchAgent {
   }
 
   /**
-   * Delete both files, then boot the job out. The bootout is last because it ends the daemon when the daemon is the job that runs
-   * (that is a deliberate end: launchd does not start it again). Silent when nothing is installed.
+   * Delete both files, then boot the job out, and hand back what the bootout did (Reset and `jaffer service` tell the person; a failure
+   * is not thrown: with nothing loaded there is nothing to unload). The bootout is last because it ends the daemon when the daemon is the
+   * job that runs (that is a deliberate end: launchd does not start it again), so a daemon that removes its own agent answers first.
    */
-  async remove(plan: AgentPlan): Promise<void> {
-    this.fs.rmSync(plan.plistPath, { force: true });
-    this.fs.rmSync(plan.wrapperPath, { force: true });
-    await this.launchctl.run(['bootout', this.target]);
+  async remove(files: AgentFiles): Promise<Bootout> {
+    this.fs.rmSync(files.plistPath, { force: true });
+    this.fs.rmSync(files.wrapperPath, { force: true });
+    return this.launchctl.run(['bootout', this.target]);
   }
 
   /**
    * Make the disk and launchd agree with the switch, and say how it stands. Wanted: nothing installed is installed; files that differ
-   * from the plan (the app moved, a new version) are rewritten, and the job loaded again unless it runs; files that are current are
-   * left alone, also when the job is not loaded (a person's own `launchctl bootout` stays: status says so). Not wanted: removed when
-   * anything of it is on disk. A refused plan touches nothing. May throw what `install` throws.
+   * from the plan (the app moved, a new version) are rewritten, and the job loaded again unless it runs (or `load` is false); files that
+   * are current are left alone, also when the job is not loaded (a person's own `launchctl bootout` stays: status says so). Not wanted:
+   * removed when anything of it is on disk. A refused plan installs nothing; unwanted, the agent at `paths` (from `agentFiles`) is still
+   * removed, so an app run from a disk image can take away the agent it installed from Applications. May throw what `install` throws.
    */
-  async reconcile(want: boolean, plan: AgentPlan | { refused: string }): Promise<AgentStatus> {
-    if ('refused' in plan) return this.status(plan);
+  async reconcile(want: boolean, plan: AgentPlan | { refused: string }, o: { load?: boolean; paths?: AgentFiles | null } = {}): Promise<AgentStatus> {
+    if ('refused' in plan) {
+      const at = o.paths;
+      if (!want && at && (this.fs.existsSync(at.plistPath) || this.fs.existsSync(at.wrapperPath))) await this.remove(at);
+      return this.status(plan);
+    }
     if (!want) {
       if (this.fs.existsSync(plan.plistPath) || this.fs.existsSync(plan.wrapperPath)) await this.remove(plan);
       return this.status(plan);
     }
     const current = this.fs.existsSync(plan.plistPath) && this.read(plan.plistPath) === plan.plist && this.read(plan.wrapperPath) === plan.wrapper;
-    if (!current) await this.install(plan);
+    if (!current) await this.install(plan, { load: o.load });
     return this.status(plan);
   }
 
   /** Start the job now (no `-k`: one that runs is not touched). True when launchd did. */
   async kickstart(): Promise<boolean> {
     return (await this.launchctl.run(['kickstart', this.target])).code === 0;
+  }
+
+  /** Load the job from its plist (its RunAtLoad starts the daemon). True when launchd did; false also for a job that is loaded already. */
+  async bootstrap(plistPath: string): Promise<boolean> {
+    return (await this.launchctl.run(['bootstrap', this.domain, plistPath])).code === 0;
   }
 }

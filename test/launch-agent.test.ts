@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LaunchAgent, agentPaths, planAgent, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
-import { AGENT_LABEL } from '../src/shared/keep-running';
+import { LaunchAgent, agentFiles, agentPaths, planAgent, type AgentFiles, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
+import { AGENT_LABEL, agentStatusText } from '../src/shared/keep-running';
+import { KeepRunning } from '../src/daemon/keep-running';
+import { daemonAgent, defaultDaemonAgent, ensureDaemon, launchDaemon, type Launcher } from '../src/core/daemon-client';
+import { makePaths } from '../src/shared/paths';
 
 /**
  * Nothing here ever runs the real `launchctl` or touches the real ~/Library/LaunchAgents: the agent is driven through a recording fake
@@ -209,6 +212,14 @@ function memFs() {
       return undefined;
     },
     rmSync: (p: unknown) => void files.delete(String(p)),
+    // a rename puts the file at its new name (a write as far as the order of what appeared on disk goes)
+    renameSync: (from: unknown, to: unknown) => {
+      const f = files.get(String(from));
+      if (!f) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      files.delete(String(from));
+      files.set(String(to), f);
+      writes.push(String(to));
+    },
     existsSync: (p: unknown) => files.has(String(p)),
     chmodSync: (p: unknown, mode: unknown) => {
       const f = files.get(String(p));
@@ -330,7 +341,8 @@ describe('LaunchAgent.remove', () => {
 
   it('is silent when nothing is installed (a failing bootout is ignored)', async () => {
     const { fsx, calls, agent } = make();
-    await expect(agent.remove(plan())).resolves.toBeUndefined();
+    // (the bootout's failure is not thrown: it is handed back, for Reset and `jaffer service` to tell)
+    await expect(agent.remove(plan())).resolves.toEqual({ code: 3, out: 'Boot-out failed: 3: No such process' });
     expect(fsx.files.size).toBe(0);
     expect(fsx.writes).toEqual([]);
     expect(calls).toEqual([['bootout', TARGET]]);
@@ -466,3 +478,346 @@ function withTemp<T>(fn: (dir: string) => T): T {
   temps.push(dir);
   return fn(dir);
 }
+
+// ------------------------------------------------------------------------------------------------- the agent, wired into the product
+
+describe('LaunchAgent for the daemon it runs: loading left to the next start, removal that says what launchd did, files written whole', () => {
+  it('install with load: false writes the files and asks launchd nothing (a daemon that is not launchd\'s own never bootstraps)', async () => {
+    const { fsx, calls, agent } = make();
+    const p = plan();
+    await agent.install(p, { load: false });
+    expect(fsx.files.get(p.wrapperPath)).toEqual({ data: p.wrapper, mode: 0o755 });
+    expect(fsx.files.get(p.plistPath)).toEqual({ data: p.plist, mode: 0o644 });
+    expect(calls).toEqual([]);
+  });
+
+  it('writes each file whole: under a temporary name in the same folder first, then renamed into place', async () => {
+    const { fsx, agent } = make();
+    const p = plan();
+    await agent.install(p, { load: false });
+    const [tmpWrapper, , tmpPlist] = fsx.writes;
+    expect(fsx.writes).toEqual([tmpWrapper, p.wrapperPath, tmpPlist, p.plistPath]);
+    expect(path.dirname(tmpWrapper!)).toBe(path.dirname(p.wrapperPath));
+    expect(path.dirname(tmpPlist!)).toBe(path.dirname(p.plistPath));
+    expect(tmpPlist!.endsWith('.plist')).toBe(false); // launchd loads every *.plist in that folder at login: a temporary one must not look like one
+    expect([...fsx.files.keys()].sort()).toEqual([p.plistPath, p.wrapperPath].sort()); // nothing temporary is left behind
+    // a write that fails half way leaves no cut-off file where launchd looks (it would fail every 5 s), and no temporary one
+    const full = memFs();
+    const write = full.writeFileSync;
+    full.writeFileSync = (f: unknown, data: unknown, o?: unknown) => {
+      write(f, String(data).slice(0, 5), o);
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    };
+    const broken = new LaunchAgent({ launchctl: fakeLaunchd().launchctl, uid: 501, fs: full as unknown as LaunchAgentFs });
+    await expect(broken.install(p)).rejects.toThrow(/ENOSPC/);
+    expect(full.files.size).toBe(0);
+  });
+
+  it('remove hands back what the bootout did (its code and what launchctl printed), so Reset and `jaffer service` can say it', async () => {
+    const loaded = make({ loaded: true, pid: 4242 });
+    seed(loaded.fsx, plan());
+    expect(await loaded.agent.remove(plan())).toEqual({ code: 0, out: '' });
+    const gone = make();
+    expect(await gone.agent.remove(plan())).toEqual({ code: 3, out: 'Boot-out failed: 3: No such process' });
+  });
+
+  it('reconcile passes load: false on to install (stale files are rewritten, nothing is bootstrapped)', async () => {
+    const { fsx, calls, agent } = make();
+    const p = plan();
+    seed(fsx, p, { plist: p.plist.replace('<integer>5</integer>', '<integer>10</integer>') });
+    expect(await agent.reconcile(true, p, { load: false })).toEqual({ state: 'not-loaded' });
+    expect(fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]);
+  });
+
+  it('reconcile(false) of a plan refused for where the app runs (translocated) still takes away an agent installed earlier, through the paths it is given', async () => {
+    const { fsx, calls, agent } = make({ loaded: true, pid: null });
+    const p = plan();
+    seed(fsx, p);
+    const refused = planAgent({ ...BASE, execPath: '/private/var/folders/xx/T/AppTranslocation/ABC/d/Jaffer.app/Contents/MacOS/Jaffer' });
+    expect(refused).toEqual({ refused: expect.stringMatching(/Applications/) });
+    const files = agentFiles({ ...BASE, execPath: '/private/var/folders/xx/T/AppTranslocation/ABC/d/Jaffer.app/Contents/MacOS/Jaffer' });
+    expect(files).toEqual(agentPaths(BASE));
+    expect(await agent.reconcile(false, refused, { paths: files })).toEqual({ state: 'refused', reason: expect.stringMatching(/Applications/) });
+    expect(fsx.files.size).toBe(0);
+    expect(calls).toEqual([['bootout', TARGET]]);
+    // wanted, a refused plan still installs nothing
+    const again = make();
+    expect(await again.agent.reconcile(true, refused, { paths: files })).toEqual({ state: 'refused', reason: expect.any(String) });
+    expect(again.fsx.writes.length + again.fsx.dirs.size + again.calls.length).toBe(0);
+  });
+
+  it('agentFiles: where an agent of this home would be on this Mac, and nothing for another platform or another home', () => {
+    expect(agentFiles(BASE)).toEqual(agentPaths(BASE));
+    expect(agentFiles({ ...BASE, execPath: '/Volumes/Jaffer 1.2/Jaffer.app/Contents/MacOS/Jaffer' })).toEqual(agentPaths(BASE)); // a refusal about the app, not the home
+    expect(agentFiles({ ...BASE, platform: 'linux' })).toBeNull();
+    expect(agentFiles({ ...BASE, home: '/tmp/jaffer-test-1/.jaffer' })).toBeNull();
+    expect(agentFiles({ ...BASE, userHome: '/Users/m\ne' })).toBeNull();
+  });
+
+  it('bootstrap loads the job from its plist and says whether launchd did', async () => {
+    const down = make();
+    expect(await down.agent.bootstrap(plan().plistPath)).toBe(true);
+    expect(down.calls).toEqual([['bootstrap', 'gui/501', plan().plistPath]]);
+    const refusing = make({ bootstrapFails: 'Bootstrap failed: 5: Input/output error' });
+    expect(await refusing.agent.bootstrap(plan().plistPath)).toBe(false);
+  });
+});
+
+describe('the wrapper tells the daemon that launchd runs it', () => {
+  it('exports JAFFER_LAUNCHD=1 to the app it execs (a detached daemon never has it)', () => {
+    expect(plan().wrapper).toContain('export JAFFER_LAUNCHD=1');
+    withTemp((dir) => {
+      const execPath = path.join(dir, 'Jaffer');
+      fs.writeFileSync(execPath, '#!/bin/sh\nprintf "launchd=%s\\n" "$JAFFER_LAUNCHD"\n', { mode: 0o755 });
+      fs.chmodSync(execPath, 0o755);
+      const wrapper = path.join(dir, 'wrapper.sh');
+      fs.writeFileSync(wrapper, plan({ execPath, daemonScript: path.join(dir, 'jafferd.cjs'), uid: 99999 }).wrapper);
+      const r = spawnSync('/bin/sh', [wrapper], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout.trim()).toBe('launchd=1');
+    });
+  });
+});
+
+describe('KeepRunning: what the daemon does for the switch (a fake launchd, an in-memory disk)', () => {
+  const MOVE = 'Jaffer is running from a disk image or a temporary location. Move Jaffer to Applications first.';
+  function keep(o: { launchd?: boolean; plan?: AgentPlan | { refused: string }; files?: AgentFiles | null; start?: Parameters<typeof fakeLaunchd>[0]; keepRunning?: boolean } = {}) {
+    const fsx = memFs();
+    const d = fakeLaunchd(o.start);
+    const agent = new LaunchAgent({ launchctl: d.launchctl, uid: 501, fs: fsx as unknown as LaunchAgentFs });
+    const later: { fn: () => unknown; ms: number }[] = [];
+    let flag = o.keepRunning ?? false;
+    const flags: boolean[] = [];
+    const k = new KeepRunning({
+      agent,
+      plan: () => o.plan ?? plan(),
+      files: () => (o.files === undefined ? agentPaths(BASE) : o.files),
+      launchd: !!o.launchd,
+      keepRunning: () => flag,
+      setKeepRunning: (on) => {
+        flag = on;
+        flags.push(on);
+      },
+      later: (fn, ms) => void later.push({ fn, ms }),
+      log: () => undefined,
+    });
+    return { k, fsx, ...d, later, flags, flag: () => flag };
+  }
+  const stale = (p: AgentPlan) => ({ plist: p.plist.replace('<integer>5</integer>', '<integer>10</integer>') });
+
+  it('in a daemon that launchd does not run (started detached), install writes the files, loads nothing, turns the switch on, and says it is active from the next login or restart', async () => {
+    const t = keep();
+    const p = plan();
+    const r = await t.k.install();
+    expect(r).toEqual({ state: 'installed' });
+    expect(agentStatusText(r)).toBe('installed, active from the next login or restart');
+    expect(t.fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(t.fsx.files.get(p.wrapperPath)?.data).toBe(p.wrapper);
+    expect(t.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]); // no bootstrap: launchd's instance would find the socket taken and exit 0
+    expect(t.flags).toEqual([true]);
+  });
+
+  it('in the daemon launchd runs (JAFFER_LAUNCHD=1), install only refreshes the files: launchd is asked to load or stop nothing', async () => {
+    const t = keep({ launchd: true, start: { loaded: true, pid: 4242 } });
+    const p = plan();
+    seed(t.fsx, p, stale(p));
+    expect(await t.k.install()).toEqual({ state: 'running', pid: 4242 });
+    expect(t.fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(t.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]);
+    expect(t.flags).toEqual([true]);
+  });
+
+  it('in the daemon launchd runs, remove answers first and boots out afterwards (the bootout ends this very daemon), and says the session ends', async () => {
+    const t = keep({ launchd: true, start: { loaded: true, pid: 4242 }, keepRunning: true });
+    const p = plan();
+    seed(t.fsx, p);
+    const r = await t.k.remove();
+    expect(r.state).toBe('not-installed');
+    expect(r.note).toMatch(/session ends/i);
+    expect(t.calls).toEqual([]); // nothing yet: the reply has to go out before launchd stops this daemon
+    expect(t.flag()).toBe(false);
+    expect(t.later).toHaveLength(1);
+    expect(t.later[0]!.ms).toBeGreaterThan(0);
+    await t.later[0]!.fn();
+    expect(t.fsx.files.size).toBe(0);
+    expect(t.calls).toEqual([['bootout', TARGET]]);
+  });
+
+  it('in a detached daemon, remove takes the files away and boots out at once, and tells what launchd did', async () => {
+    const t = keep({ start: { loaded: true, pid: null }, keepRunning: true });
+    seed(t.fsx, plan());
+    const r = await t.k.remove();
+    expect(r.state).toBe('not-installed');
+    expect(r.note).toMatch(/launchd/);
+    expect(t.fsx.files.size).toBe(0);
+    expect(t.calls.filter((c) => c[0] === 'bootout')).toEqual([['bootout', TARGET]]);
+    expect(t.later).toEqual([]);
+    expect(t.flag()).toBe(false);
+  });
+
+  it('status: running with the pid, installed (from the next login or restart) in a detached daemon, not installed', async () => {
+    const run = keep({ launchd: true, start: { loaded: true, pid: 31337 } });
+    seed(run.fsx, plan());
+    expect(await run.k.status()).toEqual({ state: 'running', pid: 31337 });
+    const detached = keep({ start: { loaded: true, pid: null } }); // (launchd knows the job, which exited because this daemon has the socket)
+    seed(detached.fsx, plan());
+    expect(await detached.k.status()).toEqual({ state: 'installed' });
+    expect(await keep().k.status()).toEqual({ state: 'not-installed' });
+  });
+
+  it('in another home (refused), status, install, remove and the start all say why and touch nothing: no file, no launchctl, not the switch', async () => {
+    for (const op of ['status', 'install', 'remove', 'reconcileAtStart'] as const) {
+      for (const on of [false, true]) {
+        const t = keep({ plan: { refused: 'another home' }, files: null, keepRunning: on, start: { loaded: true, pid: 4242 } });
+        seed(t.fsx, plan()); // even an agent of the person's own on the same disk is left exactly as it is
+        expect(await t.k[op](), op).toEqual({ state: 'refused', reason: 'another home' });
+        expect(t.fsx.writes, op).toEqual([]);
+        expect(t.fsx.files.size, op).toBe(2);
+        expect(t.fsx.dirs.size, op).toBe(0);
+        expect(t.calls, op).toEqual([]);
+        expect(t.flags, op).toEqual([]);
+        expect(t.later, op).toEqual([]);
+      }
+    }
+  });
+
+  it('with the app translocated (refused for where it runs), remove still takes an agent installed earlier away, and install still writes nothing', async () => {
+    const t = keep({ plan: { refused: MOVE }, keepRunning: true, start: { loaded: true, pid: null } });
+    seed(t.fsx, plan());
+    expect(await t.k.install()).toEqual({ state: 'refused', reason: MOVE });
+    expect(t.fsx.writes).toEqual([]);
+    expect(t.flags).toEqual([]);
+    expect(await t.k.remove()).toMatchObject({ state: 'refused', reason: MOVE });
+    expect(t.fsx.files.size).toBe(0);
+    expect(t.calls.filter((c) => c[0] === 'bootout')).toEqual([['bootout', TARGET]]);
+    expect(t.flag()).toBe(false);
+  });
+
+  it('at the start of the daemon: on refreshes stale or missing files without loading them; off takes an installed agent away, also when the app is translocated', async () => {
+    const p = plan();
+    const on = keep({ keepRunning: true });
+    seed(on.fsx, p, stale(p));
+    expect(await on.k.reconcileAtStart()).toEqual({ state: 'installed' });
+    expect(on.fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(on.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]);
+    const fresh = keep({ keepRunning: true });
+    expect(await fresh.k.reconcileAtStart()).toEqual({ state: 'installed' });
+    expect(fresh.fsx.files.size).toBe(2);
+    expect(fresh.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]);
+    const off = keep({ keepRunning: false, start: { loaded: true, pid: null } });
+    seed(off.fsx, p);
+    expect(await off.k.reconcileAtStart()).toEqual({ state: 'not-installed' });
+    expect(off.fsx.files.size).toBe(0);
+    expect(off.calls.some((c) => c[0] === 'bootout')).toBe(true);
+    const moved = keep({ keepRunning: false, plan: { refused: MOVE }, start: { loaded: true, pid: null } });
+    seed(moved.fsx, p);
+    expect(await moved.k.reconcileAtStart()).toEqual({ state: 'refused', reason: MOVE });
+    expect(moved.fsx.files.size).toBe(0);
+    expect(moved.calls.some((c) => c[0] === 'bootout')).toBe(true);
+    // off with nothing installed asks launchd nothing at all (the start of every daemon without the agent)
+    const none = keep({ keepRunning: false });
+    expect(await none.k.reconcileAtStart()).toEqual({ state: 'not-installed' });
+    expect(none.calls).toEqual([]);
+    // neither the start nor the switch changes the person's choice by itself
+    expect([...on.flags, ...fresh.flags, ...off.flags, ...moved.flags, ...none.flags]).toEqual([]);
+  });
+
+  it('the words for each state, as `jaffer service status` and Settings say them', () => {
+    expect(agentStatusText({ state: 'not-installed' })).toBe('not installed');
+    expect(agentStatusText({ state: 'installed' })).toBe('installed, active from the next login or restart');
+    expect(agentStatusText({ state: 'running', pid: 42 })).toBe('running (pid 42)');
+    expect(agentStatusText({ state: 'not-loaded' })).toBe('installed but not loaded');
+    expect(agentStatusText({ state: 'refused', reason: 'Move Jaffer to Applications first.' })).toBe('refused: Move Jaffer to Applications first.');
+  });
+});
+
+describe('launchDaemon: launchd starts the daemon when the agent is installed, a detached spawn otherwise', () => {
+  function setup(o: { installed?: boolean; start?: Parameters<typeof fakeLaunchd>[0] } = {}) {
+    const fsx = memFs();
+    const d = fakeLaunchd(o.start);
+    const p = plan();
+    if (o.installed) seed(fsx, p);
+    const agent = daemonAgent({ agent: new LaunchAgent({ launchctl: d.launchctl, uid: 501, fs: fsx as unknown as LaunchAgentFs }), plistPath: p.plistPath, exists: (f) => fsx.files.has(f) });
+    const spawned: { cmd: string; args: readonly string[]; opts: { detached?: boolean; env?: NodeJS.ProcessEnv } }[] = [];
+    const spawn: NonNullable<Launcher['spawn']> = (cmd, args, opts) => {
+      spawned.push({ cmd, args, opts });
+      return { unref: () => undefined };
+    };
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jaffer-launch-')));
+    temps.push(dir);
+    const paths = makePaths(path.join(dir, '.jaffer'));
+    const launcher: Launcher = { execPath: '/x/node', daemonScript: path.join(dir, 'jafferd.cjs'), cliScript: path.join(dir, 'jaffer.cjs'), agent, spawn };
+    return { fsx, ...d, p, agent, spawned, paths, launcher };
+  }
+
+  it('with the agent installed and loaded it kickstarts the job and spawns nothing', async () => {
+    const t = setup({ installed: true, start: { loaded: true, pid: null } });
+    expect(await launchDaemon(t.paths, t.launcher)).toBe('launchd');
+    expect(t.calls).toEqual([['kickstart', TARGET]]);
+    expect(t.spawned).toEqual([]);
+  });
+
+  it('with the plist on disk but the job not loaded it bootstraps it (RunAtLoad starts the daemon), kickstarts it, and spawns nothing', async () => {
+    const t = setup({ installed: true });
+    expect(await launchDaemon(t.paths, t.launcher)).toBe('launchd');
+    expect(t.calls).toEqual([
+      ['kickstart', TARGET],
+      ['bootstrap', 'gui/501', t.p.plistPath],
+      ['kickstart', TARGET],
+    ]);
+    expect(t.spawned).toEqual([]);
+  });
+
+  it('when launchd will not start it (kickstart and bootstrap fail) it falls back to the detached spawn', async () => {
+    const t = setup({ installed: true, start: { bootstrapFails: 'Bootstrap failed: 5: Input/output error' } });
+    expect(await launchDaemon(t.paths, t.launcher)).toBe('spawned');
+    expect(t.calls.map((c) => c[0])).toEqual(['kickstart', 'bootstrap']);
+    expect(t.spawned).toHaveLength(1);
+  });
+
+  it('with no agent installed it spawns the daemon detached, as before, and asks launchd nothing', async () => {
+    const t = setup();
+    expect(await launchDaemon(t.paths, t.launcher)).toBe('spawned');
+    expect(t.calls).toEqual([]);
+    expect(t.spawned).toHaveLength(1);
+    const s = t.spawned[0]!;
+    expect(s.cmd).toBe('/x/node');
+    expect(s.args).toEqual([t.launcher.daemonScript]);
+    expect(s.opts.detached).toBe(true);
+    expect(s.opts.env?.JAFFER_HOME).toBe(t.paths.home);
+    expect(s.opts.env?.JAFFER_CLI_SCRIPT).toBe(t.launcher.cliScript);
+    // and with no agent at all (a test or another home) the same
+    const none = setup();
+    expect(await launchDaemon(none.paths, { ...none.launcher, agent: null })).toBe('spawned');
+    expect(none.spawned).toHaveLength(1);
+  });
+
+  it('a detached daemon is never told it is launchd\'s: JAFFER_LAUNCHD is not passed on, from the environment or the launcher', async () => {
+    const t = setup();
+    const before = process.env.JAFFER_LAUNCHD;
+    process.env.JAFFER_LAUNCHD = '1'; // a CLI started from inside a launchd-run session
+    try {
+      await launchDaemon(t.paths, { ...t.launcher, env: { JAFFER_LAUNCHD: '1' } });
+    } finally {
+      if (before === undefined) delete process.env.JAFFER_LAUNCHD;
+      else process.env.JAFFER_LAUNCHD = before;
+    }
+    expect(t.spawned[0]!.opts.env?.JAFFER_LAUNCHD).toBeUndefined();
+  });
+
+  it('ensureDaemon falls back to the detached spawn when the agent takes itself away (the app it was written for is gone)', async () => {
+    const holder: { fsx?: ReturnType<typeof memFs>; plist?: string } = {};
+    // launchd starts the wrapper, which finds no app, deletes the plist and exits 0: no daemon comes
+    const t = setup({ installed: true, start: { loaded: true, pid: null, onCall: (a) => void (a[0] === 'kickstart' && holder.fsx!.files.delete(holder.plist!)) } });
+    holder.fsx = t.fsx;
+    holder.plist = t.p.plistPath;
+    await expect(ensureDaemon(t.paths, t.launcher, 900)).rejects.toThrow(/Could not start/);
+    expect(t.calls[0]).toEqual(['kickstart', TARGET]);
+    expect(t.spawned).toHaveLength(1);
+  });
+
+  it('the agent by default is none for any home but the person\'s own: a test home never runs launchctl', () => {
+    expect(defaultDaemonAgent(path.join(os.tmpdir(), 'jaffer-test-x', '.jaffer'))).toBeNull();
+  });
+});

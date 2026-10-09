@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { teardownClaude } from './integrations/claude';
 import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
+import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, type Launchctl } from './service/launch-agent';
+import { isDefaultHome } from './session/caffeinate';
 
 export interface ResetOptions {
   /** Jaffer's own folder (default ~/.jaffer). */
@@ -14,6 +16,14 @@ export interface ResetOptions {
   /** Also remove the app's own data (Electron's folder, preferences, saved window state). The running app clears its own. */
   appData?: boolean;
   now?: Date;
+  /**
+   * launchd, for the login agent that keeps the session running. Left out: the real `launchctl`, and only for the person's own
+   * `~/.jaffer` on macOS (`isDefaultHome`): a reset of any other home (a test, a second install) never touches launchd or the agent's
+   * plist. `null`: leave the agent alone. Tests pass a fake.
+   */
+  launchctl?: Launchctl | null;
+  /** The user whose launchd domain (`gui/<uid>`) holds the agent (default: this process's). */
+  uid?: number;
 }
 
 export interface ResetResult {
@@ -67,7 +77,24 @@ function isLink(p: string): boolean {
 }
 
 /**
- * Take Jaffer off this Mac so the next install starts from scratch: its hooks and memory tools in Claude Code, what it wrote
+ * Take away the login agent that keeps the session running: its plist (in the person's LaunchAgents), its wrapper (`<home>/bin/jafferd`)
+ * and the job in launchd (`bootout`; when launchd runs the daemon, that ends it, after it saved the state, and launchd does not start it
+ * again). The first step of a reset: `jaffer reset` and Settings → Reset run it before they end the session, and `resetJaffer` again
+ * (silent then). Nothing at all without an agent on disk. Returns what to tell the person, with what launchd answered.
+ */
+export async function removeAgentForReset(o: Pick<ResetOptions, 'home' | 'userHome' | 'launchctl' | 'uid'>): Promise<string[]> {
+  const home = path.resolve(o.home);
+  const launchctl = o.launchctl !== undefined ? o.launchctl : process.platform === 'darwin' && isDefaultHome(home) ? execLaunchctl() : null;
+  if (!launchctl) return [];
+  const files = agentPaths({ home, userHome: o.userHome ?? os.homedir() });
+  if (!fs.existsSync(files.plistPath) && !fs.existsSync(files.wrapperPath)) return [];
+  const agent = new LaunchAgent({ launchctl, uid: o.uid ?? process.getuid?.() ?? -1, fs });
+  const r = await agent.remove(files);
+  return [`Removed the background agent that kept the session running (${files.plistPath.replace(o.userHome ?? os.homedir(), '~')}); ${bootoutNote(r)}`];
+}
+
+/**
+ * Take Jaffer off this Mac so the next install starts from scratch: the login agent that keeps the session running (first), its hooks and memory tools in Claude Code, what it wrote
  * into Claude's files, the `jaffer` command link, the update cache, its own folder (moved aside as a backup unless `backup` is
  * false) and, optionally, the app's own data. Claude Code itself, its login and the person's own settings are not touched.
  * The daemon must already be stopped: it owns the folder.
@@ -82,6 +109,9 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
     changed = true;
     messages.push(m);
   };
+
+  // first, while Jaffer's folder (with the agent's wrapper) is still there: launchd must not start a daemon for a session being reset
+  for (const m of await removeAgentForReset({ home, userHome, launchctl: o.launchctl, uid: o.uid })) did(m);
 
   const td = await teardownClaude(userHome, env);
   if (td.messages.some((m) => /^Removed/.test(m))) changed = true;
