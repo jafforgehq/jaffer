@@ -384,10 +384,11 @@ function buildMenu(): void {
           label: 'Quit and End Session',
           accelerator: 'Alt+Cmd+Q',
           click: async () => {
-            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory and the conversation are kept.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
+            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory is kept. Claude Code is not resumed automatically; its conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
             if (r.response === 0) {
               quitting = true;
-              await client?.call('app.shutdown', {}).catch(() => undefined);
+              // ending the session on purpose: the next start does not bring the Claude Code conversation back by itself
+              await client?.call('app.shutdown', { forgetConversation: true }).catch(() => undefined);
               app.quit();
             }
           },

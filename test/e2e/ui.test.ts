@@ -977,6 +977,12 @@ describe('Jaffer UI end to end', () => {
       await send({ state: 'cancelled', id: ID });
       await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go when the daemon drops it');
       expect(await page.locator('.toast').count()).toBe(0);
+      // a notice that is due already (it reached a window late) never says "in 0 s"
+      await send({ state: 'pending', id: ID, typesAt: Date.now() - 500 });
+      await notice.waitFor();
+      expect(await notice.textContent()).toContain('Resuming Claude in 1 s');
+      await send({ state: 'typed', id: ID });
+      await until(async () => (await notice.count()) === 0, 5_000, 'the late notice to go once it was typed');
     } finally {
       await page.evaluate(() => {
         const w = window as any;
@@ -1014,6 +1020,44 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
+
+  it('auto-resume: a window that opens while the notice runs asks the daemon, and shows it with Cancel all the same', async () => {
+    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
+    // The window opens after the daemon announced (a reboot, the app reconnecting after an update): no event reaches it, so it
+    // asks `claude.autoresume.state` when it starts. Here the daemon's answer is stood in for, once, on the next page load.
+    await page.addInitScript(() => {
+      const raw = sessionStorage.getItem('jaffer.test.autoresumeState');
+      if (!raw) return;
+      sessionStorage.removeItem('jaffer.test.autoresumeState');
+      let bridge: any;
+      Object.defineProperty(window, 'jaffer', {
+        configurable: true,
+        get: () => bridge,
+        set: (v: any) => {
+          const call = v.call;
+          let once = true;
+          v.call = (m: string, p: unknown) => {
+            if (m === 'claude.autoresume.state' && once) {
+              once = false;
+              return Promise.resolve(JSON.parse(raw));
+            }
+            return call(m, p);
+          };
+          bridge = v;
+        },
+      });
+    });
+    await page.evaluate((st) => sessionStorage.setItem('jaffer.test.autoresumeState', JSON.stringify(st)), { state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
+    await notice.waitFor({ timeout: 10_000 });
+    const secs = Number(/Resuming Claude in (\d+) s/.exec((await notice.textContent()) ?? '')?.[1]);
+    expect(secs).toBeGreaterThanOrEqual(10); // the time the daemon announced, less the moment the page took to open
+    expect(secs).toBeLessThanOrEqual(20);
+    await notice.locator('button', { hasText: 'Cancel' }).click();
+    await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
+  }, 40_000);
 
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');

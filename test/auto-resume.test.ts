@@ -470,6 +470,32 @@ describe('AutoResumer', () => {
     expect(typed).toEqual([]);
   });
 
+  it('a shell that died clears the Cancel mark and checks again: Claude comes back in the new shell', () => {
+    r.check();
+    r.cancel();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    r.shellDied(); // (this stand-in shell is already at its prompt again)
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('a shell that died keeps the give-up: still at the limit, the new shell tells nothing more and types nothing', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    promptReady = false; // the shell is gone
+    r.shellDied();
+    promptReady = true; // and the new one is at its prompt
+    r.check();
+    advance(10_000);
+    r.shellDied(); // and again
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    expect(events).toEqual([{ state: 'gave-up', id: ID }]);
+    expect(typed).toEqual([]);
+  });
+
   it('a short crash after a try keeps the attempt; a healthy run (30 s or more) that crashes later starts over', () => {
     r.check();
     advance(3_000);

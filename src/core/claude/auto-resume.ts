@@ -143,6 +143,15 @@ export class AutoResumer {
     this.check();
   }
 
+  /**
+   * The shell died, and any Claude in it: a Cancel was said about the shell that is gone, so the new shell's prompt may bring the
+   * conversation back. A give-up stays: a new shell is not a new try, and it was said once.
+   */
+  shellDied(): void {
+    this.cancelledId = undefined;
+    this.check();
+  }
+
   private step(explicit: boolean): void {
     this.unschedule();
     const id = this.d.offer()?.id;

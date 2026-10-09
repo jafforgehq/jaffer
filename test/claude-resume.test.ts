@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
-import { endsConversation, isSessionId, resumeCommand } from '../src/shared/claude-resume';
+import { endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
 import { AUTO_RESUME } from '../src/shared/keep-running';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -354,5 +354,15 @@ describe('endsConversation: which `claude` commands, when they finish, mean the 
 
   it('is not the commands that only ask or manage (they must not drop an offer that is waiting)', () => {
     for (const c of ['claude --version', 'claude -v', 'claude --help', 'claude -h', 'claude mcp list', 'claude update', 'claude doctor', 'claude config get theme', 'claude auth status', 'claude plugin list', 'claude --debug mcp list']) expect(endsConversation(c), c).toBe(false);
+  });
+});
+
+describe('isPrintMode: a `claude` that answers once and exits (-p, --print) is never a conversation to resume', () => {
+  it('is a command line with -p or --print among its options', () => {
+    for (const c of ['claude -p hi', 'claude -p "fix the build"', 'claude --print "hi"', 'claude --model opus -p hi', 'claude -c -p "and now?"', 'FOO=1 claude -p hi', '/usr/local/bin/claude --print', 'command claude -p hi', 'claude -p hi | tee out.txt']) expect(isPrintMode(c), c).toBe(true);
+  });
+
+  it('is not an interactive Claude Code, nor -p inside the words of a prompt', () => {
+    for (const c of ['claude', 'claude --resume abcdef12', 'claude -c', 'claude "explain what -p does"', "claude 'use --print here'", 'claude --model opus', 'claude --permission-mode plan', 'claude mcp list', 'echo claude -p', 'claudex -p hi']) expect(isPrintMode(c), c).toBe(false);
   });
 });

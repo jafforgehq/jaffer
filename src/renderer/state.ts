@@ -116,12 +116,15 @@ function applyClaudeState(sessions: ClaudeSession[]): void {
 export const resumeOffer = signal<ResumeOffer | null>(null);
 /** The notice before the daemon types `claude --resume` by itself: one at a time, with Cancel, until it types, drops it or gives up. */
 let autoResumeToast: number | null = null;
+/** Counts what the daemon said about it, so an answer to `claude.autoresume.state` that a newer event overtook is not shown. */
+let autoResumeSeen = 0;
 function onAutoResume(e: { state?: string; typesAt?: number } | null): void {
+  autoResumeSeen++;
   if (autoResumeToast !== null) dismissToast(autoResumeToast);
   autoResumeToast = null;
   if (e?.state !== 'pending' || typeof e.typesAt !== 'number') return;
   const left = Math.max(0, e.typesAt - Date.now());
-  const s = Math.ceil(left / 1000);
+  const s = Math.max(1, Math.ceil(left / 1000)); // a notice that reached the window late is still "in 1 s", never "in 0 s"
   const when = s < 60 ? `${s} s` : `${Math.round(s / 60)} min`;
   // up for as long as the wait (a retry waits minutes), a little past it: the daemon's next word takes it away
   autoResumeToast = toast({ kind: 'info', text: `Resuming Claude in ${when}`, action: { label: 'Cancel', run: () => void jaffer().call('claude.autoresume.cancel', {}).catch(() => undefined) } }, Math.max(6000, left + 2000));
@@ -130,6 +133,10 @@ async function loadClaudeState(): Promise<void> {
   try {
     applyClaudeState((await jaffer().call('claude.state', {})).sessions);
     resumeOffer.value = (await jaffer().call('claude.resume', {})) ?? null;
+    // a notice announced before this window was listening (it opened after a reboot, or reconnected after an update)
+    const seen = autoResumeSeen;
+    const notice = await jaffer().call('claude.autoresume.state', {});
+    if (notice && seen === autoResumeSeen) onAutoResume(notice);
   } catch {
     /* the daemon is not there yet; its next push fills this in */
   }

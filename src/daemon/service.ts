@@ -16,9 +16,9 @@ import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { endsConversation, isSessionId, type ResumeOffer } from '../shared/claude-resume';
+import { endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
 import { ResumeStore } from '../core/claude/resume';
-import { AutoResumer, type AutoResumeTiming } from '../core/claude/auto-resume';
+import { AutoResumer, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
 import { AUTO_RESUME, AUTO_RESUME_TEST } from '../shared/keep-running';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
@@ -78,6 +78,8 @@ export class JafferService {
   private lastInputAt = 0;
   /** When auto-resume itself last typed: its line is on the prompt until the shell runs it, and is not added to either. */
   private lastAutoTypedAt = 0;
+  /** The notice that is running, if one is: a window that connects after it was announced is told when it asks. */
+  private autoNotice: Extract<AutoResumeEvent, { state: 'pending' }> | null = null;
   private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
@@ -121,7 +123,10 @@ export class JafferService {
             this.log(`auto-resume: could not type: ${errMsg(e)}`);
           }
         },
-        emit: (e) => this.rpc.broadcast('claude.autoresume', e),
+        emit: (e) => {
+          this.autoNotice = e.state === 'pending' ? e : null; // typed, cancelled or given up: no notice runs any more
+          this.rpc.broadcast('claude.autoresume', e);
+        },
         setTimer: (fn, ms) => {
           const t = setTimeout(fn, ms);
           t.unref?.();
@@ -286,9 +291,9 @@ export class JafferService {
       // not the person ending the conversation), and a daemon that is stopping leaves everything as it is.
       if (e.event.type === 'exit' && !this.stopping) {
         this.lastShellExitAt = Date.now();
-        // a Claude that died with its shell ended without anyone saying no to it: an earlier Cancel or give-up is history, and the
-        // new shell's prompt brings it back
-        this.autoResume.claudeEnded({ exit: null, durMs: 0 });
+        // a Claude that died with its shell ended without anyone saying no to it: an earlier Cancel is history, and the new shell's
+        // prompt brings it back (a give-up stays: a new shell is not a new try)
+        this.autoResume.shellDied();
         this.claudeWatcher.endAll();
         this.pushResume();
       }
@@ -304,8 +309,10 @@ export class JafferService {
         if (!stoppedExit(ev.exit) && isClaudeCommand(ev.cmd)) {
           this.claudeWatcher.endAll();
           // quit on purpose (exit 0, or Ctrl+C): nothing to offer afterwards. A crash or a kill leaves the offer, and a daemon that is
-          // stopping must not take it away (the shell dying with it is not the person ending the conversation)
-          if (!this.stopping && (ev.exit === 0 || ev.exit === 130) && endsConversation(ev.cmd)) this.resume.forget();
+          // stopping must not take it away (the shell dying with it is not the person ending the conversation). `claude -p` answered
+          // once and is gone, however it ended: a failing one must not leave an offer that starts an interactive Claude by itself.
+          const quit = (ev.exit === 0 || ev.exit === 130) && endsConversation(ev.cmd);
+          if (!this.stopping && (quit || isPrintMode(ev.cmd))) this.resume.forget();
           this.pushResume();
         }
         const proj = resolveProject(ev.cwd, this.userHome);
@@ -544,6 +551,8 @@ export class JafferService {
       this.autoResume.cancel();
       return true;
     });
+    // the notice that is running ({ state: 'pending', id, typesAt }) or null: for a window that connected after it was announced
+    r.handle('claude.autoresume.state', () => this.autoNotice);
 
     // ---- memory
     const api = makeMemoryApi(this.memory);
@@ -608,7 +617,13 @@ export class JafferService {
       return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
     });
 
-    r.handle('app.shutdown', () => {
+    // `forgetConversation`: the person ends the session (Quit and End Session), so the Claude Code conversation is not resumed at
+    // the next start. An update, Restart session, Reset or `jaffer daemon stop` shut down plainly: the conversation comes back.
+    r.handle('app.shutdown', (p: { forgetConversation?: boolean } | undefined) => {
+      if (p?.forgetConversation === true) {
+        this.resume.forget();
+        this.pushResume(); // (and a notice that is running ends with it)
+      }
       setTimeout(() => this.onShutdown.fn(), 50);
       return true;
     });
