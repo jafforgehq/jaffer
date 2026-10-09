@@ -1,0 +1,577 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { AutoResumer, nextStep, waitBefore, type AutoResumeDeps, type AutoResumeEvent, type AutoResumeInput, type AutoResumeTiming } from '../src/core/claude/auto-resume';
+import { AUTO_RESUME } from '../src/shared/keep-running';
+
+const ID = '3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f';
+const OTHER = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4';
+const RESUME = `claude --resume ${ID}\r`;
+const T0 = 50_000_000;
+
+/** The daemon's test mode: the same numbers, in milliseconds. */
+const FAST: AutoResumeTiming = { noticeMs: 3, quietMs: 2, maxAttempts: 3, windowMs: 600, waitsMs: [3, 20, 120], healthyMs: 30 };
+
+describe('waitBefore', () => {
+  it('waits 3 s before the first try, 20 s before the second, 2 min before the third and any later', () => {
+    expect(waitBefore([])).toBe(3_000);
+    expect(waitBefore([1])).toBe(20_000);
+    expect(waitBefore([1, 2])).toBe(120_000);
+    expect(waitBefore([1, 2, 3, 4])).toBe(120_000);
+  });
+
+  it('reads the waits from the timing it is given', () => {
+    expect(waitBefore([], FAST)).toBe(3);
+    expect(waitBefore([1], FAST)).toBe(20);
+    expect(waitBefore([1, 2, 3], FAST)).toBe(120);
+  });
+});
+
+describe('nextStep', () => {
+  const ready: AutoResumeInput = { now: T0, offer: { id: ID }, promptReady: true, busy: false, lastInputAt: T0 - 60_000, enabled: true, stopping: false, attempts: [], cancelled: false };
+  const step = (over: Partial<AutoResumeInput> = {}) => nextStep({ ...ready, ...over });
+  const three = [T0 - 300_000, T0 - 200_000, T0 - 100_000];
+
+  it.each<[string, Partial<AutoResumeInput>]>([
+    ['there is no offer', { offer: null }],
+    ['the setting is off', { enabled: false }],
+    ['the daemon is stopping', { stopping: true }],
+    ['the person cancelled it', { cancelled: true }],
+    ['the id is not a session id', { offer: { id: 'x; rm -rf ~' } }],
+    ['the id is empty', { offer: { id: '' } }],
+    ['the id is too short', { offer: { id: 'abc' } }],
+    ['something runs in the shell', { busy: true }],
+    ['the shell is not at a prompt', { promptReady: false }],
+    ['something runs and the person typed 1 s ago (idle, not wait)', { busy: true, lastInputAt: T0 - 1_000 }],
+    ['the shell is not at a prompt and the person typed 1 s ago (idle, not wait)', { promptReady: false, lastInputAt: T0 - 1_000 }],
+    ['something starts running during the notice', { busy: true, pendingSince: T0 - 3_000 }],
+    ['the setting is off, even at the limit', { enabled: false, attempts: three }],
+    ['the daemon is stopping, even at the limit', { stopping: true, attempts: three }],
+    ['the person cancelled it, even at the limit', { cancelled: true, attempts: three }],
+    ['there is no offer, even at the limit', { offer: null, attempts: three }],
+  ])('is idle when %s', (_, over) => {
+    expect(step(over)).toEqual({ kind: 'idle' });
+  });
+
+  it('announces when everything holds, typing after the notice', () => {
+    expect(step()).toEqual({ kind: 'announce', typesAt: T0 + AUTO_RESUME.noticeMs });
+    expect(step()).toEqual({ kind: 'announce', typesAt: T0 + 3_000 });
+  });
+
+  it('announces a retry with its own, longer wait, so the notice tells the truth', () => {
+    expect(step({ attempts: [T0 - 30_000] })).toEqual({ kind: 'announce', typesAt: T0 + 20_000 });
+    expect(step({ attempts: [T0 - 90_000, T0 - 30_000] })).toEqual({ kind: 'announce', typesAt: T0 + 120_000 });
+  });
+
+  it('waits for 2 s of quiet after the person typed before announcing', () => {
+    expect(step({ lastInputAt: T0 - 1_000 })).toEqual({ kind: 'wait', until: T0 + 1_000 });
+    expect(step({ lastInputAt: T0 - 2_000 })).toEqual({ kind: 'announce', typesAt: T0 + 3_000 });
+  });
+
+  it('types once the wait since the notice has passed, and not a moment before', () => {
+    expect(step({ pendingSince: T0 - 2_999 })).toEqual({ kind: 'wait', until: T0 + 1 });
+    expect(step({ pendingSince: T0 - 3_000 })).toEqual({ kind: 'type', id: ID });
+    expect(step({ pendingSince: T0 - 19_999, attempts: [T0 - 60_000] })).toEqual({ kind: 'wait', until: T0 + 1 });
+    expect(step({ pendingSince: T0 - 20_000, attempts: [T0 - 60_000] })).toEqual({ kind: 'type', id: ID });
+    expect(step({ pendingSince: T0 - 120_000, attempts: [T0 - 200_000, T0 - 150_000] })).toEqual({ kind: 'type', id: ID });
+  });
+
+  it('the person typing during the notice moves the typing to 2 s after their last key', () => {
+    expect(step({ pendingSince: T0 - 3_000, lastInputAt: T0 - 500 })).toEqual({ kind: 'wait', until: T0 + 1_500 });
+    expect(step({ pendingSince: T0 - 3_000, lastInputAt: T0 - 2_000 })).toEqual({ kind: 'type', id: ID });
+  });
+
+  it('gives up at three attempts in ten minutes, whatever the shell is doing', () => {
+    expect(step({ attempts: three })).toEqual({ kind: 'give-up' });
+    expect(step({ attempts: [...three, T0 - 1] })).toEqual({ kind: 'give-up' });
+    expect(step({ attempts: three, busy: true })).toEqual({ kind: 'give-up' });
+    expect(step({ attempts: three, promptReady: false })).toEqual({ kind: 'give-up' });
+    expect(step({ attempts: three, pendingSince: T0 - 200_000 })).toEqual({ kind: 'give-up' });
+  });
+
+  it('does not count attempts older than ten minutes', () => {
+    expect(step({ attempts: [T0 - 700_000, T0 - 650_000, T0 - 100_000] })).toEqual({ kind: 'announce', typesAt: T0 + 20_000 });
+    expect(step({ attempts: [T0 - 600_000, T0 - 599_999, T0 - 1] })).toEqual({ kind: 'announce', typesAt: T0 + 120_000 });
+  });
+
+  it('reads every number from the timing it is given', () => {
+    expect(nextStep(ready, FAST)).toEqual({ kind: 'announce', typesAt: T0 + 3 });
+    expect(nextStep({ ...ready, lastInputAt: T0 - 1 }, FAST)).toEqual({ kind: 'wait', until: T0 + 1 });
+    expect(nextStep({ ...ready, attempts: [T0 - 30] }, FAST)).toEqual({ kind: 'announce', typesAt: T0 + 20 });
+    expect(nextStep({ ...ready, pendingSince: T0 - 20, attempts: [T0 - 30] }, FAST)).toEqual({ kind: 'type', id: ID });
+    expect(nextStep({ ...ready, attempts: [T0 - 30, T0 - 20, T0 - 10] }, FAST)).toEqual({ kind: 'give-up' });
+    expect(nextStep({ ...ready, attempts: [T0 - 700, T0 - 20, T0 - 10] }, FAST)).toEqual({ kind: 'announce', typesAt: T0 + 120 });
+    expect(nextStep({ ...ready, attempts: [T0 - 30, T0 - 20] }, { ...FAST, maxAttempts: 2 })).toEqual({ kind: 'give-up' });
+  });
+});
+
+describe('AutoResumer', () => {
+  let now: number;
+  let timers: { fn: () => void; at: number; live: boolean }[];
+  let offer: { id: string } | null;
+  let promptReady: boolean;
+  let busy: boolean;
+  let lastInputAt: number;
+  let enabled: boolean;
+  let stopping: boolean;
+  let tries: Map<string, number[]>;
+  let cleared: string[];
+  let typed: string[];
+  let events: AutoResumeEvent[];
+  let r: AutoResumer;
+
+  const advance = (ms: number) => {
+    const to = now + ms;
+    for (;;) {
+      const due = timers.filter((t) => t.live && t.at <= to).sort((a, b) => a.at - b.at)[0];
+      if (!due) break;
+      now = due.at;
+      due.live = false;
+      due.fn();
+    }
+    now = to;
+  };
+
+  const deps = (): AutoResumeDeps => ({
+    now: () => now,
+    offer: () => offer,
+    promptReady: () => promptReady,
+    busy: () => busy,
+    lastInputAt: () => lastInputAt,
+    enabled: () => enabled,
+    stopping: () => stopping,
+    // like ResumeStore: the times that still count
+    attempts: (id) => (tries.get(id) ?? []).filter((t) => now - t < AUTO_RESUME.windowMs),
+    recordAttempt: (id) => void tries.set(id, [...(tries.get(id) ?? []), now]),
+    clearAttempts: (id) => {
+      cleared.push(id);
+      tries.delete(id);
+    },
+    type: (text) => {
+      typed.push(text);
+      // the shell runs what was typed: no prompt, busy
+      busy = true;
+      promptReady = false;
+    },
+    emit: (e) => void events.push(e),
+    setTimer: (fn, ms) => {
+      const t = { fn, at: now + ms, live: true };
+      timers.push(t);
+      return t;
+    },
+    clearTimer: (t) => {
+      (t as { live: boolean }).live = false;
+    },
+  });
+
+  beforeEach(() => {
+    now = T0;
+    timers = [];
+    offer = { id: ID };
+    promptReady = true;
+    busy = false;
+    lastInputAt = 0;
+    enabled = true;
+    stopping = false;
+    tries = new Map();
+    cleared = [];
+    typed = [];
+    events = [];
+    r = new AutoResumer(deps());
+  });
+
+  /** Claude Code ran for `durMs` and ended with `exit`; the shell is back at its prompt. */
+  const ended = (exit: number | null, durMs: number) => {
+    advance(durMs);
+    busy = false;
+    promptReady = true;
+    r.claudeEnded({ exit, durMs });
+  };
+  const gaveUp = () => events.filter((e) => e.state === 'gave-up');
+  const liveTimers = () => timers.filter((t) => t.live).length;
+
+  it('says so, then types exactly `claude --resume <id>` and Enter 3 s later, once, and counts the attempt', () => {
+    r.check();
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: T0 + 3_000 }]);
+    advance(2_999);
+    expect(typed).toEqual([]);
+    advance(1);
+    expect(typed).toEqual([RESUME]);
+    expect(tries.get(ID)).toEqual([T0 + 3_000]);
+    expect(events).toEqual([
+      { state: 'pending', id: ID, typesAt: T0 + 3_000 },
+      { state: 'typed', id: ID },
+    ]);
+    advance(600_000);
+    expect(typed).toEqual([RESUME]);
+    expect(liveTimers()).toBe(0);
+  });
+
+  it('a second check() during the notice does not announce again, and one timer at most is pending', () => {
+    r.check();
+    advance(1_000);
+    r.check();
+    r.check();
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: T0 + 3_000 }]);
+    expect(liveTimers()).toBe(1);
+    advance(2_000);
+    expect(typed).toEqual([RESUME]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']);
+  });
+
+  it('Cancel before the time types nothing, and the same offer stays quiet until it changes', () => {
+    r.check();
+    advance(1_000);
+    r.cancel();
+    expect(events).toEqual([
+      { state: 'pending', id: ID, typesAt: T0 + 3_000 },
+      { state: 'cancelled', id: ID },
+    ]);
+    expect(liveTimers()).toBe(0);
+    advance(10_000);
+    r.check();
+    r.check();
+    advance(600_000);
+    expect(typed).toEqual([]);
+    expect(events).toHaveLength(2);
+    expect(tries.get(ID)).toBeUndefined();
+
+    offer = { id: OTHER }; // another conversation is offered
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: OTHER, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([`claude --resume ${OTHER}\r`]);
+  });
+
+  it('a cancelled offer that goes away and comes back is tried again', () => {
+    r.check();
+    r.cancel();
+    offer = null;
+    r.check();
+    offer = { id: ID };
+    r.check();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled', 'pending']);
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('the person typing at 2.5 s moves the typing to 2 s after their last key', () => {
+    r.check();
+    advance(2_500);
+    lastInputAt = now;
+    advance(500);
+    expect(typed).toEqual([]);
+    advance(1_499);
+    expect(typed).toEqual([]);
+    advance(1);
+    expect(now).toBe(T0 + 4_500);
+    expect(typed).toEqual([RESUME]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']); // announced once
+  });
+
+  it('the person typing while it waits is never overridden', () => {
+    r.check();
+    for (let i = 0; i < 30; i++) {
+      advance(1_000);
+      lastInputAt = now; // a key every second, for half a minute
+      expect(typed).toEqual([]);
+    }
+    advance(1_999);
+    expect(typed).toEqual([]);
+    advance(1);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('waits for quiet before announcing when the person was typing at the start', () => {
+    lastInputAt = T0 - 500;
+    r.check();
+    expect(events).toEqual([]);
+    advance(1_500);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: T0 + 1_500 + 3_000 }]);
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('a command the person starts during the notice drops this try; the next prompt announces again', () => {
+    r.check();
+    advance(1_000);
+    busy = true; // they pressed Enter on something
+    promptReady = false;
+    advance(5_000);
+    expect(typed).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    busy = false; // their command finished, the prompt is back
+    promptReady = true;
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('a crash is tried again after 20 s, then after 2 min, and the fourth time it gives up once and types nothing', () => {
+    r.check();
+    advance(3_000);
+    expect(typed).toHaveLength(1);
+
+    ended(1, 5_000); // crashed within seconds
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 20_000 });
+    advance(19_999);
+    expect(typed).toHaveLength(1);
+    advance(1);
+    expect(typed).toEqual([RESUME, RESUME]);
+
+    ended(1, 5_000);
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 120_000 });
+    advance(119_999);
+    expect(typed).toHaveLength(2);
+    advance(1);
+    expect(typed).toEqual([RESUME, RESUME, RESUME]);
+
+    ended(1, 5_000);
+    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
+    expect(events.at(-1)).toEqual({ state: 'gave-up', id: ID });
+
+    // later prompts, checks, Restart Claude at the limit, and even the 10 minutes passing: no second notice, nothing typed
+    r.check({ explicit: true });
+    r.check();
+    advance(60_000);
+    r.check();
+    advance(600_000);
+    r.check();
+    advance(600_000);
+    expect(gaveUp()).toHaveLength(1);
+    expect(typed).toHaveLength(3);
+    expect(tries.get(ID)).toHaveLength(3);
+    expect(cleared).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed', 'pending', 'typed', 'pending', 'typed', 'gave-up']);
+  });
+
+  it('a new offer after giving up starts over', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    offer = { id: OTHER };
+    r.check();
+    advance(3_000);
+    expect(typed).toEqual([`claude --resume ${OTHER}\r`]);
+    offer = { id: ID }; // the first one again: a new give-up is a new notice
+    busy = false;
+    promptReady = true;
+    r.check();
+    expect(gaveUp()).toHaveLength(2);
+    expect(typed).toHaveLength(1);
+  });
+
+  it('an offer that goes away and comes back while still at the limit is a new give-up, told again, and nothing is typed', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    offer = null;
+    r.check();
+    offer = { id: ID };
+    r.check();
+    r.check();
+    expect(gaveUp()).toHaveLength(2);
+    expect(typed).toEqual([]);
+  });
+
+  it('a short crash after a try keeps the attempt; a healthy run (30 s or more) that crashes later starts over', () => {
+    r.check();
+    advance(3_000);
+    ended(1, 5_000);
+    expect(cleared).toEqual([]);
+    expect(tries.get(ID)).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 20_000 }); // the second try waits longer
+    advance(20_000);
+    expect(typed).toHaveLength(2);
+
+    ended(1, 60_000); // ran for a minute, then crashed: that attempt worked
+    expect(cleared).toEqual([ID]);
+    expect(tries.get(ID)).toBeUndefined();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 }); // a fresh start: the first wait
+    advance(3_000);
+    expect(typed).toEqual([RESUME, RESUME, RESUME]);
+    expect(tries.get(ID)).toEqual([now]);
+  });
+
+  it('a healthy run is judged by how long it lasted, also when the prompt comes back after the exit is reported', () => {
+    r.check();
+    advance(3_000);
+    advance(30_000);
+    busy = false; // the command ended; the prompt is not drawn yet
+    r.claudeEnded({ exit: 2, durMs: 30_000 });
+    expect(cleared).toEqual([ID]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']);
+    promptReady = true; // the prompt event
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+  });
+
+  it.each<[string, number | null]>([
+    ['exit 0', 0],
+    ['Ctrl+C (130)', 130],
+    ['stopped with Ctrl+Z (146)', 146],
+    ['stopped (145)', 145],
+    ['stopped (150)', 150],
+    ['an unknown exit', null],
+  ])('a deliberate or unclear end (%s) is never resumed', (_, exit) => {
+    r.check();
+    advance(3_000);
+    ended(exit, 5_000);
+    advance(600_000);
+    expect(typed).toEqual([RESUME]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']);
+    expect(cleared).toEqual([]);
+    ended(exit, 60_000);
+    expect(cleared).toEqual([]);
+    expect(typed).toHaveLength(1);
+  });
+
+  it('a crash of a Claude the person started is tried again, without touching the attempts', () => {
+    busy = true;
+    promptReady = false;
+    r.check(); // their `claude` is running
+    expect(events).toEqual([]);
+    ended(1, 3_600_000);
+    expect(cleared).toEqual([]);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('explicit (Restart Claude) types even with the setting off', () => {
+    enabled = false;
+    r.check();
+    advance(10_000);
+    expect(events).toEqual([]);
+    r.check({ explicit: true });
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+    expect(tries.get(ID)).toEqual([now]); // it counts as an attempt
+    // the request was for that once: a crash afterwards is not retried with the setting off
+    ended(1, 5_000);
+    advance(600_000);
+    expect(typed).toHaveLength(1);
+  });
+
+  it('explicit never ignores the other conditions', () => {
+    enabled = false;
+    for (const set of [
+      () => (offer = null),
+      () => (offer = { id: 'x; rm -rf ~' }),
+      () => (promptReady = false),
+      () => (busy = true),
+      () => (stopping = true),
+    ]) {
+      offer = { id: ID };
+      promptReady = true;
+      busy = false;
+      stopping = false;
+      set();
+      r.check({ explicit: true });
+      advance(600_000);
+    }
+    expect(typed).toEqual([]);
+    expect(events).toEqual([]);
+
+    offer = { id: ID };
+    promptReady = true;
+    busy = false;
+    stopping = false;
+    lastInputAt = now - 500; // the quiet period
+    r.check({ explicit: true });
+    expect(events).toEqual([]);
+    advance(1_500);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+    r.cancel(); // Cancel during its notice
+    advance(600_000);
+    r.check();
+    expect(typed).toEqual([]);
+
+    tries.set(ID, [now - 3, now - 2, now - 1]); // the attempt limit
+    r.check({ explicit: true });
+    advance(600_000);
+    expect(typed).toEqual([]);
+    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
+  });
+
+  it('asking again (explicit) after an earlier Cancel resumes; a later automatic check stays cancelled', () => {
+    r.check();
+    r.cancel();
+    r.check();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    r.check({ explicit: true }); // the person chose Restart Claude: that is asking again
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('the explicit request lasts through its own wait for quiet and its notice, even with the setting off', () => {
+    enabled = false;
+    lastInputAt = T0 - 1_000;
+    r.check({ explicit: true });
+    advance(1_000);
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: now + 3_000 }]);
+    r.check(); // an automatic check meanwhile (a prompt, a config change) does not drop it
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('nothing is typed when the daemon starts stopping during the wait', () => {
+    r.check();
+    advance(1_000);
+    stopping = true;
+    advance(600_000);
+    expect(typed).toEqual([]);
+    expect(tries.get(ID)).toBeUndefined();
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+  });
+
+  it('turning the setting off during the notice drops it', () => {
+    r.check();
+    advance(1_000);
+    enabled = false;
+    r.check(); // the config change
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    advance(600_000);
+    expect(typed).toEqual([]);
+  });
+
+  it('another conversation offered during the notice drops the first and announces the new one', () => {
+    r.check();
+    advance(1_000);
+    offer = { id: OTHER };
+    advance(2_000);
+    expect(typed).toEqual([]);
+    expect(events).toEqual([
+      { state: 'pending', id: ID, typesAt: T0 + 3_000 },
+      { state: 'cancelled', id: ID },
+      { state: 'pending', id: OTHER, typesAt: T0 + 6_000 },
+    ]);
+    advance(3_000);
+    expect(typed).toEqual([`claude --resume ${OTHER}\r`]);
+  });
+
+  it('only a session id is ever typed', () => {
+    for (const id of ['x; rm -rf ~', '', 'abc', '-rf-rf-rf-rf', 'a'.repeat(65), 'abcdefgh\rrm', '$(reboot)ab']) {
+      offer = { id };
+      r.check();
+      r.check({ explicit: true });
+      advance(600_000);
+    }
+    expect(typed).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('takes its numbers from the timing it is given (the daemon test mode)', () => {
+    r = new AutoResumer(deps(), FAST);
+    r.check();
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: T0 + 3 }]);
+    advance(3);
+    expect(typed).toEqual([RESUME]);
+    ended(1, 5);
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 20 });
+    advance(20);
+    ended(1, 30); // healthy at 30 ms
+    expect(cleared).toEqual([ID]);
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3 });
+  });
+});
