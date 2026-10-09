@@ -1,9 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, type execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LaunchAgent, agentFiles, agentPaths, planAgent, type AgentFiles, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
+import { LaunchAgent, agentFiles, agentPaths, execLaunchctl, planAgent, type AgentFiles, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
 import { AGENT_LABEL, agentStatusText } from '../src/shared/keep-running';
 import { KeepRunning } from '../src/daemon/keep-running';
 import { daemonAgent, defaultDaemonAgent, ensureDaemon, launchDaemon, type Launcher } from '../src/core/daemon-client';
@@ -644,6 +644,19 @@ describe('KeepRunning: what the daemon does for the switch (a fake launchd, an i
     expect(t.calls).toEqual([['bootout', TARGET]]);
   });
 
+  it('a normal switch-off in a detached daemon (launchd had nothing loaded) reads "Turned off", not what launchctl printed about a job it never had', async () => {
+    const t = keep({ keepRunning: true }); // the job is not loaded: bootout answers "Boot-out failed: 3: No such process"
+    seed(t.fsx, plan());
+    expect(await t.k.remove()).toEqual({ state: 'not-installed', note: 'Turned off.' });
+    expect(t.fsx.files.size).toBe(0);
+    // another failure of launchctl is still said
+    const odd = keep({ keepRunning: true, start: { loaded: true, pid: null } });
+    seed(odd.fsx, plan());
+    const run = odd.launchctl.run;
+    odd.launchctl.run = async (args) => (args[0] === 'bootout' ? { code: 5, out: 'Boot-out failed: 5: Input/output error\n' } : run(args));
+    expect((await odd.k.remove()).note).toMatch(/Input\/output error/);
+  });
+
   it('in a detached daemon, remove takes the files away and boots out at once, and tells what launchd did', async () => {
     const t = keep({ start: { loaded: true, pid: null }, keepRunning: true });
     seed(t.fsx, plan());
@@ -819,5 +832,51 @@ describe('launchDaemon: launchd starts the daemon when the agent is installed, a
 
   it('the agent by default is none for any home but the person\'s own: a test home never runs launchctl', () => {
     expect(defaultDaemonAgent(path.join(os.tmpdir(), 'jaffer-test-x', '.jaffer'))).toBeNull();
+  });
+});
+
+describe('safety: a development run gets no agent, and the tests can never reach the real launchctl', () => {
+  it('planAgent refuses an app run from node_modules (`npm run dev` on ~/.jaffer must never point the real agent at the repo)', () => {
+    const execPath = '/Users/me/src/jaffer/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron';
+    expect(planAgent({ ...BASE, execPath })).toEqual({ refused: 'This is a development run of Jaffer: use the installed app.' });
+    expect(agentFiles({ ...BASE, execPath })).toEqual(agentPaths(BASE)); // a refusal about the app: an agent installed earlier can still be taken away
+  });
+
+  it('JAFFER_NO_LAUNCHCTL=1 makes execLaunchctl fail at once without running anything (checked at each run)', async () => {
+    const runs: string[][] = [];
+    const fakeExec = ((file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => {
+      runs.push([file, ...args]);
+      cb(null, '', '');
+      return {};
+    }) as unknown as typeof execFile;
+    const launchctl = execLaunchctl({ execFile: fakeExec });
+    const before = process.env.JAFFER_NO_LAUNCHCTL;
+    try {
+      process.env.JAFFER_NO_LAUNCHCTL = '1';
+      expect(await launchctl.run(['bootout', TARGET])).toEqual({ code: 1, out: 'launchctl is disabled (JAFFER_NO_LAUNCHCTL)' });
+      expect(runs).toEqual([]);
+      delete process.env.JAFFER_NO_LAUNCHCTL; // without it the (here stand-in) launchctl runs
+      expect(await launchctl.run(['print', TARGET])).toEqual({ code: 0, out: '' });
+      expect(runs).toEqual([['/bin/launchctl', 'print', TARGET]]);
+    } finally {
+      if (before === undefined) delete process.env.JAFFER_NO_LAUNCHCTL;
+      else process.env.JAFFER_NO_LAUNCHCTL = before;
+    }
+  });
+
+  it('every test run has the kill switch on (vitest.config.ts, vitest.e2e.config.ts), and what the tests spawn inherits it, the daemon too', async () => {
+    expect(process.env.JAFFER_NO_LAUNCHCTL).toBe('1');
+    for (const config of ['vitest.config.ts', 'vitest.e2e.config.ts']) expect(fs.readFileSync(path.resolve(__dirname, '..', config), 'utf8'), config).toMatch(/JAFFER_NO_LAUNCHCTL: '1'/);
+    // a child process, as the tests spawn the bundled CLI and daemon (with process.env, or a copy of it with more in it)
+    for (const env of [undefined, { ...process.env, HOME: os.tmpdir() }]) {
+      const r = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.env.JAFFER_NO_LAUNCHCTL))'], { encoding: 'utf8', env });
+      expect(r.stdout).toBe('1');
+    }
+    // and the daemon as the launcher starts it
+    const spawned: { env?: NodeJS.ProcessEnv }[] = [];
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jaffer-launch-')));
+    temps.push(dir);
+    await launchDaemon(makePaths(path.join(dir, '.jaffer')), { execPath: '/x/node', daemonScript: path.join(dir, 'jafferd.cjs'), env: { HOME: dir }, agent: null, spawn: (_c, _a, o) => (spawned.push(o), { unref: () => undefined }) });
+    expect(spawned[0]!.env?.JAFFER_NO_LAUNCHCTL).toBe('1');
   });
 });

@@ -1,4 +1,5 @@
 import type { UpdateState } from '../shared/update-policy';
+import type { AgentStatus } from '../shared/keep-running';
 
 export interface JafferBridge {
   call<T = any>(method: string, params?: unknown): Promise<T>;
@@ -15,6 +16,11 @@ export interface JafferBridge {
   reset(): Promise<{ cancelled: boolean }>;
   /** Restart the shell in the same folder and take the Claude Code conversation up again (the app asks first; `resumable`: one comes back). */
   restartClaude(): Promise<{ cancelled: boolean; resumable?: boolean }>;
+  /**
+   * Turn "Keep my session running in the background" off. When launchd runs the session that ends it, so the app asks first (`cancelled`:
+   * the person said no and nothing changed); `status` is the daemon's answer to `service.remove`.
+   */
+  keepRunningOff(): Promise<{ cancelled: boolean; status?: AgentStatus }>;
   pathForFile(f: File): string;
   platform: string;
 }

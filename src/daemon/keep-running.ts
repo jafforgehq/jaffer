@@ -1,4 +1,4 @@
-import { bootoutNote, type AgentFiles, type AgentPlan, type LaunchAgent } from '../core/service/launch-agent';
+import { bootoutNote, type AgentFiles, type AgentPlan, type Bootout, type LaunchAgent } from '../core/service/launch-agent';
 import type { AgentStatus } from '../shared/keep-running';
 
 /**
@@ -31,6 +31,16 @@ export interface KeepRunningDeps {
 
 /** What the person is told when the agent is taken away from the daemon launchd runs. */
 export const SESSION_ENDS_NOTE = 'The session ends now: launchd was running it, and stops it with the agent. Jaffer starts a new one in the same folder (at once while the window is open, or the next time you open Jaffer).';
+
+/**
+ * The switch turned off in a daemon that launchd does not run: launchd usually had nothing loaded ("Boot-out failed: 3: No such
+ * process", or "Could not find service"), which is the normal case, not news. Anything else launchctl said is told.
+ */
+function turnedOffNote(r: Bootout): string {
+  if (r.code === 0) return 'Turned off; launchd unloaded it.';
+  if (r.code === 3 || r.code === 113 || /No such process|Could not find service/i.test(r.out)) return 'Turned off.';
+  return `Turned off. ${bootoutNote(r)}`;
+}
 
 /** Long enough for the reply to leave the socket before the bootout ends this daemon. */
 const REPLY_FIRST_MS = 50;
@@ -74,8 +84,7 @@ export class KeepRunning {
       return { ...(refused ?? { state: 'not-installed' }), note: SESSION_ENDS_NOTE };
     }
     const r = await this.d.agent.remove(files);
-    const note = `The background agent is removed; ${bootoutNote(r)}`;
-    return { ...(refused ?? this.view(await this.d.agent.status(plan as AgentPlan))), note };
+    return { ...(refused ?? this.view(await this.d.agent.status(plan as AgentPlan))), note: turnedOffNote(r) };
   }
 
   /**

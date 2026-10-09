@@ -509,14 +509,28 @@ function keepRunningLine(s: AgentStatus): { text: string; state: string } {
  */
 function KeepRunningField({ flag }: { flag: boolean }): VNode {
   const [status, setStatus] = useState<AgentStatus | null>(null);
+  /** Why the daemon could not say: a session daemon from before this version (after an app update) does not know the question. */
+  const [unknown, setUnknown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  useEffect(() => void call<AgentStatus>('service.status', {}).then(setStatus).catch(() => undefined), []);
+  useEffect(
+    () =>
+      void call<AgentStatus>('service.status', {})
+        .then(setStatus)
+        .catch((e) => setUnknown(/unknown method/i.test(e instanceof Error ? e.message : String(e)) ? 'Restart your session to use this' : 'The session could not say')),
+    [],
+  );
   const refused = status?.state === 'refused';
   const on = status ? status.state === 'running' || status.state === 'installed' || status.state === 'not-loaded' : flag;
   const toggle = async (v: boolean) => {
     setBusy(true);
     try {
-      const s = await call<AgentStatus>(v ? 'service.install' : 'service.remove', {});
+      let s: AgentStatus;
+      if (!v && status?.state === 'running') {
+        // launchd runs this session: taking the agent away ends it, so the app asks first (Cancel leaves everything as it was)
+        const r = await window.jaffer.keepRunningOff();
+        if (r.cancelled || !r.status) return;
+        s = r.status;
+      } else s = await call<AgentStatus>(v ? 'service.install' : 'service.remove', {});
       setStatus(s);
       if (s.state === 'refused') toast({ kind: 'error', text: s.reason });
       else if (s.note) toast({ kind: 'info', text: s.note }, 10_000);
@@ -527,7 +541,7 @@ function KeepRunningField({ flag }: { flag: boolean }): VNode {
     }
   };
   return (
-    <Field label="Keep my session running in the background" hint="macOS starts your session at login and again after a crash or a reboot, with or without the window open (a login agent); off takes the agent away" status={status ? keepRunningLine(status) : { text: '…', state: 'unknown' }}>
+    <Field label="Keep my session running in the background" hint="macOS starts your session at login and again after a crash or a reboot, with or without the window open (a login agent); off takes the agent away" status={status ? keepRunningLine(status) : { text: unknown ?? '…', state: 'unknown' }}>
       <Switch checked={on && !refused} disabled={busy || !status || refused} onChange={(v) => void toggle(v)} />
     </Field>
   );

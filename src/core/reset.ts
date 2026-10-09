@@ -5,6 +5,8 @@ import { teardownClaude } from './integrations/claude';
 import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
 import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, type Launchctl } from './service/launch-agent';
 import { isDefaultHome } from './session/caffeinate';
+import { ConfigStore } from '../shared/config';
+import { makePaths } from '../shared/paths';
 
 export interface ResetOptions {
   /** Jaffer's own folder (default ~/.jaffer). */
@@ -24,6 +26,16 @@ export interface ResetOptions {
   launchctl?: Launchctl | null;
   /** The user whose launchd domain (`gui/<uid>`) holds the agent (default: this process's). */
   uid?: number;
+  /**
+   * Tells a daemon that still runs that the switch is off (`config.patch`: its config lives in memory, and it would write it back). The
+   * config file is set to off as well, whatever this does. Left out: no daemon runs.
+   */
+  keepRunningOff?: () => Promise<void>;
+  /**
+   * Ends the session (the daemon owns Jaffer's folder; when this returns it must be stopped). Called once the switch is off and the agent
+   * is gone, before anything else is removed. Left out: the caller has ended it already.
+   */
+  endSession?: () => Promise<void>;
 }
 
 export interface ResetResult {
@@ -77,10 +89,21 @@ function isLink(p: string): boolean {
 }
 
 /**
+ * The switch "Keep my session running in the background" off in Jaffer's config file, so that a daemon that starts while the reset runs
+ * (an open app reconnecting) does not put the agent back. Only a config that is there is written: a reset makes no folder.
+ */
+function keepRunningOffOnDisk(home: string): void {
+  const paths = makePaths(home);
+  if (!fs.existsSync(paths.config)) return;
+  const config = new ConfigStore(paths);
+  if (config.get().session.keepRunning) config.patch({ session: { keepRunning: false } });
+}
+
+/**
  * Take away the login agent that keeps the session running: its plist (in the person's LaunchAgents), its wrapper (`<home>/bin/jafferd`)
  * and the job in launchd (`bootout`; when launchd runs the daemon, that ends it, after it saved the state, and launchd does not start it
- * again). The first step of a reset: `jaffer reset` and Settings → Reset run it before they end the session, and `resetJaffer` again
- * (silent then). Nothing at all without an agent on disk. Returns what to tell the person, with what launchd answered.
+ * again). A step of `resetJaffer`, after the switch is off and before the session ends; silent when it was done already. Nothing at all
+ * without an agent on disk. Returns what to tell the person, with what launchd answered.
  */
 export async function removeAgentForReset(o: Pick<ResetOptions, 'home' | 'userHome' | 'launchctl' | 'uid'>): Promise<string[]> {
   const home = path.resolve(o.home);
@@ -97,7 +120,8 @@ export async function removeAgentForReset(o: Pick<ResetOptions, 'home' | 'userHo
  * Take Jaffer off this Mac so the next install starts from scratch: the login agent that keeps the session running (first), its hooks and memory tools in Claude Code, what it wrote
  * into Claude's files, the `jaffer` command link, the update cache, its own folder (moved aside as a backup unless `backup` is
  * false) and, optionally, the app's own data. Claude Code itself, its login and the person's own settings are not touched.
- * The daemon must already be stopped: it owns the folder.
+ * The order: the switch off, the login agent away, the session ended (`endSession`; without it the daemon must already be stopped, as it
+ * owns the folder), then the rest.
  */
 export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
   const userHome = o.userHome ?? os.homedir();
@@ -110,8 +134,13 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
     messages.push(m);
   };
 
-  // first, while Jaffer's folder (with the agent's wrapper) is still there: launchd must not start a daemon for a session being reset
+  // First, in this order, while Jaffer's folder is still there: the switch off (in a daemon that runs, and in the file), so nothing
+  // started meanwhile puts the agent back; the agent away, so launchd starts nothing for a session being reset (when launchd runs the
+  // daemon, that is what ends it); then the session ends; then the rest.
+  await o.keepRunningOff?.().catch(() => undefined);
+  keepRunningOffOnDisk(home);
   for (const m of await removeAgentForReset({ home, userHome, launchctl: o.launchctl, uid: o.uid })) did(m);
+  await o.endSession?.();
 
   const td = await teardownClaude(userHome, env);
   if (td.messages.some((m) => /^Removed/.test(m))) changed = true;

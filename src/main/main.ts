@@ -17,8 +17,9 @@ import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
-import { removeAgentForReset, resetJaffer } from '../core/reset';
+import { resetJaffer } from '../core/reset';
 import { restartClaudeText } from '../shared/restart-claude';
+import { keepRunningOffText } from '../shared/keep-running';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
@@ -488,13 +489,20 @@ ipcMain.handle('jaffer:reset', async (e) => {
   quitting = true; // from here the app is on its way out and must not reconnect to the session it is ending
   updates?.stop();
   await client?.call('setup.claude.remove', {}).catch(() => undefined); // the daemon finds `claude` the way the terminal does
-  // the login agent before the session ends: launchd must not start it again (when launchd runs the daemon, this is what ends it)
-  await removeAgentForReset({ home: paths.home }).catch(() => undefined);
-  await client?.call('app.shutdown', {}).catch(() => undefined);
-  client?.close();
-  for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);
   try {
-    await resetJaffer({ home: paths.home, backup: r.response === 1, appData: false });
+    // resetJaffer keeps the order: the switch off, the login agent away (launchd must not start the session again; when launchd runs
+    // it, that ends it), the session ended, then the rest
+    await resetJaffer({
+      home: paths.home,
+      backup: r.response === 1,
+      appData: false,
+      keepRunningOff: async () => void (await client?.call('config.patch', { session: { keepRunning: false } })),
+      endSession: async () => {
+        await client?.call('app.shutdown', {}).catch(() => undefined);
+        client?.close();
+        for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);
+      },
+    });
     await session.defaultSession.clearStorageData();
     await session.defaultSession.clearCache();
     app.setLoginItemSettings({ openAtLogin: false });
@@ -522,6 +530,21 @@ ipcMain.handle('jaffer:restart-claude', async (e) => {
   // asked again: the world may have moved while the dialog was up, and the daemon says what it did
   const done = (await client.call('claude.restart', {})) as { resumable?: boolean };
   return { cancelled: false, resumable: done.resumable === true };
+});
+// Settings → Keep my session running, switched off. When launchd runs the session, taking the agent away ends it (the shell and whatever
+// runs in it), so the person is asked first; asked again here, as the world may have moved since the window looked. When Jaffer runs
+// the session, nothing ends and nothing is asked. The daemon removes the agent; this only asks and relays its answer.
+ipcMain.handle('jaffer:keep-running-off', async (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  if (!client || !client.connected) throw new Error('The session daemon is not connected.');
+  const now = (await client.call('service.status', {})) as { state?: string };
+  if (now.state === 'running') {
+    const text = keepRunningOffText();
+    const ask = { type: 'warning' as const, message: text.message, detail: text.detail, buttons: [...text.buttons], defaultId: 0, cancelId: 0 };
+    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+    if (r.response !== 1) return { cancelled: true };
+  }
+  return { cancelled: false, status: await client.call('service.remove', {}) };
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });

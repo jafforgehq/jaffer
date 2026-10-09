@@ -174,6 +174,31 @@ describe('resetJaffer and the login agent that keeps the session running (a fake
     expect(said.indexOf('background')).toBeLessThan(said.indexOf('backup')); // the first thing it did
   });
 
+  it('turns the switch off first, then takes the agent away, then ends the session, then moves the folder: a daemon started in between cannot put the agent back', async () => {
+    lived();
+    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
+    const { plist } = agentOnDisk();
+    const flag = () => JSON.parse(fs.readFileSync(path.join(env.home, 'config.json'), 'utf8')).session.keepRunning;
+    const order: string[] = [];
+    const f = fakeLaunchctl({ code: 0, out: '' }, () => order.push(`bootout: switch ${flag()}, folder ${fs.existsSync(env.home)}`));
+    await resetJaffer({
+      home: env.home,
+      userHome: env.userHome,
+      env: claudeEnv(),
+      backup: true,
+      launchctl: f.launchctl,
+      uid: 501,
+      keepRunningOff: async () => void order.push('the running daemon is told the switch is off'),
+      endSession: async () => void order.push(`session ends: switch ${flag()}, agent ${fs.existsSync(plist)}, folder ${fs.existsSync(env.home)}`),
+    });
+    expect(order).toEqual([
+      'the running daemon is told the switch is off',
+      'bootout: switch false, folder true', // (the file says off too, whatever the daemon did)
+      'session ends: switch false, agent false, folder true',
+    ]);
+    expect(fs.existsSync(env.home)).toBe(false);
+  });
+
   it('says what launchd answered when it had nothing loaded (the result of the bootout is told, not hidden)', async () => {
     lived();
     agentOnDisk();

@@ -9,8 +9,8 @@ import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
-import { removeAgentForReset, resetJaffer } from '../core/reset';
-import { agentStatusText, type AgentStatus } from '../shared/keep-running';
+import { resetJaffer } from '../core/reset';
+import { agentStatusText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
 
@@ -249,15 +249,20 @@ async function main(): Promise<void> {
           return;
         }
       }
-      // the login agent first: launchd must not start the session again while it is being reset (when launchd runs it, this ends it)
-      for (const m of await removeAgentForReset({ home: paths.home })) console.log(m);
+      // resetJaffer keeps the order: the switch off, the login agent away (launchd must not start the session again; when launchd runs
+      // it, that ends it), the session ended, then the rest
       const running = await tryConnect(paths);
-      if (running) {
-        await running.call('app.shutdown', {}).catch(() => undefined);
-        running.close();
-        for (let i = 0; i < 40 && (await tryConnect(paths, 300).then((c) => (c?.close(), !!c))); i++) await new Promise((r) => setTimeout(r, 150));
-      }
-      const res = await resetJaffer({ home: paths.home, backup: !del });
+      const res = await resetJaffer({
+        home: paths.home,
+        backup: !del,
+        keepRunningOff: async () => void (await running?.call('config.patch', { session: { keepRunning: false } })),
+        endSession: async () => {
+          if (!running) return;
+          await running.call('app.shutdown', {}).catch(() => undefined);
+          running.close();
+          for (let i = 0; i < 40 && (await tryConnect(paths, 300).then((c) => (c?.close(), !!c))); i++) await new Promise((r) => setTimeout(r, 150));
+        },
+      });
       for (const m of res.messages) console.log(m);
       console.log(green('Done.') + dim(' If the Jaffer app is open, quit it (⌘Q); it starts a new session straight away. To finish a clean install, drag Jaffer.app to the Trash and install the latest release.'));
       return;
@@ -323,6 +328,10 @@ async function main(): Promise<void> {
       const client = await ensureDaemon(paths, launcher());
       let s: AgentStatus;
       try {
+        // turned off while launchd runs the session, it ends: asked for here, so said first (the app asks in a dialog)
+        if (sub === 'remove' && ((await client.call('service.status', {}, 30_000)) as AgentStatus).state === 'running') {
+          process.stderr.write(`${keepRunningOffText().detail}\n`);
+        }
         s = await client.call(method, {}, 30_000);
       } finally {
         client.close();

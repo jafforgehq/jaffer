@@ -996,6 +996,94 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('Settings: turning it off while macOS runs the session asks first (the app\'s own dialog, stood in for): Cancel changes nothing; with the agent only installed nothing is asked', async () => {
+    // the daemon's answers are played (nothing reaches launchd), and so is the app's question (its words are keep-running-off.test.ts)
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.__realOff = w.jaffer.keepRunningOff;
+      w.__svcCalls = [];
+      w.__svc = { state: 'running', pid: 4242 };
+      w.jaffer.call = (m: string, p: unknown) => {
+        if (!m.startsWith('service.')) return w.__realCall(m, p);
+        w.__svcCalls.push(m);
+        if (m === 'service.install') w.__svc = { state: 'installed' };
+        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'Turned off.' };
+        return Promise.resolve(w.__svc);
+      };
+      w.__offAsked = 0;
+      w.__offAnswer = 'cancel';
+      w.jaffer.keepRunningOff = async () => {
+        w.__offAsked++;
+        return w.__offAnswer === 'cancel' ? { cancelled: true } : w.__realOff();
+      };
+    });
+    const asked = () => page.evaluate(() => (window as any).__offAsked as number);
+    const removes = async () => ((await page.evaluate(() => (window as any).__svcCalls)) as string[]).filter((m) => m === 'service.remove').length;
+    try {
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
+      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
+      // launchd runs the session: off asks first, and Cancel leaves everything as it was
+      await keep.locator('.switch').click();
+      await until(async () => (await asked()) === 1, 5_000, 'the app to be asked');
+      await sleep(300);
+      expect(await keep.locator('input').isChecked()).toBe(true);
+      expect(await removes()).toBe(0);
+      expect(await line()).toContain('running (pid 4242)');
+      // a yes: the agent goes (the session with it)
+      await page.evaluate(() => ((window as any).__offAnswer = 'yes'));
+      await keep.locator('.switch').click();
+      await until(async () => (await line()).includes('not installed'), 5_000, 'the removed line');
+      expect(await asked()).toBe(2);
+      expect(await removes()).toBe(1);
+      expect(await keep.locator('input').isChecked()).toBe(false);
+      // installed but launchd is not running this session (it was started by Jaffer): off ends nothing, so nothing is asked
+      await keep.locator('.switch').click();
+      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
+      await keep.locator('.switch').click();
+      await until(async () => (await line()).includes('not installed'), 5_000, 'removed again');
+      expect(await asked()).toBe(2);
+      expect(await removes()).toBe(2);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__realCall;
+        w.jaffer.keepRunningOff = w.__realOff;
+      });
+      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
+    }
+  }, 60_000);
+
+  it('Settings: against a session daemon from before this version (no service.status), the keep-running line says to restart the session', async () => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'service.status' ? Promise.reject(new Error('unknown method: service.status')) : w.__realCall(m, p));
+    });
+    try {
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+      await until(async () => ((await keep.locator('.field-status').textContent()) ?? '') === 'Restart your session to use this', 5_000, 'the restart line');
+      expect(await keep.locator('input').isDisabled()).toBe(true);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__realCall;
+      });
+      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
+    }
+  }, 60_000);
+
   it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {
     await page.evaluate(() => {
       const clip = { reads: 0, written: [] as string[] };

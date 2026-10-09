@@ -67,6 +67,21 @@ export const AGENT_LABEL = 'com.jafforge.jaffer.daemon';
  */
 export type AgentStatus = ({ state: 'not-installed' } | { state: 'installed' } | { state: 'running'; pid: number } | { state: 'not-loaded' } | { state: 'refused'; reason: string }) & { note?: string };
 
+/**
+ * What the app asks before the switch is turned off while launchd runs the session (`service.status` is `running`): taking the agent
+ * away stops the daemon launchd runs, and the shell with it. Plain text for a native dialog (Cancel first: the default and Escape), and
+ * what `jaffer service remove` prints before it does it. Turned off while Jaffer itself runs the session, nothing ends and nothing is asked.
+ */
+export function keepRunningOffText(): { message: string; detail: string; buttons: [string, string] } {
+  return {
+    message: 'Turn off keeping your session running?',
+    detail:
+      'This ends your terminal session now: your shell and anything running in it stop (a Claude Code conversation can be resumed afterwards). ' +
+      'macOS is running your session at the moment, and turning this off stops it; a new one starts in the same folder.',
+    buttons: ['Cancel', 'Turn off and end the session'],
+  };
+}
+
 /** The state in words, as `jaffer service status` prints it and Settings shows it. */
 export function agentStatusText(s: AgentStatus): string {
   switch (s.state) {

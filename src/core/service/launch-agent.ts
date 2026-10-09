@@ -53,6 +53,9 @@ export interface Bootout {
 /** What the agent needs from the file system (a fake in the tests). */
 export type LaunchAgentFs = Pick<typeof import('node:fs'), 'writeFileSync' | 'mkdirSync' | 'rmSync' | 'existsSync' | 'chmodSync' | 'readFileSync' | 'renameSync'>;
 
+/** Why an app run from the repository (`npm run dev`: Electron from node_modules) gets no agent: it must never point the real one there. */
+export const REFUSED_DEV_RUN = 'This is a development run of Jaffer: use the installed app.';
+
 /** Why a home other than the person's own `~/.jaffer` gets no agent. */
 export const REFUSED_OTHER_HOME = 'Only the usual Jaffer folder (~/.jaffer) can be kept running by macOS; this Jaffer uses another folder (JAFFER_HOME).';
 
@@ -105,6 +108,7 @@ export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
   if (i.execPath.includes('/AppTranslocation/') || i.execPath.startsWith('/Volumes/')) {
     return { refused: 'Jaffer is running from a disk image or a temporary location. Move Jaffer to Applications first.' };
   }
+  if (i.execPath.includes('/node_modules/')) return { refused: REFUSED_DEV_RUN };
   const { plistPath, wrapperPath } = agentPaths(i);
   const log = path.join(i.home, 'run', 'jafferd.log');
   const plist = [
@@ -162,12 +166,18 @@ export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
   return { plistPath, wrapperPath, plist, wrapper };
 }
 
-/** The real `launchctl`. It never rejects: a failed run, or one that could not start, is a code that is not 0 and what was printed. */
-export function execLaunchctl(): Launchctl {
+/**
+ * The real `launchctl`. It never rejects: a failed run, or one that could not start, is a code that is not 0 and what was printed.
+ * `JAFFER_NO_LAUNCHCTL=1` (set for every test run, and inherited by the daemons and CLIs they start) is a kill switch: each run then
+ * fails at once and nothing is run. `execFile` is injectable for the tests.
+ */
+export function execLaunchctl(o: { execFile?: typeof execFile } = {}): Launchctl {
+  const run = o.execFile ?? execFile;
   return {
     run: (args) =>
       new Promise((resolve) => {
-        execFile('/bin/launchctl', args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+        if (process.env.JAFFER_NO_LAUNCHCTL === '1') return resolve({ code: 1, out: 'launchctl is disabled (JAFFER_NO_LAUNCHCTL)' });
+        run('/bin/launchctl', args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
           const out = `${stdout ?? ''}${stderr ?? ''}`;
           if (!err) return resolve({ code: 0, out });
           const code = (err as NodeJS.ErrnoException & { code?: unknown }).code;
