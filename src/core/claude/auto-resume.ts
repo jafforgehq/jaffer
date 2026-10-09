@@ -39,7 +39,7 @@ export interface AutoResumeDeps {
   stopping(): boolean;
   /**
    * The shell itself has the terminal right now, not a program it runs (whatever the marks say: a program can print them). Asked once
-   * more the moment it would type; a no there types nothing.
+   * more the moment it would type, of the system itself (never a cached answer: see `shellChecks`); a no there types nothing.
    */
   mayType(): boolean;
   /** Writes to the terminal. Only ever `claude --resume <id>` and Enter. */
@@ -47,6 +47,33 @@ export interface AutoResumeDeps {
   emit(e: AutoResumeEvent): void;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(t: unknown): void;
+}
+
+/** The shell as the resumer looks at it (the daemon's main pane). */
+export interface ShellView {
+  readonly alive: boolean;
+  /** At its prompt, by the marks (OSC 133). */
+  readonly promptReady: boolean;
+  /** The shell itself has the terminal (its foreground process group is the shell's pid); may reuse an answer of up to 250 ms ago unless `fresh`. */
+  foregroundIsShell(opts?: { fresh?: boolean }): boolean;
+}
+
+/**
+ * `promptReady` and `mayType` of the resumer, from the shell. `promptReady` is a decision: at the prompt by the marks, the line empty,
+ * and the shell has the terminal, an answer of the last 250 ms will do. `mayType` is the moment of typing: the system is asked again,
+ * never a cached answer (a program that took the terminal since, an ssh typed ahead, would otherwise get `claude --resume`).
+ */
+export function shellChecks(shell: () => ShellView | undefined, lineEmpty: () => boolean): Pick<AutoResumeDeps, 'promptReady' | 'mayType'> {
+  return {
+    promptReady: () => {
+      const s = shell();
+      return !!s && s.alive && s.promptReady && lineEmpty() && s.foregroundIsShell();
+    },
+    mayType: () => {
+      const s = shell();
+      return !!s && s.alive && s.foregroundIsShell({ fresh: true });
+    },
+  };
 }
 
 /**

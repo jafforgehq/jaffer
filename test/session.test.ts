@@ -4,8 +4,9 @@ import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { runInShell, startShell, stopShell, untilReady, waitFor } from './helpers/pty';
-import type { PtySession, PtyEvent } from '../src/core/session/terminal';
+import { ForegroundCheck, FOREGROUND_CACHE_MS, FOREGROUND_READ_MS, readForegroundGroup, type PtySession, type PtyEvent } from '../src/core/session/terminal';
 import { SessionHost } from '../src/core/session/host';
+import { shellChecks } from '../src/core/claude/auto-resume';
 
 let env: TestEnv;
 let sh: PtySession | null = null;
@@ -149,7 +150,8 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     // the marks say: at a prompt, nothing running; the foreground says otherwise
     expect(s.promptReady).toBe(true);
     expect(s.runningCommand).toBeNull();
-    expect(s.foregroundIsShell()).toBe(false);
+    expect(s.foregroundIsShell()).toBe(false); // (what the script printed is output: an answer from before it is not reused)
+    expect(s.foregroundIsShell({ fresh: true })).toBe(false);
     expect(await settles(true, 6000)).toBe(true); // it ended: the shell's own prompt
     s.write('sleep 2\r');
     expect(await settles(false)).toBe(false);
@@ -157,11 +159,18 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     s.write('( sleep 2; true )\r'); // a subshell: a process of the shell's name, in a group of its own
     expect(await settles(false)).toBe(false);
     expect(await settles(true, 6000)).toBe(true);
-    // the shell replaced by another program keeps its pid and its place in the foreground, but it is no longer the shell
+    // The shell replaced by another program (`exec`) keeps its pid and its place in the foreground. 0.5.1 drops the comparison of the
+    // process's name with the shell's (it hid the Resume button for `SHELL=/bin/sh`, which runs bash, and for any wrapper shell): the
+    // terminal's foreground group being the shell's pid is the authority, so this one case now reads as the shell. The marks still say
+    // a command runs (`exec sleep 2` began and never ended), so no Resume button shows for it; only a program that prints prompt marks of
+    // its own after an `exec` gets one (daemon.test.ts shows it, and that Restart Claude, which types into a new shell, is unaffected).
     s.write('exec sleep 2\r');
-    expect(await settles(false)).toBe(false);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.foregroundIsShell({ fresh: true })).toBe(true);
+    expect(s.runningCommand).toBe('exec sleep 2');
     await waitFor(s, (e) => e.type === 'exit', 8000);
     expect(s.foregroundIsShell()).toBe(false); // and a shell that is gone is not one either
+    expect(s.foregroundIsShell({ fresh: true })).toBe(false);
   }, 40_000);
 });
 
@@ -345,5 +354,153 @@ describe('screen restore, and the switch that turns it off', () => {
       await stop(a);
     }
   }, 40_000);
+});
+
+// 0.5.1: the terminal's foreground process group being the shell's own pid is the whole check (the shell's name is no longer compared:
+// `SHELL=/bin/sh` runs bash, a wrapper shell has another name, and the Resume button hid for both). The daemon asks about six times per
+// command while a conversation is offered, each a synchronous `/bin/ps`: an answer is reused for 250 ms (and not after the terminal
+// printed anything), and `ps` gets 500 ms. The moment Restart Claude types always asks again.
+describe('the foreground check: the system is asked, at most every 250 ms, and never for long', () => {
+  const SHELL_PID = 4242;
+  /** A check with a counting group reader and a clock of its own. */
+  const check = (o: { group?: () => number | null; alive?: () => boolean } = {}) => {
+    let now = 1_000_000;
+    const reads: number[] = [];
+    const fg = new ForegroundCheck({
+      pid: () => SHELL_PID,
+      alive: o.alive ?? (() => true),
+      readGroup: (pid) => {
+        reads.push(pid);
+        return o.group ? o.group() : SHELL_PID;
+      },
+      now: () => now,
+    });
+    return { fg, reads, advance: (ms: number) => void (now += ms) };
+  };
+
+  it('two calls within 250 ms read the group once; the next one after that reads again', () => {
+    const t = check();
+    expect(t.fg.isShell()).toBe(true);
+    t.advance(FOREGROUND_CACHE_MS - 1);
+    expect(t.fg.isShell()).toBe(true);
+    expect(t.reads).toEqual([SHELL_PID]);
+    t.advance(1);
+    expect(t.fg.isShell()).toBe(true);
+    expect(t.reads).toHaveLength(2);
+  });
+
+  it('`fresh: true` always reads, and its answer is the one reused afterwards', () => {
+    let group: number | null = SHELL_PID;
+    const t = check({ group: () => group });
+    expect(t.fg.isShell()).toBe(true);
+    group = 777; // a program took the terminal a moment later
+    t.advance(10);
+    expect(t.fg.isShell()).toBe(true); // (a decision may use the answer of 10 ms ago)
+    expect(t.fg.isShell({ fresh: true })).toBe(false);
+    expect(t.fg.isShell({ fresh: true })).toBe(false);
+    expect(t.reads).toHaveLength(3);
+    t.advance(10);
+    expect(t.fg.isShell()).toBe(false); // the fresh answer is the one reused now
+    expect(t.reads).toHaveLength(3);
+  });
+
+  it('a reader that throws, or that cannot say in time (null), is "not the shell", and that answer is not kept as a yes', () => {
+    let fail: 'throw' | 'null' | null = 'throw';
+    const t = check({
+      group: () => {
+        if (fail === 'throw') throw new Error('ps went away');
+        return fail === 'null' ? null : SHELL_PID;
+      },
+    });
+    expect(t.fg.isShell()).toBe(false);
+    fail = 'null';
+    expect(t.fg.isShell({ fresh: true })).toBe(false);
+    fail = null;
+    expect(t.fg.isShell({ fresh: true })).toBe(true);
+  });
+
+  it('a group that is not the shell\'s pid is not the shell: a command, a script or a program the shell runs has the terminal', () => {
+    for (const group of [SHELL_PID + 1, 1, 0, -SHELL_PID]) {
+      const t = check({ group: () => group });
+      expect(t.fg.isShell(), String(group)).toBe(false);
+    }
+  });
+
+  it('a pane whose shell is gone is not the shell, and the system is not even asked', () => {
+    let alive = true;
+    const t = check({ alive: () => alive });
+    expect(t.fg.isShell()).toBe(true);
+    alive = false;
+    expect(t.fg.isShell()).toBe(false); // not the answer of a moment ago either
+    expect(t.fg.isShell({ fresh: true })).toBe(false);
+    expect(t.reads).toHaveLength(1);
+  });
+
+  it('an answer is not reused after the terminal printed something, or once the clock went back', () => {
+    const t = check();
+    t.fg.isShell();
+    t.fg.forget(); // what the pane does for every chunk of output: a program that started prints, and its marks are output
+    t.fg.isShell();
+    expect(t.reads).toHaveLength(2);
+    t.advance(-1000);
+    t.fg.isShell();
+    expect(t.reads).toHaveLength(3);
+  });
+
+  it('the moment Restart Claude types asks the system again, even 1 ms after a decision read it (a cached yes there would type into a program that took the terminal since)', () => {
+    let group: number | null = SHELL_PID;
+    const t = check({ group: () => group });
+    const pane = { alive: true, promptReady: true, foregroundIsShell: (o?: { fresh?: boolean }) => t.fg.isShell(o) };
+    const checks = shellChecks(() => pane, () => true);
+    expect(checks.promptReady()).toBe(true); // a decision: reads
+    t.advance(1);
+    expect(checks.promptReady()).toBe(true); // a decision within 250 ms: the same answer, no second read
+    expect(t.reads).toHaveLength(1);
+    expect(checks.mayType()).toBe(true); // the moment of typing: reads again
+    expect(t.reads).toHaveLength(2);
+    group = 777; // an ssh (or any program) took the terminal 1 ms later
+    t.advance(1);
+    expect(checks.mayType()).toBe(false);
+    expect(t.reads).toHaveLength(3);
+    // and the rest of what they say: no pane, a dead one, a line that is not empty, no prompt
+    expect(shellChecks(() => undefined, () => true).mayType()).toBe(false);
+    expect(shellChecks(() => ({ ...pane, alive: false }), () => true).mayType()).toBe(false);
+    group = SHELL_PID;
+    expect(shellChecks(() => pane, () => false).promptReady()).toBe(false);
+    expect(shellChecks(() => ({ ...pane, promptReady: false }), () => true).promptReady()).toBe(false);
+  });
+
+  it('the real reader: one `ps -o tpgid=` call; a pid that is not there, or a `ps` that hangs, is null within its 500 ms', () => {
+    expect(FOREGROUND_READ_MS).toBe(500);
+    expect(readForegroundGroup(process.pid)).not.toBe(process.pid); // (this test process does not lead its terminal's foreground, if it has one)
+    expect(readForegroundGroup(2 ** 22 + 12345)).toBeNull(); // no such process
+    const hang = path.join(env.root, 'ps-that-hangs');
+    fs.writeFileSync(hang, '#!/bin/sh\nexec sleep 5\n', { mode: 0o755 });
+    const t0 = Date.now();
+    expect(readForegroundGroup(process.pid, hang)).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('a real pane: reads once for calls in a row, again after its shell printed something, and not at all once the shell is gone', async () => {
+    const reads: number[] = [];
+    sh = startShell(env, { foregroundGroup: (pid) => (reads.push(pid), readForegroundGroup(pid)) });
+    await untilReady(sh);
+    await new Promise((r) => setTimeout(r, 300)); // (the prompt has been drawn)
+    const s = sh;
+    const before = reads.length;
+    expect(s.foregroundIsShell()).toBe(true);
+    expect(s.foregroundIsShell()).toBe(true);
+    expect(s.foregroundIsShell()).toBe(true);
+    expect(reads.length).toBe(before + 1);
+    expect(reads.every((p) => p === s.pid)).toBe(true);
+    await runInShell(s, 'echo printed');
+    s.foregroundIsShell();
+    expect(reads.length).toBe(before + 2);
+    s.write('exit\r');
+    await waitFor(s, (e) => e.type === 'exit', 8000);
+    const gone = reads.length;
+    expect(s.foregroundIsShell({ fresh: true })).toBe(false);
+    expect(reads.length).toBe(gone);
+  }, 20_000);
 });
 

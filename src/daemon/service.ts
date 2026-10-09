@@ -22,7 +22,7 @@ import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { COMMAND_HEAD, endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
 import { ResumeStore } from '../core/claude/resume';
-import { AutoResumer, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
+import { AutoResumer, shellChecks, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
 import { AUTO_RESUME, AUTO_RESUME_TEST, RESTART_HOLD_MS, RESTART_HOLD_TEST_MS } from '../shared/keep-running';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
@@ -133,12 +133,13 @@ export class JafferService {
       {
         now: () => Date.now(),
         offer: () => this.resumeOffer(),
-        // at its prompt with an empty line: what we type must never be added to a line the person (or this) has started. The marks
-        // that say "a prompt" are output any program can print (a remote shell over ssh): the shell itself must have the terminal.
-        promptReady: () => {
-          const pane = this.host?.mainPane;
-          return !!pane && pane.alive && pane.promptReady && this.inputSeq === this.lineEmptyAt && pane.foregroundIsShell();
-        },
+        // `promptReady`: at its prompt with an empty line (what we type must never be added to a line the person, or this, has started),
+        // and the shell itself has the terminal (the marks are output any program can print: a remote shell over ssh). `mayType`: asked
+        // again at the moment of typing, of the system itself, never an answer of a moment ago.
+        ...shellChecks(
+          () => this.host?.mainPane,
+          () => this.inputSeq === this.lineEmptyAt,
+        ),
         busy: () => {
           const pane = this.host?.mainPane;
           return !!pane && pane.runningCommand !== null; // (a command the marks gave no line for runs all the same)
@@ -147,11 +148,6 @@ export class JafferService {
         // (nothing is resumed by itself: only a request the person made, Restart Claude Code's (`restartPrompt`), starts anything. An old
         // config's `session.autoResume` is kept in the file and read by nothing.)
         stopping: () => this.stopping,
-        // looked at again at the moment of typing
-        mayType: () => {
-          const pane = this.host?.mainPane;
-          return !!pane && pane.alive && pane.foregroundIsShell();
-        },
         // straight to the shell: this is not the person typing (no `lastInputAt`) and not an answer to Claude (no `userAnswered`); until
         // the shell runs it, its line is not empty
         type: (text) => {
@@ -572,6 +568,8 @@ export class JafferService {
    * The conversation that can be resumed now (the Resume button, and what Restart Claude Code types): the saved one, with nothing running in the
    * shell. "Nothing running" is what the marks say and what the terminal's foreground says: a program (ssh into a server whose shell
    * prints marks of its own) can make the marks say "a prompt, nothing running". A shell that is gone is not asked (a new one comes).
+   * Whatever the shell is called (`/bin/sh` runs bash): its pid leading the terminal's foreground is the test. (A decision: the answer
+   * of up to 250 ms ago will do, unless the terminal printed something since.)
    */
   private resumeOffer(): ResumeOffer | null {
     const offer = this.savedOffer();
@@ -659,7 +657,8 @@ export class JafferService {
     this.foregroundTimer = setTimeout(() => {
       this.foregroundTimer = null;
       if (this.stopping || this.host?.mainPane !== pane || !pane.alive || !pane.promptReady) return;
-      if (!pane.foregroundIsShell()) return this.settleAfterPrompt(tries - 1);
+      // looking again is the point: the system is asked, not the answer of the last look (200 ms ago, within the 250 ms it is kept)
+      if (!pane.foregroundIsShell({ fresh: true })) return this.settleAfterPrompt(tries - 1);
       this.restartPrompt();
       this.pushResume();
     }, FOREGROUND_SETTLE_MS);

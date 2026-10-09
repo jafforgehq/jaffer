@@ -932,6 +932,32 @@ function standInSsh(dir: string) {
   };
 }
 
+/**
+ * A program whose process is not called like the shell (perl, where the ssh stand-in is a bash script) that prints the same marks as
+ * `standInSsh` and then keeps every line typed into it, for the seconds it is given: `exec` into it is the case the comparison of the
+ * shell's name used to hide.
+ */
+function standInMarksProgram(dir: string) {
+  const got = path.join(dir, 'marks-got');
+  fs.writeFileSync(got, '');
+  const script = path.join(dir, 'marks.pl');
+  fs.writeFileSync(
+    script,
+    [
+      '$| = 1;',
+      'print "\\e]133;D;0\\a\\e]133;A\\a\\e]133;C\\a\\e]133;D;0\\a\\e]133;A\\a";',
+      'open(my $got, ">>", $ARGV[0]) or die; select((select($got), $| = 1)[0]);',
+      'my $end = time + $ARGV[1];',
+      'while (time < $end) { my $rin = ""; vec($rin, fileno(STDIN), 1) = 1; if (select(my $rout = $rin, undef, undef, 0.2) > 0) { my $line = <STDIN>; last unless defined $line; print $got $line; } }',
+      '',
+    ].join('\n'),
+  );
+  return {
+    command: (seconds: number) => `/usr/bin/perl '${script}' '${got}' ${seconds}`,
+    got: () => fs.readFileSync(got, 'utf8'),
+  };
+}
+
 describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, a stand-in claude, the timing on a millisecond scale)', () => {
   const T = AUTO_RESUME_TEST;
   let env5: TestEnv;
@@ -1675,6 +1701,78 @@ describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, 
 
     // The marks are output, and a program can print them: what the daemon types must reach the shell itself, never a program it runs
     // (the shell's foreground process is looked at, not the marks), and the Resume button waits for that too.
+    it("no Resume button while an ssh stand-in forges the shell's prompt marks, not even for a moment: it is back at the shell's own prompt after it", async () => {
+      const ID = tag(30);
+      const { c, hook } = await inFolder5('fg-a');
+      await endSessions(c, hook);
+      const ssh = standInSsh(fake.dir);
+      const term = terminal(c);
+      const cmds = commands(c);
+      try {
+        ssh.clear();
+        ssh.staysFor(3);
+        await hook(c, 'SessionStart', ID);
+        await hook(c, 'SessionEnd', ID, { reason: 'other' }); // Claude Code stopped from outside: the conversation is kept, and offered
+        await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
+        const pushed = collect(c, 'claude.resume');
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // asked a moment before ssh starts: an answer the next 250 ms might reuse
+        await c.call('pty.write', { data: 'ssh server\r' });
+        await waitUntil(() => cmds.some((x) => x.cmd === ''), 8000); // the remote prompt it printed: by the marks, nothing runs
+        for (let i = 0; i < 5; i++) {
+          expect(await c.call('claude.resume', {})).toBeNull();
+          await sleep(150);
+        }
+        expect(pushed.filter((o) => o !== null)).toEqual([]); // and the window was never told otherwise while it ran
+        // ssh ends: the shell's own prompt brings the button back
+        await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
+        expect(pushed.at(-1)).toMatchObject({ id: ID });
+        expect(ssh.got()).toBe('');
+        expect(term.text()).not.toContain('RESUMED:');
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        c.close();
+      }
+    }, 40_000);
+
+    // The one case the comparison of the shell's name used to hide, and 0.5.1 no longer does: the shell `exec`s into a program, which keeps
+    // the shell's pid and so leads the terminal's foreground, and that program prints prompt marks of its own. By the marks and by the
+    // foreground it is the shell at its prompt, so the button is offered (a click would type into that program: the person's click, as
+    // in 0.4). Nothing is typed by itself, and Restart Claude, which restarts the shell, types only into the new one.
+    it.skipIf(!fs.existsSync('/usr/bin/perl'))("`exec` into a program that prints prompt marks of its own: the button is offered (the shell's name is not compared any more), and Restart Claude types only into the new shell", async () => {
+      const ID = tag(32);
+      const { c, hook } = await inFolder5('fg-c');
+      await endSessions(c, hook);
+      const prog = standInMarksProgram(fake.dir);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        await hook(c, 'SessionEnd', ID, { reason: 'other' });
+        await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
+        const before = await panePid(c);
+        await c.call('pty.write', { data: `exec ${prog.command(20)}\r` });
+        await waitUntil(() => cmds.some((x) => x.cmd === ''), 8000); // its own prompt marks
+        await sleep(300);
+        expect((await c.call('pane.list', {}))[0]).toMatchObject({ pid: before, alive: true }); // the same pid: the shell became the program
+        expect(await c.call('claude.resume', {})).toMatchObject({ id: ID }); // what the code does now: offered
+        await sleep(T.quietMs + T.noticeMs + 600);
+        expect(events).toEqual([]); // nothing by itself
+        expect(prog.got()).toBe('');
+        // Restart Claude: the program goes with the shell, the new shell gets the conversation, once
+        expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+        await newShell(c, before);
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        await settle();
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(term.count(resumed(ID))).toBe(1);
+        expect(prog.got()).toBe('');
+      } finally {
+        c.close();
+      }
+    }, 40_000);
+
     it('Restart Claude: an ssh typed ahead into the new shell gets nothing at its remote prompt; the shell\'s own prompt after it is resumed', async () => {
       const ID = tag(31);
       const { c, hook } = await inFolder5('fg-b');
@@ -1935,6 +2033,57 @@ describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, 
       }
     }, 60_000);
   });
+});
+
+// 0.5.1: the Resume button is the way back after a restart, so it must show whatever the shell is called. `SHELL=/bin/sh` runs bash on
+// macOS (dash on Linux): the process is not called `sh`, and comparing names hid the button for good. The foreground decides alone.
+describe('the Resume button with a shell of another name (SHELL=/bin/sh: bash on macOS, dash on Linux; bundled daemon)', () => {
+  let env7: TestEnv;
+  const ID = '1a2b3c4d-0000-4a00-8a00-000000000301';
+  beforeAll(() => {
+    env7 = makeEnv();
+    // a login sh reads ~/.profile: the stand-in `claude` comes first on its PATH (nothing here types, but nothing could start a real one)
+    const standIn = standInClaude(path.join(env7.root, 'stand-in'));
+    fs.writeFileSync(path.join(env7.userHome, '.profile'), `PATH='${standIn.dir}':"$PATH"; export PATH\n`);
+  });
+  afterAll(async () => {
+    const last = await tryConnect(env7.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    last?.close();
+    await sleep(300);
+    env7?.cleanup();
+  });
+
+  it("a recorded conversation is offered at the shell's prompt, and not while a command the shell runs has the terminal", async () => {
+    const c = await ensureDaemon(env7.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env7.userHome, SHELL: '/bin/sh', JAFFER_TICK_MS: '400', PS1: '$ ', JAFFER_TEST_AUTORESUME_FAST: '1' },
+    });
+    try {
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      await sleep(800); // (the shell is at its prompt)
+      const cwd = (await c.call('session.info', {})).cwd as string;
+      const transcript = path.join(env7.userHome, 'sh.jsonl');
+      fs.writeFileSync(transcript, '{}\n');
+      const hook = (ev: string, over: object = {}) => c.call('claude.event', { session_id: ID, hook_event_name: ev, cwd, transcript_path: transcript, ...over });
+      await hook('SessionStart');
+      await hook('UserPromptSubmit', { prompt: 'go' });
+      await hook('SessionEnd', { reason: 'other' }); // stopped from outside (a logout): kept, to be offered
+      await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
+      expect(await c.call('claude.resume', {})).toMatchObject({ id: ID });
+      // this sh prints no marks: only the terminal's foreground says that a command runs, and the button is not offered meanwhile
+      await c.call('pty.write', { data: 'sleep 2\r' });
+      await waitUntil(async () => (await c.call('claude.resume', {})) === null, 5_000);
+      await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000); // back at the prompt
+      expect(((await c.call('session.snapshot', {})) as { data: string }).data).not.toContain('RESUMED:'); // and nothing was typed
+      await c.call('claude.resume.dismiss', {});
+    } finally {
+      c.close();
+    }
+  }, 40_000);
 });
 
 describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {

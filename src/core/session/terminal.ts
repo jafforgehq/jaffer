@@ -1,6 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
@@ -26,6 +24,10 @@ export interface PtyOptions {
   cols: number;
   rows: number;
   scrollback?: number;
+  /** How the terminal's foreground process group is read (default `readForegroundGroup`: tests count or stand in for it). */
+  foregroundGroup?: (pid: number) => number | null;
+  /** The clock of the foreground check's short memory (tests). */
+  now?: () => number;
 }
 
 const MAX_OUTPUT_LINES = 400;
@@ -35,33 +37,73 @@ function unescapeOsc(s: string): string {
   return s.replace(/\\x([0-9a-fA-F]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
 }
 
+/** How long an answer of the foreground check is reused: the daemon asks several times for one event (the offer, the prompt, Restart Claude). */
+export const FOREGROUND_CACHE_MS = 250;
+/** How long `ps` gets to say: it runs on the daemon's thread, and a slower answer is "not the shell". */
+export const FOREGROUND_READ_MS = 500;
+
 /**
- * A process name as the system keeps it: the last part of a path, without the `-` a login shell puts in front, and only as long as
- * macOS (16 characters) and Linux (15) keep it.
+ * The terminal's foreground process group, as the system says it for this process: one `ps -o tpgid=` call (`ps` stands in for
+ * `/bin/ps` in tests). Null when it cannot be read, or not within `timeoutMs`.
  */
-function procName(s: string): string {
-  return path.basename(s).replace(/^-/, '').slice(0, 15);
-}
-
-/** The names the shell of a pane shows as: the file it was started from, and what that file is a link to. */
-function shellNames(file: string): Set<string> {
-  const names = new Set([procName(file)]);
+export function readForegroundGroup(pid: number, ps = '/bin/ps', timeoutMs = FOREGROUND_READ_MS): number | null {
   try {
-    names.add(procName(fs.realpathSync(file)));
-  } catch {
-    /* not a path that resolves: the name alone */
-  }
-  return names;
-}
-
-/** The terminal's foreground process group, as the system says it for this process (`ps -o tpgid`); null when it cannot be read. */
-function foregroundGroup(pid: number): number | null {
-  try {
-    const out = execFileSync('/bin/ps', ['-o', 'tpgid=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const out = execFileSync(ps, ['-o', 'tpgid=', '-p', String(pid)], { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'ignore'] });
     const n = Number.parseInt(out.trim(), 10);
     return Number.isInteger(n) && n > 0 ? n : null;
   } catch {
     return null;
+  }
+}
+
+export interface ForegroundDeps {
+  /** The shell's pid. */
+  pid(): number;
+  /** The shell still runs. */
+  alive(): boolean;
+  /** The terminal's foreground process group (`readForegroundGroup`); null when it cannot be told. May throw. */
+  readGroup(pid: number): number | null;
+  now(): number;
+}
+
+/**
+ * Is the shell itself what has the terminal right now (at its own prompt), and not a program it runs? The marks cannot say: they are
+ * output, and any program prints them if it likes (a remote shell over ssh with an integration of its own does). What a program cannot
+ * change: the terminal's foreground process group is the shell's own, its pid (a command, a script, a subshell each get a group of
+ * their own: the system's answer, read with `ps`). Anything that cannot be read is a no: what depends on this types into the terminal.
+ *
+ * The process's name is not compared with the shell's (0.5.1): `SHELL=/bin/sh` runs bash, a wrapper shell has a name of its own, and
+ * the Resume button hid for both. The one case that comparison caught is a shell that `exec`ed into a program, which keeps the shell's
+ * pid: by the foreground it is the shell. The marks still say a command runs then, unless the program prints prompt marks of its own.
+ *
+ * An answer is reused for `FOREGROUND_CACHE_MS` (the daemon asks about six times per command while a conversation is offered, each a
+ * synchronous `ps`), and not after the terminal printed anything since (`forget`: a program that took the terminal prints, its marks
+ * are output). `fresh: true` always asks: the moment Restart Claude types does (a cached yes there could type into a program).
+ */
+export class ForegroundCheck {
+  private last: { at: number; shell: boolean } | null = null;
+
+  constructor(private readonly d: ForegroundDeps) {}
+
+  isShell(opts: { fresh?: boolean } = {}): boolean {
+    if (!this.d.alive()) return false;
+    const now = this.d.now();
+    const last = this.last;
+    if (!opts.fresh && last && now >= last.at && now - last.at < FOREGROUND_CACHE_MS) return last.shell;
+    const pid = this.d.pid();
+    let shell = false;
+    try {
+      shell = this.d.readGroup(pid) === pid;
+    } catch {
+      shell = false;
+    }
+    this.last = { at: now, shell };
+    return shell;
+  }
+
+  /** Something happened in the terminal: the next question is asked of the system again. */
+  forget(): void {
+    this.last = null;
   }
 }
 
@@ -88,17 +130,18 @@ export class PtySession {
   private flushTimer: NodeJS.Timeout | null = null;
   /** Count of data events emitted so far; lets a client discard anything already covered by its snapshot. */
   private dataSeq = 0;
-  /** What the shell itself is called (see `foregroundIsShell`). */
-  private readonly shellNames: Set<string>;
+  /** Whether the shell itself has the terminal (see `foregroundIsShell`). */
+  private readonly foreground: ForegroundCheck;
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
-    this.shellNames = shellNames(opts.file);
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
     this.registerParsers();
     this.pty = nodePty.spawn(opts.file, opts.args, { name: 'xterm-256color', cols: opts.cols, rows: opts.rows, cwd: opts.cwd, env: opts.env });
+    const readGroup = opts.foregroundGroup ?? ((pid: number) => readForegroundGroup(pid));
+    this.foreground = new ForegroundCheck({ pid: () => this.pty.pid, alive: () => this._alive, readGroup, now: opts.now ?? Date.now });
     this.pty.onData((d) => this.onPtyData(d));
     this.pty.onExit(({ exitCode, signal }) => {
       this._alive = false;
@@ -140,30 +183,18 @@ export class PtySession {
   }
 
   /**
-   * Is the shell itself what has the terminal right now (at its own prompt), and not a program it runs? The marks below cannot say: they
-   * are output, and any program prints them if it likes (a remote shell over ssh with an integration of its own does). Two things the
-   * program cannot change: the terminal's foreground process group is the shell's own (a command, a script, a subshell each get a group
-   * of their own: the system's answer, read with `ps`), and the process there still is the shell (not a program it `exec`ed into, which
-   * keeps its pid). Anything that cannot be read is a no: what depends on this types into the terminal.
+   * Is the shell itself what has the terminal right now (at its own prompt), and not a program it runs? The terminal's foreground
+   * process group is the shell's pid (see `ForegroundCheck`). A decision may take the answer of up to 250 ms ago (nothing was printed
+   * since); `fresh: true` asks the system again, as the moment of typing does.
    */
-  foregroundIsShell(): boolean {
-    if (!this._alive) return false;
-    let name: unknown;
-    try {
-      name = this.pty.process;
-    } catch {
-      return false;
-    }
-    if (typeof name !== 'string' || !name) return false;
-    // on macOS the name is the process's own (never a path); a path is node-pty saying it could not tell (the shell is still starting)
-    if (process.platform === 'darwin' && name.includes('/')) return false;
-    if (!this.shellNames.has(procName(name))) return false;
-    return foregroundGroup(this.pty.pid) === this.pty.pid;
+  foregroundIsShell(opts: { fresh?: boolean } = {}): boolean {
+    return this.foreground.isShell(opts);
   }
 
   // ------------------------------------------------------------------ io
 
   private onPtyData(data: string): void {
+    this.foreground.forget(); // whatever was printed (a program that started, the marks it printed): the foreground is asked again
     // Emit only after the headless terminal has parsed the chunk. Snapshots taken via
     // consistentSnapshot() are then exactly "everything emitted so far", never a partial chunk.
     this.term.write(data, () => this.queueOut(data));

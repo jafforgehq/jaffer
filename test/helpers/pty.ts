@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildShellSpawn, installShellIntegration } from '../../src/core/session/shell-integration';
-import { PtySession, type PtyEvent } from '../../src/core/session/terminal';
+import { PtySession, type PtyEvent, type PtyOptions } from '../../src/core/session/terminal';
 import type { TestEnv } from './env';
 
-export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; rows?: number; cwd?: string } = {}): PtySession {
+export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; rows?: number; cwd?: string; foregroundGroup?: PtyOptions['foregroundGroup'] } = {}): PtySession {
   installShellIntegration(env.paths);
   // Debian/Ubuntu's global zshrc runs compinit, which prompts on CI runners; opt out via the user's own .zshenv
   // (this doubles as a check that the integration sources the user's real dotfiles).
@@ -18,7 +18,7 @@ export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; 
     baseEnv: { PATH: process.env.PATH, HOME: env.userHome, LANG: 'en_US.UTF-8', PS1: '$ ', ELECTRON_RUN_AS_NODE: '1' },
     login: false,
   });
-  return new PtySession({ file: spawn.file, args: spawn.args, cwd: opts.cwd ?? env.userHome, env: spawn.env, cols: opts.cols ?? 100, rows: opts.rows ?? 30 });
+  return new PtySession({ file: spawn.file, args: spawn.args, cwd: opts.cwd ?? env.userHome, env: spawn.env, cols: opts.cols ?? 100, rows: opts.rows ?? 30, ...(opts.foregroundGroup ? { foregroundGroup: opts.foregroundGroup } : {}) });
 }
 
 export function waitFor<T>(session: PtySession, pred: (e: PtyEvent) => T | false | undefined | null, ms = 8000): Promise<T> {
