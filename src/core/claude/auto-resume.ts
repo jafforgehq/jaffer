@@ -31,6 +31,8 @@ export interface AutoResumeInput {
   attempts: number[];
   /** When the notice was given, if it was. */
   pendingSince?: number;
+  /** When that notice said it would type: never earlier, even if an old attempt ages out meanwhile. */
+  typesAt?: number;
   /** The person cancelled it for this offer. */
   cancelled: boolean;
 }
@@ -76,7 +78,7 @@ export function nextStep(i: AutoResumeInput, t: AutoResumeTiming = AUTO_RESUME):
   // the notice says when it will type, and it is never shorter than the notice
   const wait = Math.max(t.noticeMs, waitBefore(tries, t));
   if (i.pendingSince === undefined) return i.now < quietAt ? { kind: 'wait', until: quietAt } : { kind: 'announce', typesAt: i.now + wait };
-  const at = Math.max(i.pendingSince + wait, quietAt);
+  const at = Math.max(i.typesAt ?? i.pendingSince + wait, quietAt);
   return i.now < at ? { kind: 'wait', until: at } : { kind: 'type', id: i.offer.id };
 }
 
@@ -93,12 +95,16 @@ const stopped = (exit: number | null): boolean => exit !== null && exit >= 145 &
 export class AutoResumer {
   /** One timer at most: the end of a wait for quiet, or of the notice. */
   private timer: { handle: unknown } | undefined;
-  private pending: { id: string; since: number } | undefined;
+  /** The notice given: for which conversation, when, and the time it said it would type. */
+  private pending: { id: string; since: number; typesAt: number } | undefined;
   /** The offer the person asked for (Restart Claude): it goes ahead with the setting off, for this one try. */
   private explicitId: string | undefined;
+  // The two marks below hold until another conversation is offered or a Claude run ends (or the daemon restarts). An offer that is
+  // missing for a while (a command running, a `cd` elsewhere and back) does not clear them: the person was told once, and Cancel
+  // leaves the button.
   /** The offer the person cancelled. */
   private cancelledId: string | undefined;
-  /** The offer it gave up on, told once: no automatic try for it until the offer changes, even once old attempts age out. */
+  /** The offer it gave up on, told once: no automatic try for it, even once old attempts age out. */
   private gaveUpId: string | undefined;
   /** The conversation typed last, until its `claude` ends. */
   private tried: string | undefined;
@@ -113,7 +119,7 @@ export class AutoResumer {
     this.step(opts.explicit === true);
   }
 
-  /** The person said no to this attempt: nothing is typed, and this offer stays quiet until it changes. */
+  /** The person said no to this attempt: nothing is typed, and this offer stays quiet (the button is left) until the marks clear. */
   cancel(): void {
     const id = this.pending?.id ?? this.d.offer()?.id;
     this.drop();
@@ -122,11 +128,14 @@ export class AutoResumer {
   }
 
   /**
-   * A `claude` command finished. A crash is tried again; after an automatic try, a run that lasted `healthyMs` worked, so its attempts
-   * start over, and a shorter one stays counted (the next try waits longer, or it gives up). A deliberate end does nothing.
+   * A `claude` command finished: what was cancelled or given up on before is history. A crash is tried again; after an automatic try,
+   * a run that lasted `healthyMs` worked, so its attempts start over, and a shorter one stays counted (the next try waits longer, or it
+   * gives up). A deliberate end does nothing more.
    */
   claudeEnded(info: { exit: number | null; durMs: number }): void {
-    if (stopped(info.exit)) return;
+    if (stopped(info.exit)) return; // suspended, not ended
+    this.cancelledId = undefined;
+    this.gaveUpId = undefined;
     const tried = this.tried;
     this.tried = undefined;
     if (!crashed(info.exit)) return;
@@ -137,9 +146,9 @@ export class AutoResumer {
   private step(explicit: boolean): void {
     this.unschedule();
     const id = this.d.offer()?.id;
-    // the marks belong to one offer: another conversation, or none, clears them
-    if (this.cancelledId !== id) this.cancelledId = undefined;
-    if (this.gaveUpId !== id) this.gaveUpId = undefined;
+    // another conversation offered clears the marks; no offer for a moment does not
+    if (id !== undefined && this.cancelledId !== id) this.cancelledId = undefined;
+    if (id !== undefined && this.gaveUpId !== id) this.gaveUpId = undefined;
     if (this.explicitId !== id) this.explicitId = undefined;
     if (this.pending && this.pending.id !== id) this.drop();
     if (explicit && id !== undefined) {
@@ -159,6 +168,7 @@ export class AutoResumer {
         stopping: this.d.stopping(),
         attempts: id !== undefined && isSessionId(id) ? this.d.attempts(id) : [],
         pendingSince: this.pending?.since,
+        typesAt: this.pending?.typesAt,
         cancelled: id !== undefined && (id === this.cancelledId || (id === this.gaveUpId && !asked)),
       },
       this.t,
@@ -174,7 +184,7 @@ export class AutoResumer {
     }
     if (s.kind === 'wait') this.schedule(s.until - now);
     else if (s.kind === 'announce') {
-      this.pending = { id, since: now };
+      this.pending = { id, since: now, typesAt: s.typesAt };
       this.d.emit({ state: 'pending', id, typesAt: s.typesAt });
       this.schedule(s.typesAt - now);
     } else this.typeNow(s.id);
@@ -185,7 +195,6 @@ export class AutoResumer {
     // checked where it is kept, by the decision, and here again where it is typed
     if (!isSessionId(id)) return this.drop();
     this.pending = undefined;
-    this.gaveUpId = undefined;
     this.tried = id;
     this.d.recordAttempt(id);
     this.d.type(`${resumeCommand(id)}\r`);

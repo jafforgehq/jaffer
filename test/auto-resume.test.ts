@@ -74,6 +74,13 @@ describe('nextStep', () => {
     expect(step({ pendingSince: T0 - 120_000, attempts: [T0 - 200_000, T0 - 150_000] })).toEqual({ kind: 'type', id: ID });
   });
 
+  it('types at the time it announced, even when an older attempt ages out during the notice', () => {
+    // announced with two attempts (2 min); one has aged out since, which alone would make the wait 20 s
+    expect(step({ pendingSince: T0 - 20_000, typesAt: T0 + 100_000, attempts: [T0 - 60_000] })).toEqual({ kind: 'wait', until: T0 + 100_000 });
+    expect(step({ pendingSince: T0 - 120_000, typesAt: T0, attempts: [T0 - 60_000] })).toEqual({ kind: 'type', id: ID });
+    expect(step({ pendingSince: T0 - 120_000, typesAt: T0, lastInputAt: T0 - 500 })).toEqual({ kind: 'wait', until: T0 + 1_500 });
+  });
+
   it('the person typing during the notice moves the typing to 2 s after their last key', () => {
     expect(step({ pendingSince: T0 - 3_000, lastInputAt: T0 - 500 })).toEqual({ kind: 'wait', until: T0 + 1_500 });
     expect(step({ pendingSince: T0 - 3_000, lastInputAt: T0 - 2_000 })).toEqual({ kind: 'type', id: ID });
@@ -241,16 +248,41 @@ describe('AutoResumer', () => {
     expect(typed).toEqual([`claude --resume ${OTHER}\r`]);
   });
 
-  it('a cancelled offer that goes away and comes back is tried again', () => {
+  it('Cancel leaves the button: the offer going away and coming back (a command run, a cd away and back) does not bring it back', () => {
     r.check();
     r.cancel();
+    // a command runs: no offer while it does, then the prompt is back
+    offer = null;
+    busy = true;
+    promptReady = false;
+    r.check();
+    offer = { id: ID };
+    busy = false;
+    promptReady = true;
+    r.check();
+    // a cd elsewhere (no offer in another folder) and back
     offer = null;
     r.check();
     offer = { id: ID };
     r.check();
-    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled', 'pending']);
-    advance(3_000);
+    advance(600_000);
+    r.check();
+    expect(typed).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+  });
+
+  it('a long notice is not cut short when an older attempt ages out during it', () => {
+    tries.set(ID, [T0 - 590_000, T0 - 60_000]);
+    r.check();
+    expect(events).toEqual([{ state: 'pending', id: ID, typesAt: T0 + 120_000 }]);
+    advance(15_000);
+    r.check(); // the first attempt has aged out: alone that would make the wait 20 s
+    advance(104_999);
+    expect(typed).toEqual([]);
+    advance(1);
+    expect(now).toBe(T0 + 120_000);
     expect(typed).toEqual([RESUME]);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'typed']);
   });
 
   it('the person typing at 2.5 s moves the typing to 2 s after their last key', () => {
@@ -361,13 +393,78 @@ describe('AutoResumer', () => {
     expect(typed).toHaveLength(1);
   });
 
-  it('an offer that goes away and comes back while still at the limit is a new give-up, told again, and nothing is typed', () => {
+  it('gives up once: the offer going away and coming back (commands, a cd away and back) tells nothing more and types nothing', () => {
     tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
     r.check();
+    for (let i = 0; i < 3; i++) {
+      offer = null;
+      r.check();
+      offer = { id: ID };
+      r.check();
+    }
+    advance(700_000); // and once the attempts have aged out
     offer = null;
     r.check();
     offer = { id: ID };
     r.check();
+    advance(600_000);
+    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
+    expect(events).toEqual([{ state: 'gave-up', id: ID }]);
+    expect(typed).toEqual([]);
+  });
+
+  it('a different offer clears both marks', () => {
+    r.check();
+    r.cancel(); // ID cancelled
+    tries.set(OTHER, [T0 - 3, T0 - 2, T0 - 1]);
+    offer = { id: OTHER };
+    r.check(); // OTHER at the limit
+    expect(gaveUp()).toHaveLength(1);
+    offer = { id: ID };
+    r.check(); // the Cancel of ID is gone
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+    busy = false;
+    promptReady = true;
+    offer = { id: OTHER };
+    r.check(); // and so is the give-up of OTHER: a new episode
+    expect(gaveUp()).toHaveLength(2);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('a Claude run ending clears the Cancel mark, and the next check goes by the rules again', () => {
+    r.check();
+    r.cancel();
+    r.check();
+    expect(events).toHaveLength(2);
+    busy = true; // the person resumed it from the button, and it crashed
+    promptReady = false;
+    ended(1, 5_000);
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+  });
+
+  it('a deliberate end also clears the Cancel mark, without a check of its own', () => {
+    r.check();
+    r.cancel();
+    ended(0, 5_000);
+    expect(events.map((e) => e.state)).toEqual(['pending', 'cancelled']);
+    r.check();
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+  });
+
+  it('a Claude run ending clears the give-up mark: still at the limit, it gives up again exactly once', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    ended(1, 5_000); // the person's own resume crashed
+    expect(gaveUp()).toHaveLength(2);
+    r.check();
+    offer = null;
+    r.check();
+    offer = { id: ID };
     r.check();
     expect(gaveUp()).toHaveLength(2);
     expect(typed).toEqual([]);
