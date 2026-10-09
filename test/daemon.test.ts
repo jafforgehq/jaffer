@@ -1227,6 +1227,39 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
     c.close();
   }, 40_000);
 
+  it('a `claude -p` still running when its shell goes (an update, a crash, Restart shell) is a one-shot too: its hooks keep nothing, and nothing is typed afterwards', async () => {
+    const ID = '1a2b3c4d-0000-4a00-8a00-000000000015';
+    const file = path.join(env5.paths.sessionDir, 'claude.json');
+    const { c, hook } = await inFolder5('auto-k');
+    await c.call('claude.resume.dismiss', {}); // nothing kept from before
+    const events = track(c);
+    const term = terminal(c);
+    const starts = collect(c, 'pty.start') as { cmd: string }[];
+    try {
+      fake.sleeps(20); // a long print-mode run
+      await c.call('pty.write', { data: 'claude -p "summarise the log"\r' });
+      await waitUntil(() => starts.some((x) => x.cmd.startsWith('claude -p')), 8000);
+      await hook(c, 'SessionStart', ID); // its own hooks fire, as any Claude's do
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'summarise the log' });
+      await sleep(300);
+      expect(fs.existsSync(file)).toBe(false);
+      const before = (await c.call('pane.list', {}))[0];
+      await c.call('session.restart', {}); // the shell goes, and the run with it
+      await waitUntil(async () => {
+        const p = (await c.call('pane.list', {}))[0];
+        return p.alive && p.pid !== before.pid;
+      }, 10_000);
+      await sleep(800 + T.quietMs + T.noticeMs + 800); // past the new shell's first prompt and a notice it would have had
+      expect(events).toEqual([]);
+      expect(term.count(`RESUMED: --resume ${ID}`)).toBe(0);
+      expect(await c.call('claude.resume', {})).toBeNull();
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      fake.sleeps(0);
+      c.close();
+    }
+  }, 40_000);
+
   it('a shell that dies with Claude in it brings Claude back in the new shell, even after an earlier Cancel', async () => {
     const ID = '1a2b3c4d-0000-4a00-8a00-000000000011';
     const { c, hook } = await inFolder5('auto-h');

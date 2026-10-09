@@ -561,8 +561,20 @@ export class JafferService {
     if (o.hook_event_name === 'SessionEnd') {
       // a Claude that died with its shell did not end the conversation on purpose: its resume point stays
       if (Date.now() - this.lastShellExitAt > SHELL_EXIT_GRACE_MS) this.resume.forget(id);
-    } else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
+    } else if (this.config.get().session.resumeClaude && !this.printRunning()) {
+      this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
+    }
     this.pushResume();
+  }
+
+  /**
+   * A `claude -p` runs in the shell. Its hooks fire like any Claude's, but it answers once and is gone, never a conversation to resume
+   * (one that ends is forgotten, R11): what they say is not kept, so a shell or a daemon that goes while it runs leaves nothing that
+   * would start an interactive Claude by itself afterwards. (Only the start of the command line is read: see `COMMAND_HEAD`.)
+   */
+  private printRunning(): boolean {
+    const head = this.host?.mainPane?.runningCommand?.slice(0, COMMAND_HEAD) ?? '';
+    return head !== '' && isClaudeCommand(head) && isPrintMode(head);
   }
 
   /**
