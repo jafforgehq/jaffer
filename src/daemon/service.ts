@@ -14,6 +14,8 @@ import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
+import { StayAwake, type Work } from '../core/session/stay-awake';
+import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { COMMAND_HEAD, endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
@@ -38,6 +40,9 @@ export interface ServiceOptions {
 
 /** Backpressure: if a client falls this far behind we stop streaming and resync from a snapshot. */
 const MAX_BACKLOG = 8 * 1024 * 1024;
+
+/** While a command runs, the daemon looks at it this often, so that it holds the Mac awake soon after half a minute. */
+const STAY_AWAKE_TICK_MS = 5000;
 
 /** A Claude killed with its shell may say SessionEnd (an async hook) a moment after the shell's exit was seen: that is not the person quitting. */
 const SHELL_EXIT_GRACE_MS = 5000;
@@ -91,6 +96,10 @@ export class JafferService {
    * prompt has made the request (so what the notice then says is about it).
    */
   private restartHold: { id: string; from: PtySession | undefined; armed: boolean; timer: NodeJS.Timeout } | null = null;
+  /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
+  private stayAwake: StayAwake;
+  /** Looks at a running command every few seconds, so that it counts once it has run half a minute; only while one runs. */
+  private commandTicker: NodeJS.Timeout | null = null;
   private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
@@ -149,6 +158,17 @@ export class JafferService {
       },
       autoResumeTiming(),
     );
+    this.stayAwake = new StayAwake({
+      ...caffeinateHold(this.paths.home),
+      pid: process.pid,
+      now: () => Date.now(),
+      setTimer: (fn, ms) => {
+        const t = setTimeout(fn, ms);
+        t.unref?.();
+        return t;
+      },
+      clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
+    });
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -193,6 +213,7 @@ export class JafferService {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    this.stopStayAwake(); // first: nothing below may keep the Mac awake
     this.releaseRestartHold();
     this.autoResume.check(); // nothing is typed while stopping: a notice that is running ends now, and the window is told
     for (const t of this.timers) clearInterval(t);
@@ -291,10 +312,13 @@ export class JafferService {
       if ('lifecycle' in e) {
         if (e.lifecycle === 'spawned') this.lineEmptyAt = this.inputSeq; // a new shell: its line is empty, whatever was typed before it
         this.rpc.broadcast('session.lifecycle', e, this.attached);
+        this.refreshStayAwake(); // (a new shell runs nothing)
         return;
       }
       this.sendPty(e.pane, e.event);
       if (e.event.type === 'start') this.lineEmptyAt = this.inputSeq; // a command began: the keys so far were the command itself
+      // a command began or ended, or the shell is gone: a long one holds the Mac awake, and none holds nothing
+      if (e.event.type === 'start' || e.event.type === 'command' || e.event.type === 'exit') this.refreshStayAwake();
       // A command line comes from the shell's marks, which any output in the terminal can forge, at any length: only its start is
       // read to tell what it was (memory gets it whole, through its own redaction)
       const head = e.event.type === 'command' ? e.event.cmd.slice(0, COMMAND_HEAD) : '';
@@ -336,6 +360,7 @@ export class JafferService {
       }
     });
     this.claudeWatcher.changes.on((sessions) => {
+      this.refreshStayAwake();
       this.pushClaudeState();
       this.watchForRejections(sessions);
       this.pushResume();
@@ -346,9 +371,50 @@ export class JafferService {
       if (!c.session.resumeClaude) this.resume.forget(); // off forgets it, as Settings says: nothing of the conversation stays on disk
       this.pushResume();
       this.autoResume.check(); // switched on: it may go ahead now; switched off: a notice that is running ends
+      this.refreshStayAwake(); // (the switch for staying awake)
       this.memory.syncExports();
       this.startIngest();
     });
+  }
+
+  // ------------------------------------------------------------------ stay awake
+
+  /**
+   * What works now. Claude: a session is working, or a background agent runs (a Claude that waits for the person is not work, and an
+   * ended session has nothing running). A command: the one running in the shell, if the shell is alive (a shell that died mid-command
+   * never reported its end).
+   */
+  private stayAwakeWork(): Work {
+    const claude = this.claudeWatcher.sessions().some((s) => s.state !== 'ended' && (s.state === 'working' || s.subagents.some((a) => a.status === 'running')));
+    const pane = this.host?.mainPane;
+    const cmd = pane?.alive ? pane.runningCommand : null;
+    const since = pane?.runningSince ?? null;
+    return { enabled: this.config.get().session.stayAwake, claude, command: cmd !== null && since !== null ? { cmd, since } : null };
+  }
+
+  /** Tells `StayAwake` what works now, and keeps a look on a running command (it counts once it has run half a minute, with no event to say so). */
+  private refreshStayAwake(): void {
+    if (this.stopping) return;
+    try {
+      const work = this.stayAwakeWork();
+      this.stayAwake.update(work);
+      const ticking = work.enabled && work.command !== null;
+      if (ticking && !this.commandTicker) {
+        this.commandTicker = setInterval(() => this.refreshStayAwake(), STAY_AWAKE_TICK_MS);
+        this.commandTicker.unref?.();
+      } else if (!ticking && this.commandTicker) {
+        clearInterval(this.commandTicker);
+        this.commandTicker = null;
+      }
+    } catch (e) {
+      this.log(`stay awake: ${errMsg(e)}`);
+    }
+  }
+
+  private stopStayAwake(): void {
+    if (this.commandTicker) clearInterval(this.commandTicker);
+    this.commandTicker = null;
+    this.stayAwake.stop();
   }
 
   /** At most one push per 100 ms, and never fewer than the last state: the trailing push carries the newest snapshot. */

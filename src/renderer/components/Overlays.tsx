@@ -379,6 +379,9 @@ export function Settings(): VNode {
               <Field label="Keep the screen for a restart" hint="saves your screen and scrollback so they come back after a reboot or an update; off keeps nothing of the screen on disk (the folder still comes back)">
                 <Switch checked={c.session?.restoreScreen !== false} onChange={(v) => set({ session: { restoreScreen: v } })} />
               </Field>
+              <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
+                <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />
+              </Field>
               <Field label="Mark risky places" hint="tints the title bar on a protected branch (amber) and while an ssh session runs (red), so a command goes where you meant">
                 <Switch checked={c.safety?.dangerTint !== false} onChange={(v) => set({ safety: { dangerTint: v } })} />
               </Field>

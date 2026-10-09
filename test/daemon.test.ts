@@ -1871,3 +1871,148 @@ describe('a daemon does not claim hooks that belong to another Jaffer home (bund
     }
   }, 30_000);
 });
+
+describe('the Mac stays awake while Claude or a long command works (bundled daemon; no caffeinate is ever run: the hold is written to a log)', () => {
+  let env6: TestEnv;
+  let c: RpcClient;
+  let pid: number;
+  const log = () => path.join(env6.root, 'hold.log');
+  /** What the daemon asked for, in order: `hold` with the arguments for caffeinate, and `release`. */
+  const lines = (): { op: string; args: string[] }[] => {
+    try {
+      return fs.readFileSync(log(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch {
+      return [];
+    }
+  };
+  const ops = () => lines().map((l) => l.op);
+  /** A Claude Code hook event for a session of its own (the home is shared by the tests of this block). */
+  const hook = (id: string, ev: string, over: object = {}) => c.call('claude.event', { session_id: id, hook_event_name: ev, cwd: env6.userHome, ...over });
+  const state = async (id: string) => ((await c.call('claude.state', {})).sessions as ClaudeSession[]).find((s) => s.id === id)?.state;
+
+  beforeAll(async () => {
+    env6 = makeEnv();
+    fs.writeFileSync(path.join(env6.userHome, '.zshenv'), 'skip_global_compinit=1\n');
+    c = await ensureDaemon(env6.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env6.userHome, SHELL: '/bin/bash', JAFFER_TICK_MS: '400', PS1: '$ ', JAFFER_TEST_HOLD_LOG: log() },
+    });
+    pid = (await c.call('hello', {})).pid;
+    await c.call('config.patch', { session: { autoResume: false } }); // nothing in this block may type into the shell
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await sleep(500);
+  }, 30_000);
+
+  afterAll(async () => {
+    c?.close();
+    const last = await tryConnect(env6.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env6?.cleanup();
+  });
+
+  it('a working Claude holds once, for the daemon; the setting lets go at once and takes it up again', async () => {
+    expect(ops()).toEqual([]);
+    await hook('stay-1', 'SessionStart');
+    await hook('stay-1', 'UserPromptSubmit', { prompt: 'go' });
+    await waitUntil(() => ops().length > 0);
+    expect(lines()).toEqual([{ op: 'hold', args: ['-i', '-w', String(pid)] }]); // (-w: it ends by itself if the daemon dies)
+    // more events of the same turn: the same hold, not another
+    await hook('stay-1', 'PreToolUse', { tool_name: 'Bash', tool_use_id: 'toolu_s1' });
+    await hook('stay-1', 'PostToolUse', { tool_use_id: 'toolu_s1' });
+    await hook('stay-1', 'PreToolUse', { tool_name: 'Read', tool_use_id: 'toolu_s2' });
+    await sleep(600);
+    expect(ops()).toEqual(['hold']);
+    // switched off: let go at once, and Claude still working holds nothing
+    await c.call('config.patch', { session: { stayAwake: false } });
+    await waitUntil(() => ops().length === 2);
+    expect(ops()).toEqual(['hold', 'release']);
+    await hook('stay-1', 'PostToolUse', { tool_use_id: 'toolu_s2' });
+    await sleep(600);
+    expect(ops()).toEqual(['hold', 'release']);
+    // on again: Claude is still working, so it holds again
+    await c.call('config.patch', { session: { stayAwake: true } });
+    await waitUntil(() => ops().length === 3);
+    expect(ops()).toEqual(['hold', 'release', 'hold']);
+    // the work ends and the setting goes off in the delay of the release: it does not wait for it
+    await hook('stay-1', 'SessionEnd');
+    await waitUntil(async () => (await state('stay-1')) === 'ended');
+    await c.call('config.patch', { session: { stayAwake: false } });
+    await waitUntil(() => ops().length === 4);
+    expect(ops()).toEqual(['hold', 'release', 'hold', 'release']);
+    await c.call('config.patch', { session: { stayAwake: true } });
+    await sleep(600);
+    expect(ops().length).toBe(4); // nothing works: nothing is held
+  }, 40_000);
+
+  it('a background agent is work from a quiet Claude; a Claude that waits for the person is not', async () => {
+    const before = ops().length;
+    // an idle Claude with an agent running in the background
+    await hook('stay-2', 'SessionStart');
+    await hook('stay-2', 'SubagentStart', { agent_id: 'agent-1' });
+    await waitUntil(() => ops().length === before + 1);
+    expect(ops().slice(before)).toEqual(['hold']);
+    expect(await state('stay-2')).toBe('idle');
+    await hook('stay-2', 'SubagentStop', { agent_id: 'agent-1' });
+    // (the agent ending starts the delay of the release; the next Claude takes it over)
+    await hook('stay-3', 'UserPromptSubmit', { prompt: 'run it' });
+    await hook('stay-3', 'PreToolUse', { tool_name: 'Bash', tool_use_id: 'toolu_w1' });
+    await sleep(600);
+    expect(ops().length).toBe(before + 1); // still the one hold
+    // Claude asks for permission and waits: that is the person's turn, not work. The Mac may sleep after the usual delay.
+    await hook('stay-3', 'Notification', { notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    await waitUntil(async () => (await state('stay-3')) === 'needs-you');
+    const asked = Date.now();
+    await waitUntil(() => ops().length === before + 2, 25_000);
+    expect(ops().slice(before)).toEqual(['hold', 'release']);
+    expect(Date.now() - asked).toBeGreaterThanOrEqual(13_000); // after the 15 s delay, not at once
+    await sleep(500);
+    expect(await state('stay-3')).toBe('needs-you');
+    expect(ops().length).toBe(before + 2);
+    // the person answers in the terminal: Claude works again, and holds again
+    await c.call('pty.write', { data: 'y' });
+    await waitUntil(async () => (await state('stay-3')) === 'working', 5_000);
+    await waitUntil(() => ops().length === before + 3);
+    expect(ops().slice(before)).toEqual(['hold', 'release', 'hold']);
+    await c.call('pty.write', { data: '\x15' }); // (the shell's line is cleared)
+    await hook('stay-3', 'SessionEnd');
+    await hook('stay-2', 'SessionEnd');
+  }, 60_000);
+
+  it('a plain command that runs half a minute holds too, and lets go after it ends', async () => {
+    // the work of the tests before has ended: wait out the delay of the last release
+    await waitUntil(() => ops().length > 0 && ops()[ops().length - 1] === 'release', 25_000);
+    const before = ops().length;
+    const starts = collect(c, 'pty.start') as { cmd: string }[];
+    const ends = collect(c, 'pty.command') as { cmd: string }[];
+    const t0 = Date.now();
+    await c.call('pty.write', { data: 'sleep 120\r' });
+    await waitUntil(() => starts.some((s) => s.cmd === 'sleep 120'));
+    await sleep(6_000);
+    expect(ops().length).toBe(before); // not for a command that has just begun
+    await waitUntil(() => ops().length === before + 1, 45_000);
+    expect(ops()[before]).toBe('hold');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(29_000); // it had run half a minute
+    await sleep(1_000);
+    await c.call('pty.write', { data: '\x03' }); // the command ends
+    await waitUntil(() => ends.some((e) => e.cmd === 'sleep 120'), 10_000);
+    const ended = Date.now();
+    await waitUntil(() => ops().length === before + 2, 25_000);
+    expect(ops()[before + 1]).toBe('release');
+    expect(Date.now() - ended).toBeGreaterThanOrEqual(13_000);
+  }, 120_000);
+
+  it('stopping the daemon lets go of the hold', async () => {
+    await hook('stay-4', 'UserPromptSubmit', { prompt: 'go' });
+    await waitUntil(async () => (await state('stay-4')) === 'working');
+    await waitUntil(() => ops()[ops().length - 1] === 'hold');
+    const held = ops().length;
+    await c.call('app.shutdown', {});
+    await waitUntil(async () => !(await tryConnect(env6.paths, 300)), 10_000);
+    expect(ops().length).toBe(held + 1);
+    expect(ops()[held]).toBe('release');
+  }, 30_000);
+});

@@ -843,6 +843,36 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
+  it('Settings: "Keep my Mac awake while Claude works" is on by default, writes session.stayAwake, sits by the screen switch and says what it cannot do', async () => {
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    const awake = page.locator('label.field', { hasText: 'Keep my Mac awake while Claude works' });
+    const stayAwake = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session.stayAwake;
+    expect(await awake.count()).toBe(1);
+    expect(await stayAwake()).toBe(true);
+    expect(await awake.locator('input').isChecked()).toBe(true);
+    // next to "Keep the screen for a restart"
+    const next = await page.evaluate(() => {
+      const fields = [...document.querySelectorAll('.settings .field')];
+      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 1]?.textContent ?? '';
+    });
+    expect(next).toContain('Keep my Mac awake while Claude works');
+    // the hint says what it does and what it does not do (a closed lid)
+    const hint = (await awake.textContent()) ?? '';
+    expect(hint).toContain('your Mac does not go to sleep on its own');
+    expect(hint).toContain('the screen still can');
+    expect(hint).toContain('closed-display');
+    await awake.locator('.switch').click();
+    await until(async () => (await stayAwake()) === false, 5_000, 'staying awake to be switched off');
+    expect(await awake.locator('input').isChecked()).toBe(false);
+    await awake.locator('.switch').click();
+    await until(async () => (await stayAwake()) === true, 5_000, 'and on again');
+    expect(await awake.locator('input').isChecked()).toBe(true);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 60_000);
+
   it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {
     await page.evaluate(() => {
       const clip = { reads: 0, written: [] as string[] };
