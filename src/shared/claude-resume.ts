@@ -83,3 +83,22 @@ export interface ResumeOffer {
   /** When it was last seen working (ms since epoch). */
   at: number;
 }
+
+/**
+ * What *Quit and End Session* asks of the daemon: forget the Claude Code conversation, then end, so the next start does not bring it
+ * back. `claude.resume.dismiss` comes first because a daemon from before 0.5 ignores `forgetConversation` (it would keep the point, and
+ * the next daemon would resume the conversation the person ended) but knows `claude.resume.dismiss`. A failure of either stops nothing:
+ * the app quits all the same.
+ */
+export async function endSessionCalls(call: (method: string, params: object) => Promise<unknown>): Promise<void> {
+  for (const [method, params] of [
+    ['claude.resume.dismiss', {}],
+    ['app.shutdown', { forgetConversation: true }],
+  ] as const) {
+    try {
+      await call(method, params);
+    } catch {
+      /* an older daemon, or one that is gone: go on */
+    }
+  }
+}

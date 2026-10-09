@@ -19,6 +19,7 @@ import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { resetJaffer } from '../core/reset';
 import { restartClaudeText } from '../shared/restart-claude';
+import { endSessionCalls } from '../shared/claude-resume';
 import { keepRunningOffText, turnKeepRunningOff, type AgentStatus } from '../shared/keep-running';
 
 /**
@@ -389,8 +390,10 @@ function buildMenu(): void {
             const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory is kept. Claude Code is not resumed automatically; its conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
             if (r.response === 0) {
               quitting = true;
-              // ending the session on purpose: the next start does not bring the Claude Code conversation back by itself
-              await client?.call('app.shutdown', { forgetConversation: true }).catch(() => undefined);
+              // ending the session on purpose: the next start does not bring the Claude Code conversation back by itself (also with a
+              // daemon from before 0.5, which ignores forgetConversation: see endSessionCalls)
+              const c = client;
+              if (c) await endSessionCalls((m, p) => c.call(m, p));
               app.quit();
             }
           },

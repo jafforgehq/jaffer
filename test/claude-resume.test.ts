@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
-import { endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
+import { endSessionCalls, endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
 import { AUTO_RESUME } from '../src/shared/keep-running';
 import { isClaudeCommand } from '../src/shared/process-badge';
 import { makeEnv, type TestEnv } from './helpers/env';
@@ -426,5 +426,26 @@ describe('reading a `claude` command line that came from the terminal (untrusted
     expect(isPrintMode('claude -p hi' + tail)).toBe(true);
     // and a `claude` that only begins after the head is not read as one
     expect(isClaudeCommand(' '.repeat(5000) + 'claude')).toBe(false);
+  });
+});
+
+describe('endSessionCalls (what Quit and End Session asks of the daemon)', () => {
+  it('forgets the conversation with claude.resume.dismiss first, which a daemon from before 0.5 knows too, then ends with forgetConversation', async () => {
+    const calls: [string, unknown][] = [];
+    await endSessionCalls(async (m, p) => void calls.push([m, p]));
+    expect(calls).toEqual([
+      ['claude.resume.dismiss', {}],
+      ['app.shutdown', { forgetConversation: true }],
+    ]);
+  });
+
+  it('a daemon that does not know or cannot answer the first still gets the end', async () => {
+    const calls: string[] = [];
+    await endSessionCalls(async (m) => {
+      calls.push(m);
+      if (m === 'claude.resume.dismiss') throw new Error('unknown method: claude.resume.dismiss');
+    });
+    expect(calls).toEqual(['claude.resume.dismiss', 'app.shutdown']);
+    await expect(endSessionCalls(async () => Promise.reject(new Error('gone')))).resolves.toBeUndefined(); // (the app quits either way)
   });
 });
