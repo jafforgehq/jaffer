@@ -1128,6 +1128,88 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
   }, 40_000);
 
+  it('one Claude: a second conversation running gets one notice per set of conversations, and nothing is ended', async () => {
+    const TEXT = 'Two Claude conversations are running. After a restart Jaffer resumes the newest.';
+    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
+    const push = (sessions: { id: string; state: string }[]) =>
+      page.evaluate((list) => {
+        const now = Date.now();
+        (window as any).__event('claude.state', { sessions: list.map((s) => ({ ...s, since: now - 5_000, subagents: [] })) });
+      }, sessions);
+    // what the window asks the daemon: the notice is only words, so no `claude.*` call comes out of it
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__origCall2 = w.jaffer.call;
+      w.__asked2 = [];
+      w.jaffer.call = (m: string, p: unknown) => (w.__asked2.push(m), w.__origCall2(m, p));
+    });
+    try {
+      await sleep(600); // the daemon's own trailing pushes must not land on top of what is injected below
+      expect(await notice.count()).toBe(0);
+      // one conversation: nothing to say
+      await push([{ id: 'one-a', state: 'working' }]);
+      await sleep(300);
+      expect(await notice.count()).toBe(0);
+      // a second one becomes active while the first is: said once, in plain words
+      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }]);
+      await notice.waitFor();
+      expect(await notice.count()).toBe(1);
+      expect((await notice.textContent())?.trim()).toBe(TEXT);
+      expect(await notice.locator('button.linkish').count()).toBe(0); // only words: no action to take, nothing is ended (the X only closes the notice)
+      await shot('14m-one-claude');
+      // the same two again, in the other order and with another state: not said again
+      await push([{ id: 'one-b', state: 'needs-you' }, { id: 'one-a', state: 'working' }]);
+      await push([{ id: 'one-a', state: 'idle' }, { id: 'one-b', state: 'idle' }]);
+      await sleep(400);
+      expect(await notice.count()).toBe(1);
+      // one leaves (ended does not count), and the same pair comes back: it was told already
+      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'ended' }]);
+      await sleep(300);
+      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }]);
+      await sleep(400);
+      expect(await notice.count()).toBe(1);
+      // an ended conversation next to a running one is not two
+      await push([{ id: 'one-a', state: 'working' }, { id: 'one-z', state: 'ended' }]);
+      await sleep(400);
+      expect(await notice.count()).toBe(1);
+      // another set (a third conversation) is told again
+      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }, { id: 'one-c', state: 'idle' }]);
+      await until(async () => (await notice.count()) === 2, 5_000, 'a new set to be told');
+      // nothing was ended, stopped or asked of the daemon, and the window still follows the conversation that works
+      expect(((await page.evaluate(() => (window as any).__asked2)) as string[]).filter((m) => m.startsWith('claude.'))).toEqual([]);
+      expect(await page.getAttribute('.pet-corner .pet', 'data-mood')).toBe('dig');
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__origCall2;
+        w.__event('claude.state', { sessions: [] });
+      });
+    }
+    await until(async () => (await page.locator('.toast', { hasText: 'Two Claude conversations' }).count()) === 0, 10_000, 'the notices to go by themselves');
+  }, 60_000);
+
+  it('one Claude: a window that opens while two conversations run tells it once, from what the daemon says', async () => {
+    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
+    const ids = ['boot-a', 'boot-b'];
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    try {
+      for (const id of ids) await sendHook('SessionStart', { session_id: id });
+      // (the daemon pushes this to the open window too, which tells it: the next window must hear it again, being new)
+      await until(async () => (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.filter((s: { state: string }) => s.state !== 'ended').length === 2, 5_000, 'two conversations on the daemon');
+      await until(async () => (await notice.count()) === 1, 5_000, 'the open window to tell it');
+      await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+      await page.waitForSelector('.term .xterm');
+      await notice.waitFor({ timeout: 10_000 });
+      await sleep(600); // a second answer from the daemon (the window asks once at the start) would show a second one
+      expect(await notice.count()).toBe(1);
+      expect((await notice.textContent())?.trim()).toBe('Two Claude conversations are running. After a restart Jaffer resumes the newest.');
+      // nothing was ended by it
+      expect((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.filter((s: { state: string }) => s.state !== 'ended').map((s: { id: string }) => s.id).sort()).toEqual(ids);
+    } finally {
+      for (const id of ids) await sendHook('SessionEnd', { session_id: id });
+    }
+  }, 60_000);
+
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
     await page.waitForSelector('.memory');
