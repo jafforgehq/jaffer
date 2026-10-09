@@ -578,12 +578,12 @@ export class JafferService {
    * shell. "Nothing running" is what the marks say and what the terminal's foreground says: a program (ssh into a server whose shell
    * prints marks of its own) can make the marks say "a prompt, nothing running". A shell that is gone is not asked (a new one comes).
    * Whatever the shell is called (`/bin/sh` runs bash): its pid leading the terminal's foreground is the test. (A decision: the answer
-   * of up to 250 ms ago will do, unless the terminal printed something since.)
+   * of up to 250 ms ago will do, unless the terminal printed something since. `fresh` asks the system again: a click about to type.)
    */
-  private resumeOffer(): ResumeOffer | null {
+  private resumeOffer(opts: { fresh?: boolean } = {}): ResumeOffer | null {
     const offer = this.savedOffer();
     const pane = this.host?.mainPane;
-    return offer && pane?.alive && !pane.foregroundIsShell() ? null : offer;
+    return offer && pane?.alive && !pane.foregroundIsShell({ fresh: opts.fresh === true }) ? null : offer;
   }
 
   /** The same, by the marks alone. */
@@ -832,9 +832,11 @@ export class JafferService {
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
-    r.handle('claude.resume', () => {
-      // what a window has just been told is what the next change is measured against
-      const offer = this.resumeOffer();
+    r.handle('claude.resume', (p?: { fresh?: boolean }) => {
+      // What a window has just been told is what the next change is measured against. A click on the Resume button asks with `fresh`
+      // and types only if this answer is the conversation it showed (`resumeClaude`): in a shell that prints no marks nothing pushes the
+      // offer again when a program starts, so the button can be from before it. The foreground is then read now, not reused.
+      const offer = this.resumeOffer({ fresh: p?.fresh === true });
       this.lastOffer = JSON.stringify(offer);
       return offer;
     });

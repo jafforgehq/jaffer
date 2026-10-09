@@ -1,6 +1,6 @@
 import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, resumeOffer, safeCommand, toast, toggleSide } from './state';
 import { isClaudeCommand } from '../shared/process-badge';
-import { isSessionId, resumeCommand } from '../shared/claude-resume';
+import { isSessionId, resumeCommand, type ResumeOffer } from '../shared/claude-resume';
 import { errorText } from '../shared/keep-running';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
@@ -41,8 +41,16 @@ export async function runClaude(): Promise<void> {
   t.focus();
 }
 
-/** Take the Claude Code conversation that was running when Jaffer stopped back up: types `claude --resume <id>`, after the person's click. */
-export function resumeClaude(): void {
+/** A click's question to the daemon is on its way: another click (or the palette) meanwhile adds nothing. */
+let resumeAsking = false;
+
+/**
+ * Take the Claude Code conversation that was running when Jaffer stopped back up: types `claude --resume <id>`, after the person's click.
+ * The daemon is asked again first, with a fresh look at the terminal (`claude.resume`, `fresh: true`): in a shell that prints no prompt
+ * marks (`/bin/sh`, any shell besides zsh, bash and fish, one that `exec`s into tmux) nothing tells the window that a program took the
+ * terminal, so the button can be from before vim started. Only the same conversation coming back is typed; nothing is typed on an error.
+ */
+export async function resumeClaude(): Promise<void> {
   const offer = resumeOffer.value;
   const t = term();
   if (!offer || !t) {
@@ -54,7 +62,24 @@ export function resumeClaude(): void {
     toast({ kind: 'info', text: `The terminal is busy running ${safeCommand(info.value.busy)}.` });
     return;
   }
-  t.type(`${resumeCommand(offer.id)}\r`);
+  if (resumeAsking) return;
+  resumeAsking = true;
+  let now: ResumeOffer | null;
+  try {
+    now = (await call<ResumeOffer | null>('claude.resume', { fresh: true })) ?? null;
+  } catch (e) {
+    toast({ kind: 'error', text: errorText(e) }); // the button stays for the daemon's next word
+    return;
+  } finally {
+    resumeAsking = false;
+  }
+  if (!now || now.id !== offer.id || !isSessionId(now.id)) {
+    // what the daemon offers now: nothing (the button goes), or another conversation (the button shows that one)
+    resumeOffer.value = now;
+    if (!now) toast({ kind: 'info', text: 'A program has the terminal, so Claude Code was not resumed.' });
+    return;
+  }
+  t.type(`${resumeCommand(now.id)}\r`);
   t.focus();
   resumeOffer.value = null; // gone at once; the daemon's own word follows when Claude Code starts
 }

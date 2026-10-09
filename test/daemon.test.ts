@@ -2125,6 +2125,68 @@ describe('the Resume button with a shell of another name (SHELL=/bin/sh: bash on
       c.close();
     }
   }, 40_000);
+
+  // This sh prints no marks (nor does any shell besides zsh, bash and fish, or one that `exec`s into tmux from its startup file): when a
+  // program takes the terminal no event says so, nothing works the offer out again, and the window keeps the button it was shown. So a
+  // click asks again (`claude.resume` with `fresh: true`, see `resumeClaude`) and types only if the same conversation comes back. That ask
+  // looks at the terminal then: never an answer kept from before the program took it.
+  it("a program in this sh tells the window nothing (it keeps the button: the limitation), but a click's own ask (a fresh look) offers nothing while a program has the terminal, and the conversation once it is gone", async () => {
+    const ID2 = '1a2b3c4d-0000-4a00-8a00-000000000302';
+    const c = await ensureDaemon(env7.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env7.userHome, SHELL: '/bin/sh', JAFFER_TICK_MS: '400', PS1: '$ ', JAFFER_TEST_AUTORESUME_FAST: '1' },
+    });
+    const pushed = collect(c, 'claude.resume');
+    const out: string[] = [];
+    c.on('pty.data', (d: { data: string }) => out.push(d.data));
+    try {
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      await sleep(800); // (the shell is at its prompt)
+      const cwd = (await c.call('session.info', {})).cwd as string;
+      const transcript = path.join(env7.userHome, 'sh2.jsonl');
+      fs.writeFileSync(transcript, '{}\n');
+      const hook = (ev: string, over: object = {}) => c.call('claude.event', { session_id: ID2, hook_event_name: ev, cwd, transcript_path: transcript, ...over });
+      await hook('SessionStart');
+      await hook('SessionEnd', { reason: 'other' }); // stopped from outside: kept, to be offered
+      await waitUntil(() => pushed.at(-1)?.id === ID2, 10_000); // the window is shown the button
+      // a program like vim takes the terminal (`cat`: it prints nothing either): no mark comes, so the window is told nothing
+      await c.call('pty.write', { data: 'cat\r' });
+      await sleep(1000);
+      expect(await c.call('claude.resume', { fresh: true })).toBeNull(); // the click's ask: a program has the terminal
+      expect(pushed.filter((o) => o === null)).toEqual([]); // while the window still shows the button it was given: the limitation
+      expect(pushed.at(-1)?.id).toBe(ID2);
+      await c.call('pty.write', { data: '\x04' }); // cat ends
+      await waitUntil(async () => (await c.call('claude.resume', { fresh: true }))?.id === ID2, 5_000); // nothing runs: the conversation
+      // The ask reads the system, not an answer of up to 250 ms ago (kept unless the terminal printed since). Here the shell waits in
+      // `read` (a builtin: the shell itself has the terminal) with echo off and the window asks; the Enter that ends `read` prints
+      // nothing, and `stty`, then `sleep`, take the terminal inside that answer's 250 ms: only a fresh look sees them. (Up to three tries,
+      // each needing the program within 200 ms of the first ask: a loaded machine may miss one, a kept answer misses all three.)
+      let seen = false;
+      for (let n = 0; n < 3 && !seen; n++) {
+        const mark = `READY${n}`;
+        await c.call('pty.write', { data: `stty -echo; echo ${mark}; read x; stty echo; sleep 1\r` });
+        await waitUntil(() => new RegExp(`${mark}\\r?\\n`).test(out.join('')), 5_000); // (its own line: not the command line's echo)
+        await sleep(400); // whatever answer was kept is older than 250 ms
+        const t0 = Date.now();
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID2); // in `read`, the shell has the terminal: an answer kept 250 ms
+        await c.call('pty.write', { data: '\r' });
+        while (!seen && Date.now() - t0 < 200) {
+          seen = (await c.call('claude.resume', { fresh: true })) === null;
+          if (!seen) await sleep(10);
+        }
+        await waitUntil(async () => (await c.call('claude.resume', { fresh: true }))?.id === ID2, 5_000); // `sleep 1` ended
+      }
+      expect(seen, 'a fresh ask sees the program that took the terminal without printing, inside the 250 ms an answer is kept').toBe(true);
+      expect(pushed.filter((o) => o === null)).toEqual([]); // (an ask is an answer to the window, never a push)
+      expect(((await c.call('session.snapshot', {})) as { data: string }).data).not.toContain('RESUMED:'); // and nothing was typed
+      await c.call('claude.resume.dismiss', {});
+    } finally {
+      c.close();
+    }
+  }, 40_000);
 });
 
 describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {
