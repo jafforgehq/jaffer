@@ -82,6 +82,17 @@ export function keepRunningOffText(): { message: string; detail: string; buttons
   };
 }
 
+/**
+ * Settings' switch turned off, as the main process does it (and the bridge of the UI tests): every switch-off comes here. The daemon is
+ * asked how it stands now, not what the window saw when Settings opened (a daemon that died meanwhile and came back through launchd, a
+ * launchd job whose print shows no pid), and the person is asked first when launchd runs the session, because taking the agent away
+ * ends it. A no changes nothing.
+ */
+export async function turnKeepRunningOff(d: { status(): Promise<AgentStatus>; ask(): Promise<boolean>; remove(): Promise<AgentStatus> }): Promise<{ cancelled: boolean; status?: AgentStatus }> {
+  if ((await d.status()).state === 'running' && !(await d.ask())) return { cancelled: true };
+  return { cancelled: false, status: await d.remove() };
+}
+
 /** The state in words, as `jaffer service status` prints it and Settings shows it. */
 export function agentStatusText(s: AgentStatus): string {
   switch (s.state) {

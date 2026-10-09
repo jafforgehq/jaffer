@@ -22,6 +22,8 @@ export interface KeepRunningDeps {
   files: () => AgentFiles | null;
   /** This daemon is the job launchd runs. */
   launchd: boolean;
+  /** This daemon's pid (default: this process's). */
+  pid?: number;
   keepRunning: () => boolean;
   setKeepRunning: (on: boolean) => void;
   /** Runs `fn` a moment from now (after the RPC's reply has gone out). */
@@ -53,10 +55,20 @@ export class KeepRunning {
     return s.state === 'not-loaded' && !this.d.launchd ? { state: 'installed' } : s;
   }
 
+  /**
+   * What the switch is about now. The daemon that launchd runs is `running`, with its own pid, whatever `launchctl print` says (it may
+   * print no pid line, and someone may have deleted the plist): taking the agent away ends this session, and the app asks first on
+   * `running` alone.
+   */
+  private now(s: AgentStatus): AgentStatus {
+    if (this.d.launchd && s.state !== 'refused') return { state: 'running', pid: s.state === 'running' ? s.pid : (this.d.pid ?? process.pid) };
+    return this.view(s);
+  }
+
   async status(): Promise<AgentStatus> {
     const plan = this.d.plan();
     if ('refused' in plan) return { state: 'refused', reason: plan.refused };
-    return this.view(await this.d.agent.status(plan));
+    return this.now(await this.d.agent.status(plan));
   }
 
   /** Writes (or refreshes) the files, never loads the job (see above), and turns the switch on. Refused: nothing at all. */
@@ -65,7 +77,7 @@ export class KeepRunning {
     if ('refused' in plan) return { state: 'refused', reason: plan.refused };
     const s = await this.d.agent.reconcile(true, plan, { load: false });
     this.d.setKeepRunning(true);
-    return this.view(s);
+    return this.now(s);
   }
 
   /** Takes the agent away and turns the switch off. In the daemon launchd runs, the bootout (which ends it) comes after the reply. */

@@ -985,7 +985,8 @@ describe('Jaffer UI end to end', () => {
       await keep.locator('.switch').click(); // on again
       await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
       expect(await keep.locator('input').isChecked()).toBe(true);
-      expect(await page.evaluate(() => (window as any).__svcCalls)).toEqual(['service.status', 'service.remove', 'service.install']);
+      // (off asks the daemon how it stands now, before it removes: what the field read when it opened may be out of date)
+      expect(await page.evaluate(() => (window as any).__svcCalls)).toEqual(['service.status', 'service.status', 'service.remove', 'service.install']);
       await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
     } finally {
@@ -1013,9 +1014,10 @@ describe('Jaffer UI end to end', () => {
       };
       w.__offAsked = 0;
       w.__offAnswer = 'cancel';
-      w.jaffer.keepRunningOff = async () => {
+      // the question only: every switch-off goes through keepRunningOff, which asks it when the daemon says launchd runs the session
+      w.__keepRunningOffAsk = async () => {
         w.__offAsked++;
-        return w.__offAnswer === 'cancel' ? { cancelled: true } : w.__realOff();
+        return w.__offAnswer !== 'cancel';
       };
     });
     const asked = () => page.evaluate(() => (window as any).__offAsked as number);
@@ -1055,6 +1057,53 @@ describe('Jaffer UI end to end', () => {
         const w = window as any;
         w.jaffer.call = w.__realCall;
         w.jaffer.keepRunningOff = w.__realOff;
+        delete w.__keepRunningOffAsk;
+      });
+      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
+    }
+  }, 60_000);
+
+  it('Settings: what the window saw when it opened is not what decides: off with a stale "installed" while the daemon now says launchd runs the session still asks first', async () => {
+    // the daemon's answers are played (nothing reaches launchd); the app's question is stood in for, the decision to ask is the app's own
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.__svcCalls = [];
+      w.__svc = { state: 'installed' }; // what Settings reads when it opens
+      w.jaffer.call = (m: string, p: unknown) => {
+        if (!m.startsWith('service.')) return w.__realCall(m, p);
+        w.__svcCalls.push(m);
+        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'The session ends now.' };
+        return Promise.resolve(w.__svc);
+      };
+      w.__offAsked = 0;
+      w.__keepRunningOffAsk = async () => {
+        w.__offAsked++;
+        return false; // Cancel
+      };
+    });
+    const removes = async () => ((await page.evaluate(() => (window as any).__svcCalls)) as string[]).filter((m) => m === 'service.remove').length;
+    try {
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
+      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
+      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
+      // meanwhile the detached daemon died and launchd brought the session back: the daemon now says it runs it
+      await page.evaluate(() => ((window as any).__svc = { state: 'running', pid: 4343 }));
+      await keep.locator('.switch').click(); // off, with the window still showing "installed"
+      await until(async () => (await page.evaluate(() => (window as any).__offAsked)) === 1, 5_000, 'the person to be asked');
+      await sleep(300);
+      expect(await removes()).toBe(0); // Cancel: nothing taken away, the session goes on
+      expect(await keep.locator('input').isChecked()).toBe(true);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__realCall;
+        delete w.__keepRunningOffAsk;
       });
       if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
     }

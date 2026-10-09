@@ -19,7 +19,7 @@ import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { resetJaffer } from '../core/reset';
 import { restartClaudeText } from '../shared/restart-claude';
-import { keepRunningOffText } from '../shared/keep-running';
+import { keepRunningOffText, turnKeepRunningOff, type AgentStatus } from '../shared/keep-running';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
@@ -531,20 +531,24 @@ ipcMain.handle('jaffer:restart-claude', async (e) => {
   const done = (await client.call('claude.restart', {})) as { resumable?: boolean };
   return { cancelled: false, resumable: done.resumable === true };
 });
-// Settings → Keep my session running, switched off. When launchd runs the session, taking the agent away ends it (the shell and whatever
-// runs in it), so the person is asked first; asked again here, as the world may have moved since the window looked. When Jaffer runs
-// the session, nothing ends and nothing is asked. The daemon removes the agent; this only asks and relays its answer.
+// Settings → Keep my session running, switched off: every switch-off comes here. When launchd runs the session, taking the agent away
+// ends it (the shell and whatever runs in it), so the person is asked first; the daemon is asked how it stands now, as the window's view
+// may be out of date. When Jaffer runs the session, nothing ends and nothing is asked. The daemon removes the agent; this only asks and
+// relays its answer (`turnKeepRunningOff`).
 ipcMain.handle('jaffer:keep-running-off', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
-  if (!client || !client.connected) throw new Error('The session daemon is not connected.');
-  const now = (await client.call('service.status', {})) as { state?: string };
-  if (now.state === 'running') {
-    const text = keepRunningOffText();
-    const ask = { type: 'warning' as const, message: text.message, detail: text.detail, buttons: [...text.buttons], defaultId: 0, cancelId: 0 };
-    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
-    if (r.response !== 1) return { cancelled: true };
-  }
-  return { cancelled: false, status: await client.call('service.remove', {}) };
+  const c = client;
+  if (!c || !c.connected) throw new Error('The session daemon is not connected.');
+  return turnKeepRunningOff({
+    status: async () => (await c.call('service.status', {})) as AgentStatus,
+    ask: async () => {
+      const text = keepRunningOffText();
+      const ask = { type: 'warning' as const, message: text.message, detail: text.detail, buttons: [...text.buttons], defaultId: 0, cancelId: 0 };
+      const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+      return r.response === 1;
+    },
+    remove: async () => (await c.call('service.remove', {})) as AgentStatus,
+  });
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });

@@ -525,12 +525,13 @@ function KeepRunningField({ flag }: { flag: boolean }): VNode {
     setBusy(true);
     try {
       let s: AgentStatus;
-      if (!v && status?.state === 'running') {
-        // launchd runs this session: taking the agent away ends it, so the app asks first (Cancel leaves everything as it was)
+      if (!v) {
+        // every switch-off goes through the app, which asks the daemon how it stands now (what this field read when it opened may be
+        // out of date) and, when launchd runs this session, the person first: taking the agent away ends it (Cancel leaves it all)
         const r = await window.jaffer.keepRunningOff();
         if (r.cancelled || !r.status) return;
         s = r.status;
-      } else s = await call<AgentStatus>(v ? 'service.install' : 'service.remove', {});
+      } else s = await call<AgentStatus>('service.install', {});
       setStatus(s);
       if (s.state === 'refused') toast({ kind: 'error', text: s.reason });
       else if (s.note) toast({ kind: 'info', text: s.note }, 10_000);

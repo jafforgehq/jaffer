@@ -582,7 +582,7 @@ describe('the wrapper tells the daemon that launchd runs it', () => {
 
 describe('KeepRunning: what the daemon does for the switch (a fake launchd, an in-memory disk)', () => {
   const MOVE = 'Jaffer is running from a disk image or a temporary location. Move Jaffer to Applications first.';
-  function keep(o: { launchd?: boolean; plan?: AgentPlan | { refused: string }; files?: AgentFiles | null; start?: Parameters<typeof fakeLaunchd>[0]; keepRunning?: boolean } = {}) {
+  function keep(o: { launchd?: boolean; plan?: AgentPlan | { refused: string }; files?: AgentFiles | null; start?: Parameters<typeof fakeLaunchd>[0]; keepRunning?: boolean; pid?: number } = {}) {
     const fsx = memFs();
     const d = fakeLaunchd(o.start);
     const agent = new LaunchAgent({ launchctl: d.launchctl, uid: 501, fs: fsx as unknown as LaunchAgentFs });
@@ -594,6 +594,7 @@ describe('KeepRunning: what the daemon does for the switch (a fake launchd, an i
       plan: () => o.plan ?? plan(),
       files: () => (o.files === undefined ? agentPaths(BASE) : o.files),
       launchd: !!o.launchd,
+      ...(o.pid !== undefined ? { pid: o.pid } : {}),
       keepRunning: () => flag,
       setKeepRunning: (on) => {
         flag = on;
@@ -677,6 +678,18 @@ describe('KeepRunning: what the daemon does for the switch (a fake launchd, an i
     seed(detached.fsx, plan());
     expect(await detached.k.status()).toEqual({ state: 'installed' });
     expect(await keep().k.status()).toEqual({ state: 'not-installed' });
+  });
+
+  it("in the daemon launchd runs, status is running with this daemon's pid whatever launchctl print says (no pid line, the job unknown, the plist gone): turning it off ends this session, and the app must ask", async () => {
+    for (const start of [{ loaded: true, pid: null }, {}] as const) {
+      const t = keep({ launchd: true, start, pid: 31338 });
+      seed(t.fsx, plan());
+      expect(await t.k.status(), JSON.stringify(start)).toEqual({ state: 'running', pid: 31338 });
+    }
+    const gone = keep({ launchd: true, pid: 31338 }); // someone deleted the plist; launchd still runs this daemon
+    expect(await gone.k.status()).toEqual({ state: 'running', pid: 31338 });
+    const refused = keep({ launchd: true, pid: 31338, plan: { refused: 'another home' }, files: null });
+    expect(await refused.k.status()).toEqual({ state: 'refused', reason: 'another home' });
   });
 
   it('in another home (refused), status, install, remove and the start all say why and touch nothing: no file, no launchctl, not the switch', async () => {
