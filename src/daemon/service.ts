@@ -553,8 +553,8 @@ export class JafferService {
     if (!isSessionId(id)) return;
     if (o.hook_event_name === 'SessionEnd') {
       // a Claude that died with its shell did not end the conversation on purpose: its resume point stays. Nor did one whose reason is
-      // `other`: Claude Code was stopped from outside (a logout or a shutdown that reached it before this daemon), and the reboot should
-      // bring it back. `prompt_input_exit` (/exit, Ctrl+D), `clear`, `logout` and a SessionEnd with no reason (an older Claude) forget it.
+      // `other`: Claude Code was stopped from outside (a logout or a shutdown that reached it before this daemon), and it should be
+      // offered again after the reboot. `prompt_input_exit` (/exit, Ctrl+D), `clear`, `logout` and a SessionEnd with no reason (an older Claude) forget it.
       const fromOutside = o.reason === 'other';
       if (!fromOutside && Date.now() - this.lastShellExitAt > SHELL_EXIT_GRACE_MS) this.resume.forget(id);
     } else if (this.config.get().session.resumeClaude && !this.printRunning()) {

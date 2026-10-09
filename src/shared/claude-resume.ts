@@ -88,9 +88,9 @@ export interface ResumeOffer {
 export const END_SESSION_CALL_MS = 5_000;
 
 /**
- * What *Quit and End Session* asks of the daemon: forget the Claude Code conversation, then end, so the next start does not bring it
- * back. `claude.resume.dismiss` comes first because a daemon from before 0.5 ignores `forgetConversation` (it would keep the point, and
- * the next daemon would resume the conversation the person ended) but knows `claude.resume.dismiss`. A failure of either stops nothing:
+ * What *Quit and End Session* asks of the daemon: forget the Claude Code conversation, then end, so the next start does not offer it
+ * again. `claude.resume.dismiss` comes first because a daemon from before 0.5 ignores `forgetConversation` (it would keep the point, and
+ * the next daemon would offer the conversation the person ended) but knows `claude.resume.dismiss`. A failure of either stops nothing:
  * the app quits all the same. Each gets `END_SESSION_CALL_MS` (the call is told, and is let go of after it if it has not answered): a
  * daemon that hangs does not hold the quit up for the RPC's usual 30 s twice.
  */

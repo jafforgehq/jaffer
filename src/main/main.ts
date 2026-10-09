@@ -385,10 +385,10 @@ function buildMenu(): void {
           label: 'Quit and End Session',
           accelerator: 'Alt+Cmd+Q',
           click: async () => {
-            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory is kept. Claude Code is not resumed automatically; its conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
+            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory is kept. No Resume Claude button will offer this conversation; your conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
             if (r.response === 0) {
               quitting = true;
-              // ending the session on purpose: the next start does not bring the Claude Code conversation back by itself (also with a
+              // ending the session on purpose: the next start does not offer the Claude Code conversation again (also with a
               // daemon from before 0.5, which ignores forgetConversation: see endSessionCalls). 5 s each, and a hung one is let go of.
               const c = client;
               if (c) await endSessionCalls((m, p, timeoutMs) => c.call(m, p, timeoutMs));

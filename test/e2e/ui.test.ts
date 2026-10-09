@@ -1584,7 +1584,7 @@ describe('Jaffer UI end to end', () => {
   }, 40_000);
 
   it('one Claude: a second conversation running gets one notice per set of conversations, and nothing is ended', async () => {
-    const TEXT = 'Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.';
+    const TEXT = 'Two Claude conversations are running. After a restart the Resume Claude button offers the most recently active conversation.';
     const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
     const push = (sessions: { id: string; state: string }[]) =>
       page.evaluate((list) => {
@@ -1657,7 +1657,7 @@ describe('Jaffer UI end to end', () => {
       await notice.waitFor({ timeout: 10_000 });
       await sleep(600); // a second answer from the daemon (the window asks once at the start) would show a second one
       expect(await notice.count()).toBe(1);
-      expect((await notice.textContent())?.trim()).toBe('Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.');
+      expect((await notice.textContent())?.trim()).toBe('Two Claude conversations are running. After a restart the Resume Claude button offers the most recently active conversation.');
       // nothing was ended by it
       expect((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.filter((s: { state: string }) => s.state !== 'ended').map((s: { id: string }) => s.id).sort()).toEqual(ids);
     } finally {
