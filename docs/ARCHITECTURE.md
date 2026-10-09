@@ -66,7 +66,7 @@ The palette entry *Restart Claude Code, to use an update* and the button in *Set
 
 ### One Claude
 
-When two Claude conversations are active at once (`twoRunning`, `src/shared/one-claude.ts`; background agents do not count) the window says so once per set of conversations: *Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.* A notice, never a kill: Jaffer ends no process the person started.
+When two Claude conversations are active at once (`twoRunning`, `src/shared/one-claude.ts`; background agents do not count) the window says so once per set of conversations, and only for a set still running 1.5 s later (`TwoRunningNotice`: with `/clear` the new conversation's SessionStart can arrive before the old one's SessionEnd): *Two Claude conversations are running. After a restart Jaffer resumes the most recently active conversation.* A notice, never a kill: Jaffer ends no process the person started.
 
 ### Staying awake
 

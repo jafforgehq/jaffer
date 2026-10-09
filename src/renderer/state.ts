@@ -3,7 +3,7 @@ import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
 import { memoryToast } from '../shared/memory-toast';
-import { TWO_RUNNING_NOTICE, twoRunning } from '../shared/one-claude';
+import { TWO_RUNNING_NOTICE, TwoRunningNotice } from '../shared/one-claude';
 import type { UpdateState } from '../shared/update-policy';
 import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
@@ -110,15 +110,19 @@ export interface ClaudeAuthState {
 const claudeLive = signal<ClaudeSession[]>([]);
 /** The Claude session the mole and the title bar follow: the most recently changed one that has not ended. */
 export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
-/** The sets of Claude conversations the person was told about (see `twoRunning`): each is told once while this window lives. */
-const toldTwoRunning = new Set<string>();
+/**
+ * Two Claude conversations running: each set is told once while this window lives, and only when it is still running a moment later
+ * (`/clear` looks like two for an instant). Only words: nothing is ended, the person decides what to do with the second one.
+ */
+const twoRunningNotice = new TwoRunningNotice({
+  tell: () => void toast({ kind: 'info', text: TWO_RUNNING_NOTICE }),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+});
 /** Every way the window learns what Claude is doing (a pushed event, the answer when the window starts or the daemon comes back) comes through here. */
 function applyClaudeState(sessions: ClaudeSession[]): void {
   claudeLive.value = sessions;
-  const set = twoRunning(sessions, toldTwoRunning);
-  if (!set) return;
-  toldTwoRunning.add(set);
-  toast({ kind: 'info', text: TWO_RUNNING_NOTICE }); // only words: nothing is ended, the person decides what to do with the second one
+  twoRunningNotice.update(sessions);
 }
 /** Claude Code was running in this folder when Jaffer last stopped, and can be resumed (the daemon decides; null when there is nothing to offer). */
 export const resumeOffer = signal<ResumeOffer | null>(null);

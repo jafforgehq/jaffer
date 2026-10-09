@@ -1500,6 +1500,26 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('one Claude: /clear (the new conversation starts a moment before the old one has ended) is not two conversations, and says nothing', async () => {
+    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
+    const push = (sessions: { id: string; state: string }[]) =>
+      page.evaluate((list) => {
+        const now = Date.now();
+        (window as any).__event('claude.state', { sessions: list.map((s) => ({ ...s, since: now - 5_000, subagents: [] })) });
+      }, sessions);
+    try {
+      await until(async () => (await notice.count()) === 0, 10_000, 'earlier notices to go');
+      await push([{ id: 'clear-old', state: 'working' }]);
+      await push([{ id: 'clear-new', state: 'idle' }, { id: 'clear-old', state: 'working' }]); // the new one's SessionStart came first
+      await sleep(400);
+      await push([{ id: 'clear-new', state: 'idle' }, { id: 'clear-old', state: 'ended' }]); // then the old one's SessionEnd
+      await sleep(2_500);
+      expect(await notice.count()).toBe(0);
+    } finally {
+      await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
+    }
+  }, 30_000);
+
   it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
     await page.keyboard.press('Meta+Shift+M');
     await page.waitForSelector('.memory');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { twoRunning } from '../src/shared/one-claude';
+import { TWO_RUNNING_DELAY_MS, TwoRunningNotice, twoRunning } from '../src/shared/one-claude';
 
 const s = (id: string, state = 'idle') => ({ id, state });
 
@@ -62,5 +62,75 @@ describe('twoRunning: tell the person once when a second Claude conversation run
     const copy = JSON.parse(JSON.stringify(sessions));
     twoRunning(sessions, new Set());
     expect(sessions).toEqual(copy);
+  });
+});
+
+describe('TwoRunningNotice: only a second conversation that is still there a moment later is told (/clear starts the new one before the old one has ended)', () => {
+  function notice() {
+    let now = 0;
+    const timers: { fn: () => void; at: number; live: boolean }[] = [];
+    const told: string[] = [];
+    const n = new TwoRunningNotice({
+      tell: (key) => void told.push(key),
+      setTimer: (fn, ms) => {
+        const t = { fn, at: now + ms, live: true };
+        timers.push(t);
+        return t;
+      },
+      clearTimer: (t) => void ((t as { live: boolean }).live = false),
+    });
+    const advance = (ms: number) => {
+      const to = now + ms;
+      for (;;) {
+        const due = timers.filter((t) => t.live && t.at <= to).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        now = due.at;
+        due.live = false;
+        due.fn();
+      }
+      now = to;
+    };
+    return { n, told, advance, live: () => timers.filter((t) => t.live).length };
+  }
+
+  it('waits about a second and a half', () => {
+    expect(TWO_RUNNING_DELAY_MS).toBe(1_500);
+  });
+
+  it('a pair that resolves within the delay says nothing: the new conversation started, then the old one ended (/clear)', () => {
+    const t = notice();
+    t.n.update([s('old', 'working')]);
+    t.n.update([s('new'), s('old', 'working')]); // SessionStart of the new one came first
+    t.advance(400);
+    t.n.update([s('new'), s('old', 'ended')]); // then the old one's SessionEnd
+    t.advance(5_000);
+    expect(t.told).toEqual([]);
+    expect(t.live()).toBe(0); // its timer went with it
+  });
+
+  it('a pair that is still there after the delay is told, once, and not again for the same two', () => {
+    const t = notice();
+    t.n.update([s('a', 'working'), s('b')]);
+    t.advance(1_499);
+    expect(t.told).toEqual([]);
+    t.n.update([s('b', 'needs-you'), s('a', 'working')]); // the same two, another order and state: the same wait
+    t.advance(1);
+    expect(t.told).toEqual(['a+b']);
+    t.n.update([s('a'), s('b', 'ended')]);
+    t.n.update([s('a'), s('b')]);
+    t.advance(5_000);
+    expect(t.told).toEqual(['a+b']);
+  });
+
+  it('what is told is the set running when the delay is over: a third arriving meanwhile is one notice, for the three', () => {
+    const t = notice();
+    t.n.update([s('a'), s('b')]);
+    t.advance(1_000);
+    t.n.update([s('a'), s('b'), s('c')]);
+    t.advance(1_000);
+    expect(t.told).toEqual([]);
+    t.advance(500);
+    expect(t.told).toEqual(['a+b+c']);
+    expect(t.live()).toBe(0);
   });
 });
