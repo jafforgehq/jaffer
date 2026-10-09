@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { AGENT_LABEL, type AgentStatus } from '../../shared/keep-running';
+import { AGENT_LABEL, APP_BUNDLE_ID, type AgentStatus } from '../../shared/keep-running';
 
 export type { AgentStatus };
 
@@ -101,8 +101,10 @@ function shq(s: string): string {
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
 /**
- * The files for the agent, or why there can be none. The plist holds no secret: the label, how launchd restarts the job (only after a
- * failure: a deliberate end exits 0), where the log goes and `JAFFER_HOME`, nothing else.
+ * The files for the agent, or why there can be none. The plist holds no secret: the label, the app it belongs to, how launchd restarts
+ * the job (only after a failure: a deliberate end exits 0), where the log goes and `JAFFER_HOME`, nothing else. The app it belongs to
+ * (`AssociatedBundleIdentifiers`) is what macOS 13 and later show in *Login Items → Allow in the Background* for a job whose program is a
+ * script: without it the item reads as an unidentified "jafferd".
  */
 export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
   if (i.platform !== 'darwin') return { refused: REFUSED_NOT_MAC };
@@ -121,6 +123,10 @@ export function planAgent(i: PlanInput): AgentPlan | { refused: string } {
     '<dict>',
     '  <key>Label</key>',
     `  <string>${xml(AGENT_LABEL)}</string>`,
+    '  <key>AssociatedBundleIdentifiers</key>',
+    '  <array>',
+    `    <string>${xml(APP_BUNDLE_ID)}</string>`,
+    '  </array>',
     '  <key>ProgramArguments</key>',
     '  <array>',
     `    <string>${xml(wrapperPath)}</string>`,

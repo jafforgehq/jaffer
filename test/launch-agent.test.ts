@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LaunchAgent, agentFiles, agentPaths, execLaunchctl, planAgent, type AgentFiles, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
-import { AGENT_LABEL, agentStatusText } from '../src/shared/keep-running';
+import { AGENT_LABEL, APP_BUNDLE_ID, agentStatusText } from '../src/shared/keep-running';
 import { KeepRunning } from '../src/daemon/keep-running';
 import { daemonAgent, defaultDaemonAgent, ensureDaemon, launchDaemon, type Launcher } from '../src/core/daemon-client';
 import { makePaths } from '../src/shared/paths';
@@ -86,6 +86,20 @@ describe('planAgent: the plist', () => {
     expect(t).not.toMatch(/ANTHROPIC|API_KEY|TOKEN|SECRET|PASSWORD|sk-ant/i);
   });
 
+  it('names the app it belongs to (AssociatedBundleIdentifiers: the app\'s own bundle id), so Login Items shows Jaffer, not an unidentified "jafferd"', () => {
+    expect(squash(plan().plist)).toContain('<key>AssociatedBundleIdentifiers</key> <array> <string>com.jafforge.jaffer</string> </array>');
+    expect(APP_BUNDLE_ID).toBe('com.jafforge.jaffer');
+    // the id the app is built with
+    expect(fs.readFileSync(path.resolve(__dirname, '..', 'electron-builder.yml'), 'utf8')).toMatch(new RegExp(`^appId: ${APP_BUNDLE_ID.replace(/\./g, '\\.')}$`, 'm'));
+    if (process.platform !== 'darwin') return;
+    withTemp((dir) => {
+      const file = path.join(dir, 'agent.plist');
+      fs.writeFileSync(file, plan().plist);
+      const json = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', file], { encoding: 'utf8' }));
+      expect(json.AssociatedBundleIdentifiers).toEqual(['com.jafforge.jaffer']);
+    });
+  });
+
   it.skipIf(process.platform !== 'darwin')('passes plutil -lint', () => {
     withTemp((dir) => {
       const file = path.join(dir, 'agent.plist');
@@ -157,6 +171,7 @@ describe('a path with a space, an ampersand, angle brackets and quotes', () => {
         const json = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', file], { encoding: 'utf8' }));
         expect(json).toEqual({
           Label: AGENT_LABEL,
+          AssociatedBundleIdentifiers: [APP_BUNDLE_ID],
           ProgramArguments: [path.join(home, 'bin', 'jafferd')],
           EnvironmentVariables: { JAFFER_HOME: home },
           RunAtLoad: true,

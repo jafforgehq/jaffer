@@ -6,6 +6,7 @@ import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
 import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, REFUSED_NOT_MAC, REFUSED_OTHER_HOME, type AgentStatus, type Launchctl } from './service/launch-agent';
 import { isDefaultHome } from './session/caffeinate';
 import { ConfigStore } from '../shared/config';
+import { APP_BUNDLE_ID } from '../shared/keep-running';
 import { makePaths } from '../shared/paths';
 
 export interface ResetOptions {
@@ -43,7 +44,7 @@ export interface ResetResult {
   messages: string[];
 }
 
-const BUNDLE_ID = 'com.jafforge.jaffer';
+const BUNDLE_ID = APP_BUNDLE_ID;
 
 /** What Jaffer keeps in its folder: a folder that is neither empty nor holds at least one of these is not Jaffer's. */
 const OWN_ENTRIES = ['config.json', 'memory', 'run', 'session', 'shell', 'bin'];

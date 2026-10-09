@@ -52,6 +52,9 @@ export const STAY_AWAKE = {
 /** The launchd label of the daemon's login agent. */
 export const AGENT_LABEL = 'com.jafforge.jaffer.daemon';
 
+/** The app's bundle identifier (`appId` in electron-builder.yml): the agent names it as its app, for Login Items. */
+export const APP_BUNDLE_ID = 'com.jafforge.jaffer';
+
 /**
  * How the login agent that keeps the session running stands, as the daemon tells it (`service.status`, `service.install`,
  * `service.remove`): from launchd and the plist on disk, not from the switch alone.
