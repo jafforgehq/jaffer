@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keepRunningOffText, turnKeepRunningOff, type AgentStatus } from '../src/shared/keep-running';
+import { errorText, isOldDaemonError, keepRunningOffText, OLD_DAEMON_TEXT, turnKeepRunningOff, type AgentStatus } from '../src/shared/keep-running';
 
 describe('keepRunningOffText (the question the app asks before the switch is turned off while macOS runs the session)', () => {
   it('says the session ends now, what stops, that a Claude Code conversation can be resumed, and why it ends', () => {
@@ -41,5 +41,26 @@ describe('turnKeepRunningOff (every switch-off in Settings goes through it: the 
       expect(await t.result, now.state).toEqual({ cancelled: false, status: { state: 'not-installed' } });
       expect(t.calls, now.state).toEqual(['status', 'remove']);
     }
+  });
+});
+
+// A session daemon from before 0.5 (an app updated by dragging it in keeps the old daemon until the session restarts) answers what 0.5
+// added with "unknown method": the CLI and the window say what Settings already says, with one helper.
+describe('what is said to a person whose session daemon is older than the app (errorText, the CLI and the window)', () => {
+  it('an unknown method among claude.restart*, service.* and claude.autoresume.* reads "Restart your session to use this", also as the app hands it to the window', () => {
+    expect(OLD_DAEMON_TEXT).toBe('Restart your session to use this');
+    for (const m of ['claude.restart.plan', 'claude.restart', 'service.status', 'service.install', 'service.remove', 'claude.autoresume.cancel', 'claude.autoresume.state']) {
+      expect(errorText(new Error(`unknown method: ${m}`)), m).toBe(OLD_DAEMON_TEXT);
+      expect(errorText(new Error(`Error invoking remote method 'jaffer:restart-claude': Error: unknown method: ${m}`)), m).toBe(OLD_DAEMON_TEXT);
+      expect(isOldDaemonError(`unknown method: ${m}`), m).toBe(true);
+    }
+  });
+
+  it('anything else is said as it is', () => {
+    expect(errorText(new Error('The session daemon is not connected.'))).toBe('The session daemon is not connected.');
+    expect(errorText(new Error('unknown method: pane.split'))).toBe('unknown method: pane.split'); // not something 0.5 added
+    expect(errorText('plain words')).toBe('plain words');
+    expect(isOldDaemonError(new Error('timeout: service.status'))).toBe(false);
+    expect(isOldDaemonError(undefined)).toBe(false);
   });
 });

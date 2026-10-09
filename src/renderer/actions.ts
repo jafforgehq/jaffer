@@ -1,6 +1,7 @@
 import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, resumeOffer, safeCommand, toast, toggleSide } from './state';
 import { isClaudeCommand } from '../shared/process-badge';
 import { isSessionId, resumeCommand } from '../shared/claude-resume';
+import { errorText } from '../shared/keep-running';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -84,7 +85,7 @@ export async function restartClaude(): Promise<void> {
     if (r.cancelled) return;
     toast({ kind: 'info', text: r.resumable ? 'Shell restarted in the same folder. Claude Code comes back in the same conversation.' : 'Shell restarted in the same folder.' });
   } catch (e) {
-    toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    toast({ kind: 'error', text: errorText(e) }); // (a session daemon from before 0.5 does not know it: "Restart your session to use this")
   }
 }
 

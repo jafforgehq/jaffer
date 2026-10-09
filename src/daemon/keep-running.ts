@@ -3,8 +3,9 @@ import type { AgentStatus } from '../shared/keep-running';
 
 /**
  * What the daemon does for the switch *Keep my session running in the background* (`session.keepRunning`): the RPCs `service.status`,
- * `service.install` and `service.remove`, and the reconcile at its start. The agent itself (files, launchd) is `LaunchAgent`; this decides
- * when to call it, from where the daemon runs:
+ * `service.install` and `service.remove`, the reconcile at its start, and a change of the switch in the config (`switchChanged`, so that
+ * the switch and the agent never disagree for a whole session). The agent itself (files, launchd) is `LaunchAgent`; this decides when to
+ * call it, from where the daemon runs:
  * - **Started detached** (by the app or the CLI, as without the agent): install writes the files but never loads the job. launchd's
  *   instance would find the socket taken by this daemon, exit 0, and with `SuccessfulExit: false` supervise nothing. The status then says
  *   `installed`: launchd takes over at the next login, or at the next start of the session (the app or the CLI load the job and start
@@ -48,7 +49,15 @@ function turnedOffNote(r: Bootout): string {
 const REPLY_FIRST_MS = 50;
 
 export class KeepRunning {
-  constructor(private readonly d: KeepRunningDeps) {}
+  /**
+   * The value of the switch the agent was last brought in line with (at the start, by install or remove, or by a change of the switch):
+   * the change that install and remove make to the switch themselves comes back through the config, and is not acted on twice.
+   */
+  private inLine: boolean | undefined;
+
+  constructor(private readonly d: KeepRunningDeps) {
+    this.inLine = d.keepRunning(); // (what the start brings the agent in line with; a change of any other setting is not one of this)
+  }
 
   /** What launchd and the disk say. `not-loaded` in a daemon that launchd does not run is `installed`: launchd takes over at the next start. */
   private view(s: AgentStatus): AgentStatus {
@@ -76,6 +85,7 @@ export class KeepRunning {
     const plan = this.d.plan();
     if ('refused' in plan) return { state: 'refused', reason: plan.refused };
     const s = await this.d.agent.reconcile(true, plan, { load: false });
+    this.inLine = true;
     this.d.setKeepRunning(true);
     return this.now(s);
   }
@@ -83,10 +93,41 @@ export class KeepRunning {
   /** Takes the agent away and turns the switch off. In the daemon launchd runs, the bootout (which ends it) comes after the reply. */
   async remove(): Promise<AgentStatus> {
     const plan = this.d.plan();
-    const refused: AgentStatus | null = 'refused' in plan ? { state: 'refused', reason: plan.refused } : null;
     const files = 'refused' in plan ? this.d.files() : plan;
-    if (!files) return refused!; // another home or another platform: nothing here is this daemon's
+    if (!files) return { state: 'refused', reason: (plan as { refused: string }).refused }; // another home or another platform: nothing here is this daemon's
+    this.inLine = false;
     this.d.setKeepRunning(false);
+    return this.takeAway(plan, files);
+  }
+
+  /**
+   * The switch was changed in the config (Settings, `jaffer service`, `jaffer config set`): the agent is brought in line with it, with
+   * the guards of install and remove. On writes or refreshes the files and loads nothing; off takes the agent away (in the daemon
+   * launchd runs, the bootout that ends it comes after the reply to the change). A refused home is not touched (only an agent installed
+   * earlier is taken away when the app runs from a disk image, as at the start). Asking the person first is the app's, before it sets
+   * the switch. Null: already in line (the same value, or install and remove setting it themselves).
+   */
+  async switchChanged(on: boolean): Promise<AgentStatus | null> {
+    if (on === this.inLine) return null;
+    this.inLine = on;
+    try {
+      const plan = this.d.plan();
+      if (on) {
+        if ('refused' in plan) return { state: 'refused', reason: plan.refused };
+        return this.now(await this.d.agent.reconcile(true, plan, { load: false }));
+      }
+      const files = 'refused' in plan ? this.d.files() : plan;
+      if (!files) return { state: 'refused', reason: (plan as { refused: string }).refused };
+      return await this.takeAway(plan, files);
+    } catch (e) {
+      this.inLine = undefined; // not in line after all: the next change, or the next start, tries again
+      throw e;
+    }
+  }
+
+  /** The files go and launchd is told; in the daemon launchd runs, after the reply (the bootout ends this very daemon). */
+  private async takeAway(plan: AgentPlan | { refused: string }, files: AgentFiles): Promise<AgentStatus> {
+    const refused: AgentStatus | null = 'refused' in plan ? { state: 'refused', reason: plan.refused } : null;
     if (this.d.launchd) {
       this.d.later(async () => {
         this.d.log('keep running: the agent is taken away; launchd stops this daemon');
@@ -106,6 +147,7 @@ export class KeepRunning {
    */
   async reconcileAtStart(): Promise<AgentStatus> {
     const want = this.d.keepRunning();
+    this.inLine = want;
     const plan = this.d.plan();
     if ('refused' in plan) {
       const files = want ? null : this.d.files();

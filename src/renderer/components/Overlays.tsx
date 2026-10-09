@@ -9,7 +9,7 @@ import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { DEFAULT_PROTECTED_BRANCHES } from '../../shared/danger-zone';
-import { agentStatusText, type AgentStatus } from '../../shared/keep-running';
+import { agentStatusText, errorText, isOldDaemonError, OLD_DAEMON_TEXT, type AgentStatus } from '../../shared/keep-running';
 import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -513,7 +513,7 @@ function KeepRunningField({ flag }: { flag: boolean }): VNode {
     () =>
       void call<AgentStatus>('service.status', {})
         .then(setStatus)
-        .catch((e) => setUnknown(/unknown method/i.test(e instanceof Error ? e.message : String(e)) ? 'Restart your session to use this' : 'The session could not say')),
+        .catch((e) => setUnknown(isOldDaemonError(e) ? OLD_DAEMON_TEXT : 'The session could not say')),
     [],
   );
   const refused = status?.state === 'refused';
@@ -533,7 +533,7 @@ function KeepRunningField({ flag }: { flag: boolean }): VNode {
       if (s.state === 'refused') toast({ kind: 'error', text: s.reason });
       else if (s.note) toast({ kind: 'info', text: s.note }, 10_000);
     } catch (e) {
-      toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+      toast({ kind: 'error', text: errorText(e) });
     } finally {
       setBusy(false);
     }
@@ -742,7 +742,7 @@ export function Onboarding(): VNode {
   const keepRunning = () =>
     void call<AgentStatus>('service.install', {})
       .then((s) => s.state === 'refused' && toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${s.reason}` }, 10_000))
-      .catch((e) => toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${e instanceof Error ? e.message : String(e)}` }, 10_000));
+      .catch((e) => toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${errorText(e)}` }, 10_000));
   const go = async () => {
     setBusy(true);
     try {

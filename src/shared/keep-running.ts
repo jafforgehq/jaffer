@@ -85,6 +85,25 @@ export async function turnKeepRunningOff(d: { status(): Promise<AgentStatus>; as
   return { cancelled: false, status: await d.remove() };
 }
 
+/**
+ * What the person is told when the session daemon is older than the app (from before 0.5: an app updated by dragging it in keeps the old
+ * daemon until the session is restarted) and does not know what was asked: the words Settings uses, in the CLI and the window alike.
+ */
+export const OLD_DAEMON_TEXT = 'Restart your session to use this';
+
+/** What 0.5 added that an older daemon answers with "unknown method" (Restart Claude Code, the login agent, Restart Claude's notice). */
+const ADDED_IN_05 = /unknown method: (?:claude\.restart|claude\.autoresume\.|service\.)/;
+
+/** The error is an older daemon not knowing one of those (also as the app hands it to the window: "Error invoking remote method …"). */
+export function isOldDaemonError(e: unknown): boolean {
+  return ADDED_IN_05.test(e instanceof Error ? e.message : String(e));
+}
+
+/** An error in the person's words: `OLD_DAEMON_TEXT` for an older daemon, otherwise its own message. */
+export function errorText(e: unknown): string {
+  return isOldDaemonError(e) ? OLD_DAEMON_TEXT : e instanceof Error ? e.message : String(e);
+}
+
 /** The state in words, as `jaffer service status` prints it and Settings shows it. */
 export function agentStatusText(s: AgentStatus): string {
   switch (s.state) {

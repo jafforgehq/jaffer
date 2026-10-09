@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { LaunchAgent, agentFiles, agentPaths, execLaunchctl, planAgent, type AgentFiles, type AgentPlan, type Launchctl, type LaunchAgentFs, type PlanInput } from '../src/core/service/launch-agent';
 import { AGENT_LABEL, APP_BUNDLE_ID, agentStatusText } from '../src/shared/keep-running';
 import { KeepRunning } from '../src/daemon/keep-running';
-import { daemonAgent, defaultDaemonAgent, ensureDaemon, launchDaemon, type Launcher } from '../src/core/daemon-client';
+import { daemonAgent, defaultDaemonAgent, ensureDaemon, KICKSTART_AGAIN_MS, LAUNCHD_GRACE_MS, launchDaemon, type Launcher } from '../src/core/daemon-client';
 import { makePaths } from '../src/shared/paths';
+import { RpcServer } from '../src/core/rpc';
 import { cleanEnv } from './helpers/env';
 
 /**
@@ -765,6 +766,96 @@ describe('KeepRunning: what the daemon does for the switch (a fake launchd, an i
     expect([...on.flags, ...fresh.flags, ...off.flags, ...moved.flags, ...none.flags]).toEqual([]);
   });
 
+  // 0.5.1: `session.keepRunning` changed anywhere (Settings, `jaffer service`, `jaffer config set`) brings the agent in line, so the switch
+  // and the agent cannot disagree for a whole session. The same guards as install and remove; asking the person stays the app's.
+  it('a change of the switch in the config, in a daemon launchd does not run: on writes the files and loads nothing, off takes them away; the same value again does nothing', async () => {
+    const t = keep();
+    const p = plan();
+    expect(await t.k.switchChanged(true)).toEqual({ state: 'installed' });
+    expect(t.fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(t.fsx.files.get(p.wrapperPath)?.data).toBe(p.wrapper);
+    expect(t.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]); // no bootstrap: launchd's instance would find the socket taken
+    t.fsx.writes.length = 0;
+    t.calls.length = 0;
+    expect(await t.k.switchChanged(true)).toBeNull(); // already in line
+    expect(t.fsx.writes).toEqual([]);
+    expect(t.calls).toEqual([]);
+    const off = await t.k.switchChanged(false);
+    expect(off).toEqual({ state: 'not-installed', note: 'Turned off.' });
+    expect(t.fsx.files.size).toBe(0);
+    expect(t.calls.filter((c) => c[0] === 'bootout')).toEqual([['bootout', TARGET]]); // (launchd had nothing loaded: "Turned off.")
+    expect(t.later).toEqual([]);
+    expect(t.flags).toEqual([]); // the switch says it already: it is not set again
+  });
+
+  it('a change of the switch in the config, in the daemon launchd runs: on only refreshes the files; off answers first and boots out afterwards (that ends this daemon)', async () => {
+    const p = plan();
+    const on = keep({ launchd: true, start: { loaded: true, pid: 4242 } });
+    seed(on.fsx, p, stale(p));
+    expect(await on.k.switchChanged(true)).toEqual({ state: 'running', pid: 4242 });
+    expect(on.fsx.files.get(p.plistPath)?.data).toBe(p.plist);
+    expect(on.calls.map((c) => c[0]).filter((v) => v !== 'print')).toEqual([]);
+    const off = keep({ launchd: true, start: { loaded: true, pid: 4242 }, keepRunning: true });
+    seed(off.fsx, p);
+    expect(await off.k.reconcileAtStart()).toEqual({ state: 'running', pid: 4242 }); // (the start brings it in line: on)
+    off.calls.length = 0;
+    const r = await off.k.switchChanged(false);
+    expect(r?.state).toBe('not-installed');
+    expect(r?.note).toMatch(/session ends/i);
+    expect(off.calls).toEqual([]); // nothing yet: the reply to the change goes out first
+    expect(off.later).toHaveLength(1);
+    await off.later[0]!.fn();
+    expect(off.fsx.files.size).toBe(0);
+    expect(off.calls).toEqual([['bootout', TARGET]]);
+    expect(off.flags).toEqual([]);
+  });
+
+  it('what install and remove do is not done twice: the switch they set is already in line when its change comes back', async () => {
+    const t = keep();
+    await t.k.install();
+    expect(t.flags).toEqual([true]);
+    const writes = t.fsx.writes.length;
+    const calls = t.calls.length;
+    expect(await t.k.switchChanged(true)).toBeNull(); // (what the daemon's config.onChange does with the flag install set)
+    expect(t.fsx.writes.length).toBe(writes);
+    expect(t.calls.length).toBe(calls);
+    await t.k.remove();
+    expect(t.flags).toEqual([true, false]);
+    const bootouts = t.calls.filter((c) => c[0] === 'bootout').length;
+    expect(await t.k.switchChanged(false)).toBeNull();
+    expect(t.calls.filter((c) => c[0] === 'bootout').length).toBe(bootouts);
+    expect(t.later).toEqual([]);
+    // the daemon launchd runs: remove's bootout is planned once, not twice
+    const l = keep({ launchd: true, start: { loaded: true, pid: 4242 }, keepRunning: true });
+    seed(l.fsx, plan());
+    await l.k.remove();
+    expect(await l.k.switchChanged(false)).toBeNull();
+    expect(l.later).toHaveLength(1);
+  });
+
+  it('a change of the switch in another home (refused) touches nothing; with the app translocated, off still takes away an agent installed earlier and on writes nothing', async () => {
+    for (const on of [true, false]) {
+      const t = keep({ plan: { refused: 'another home' }, files: null, keepRunning: !on, start: { loaded: true, pid: 4242 } });
+      seed(t.fsx, plan()); // even an agent of the person's own on the same disk is left exactly as it is
+      expect(await t.k.switchChanged(on), String(on)).toEqual({ state: 'refused', reason: 'another home' });
+      expect(t.fsx.writes).toEqual([]);
+      expect(t.fsx.files.size).toBe(2);
+      expect(t.fsx.dirs.size).toBe(0);
+      expect(t.calls).toEqual([]);
+      expect(t.flags).toEqual([]);
+      expect(t.later).toEqual([]);
+    }
+    const moved = keep({ plan: { refused: MOVE }, keepRunning: false, start: { loaded: true, pid: null } });
+    seed(moved.fsx, plan());
+    expect(await moved.k.switchChanged(true)).toEqual({ state: 'refused', reason: MOVE });
+    expect(moved.fsx.writes).toEqual([]);
+    expect(moved.fsx.files.size).toBe(2);
+    expect(await moved.k.switchChanged(false)).toMatchObject({ state: 'refused', reason: MOVE });
+    expect(moved.fsx.files.size).toBe(0);
+    expect(moved.calls.filter((c) => c[0] === 'bootout')).toEqual([['bootout', TARGET]]);
+    expect(moved.flags).toEqual([]);
+  });
+
   it('the words for each state, as `jaffer service status` and Settings say them', () => {
     expect(agentStatusText({ state: 'not-installed' })).toBe('not installed');
     expect(agentStatusText({ state: 'installed' })).toBe('installed, active from the next login or restart');
@@ -877,6 +968,62 @@ describe('launchDaemon: launchd starts the daemon when the agent is installed, a
     await expect(ensureDaemon(t.paths, { ...t.launcher, launchdGraceMs: 300 }, 1500)).rejects.toThrow(/Could not start/);
     expect(t.calls[0]).toEqual(['kickstart', TARGET]);
     expect(t.spawned).toEqual([]);
+  });
+
+  // A kickstart that lands while the old daemon is still exiting (launchd's throttle after `app.shutdown` or a restart of the session)
+  // starts nothing: the job's process still runs, and the one that ends with 0 is not brought back. Asked again inside the wait.
+  it('ensureDaemon: a kickstart that starts nothing is asked again every 2 s within the wait (a clock of its own), and after the grace the detached spawn still comes, with no kickstart beside it', async () => {
+    let now = 0;
+    const kicks: number[] = [];
+    const t = setup({ installed: true, start: { loaded: true, pid: null, onCall: (a) => void (a[0] === 'kickstart' && kicks.push(now)) } });
+    const at: number[] = [];
+    const spawn = t.launcher.spawn!;
+    const launcher: Launcher = { ...t.launcher, clock: { now: () => now, sleep: async (ms) => void (now += ms) }, spawn: (c, a, o) => (at.push(now), spawn(c, a, o)) };
+    await expect(ensureDaemon(t.paths, launcher)).rejects.toThrow(/Could not start/); // (the default wait and grace, on the fake clock; no daemon here)
+    expect(kicks[0]).toBe(0); // launchDaemon's own
+    expect(kicks.length).toBeGreaterThanOrEqual(3); // and again at about 2 s and 4 s
+    for (let i = 1; i < kicks.length; i++) {
+      expect(kicks[i]! - kicks[i - 1]!).toBeGreaterThanOrEqual(KICKSTART_AGAIN_MS);
+      expect(kicks[i]! - kicks[i - 1]!).toBeLessThan(KICKSTART_AGAIN_MS + 250);
+    }
+    expect(t.spawned).toHaveLength(1);
+    expect(at[0]).toBeGreaterThanOrEqual(LAUNCHD_GRACE_MS);
+    expect(kicks.every((k) => k < at[0]!)).toBe(true); // none once the session is spawned detached
+    expect(now).toBeGreaterThanOrEqual(12_000); // the whole wait
+  });
+
+  it('ensureDaemon: when the kickstart asked again brings the daemon up, it is the one connected to, and nothing is spawned', async () => {
+    let now = 0;
+    let server: RpcServer | null = null;
+    let kicked = 0;
+    const holder: { socket?: string } = {};
+    const t = setup({
+      installed: true,
+      start: {
+        loaded: true,
+        pid: null,
+        onCall: (a) => {
+          // the second kickstart: launchd starts the daemon this time
+          if (a[0] === 'kickstart' && ++kicked === 2) {
+            server = new RpcServer();
+            server.handle('hello', () => ({ ok: true }));
+            void server.listen(holder.socket!);
+          }
+        },
+      },
+    });
+    holder.socket = t.paths.socket;
+    const launcher: Launcher = { ...t.launcher, clock: { now: () => now, sleep: async (ms) => ((now += ms), await new Promise((r) => setTimeout(r, 2))) } };
+    const c = await ensureDaemon(t.paths, launcher);
+    try {
+      expect(await c.call('hello', {})).toEqual({ ok: true });
+      expect(kicked).toBe(2);
+      expect(t.spawned).toEqual([]);
+      expect(now).toBeLessThan(LAUNCHD_GRACE_MS);
+    } finally {
+      c.close();
+      await (server as RpcServer | null)?.close();
+    }
   });
 
   it('the agent by default is none for any home but the person\'s own: a test home never runs launchctl', () => {

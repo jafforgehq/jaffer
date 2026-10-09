@@ -48,6 +48,8 @@ export interface Launcher {
   spawn?: (command: string, args: readonly string[], options: SpawnOptions & { env?: NodeJS.ProcessEnv }) => { unref(): void };
   /** How long launchd gets to bring the daemon up before it is spawned detached (default `LAUNCHD_GRACE_MS`; tests). */
   launchdGraceMs?: number;
+  /** The clock of the wait for the daemon (tests): what time it is, and waiting. */
+  clock?: { now(): number; sleep(ms: number): Promise<void> };
 }
 
 /**
@@ -56,6 +58,13 @@ export interface Launcher {
  * disallowed it in Login Items), the session must not depend on launchd.
  */
 export const LAUNCHD_GRACE_MS = 6_000;
+
+/**
+ * While launchd took the start and no daemon answers, `kickstart` is asked again this often. One that lands while the old daemon is
+ * still exiting (the session was just restarted: launchd's throttle) starts nothing, since the job's process still runs, and the one
+ * that ends with 0 is not brought back.
+ */
+export const KICKSTART_AGAIN_MS = 2_000;
 
 /** A `DaemonAgent` from a `LaunchAgent` and where its plist is. */
 export function daemonAgent(a: { agent: LaunchAgent; plistPath: string; exists?: (file: string) => boolean }): DaemonAgent {
@@ -122,20 +131,26 @@ export async function ensureDaemon(paths: JafferPaths, l: Launcher, waitMs = 12_
   const existing = await tryConnect(paths);
   if (existing) return existing;
   const agent = agentOf(paths, l);
+  const clock = l.clock ?? { now: Date.now, sleep };
   let spawned = (await launchDaemon(paths, { ...l, agent })) === 'spawned';
-  const t0 = Date.now();
+  const t0 = clock.now();
+  let kickedAt = t0;
   const grace = l.launchdGraceMs ?? LAUNCHD_GRACE_MS;
-  while (Date.now() - t0 < waitMs) {
-    await sleep(120);
+  while (clock.now() - t0 < waitMs) {
+    await clock.sleep(120);
     const c = await tryConnect(paths, 600);
     if (c) return c;
     if (spawned || !agent) continue;
     // the agent's wrapper takes the agent away when the app it was written for is gone (moved, deleted): then launchd starts nothing.
     // Or launchd took the start and no daemon came: with no process of launchd's for it, the daemon is spawned here (its own start
     // rewrites the wrapper, and a launchd instance that starts later finds the socket taken and exits 0, which launchd leaves alone).
-    if (!agent.installed() || (Date.now() - t0 >= grace && !(await agent.running()))) {
+    if (!agent.installed() || (clock.now() - t0 >= grace && !(await agent.running()))) {
       spawnDetached(paths, l);
       spawned = true;
+    } else if (clock.now() - kickedAt >= KICKSTART_AGAIN_MS) {
+      // nothing answers yet: the kickstart may have landed while the old daemon was still exiting, and started nothing (see above)
+      kickedAt = clock.now();
+      await agent.kickstart().catch(() => false);
     }
   }
   throw new Error(`Could not start the Jaffer session daemon (see ${paths.logFile}).`);

@@ -10,7 +10,7 @@ import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { removeAgentWithoutDaemon, resetJaffer } from '../core/reset';
-import { agentStatusText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
+import { agentStatusText, errorText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
 import { detectTargets } from '../core/memory/exports';
 import type { RpcClient } from '../core/rpc';
 
@@ -85,8 +85,9 @@ const SERVICE_HELP = `Usage: jaffer service [status|install|remove]
   jaffer service status    whether macOS keeps your session running in the background: not installed, installed (active from the
                            next login or restart), running (pid), installed but not loaded, or refused (and why)
   jaffer service install   install the login agent: launchd starts the session at login and again after a crash
-  jaffer service remove    remove it (when launchd runs the session, that ends the session now; with no session
-                           running, or one that cannot start, it is removed without starting one)
+  jaffer service remove    remove it (when launchd runs the session, that ends the session now, and typed in that
+                           session it needs --yes; with no session running, or one that cannot start, it is removed
+                           without starting one)
 `;
 
 async function main(): Promise<void> {
@@ -337,9 +338,15 @@ async function main(): Promise<void> {
       }
       let s: AgentStatus;
       try {
-        // turned off while launchd runs the session, it ends: asked for here, so said first (the app asks in a dialog)
+        // turned off while launchd runs the session, it ends: asked for here, so said first (the app asks in a dialog). Typed in that very
+        // session (Jaffer's own terminal), it ends the terminal it was typed in: only with --yes.
         if (sub === 'remove' && ((await client.call('service.status', {}, 30_000)) as AgentStatus).state === 'running') {
           process.stderr.write(`${keepRunningOffText().detail}\n`);
+          if (process.env.JAFFER_SESSION === '1' && !flag('yes')) {
+            process.exitCode = 1;
+            process.stderr.write(red('This shell is that session: nothing was changed. Run `jaffer service remove --yes` to turn it off and end the session, or turn it off in Settings.\n'));
+            return;
+          }
         }
         s = await client.call(method, {}, 30_000);
       } finally {
@@ -390,6 +397,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  process.stderr.write(red(`jaffer: ${e instanceof Error ? e.message : e}\n`));
+  // (a session daemon older than this CLI does not know what 0.5 added: said as Settings says it)
+  process.stderr.write(red(`jaffer: ${errorText(e)}\n`));
   process.exit(1);
 });

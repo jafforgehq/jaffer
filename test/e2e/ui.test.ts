@@ -455,6 +455,33 @@ describe('Jaffer UI end to end', () => {
     }
   }, 40_000);
 
+  // A session daemon from before 0.5 (the app was updated, the session not yet restarted) does not know Restart Claude Code: the toast says
+  // what Settings says for the same reason, not "unknown method" (as the app hands it on: "Error invoking remote method …").
+  it('Restart Claude Code against a session daemon from before 0.5: the toast says "Restart your session to use this"', async () => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__origRestart = w.jaffer.restartClaude;
+      w.jaffer.restartClaude = async () => {
+        throw new Error("Error invoking remote method 'jaffer:restart-claude': Error: unknown method: claude.restart.plan");
+      };
+    });
+    try {
+      await page.keyboard.press('Meta+p');
+      await page.waitForSelector('.palette input');
+      await page.fill('.palette input', 'update claude code');
+      await page.keyboard.press('Enter');
+      const toast = page.locator('.toast', { hasText: 'Restart your session to use this' });
+      await toast.waitFor({ timeout: 5_000 });
+      expect(await page.locator('.toast', { hasText: /unknown method/ }).count()).toBe(0);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.restartClaude = w.__origRestart;
+      });
+      for (let i = 0; i < 2 && (await page.locator('.settings, .palette').count()) > 0; i++) await page.keyboard.press('Escape');
+    }
+  }, 30_000);
+
   it('the pet: asleep when nothing runs, digging while something does, up when Claude needs you, cheering after a turn, gone when switched off', async () => {
     const pet = '.pet-corner .pet';
     const mood = () => page.getAttribute(pet, 'data-mood');

@@ -441,6 +441,14 @@ export class JafferService {
       this.refreshStayAwake(); // (the switch for staying awake)
       this.memory.syncExports();
       this.startIngest();
+      // Keep my session running: the agent follows the switch however it changed (Settings, `jaffer service`, `jaffer config set`), with
+      // every guard of install and remove (a refused home is not touched; in the daemon launchd runs, the bootout comes after the reply).
+      // What install and remove set themselves is already in line (null).
+      const on = c.session.keepRunning;
+      void this.keepRunning
+        .switchChanged(on)
+        .then((s) => s && this.log(`keep running: switched ${on ? 'on' : 'off'}: ${s.state === 'refused' ? `refused (${s.reason})` : s.state}`))
+        .catch((e) => this.log(`keep running: ${errMsg(e)}`));
     });
   }
 
