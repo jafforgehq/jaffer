@@ -114,7 +114,11 @@ export class AutoResumer {
     private t: AutoResumeTiming = AUTO_RESUME,
   ) {}
 
-  /** `explicit`: the person asked for it (Restart Claude): it does not need the setting on, and it overrides an earlier Cancel. */
+  /**
+   * `explicit`: the person asked for it (Restart Claude): it does not need the setting on, and it overrides an earlier Cancel and an
+   * earlier give-up. Each explicit check is that request: at the attempt limit it says so (`gave-up`) once for it, so the click is never
+   * silent. The request lasts only until its first idle, so the caller repeats it until it is typed, cancelled or given up on.
+   */
   check(opts: { explicit?: boolean } = {}): void {
     this.step(opts.explicit === true);
   }
@@ -163,6 +167,7 @@ export class AutoResumer {
     if (explicit && id !== undefined) {
       this.explicitId = id;
       this.cancelledId = undefined;
+      this.gaveUpId = undefined; // told once before, and told again for this request below
     }
     const asked = id !== undefined && id === this.explicitId;
     const now = this.d.now();
@@ -178,7 +183,7 @@ export class AutoResumer {
         attempts: id !== undefined && isSessionId(id) ? this.d.attempts(id) : [],
         pendingSince: this.pending?.since,
         typesAt: this.pending?.typesAt,
-        cancelled: id !== undefined && (id === this.cancelledId || (id === this.gaveUpId && !asked)),
+        cancelled: id !== undefined && (id === this.cancelledId || id === this.gaveUpId),
       },
       this.t,
     );

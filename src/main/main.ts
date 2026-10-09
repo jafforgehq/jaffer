@@ -18,6 +18,7 @@ import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { resetJaffer } from '../core/reset';
+import { restartClaudeText } from '../shared/restart-claude';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
@@ -505,6 +506,20 @@ ipcMain.handle('jaffer:reset', async (e) => {
   app.relaunch();
   app.exit(0);
   return { cancelled: false };
+});
+// Restart Claude Code, to use an update: it ends whatever runs in the shell, so the person is always asked (and told whether Claude is
+// working, and whether a conversation comes back). The daemon decides what comes back; this only asks and relays the answer.
+ipcMain.handle('jaffer:restart-claude', async (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  if (!client || !client.connected) throw new Error('The session daemon is not connected.');
+  const plan = (await client.call('claude.restart.plan', {})) as { resumable?: boolean; busy?: boolean };
+  const text = restartClaudeText({ resumable: plan.resumable === true, busy: plan.busy === true });
+  const ask = { type: 'warning' as const, message: text.message, detail: text.detail, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1 };
+  const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+  if (r.response !== 0) return { cancelled: true };
+  // asked again: the world may have moved while the dialog was up, and the daemon says what it did
+  const done = (await client.call('claude.restart', {})) as { resumable?: boolean };
+  return { cancelled: false, resumable: done.resumable === true };
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });

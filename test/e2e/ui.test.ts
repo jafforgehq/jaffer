@@ -334,6 +334,74 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
+  it('Restart Claude Code: in the palette and in Settings → Claude Code, both only ask the app, which asks the person first', async () => {
+    // the question is the app's own native dialog (its text is covered by restart-claude.test.ts); here the app is stood in for
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__restartAsked = 0;
+      w.__restartAnswer = { cancelled: true };
+      w.__origRestart = w.jaffer.restartClaude;
+      w.jaffer.restartClaude = async () => {
+        w.__restartAsked++;
+        return w.__restartAnswer;
+      };
+    });
+    const asked = () => page.evaluate(() => (window as any).__restartAsked as number);
+    try {
+      // the palette lists it by what it is for
+      await page.keyboard.press('Meta+p');
+      await page.waitForSelector('.palette input');
+      await page.keyboard.type('new version');
+      const found = (await page.textContent('.palette-list')) ?? '';
+      expect(found).toContain('Restart Claude Code, to use an update');
+      expect(found).toContain('Terminal');
+      await page.fill('.palette input', 'update claude code');
+      expect(await page.locator('.pal-row', { hasText: 'Restart Claude Code, to use an update' }).count()).toBe(1);
+      await page.keyboard.press('Enter');
+      await until(async () => (await asked()) === 1, 5_000, 'the palette action to ask the app');
+      await sleep(300);
+      expect(await page.locator('.toast', { hasText: /restarted/i }).count()).toBe(0); // the person said no: nothing is announced
+      // the button in Settings → Claude Code
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+      const btn = page.locator('.settings button', { hasText: 'Restart Claude Code' });
+      expect(await btn.count()).toBe(1);
+      await btn.click();
+      await until(async () => (await asked()) === 2, 5_000, 'the Settings button to ask the app');
+      await sleep(300);
+      expect(await page.locator('.toast', { hasText: /restarted/i }).count()).toBe(0);
+      // a yes, with a conversation to bring back, is said plainly (the notice with Cancel is the daemon's own)
+      await page.evaluate(() => ((window as any).__restartAnswer = { cancelled: false, resumable: true }));
+      await btn.click();
+      await until(async () => (await asked()) === 3, 5_000, 'the third ask');
+      const toast = page.locator('.toast', { hasText: 'Shell restarted' });
+      await toast.waitFor();
+      expect(await toast.textContent()).toMatch(/same conversation/);
+      // with none, only the shell
+      await page.evaluate(() => ((window as any).__restartAnswer = { cancelled: false, resumable: false }));
+      await btn.click();
+      await until(async () => (await asked()) === 4, 5_000, 'the fourth ask');
+      await until(async () => (await page.locator('.toast', { hasText: 'Shell restarted' }).allTextContents()).some((t) => !/conversation/.test(t)), 5_000, 'the plain toast');
+      // an error from the app is shown, not swallowed
+      await page.evaluate(() => {
+        (window as any).jaffer.restartClaude = async () => {
+          throw new Error('The session daemon is not connected.');
+        };
+      });
+      await btn.click();
+      await page.locator('.toast', { hasText: 'The session daemon is not connected.' }).waitFor();
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.restartClaude = w.__origRestart;
+      });
+      for (let i = 0; i < 2; i++) await page.keyboard.press('Escape'); // (a failure above must not leave a dialog over the next test)
+    }
+  }, 40_000);
+
   it('the pet: asleep when nothing runs, digging while something does, up when Claude needs you, cheering after a turn, gone when switched off', async () => {
     const pet = '.pet-corner .pet';
     const mood = () => page.getAttribute(pet, 'data-mood');

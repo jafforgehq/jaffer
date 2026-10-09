@@ -74,6 +74,20 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
   }
 }
 
+/**
+ * "Restart Claude Code, to use an update": the app asks the person first (a native dialog that says what stops and what comes back),
+ * then restarts the shell in the same folder; the daemon takes the same conversation up in the new shell, with the usual notice and Cancel.
+ */
+export async function restartClaude(): Promise<void> {
+  try {
+    const r = await window.jaffer.restartClaude();
+    if (r.cancelled) return;
+    toast({ kind: 'info', text: r.resumable ? 'Shell restarted in the same folder. Claude Code comes back in the same conversation.' : 'Shell restarted in the same folder.' });
+  } catch (e) {
+    toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 export const actions: Action[] = [
   { id: 'toggle-memory', title: 'Memory: show or hide', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
   { id: 'resume-claude', title: 'Resume the Claude Code conversation that was running here', section: 'Terminal', keywords: 'claude code continue restart', run: resumeClaude },
@@ -82,6 +96,7 @@ export const actions: Action[] = [
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
   { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => openOverlay('find') },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
+  { id: 'restart-claude', title: 'Restart Claude Code, to use an update', section: 'Terminal', keywords: 'update claude code new version', run: restartClaude },
   { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },
   { id: 'zoom-out', title: 'Smaller text', section: 'View', keys: '⌘-', run: () => zoom(-1) },

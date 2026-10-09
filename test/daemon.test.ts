@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { fakeClaude } from './helpers/fake-claude';
 import { MockAnthropic } from './helpers/mock-anthropic';
@@ -10,7 +10,7 @@ import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
 import { findClaude } from '../src/core/integrations/claude';
 import type { ClaudeSession } from '../src/core/claude/watcher';
-import { AUTO_RESUME_TEST } from '../src/shared/keep-running';
+import { AUTO_RESUME_TEST, RESTART_HOLD_TEST_MS } from '../src/shared/keep-running';
 
 const CLAUDE = await findClaude().catch(() => null);
 
@@ -852,7 +852,10 @@ function standInClaude(dir: string) {
   const code = path.join(dir, 'exit');
   fs.writeFileSync(code, '0');
   fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/sh\necho "RESUMED: $*"\nexit "$(cat '${code}')"\n`, { mode: 0o755 });
-  return { dir, exitWith: (n: number) => fs.writeFileSync(code, String(n)) };
+  // how many seconds the person's startup file keeps a new shell from its first prompt (none: an empty file)
+  const slow = path.join(dir, 'slow-start');
+  fs.writeFileSync(slow, '');
+  return { dir, slow, exitWith: (n: number) => fs.writeFileSync(code, String(n)), startsAfter: (seconds: number) => fs.writeFileSync(slow, seconds ? String(seconds) : '') };
 }
 
 describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, the timing on a millisecond scale)', () => {
@@ -916,7 +919,7 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
     env5 = makeEnv();
     fake = standInClaude(path.join(env5.root, 'stand-in'));
     // the person's own startup file, read after the system's (which may reorder PATH): the stand-in comes first
-    fs.writeFileSync(path.join(env5.userHome, '.bash_profile'), `PATH='${fake.dir}':"$PATH"\n`);
+    fs.writeFileSync(path.join(env5.userHome, '.bash_profile'), `PATH='${fake.dir}':"$PATH"\nif [ -s '${fake.slow}' ]; then sleep "$(cat '${fake.slow}')"; fi\n`);
     const c = await connect5();
     await c.call('session.attach', { cols: 100, rows: 30 });
     await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
@@ -1208,6 +1211,337 @@ describe('Claude Code comes back by itself (bundled daemon, a stand-in claude, t
     expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'typed']);
     c.close();
   }, 40_000);
+
+  // Restart Claude Code (the palette, Settings): the shell restarts in the same folder and the same conversation comes back
+  describe('Restart Claude (claude.restart.plan, claude.restart)', () => {
+    const tag = (n: number) => `1a2b3c4d-0000-4a00-8a00-0000000001${String(n).padStart(2, '0')}`;
+    type Hook = Awaited<ReturnType<typeof inFolder5>>['hook'];
+    /** Nothing from an earlier test is still running as far as the daemon knows. */
+    const endSessions = async (c: RpcClient, hook: Hook) => {
+      for (const s of (await c.call('claude.state', {})).sessions) if (s.state !== 'ended') await hook(c, 'SessionEnd', s.id);
+    };
+    const panePid = async (c: RpcClient) => (await c.call('pane.list', {}))[0].pid as number;
+    /** The shell that replaces the one with this pid, alive. */
+    const newShell = async (c: RpcClient, before: number) => {
+      await waitUntil(async () => {
+        const p = (await c.call('pane.list', {}))[0];
+        return p.alive && p.pid !== before;
+      }, 10_000);
+      return (await c.call('pane.list', {}))[0] as { pid: number };
+    };
+    const folderOf = async (c: RpcClient) => fs.realpathSync((await c.call('session.info', {})).cwd);
+    const plan = (c: RpcClient) => c.call('claude.restart.plan', {});
+    const setSession = (c: RpcClient, session: object) => c.call('config.patch', { session });
+    const resumed = (id: string) => `RESUMED: --resume ${id}`;
+    const settle = () => sleep(T.quietMs + T.noticeMs + 900);
+    afterEach(() => fake.startsAfter(0));
+
+    it('the plan says whether a conversation would come back and whether it is working, and restarts nothing', async () => {
+      const ID = tag(1);
+      const { c, hook } = await inFolder5('rs-plan');
+      await endSessions(c, hook);
+      const pid = await panePid(c);
+      expect(await plan(c)).toEqual({ resumable: false, busy: false }); // nothing recorded here
+      await hook(c, 'SessionStart', ID);
+      expect(await plan(c)).toEqual({ resumable: true, busy: false }); // a Claude that is open and idle
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      expect(await plan(c)).toEqual({ resumable: true, busy: true }); // working
+      await hook(c, 'Stop', ID);
+      expect(await plan(c)).toEqual({ resumable: true, busy: false });
+      await hook(c, 'PreToolUse', ID, { tool_name: 'Bash', tool_use_id: 'toolu_1' });
+      await hook(c, 'Notification', ID, { notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+      expect(await plan(c)).toEqual({ resumable: true, busy: true }); // waiting for the person counts too
+      await c.call('claude.resume.dismiss', {}); // "Not now": the conversation is forgotten, nothing to bring back
+      expect(await plan(c)).toEqual({ resumable: false, busy: true }); // (the Claude that is open still waits for the person)
+      await hook(c, 'SessionEnd', ID);
+      expect(await plan(c)).toEqual({ resumable: false, busy: false });
+      expect(await panePid(c)).toBe(pid); // and asking restarted nothing
+      c.close();
+    }, 30_000);
+
+    it('restarts the shell in the same folder and resumes the same conversation, also with "Resume Claude automatically" off', async () => {
+      const ID = tag(2);
+      const { c, real, hook } = await inFolder5('rs-a');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' }); // working when it is restarted
+        expect(await plan(c)).toEqual({ resumable: true, busy: true });
+        const before = await panePid(c);
+        const at = Date.now();
+        expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+        const shell = await newShell(c, before);
+        expect(shell.pid).not.toBe(before);
+        expect(await folderOf(c)).toBe(real); // the same folder
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        // announced first, typed once the time it said had come, exactly that line
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(events[0]!.id).toBe(ID);
+        expect(events[0]!.typesAt! - events[0]!.seenAt).toBeGreaterThanOrEqual(T.noticeMs - 200);
+        expect(events[0]!.seenAt).toBeGreaterThan(at);
+        expect(((await c.call('session.snapshot', {})) as { data: string }).data).toContain(`claude --resume ${ID}`);
+        await settle();
+        expect(term.count(resumed(ID))).toBe(1); // once
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(await c.call('claude.autoresume.state', {})).toBeNull();
+        // it was a request for that once: nothing automatic follows (the setting is still off)
+        expect((await c.call('config.get', {})).session.autoResume).toBe(false);
+        expect(await c.call('claude.resume', {})).toBeNull(); // the stand-in quit on purpose
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('works the same with "Resume Claude automatically" on, and counts as one attempt', async () => {
+      const ID = tag(3);
+      const { c, hook } = await inFolder5('rs-b');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      fake.exitWith(1); // the resumed one crashes: a restart counts as a try, the next waits longer
+      await hook(c, 'SessionStart', ID);
+      const before = await panePid(c);
+      expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+      await newShell(c, before);
+      await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+      expect(states(events).slice(0, 2)).toEqual(['pending', 'typed']);
+      // its crash is tried again after the second wait, not the first: the restart was the first try
+      await waitUntil(() => events.filter((e) => e.state === 'pending').length >= 2, 10_000);
+      const second = events.filter((e) => e.state === 'pending')[1]!;
+      expect(second.typesAt! - second.seenAt).toBeGreaterThanOrEqual(T.waitsMs[1]! - 200);
+      fake.exitWith(0);
+      await waitUntil(() => term.count(resumed(ID)) >= 2, 10_000);
+      await settle();
+      await c.call('claude.resume.dismiss', {});
+      c.close();
+    }, 40_000);
+
+    it('Cancel during the notice types nothing and leaves the button', async () => {
+      const ID = tag(4);
+      const { c, hook } = await inFolder5('rs-c');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        const before = await panePid(c);
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        await waitUntil(() => events.some((e) => e.state === 'pending'), 10_000);
+        expect(await c.call('claude.autoresume.cancel', {})).toBe(true);
+        await waitUntil(() => events.some((e) => e.state === 'cancelled'), 5000);
+        await settle();
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button is still there
+        // and a later prompt does not bring it back
+        await c.call('pty.write', { data: 'echo after-cancel\r' });
+        await sleep(T.quietMs + T.noticeMs + 800);
+        expect(term.count(resumed(ID))).toBe(0);
+        expect(states(events)).toEqual(['pending', 'cancelled']);
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('with no conversation it only restarts the shell, in the same folder, and types nothing', async () => {
+      const { c, real, hook } = await inFolder5('rs-d');
+      await endSessions(c, hook);
+      await c.call('claude.resume.dismiss', {});
+      const events = track(c);
+      const term = terminal(c);
+      expect(await plan(c)).toEqual({ resumable: false, busy: false });
+      const before = await panePid(c);
+      expect(await c.call('claude.restart', {})).toEqual({ resumable: false });
+      await newShell(c, before);
+      expect(await folderOf(c)).toBe(real);
+      await settle();
+      expect(events).toEqual([]);
+      expect(term.text()).not.toContain('RESUMED:');
+      expect(await c.call('claude.resume', {})).toBeNull();
+      c.close();
+    }, 30_000);
+
+    it('with "Offer to resume Claude Code" off nothing is kept, so it only restarts the shell and never types', async () => {
+      const ID = tag(5);
+      const { c, hook } = await inFolder5('rs-e');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await hook(c, 'SessionStart', ID);
+      expect(await plan(c)).toEqual({ resumable: true, busy: false });
+      await setSession(c, { resumeClaude: false }); // switching it off forgets the conversation
+      try {
+        await hook(c, 'SessionStart', ID); // and a Claude that is still open is not recorded again
+        expect(await plan(c)).toEqual({ resumable: false, busy: false });
+        const before = await panePid(c);
+        expect(await c.call('claude.restart', {})).toEqual({ resumable: false });
+        await newShell(c, before);
+        await settle();
+        expect(events).toEqual([]);
+        expect(term.text()).not.toContain('RESUMED:');
+        expect(await c.call('claude.resume', {})).toBeNull();
+        // switched on again later, nothing is left over from the request
+        await setSession(c, { resumeClaude: true });
+        await sleep(T.quietMs + T.noticeMs + 600);
+        expect(term.text()).not.toContain('RESUMED:');
+      } finally {
+        await setSession(c, { resumeClaude: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('waits for the new shell: a first prompt that comes later than the request still gets the conversation back', async () => {
+      const ID = tag(6);
+      const { c, hook } = await inFolder5('rs-f');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        fake.startsAfter(1.5); // the person's startup file keeps the new shell from its prompt for a while
+        await hook(c, 'SessionStart', ID);
+        const before = await panePid(c);
+        const at = Date.now();
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        await sleep(600);
+        expect(events).toEqual([]); // nothing yet: no prompt, and nothing typed into a shell that is still starting
+        await waitUntil(() => term.count(resumed(ID)) > 0, 20_000);
+        expect(states(events)).toEqual(['pending', 'typed']);
+        expect(events[0]!.seenAt - at).toBeGreaterThanOrEqual(1500); // it was announced at that prompt, not at the request
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('a second request while the first one is announced replaces it: the new shell is resumed once', async () => {
+      const ID = tag(7);
+      const { c, hook } = await inFolder5('rs-g');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        await hook(c, 'SessionStart', ID);
+        const first = await panePid(c);
+        // asked again the moment the notice for the second shell is announced (it runs for T.noticeMs)
+        let again: Promise<unknown> | undefined;
+        c.on('claude.autoresume', (d) => {
+          if (d.state === 'pending' && !again) again = c.call('claude.restart', {});
+        });
+        await c.call('claude.restart', {});
+        await waitUntil(() => term.count(resumed(ID)) > 0, 15_000);
+        expect(await again).toEqual({ resumable: true });
+        expect(await panePid(c)).not.toBe(first);
+        // the first notice died with its shell; the third shell is announced and resumed, by the request (the setting is off)
+        expect(states(events)).toEqual(['pending', 'cancelled', 'pending', 'typed']);
+        await settle();
+        expect(term.count(resumed(ID))).toBe(1);
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('a request that was not answered in time is stale: a prompt that comes later types nothing', async () => {
+      const ID = tag(8);
+      const { c, hook } = await inFolder5('rs-h');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        fake.exitWith(0);
+        fake.startsAfter(RESTART_HOLD_TEST_MS / 1000 + 2); // the shell reaches its prompt after the daemon stopped waiting for it
+        await hook(c, 'SessionStart', ID);
+        const before = await panePid(c);
+        await c.call('claude.restart', {});
+        await newShell(c, before);
+        await sleep(RESTART_HOLD_TEST_MS + 3000); // (its prompt comes 2 s after the daemon stopped waiting)
+        await settle(); // and long enough for anything that prompt set off
+        expect(events).toEqual([]);
+        expect(term.text()).not.toContain('RESUMED:');
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID); // only the button is left
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+
+    it('at the attempt limit it says so, once, and types nothing', async () => {
+      const ID = tag(9);
+      const { c, hook } = await inFolder5('rs-i');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      const cmds = commands(c);
+      await hook(c, 'SessionStart', ID);
+      await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+      fake.exitWith(1);
+      await c.call('pty.write', { data: 'claude\r' }); // it crashes, and so does every resumed one
+      await waitUntil(() => events.some((e) => e.state === 'gave-up'), 30_000);
+      expect(term.count(resumed(ID))).toBe(3);
+      expect(states(events).filter((x) => x === 'gave-up')).toHaveLength(1);
+      expect(cmds.filter((x) => x.cmd === `claude --resume ${ID}`)).toHaveLength(3);
+      // the person asks for Restart Claude anyway: the click is answered
+      expect(await plan(c)).toEqual({ resumable: true, busy: false });
+      const before = await panePid(c);
+      expect(await c.call('claude.restart', {})).toEqual({ resumable: true });
+      await newShell(c, before);
+      await waitUntil(() => states(events).filter((x) => x === 'gave-up').length === 2, 10_000);
+      await settle();
+      expect(states(events).filter((x) => x === 'gave-up')).toHaveLength(2); // once for that request
+      expect(term.count(resumed(ID))).toBe(3); // and nothing more was typed
+      expect(await c.call('claude.autoresume.state', {})).toBeNull();
+      // a prompt afterwards tells nothing more
+      await c.call('pty.write', { data: 'echo after-limit\r' });
+      await sleep(T.quietMs + 800);
+      expect(states(events).filter((x) => x === 'gave-up')).toHaveLength(2);
+      expect((await c.call('claude.resume', {}))?.id).toBe(ID); // the button stays
+      fake.exitWith(0);
+      await c.call('claude.resume.dismiss', {});
+      c.close();
+    }, 60_000);
+
+    it("the palette's plain Restart shell leaves the conversation to the button and asks for nothing by itself", async () => {
+      const ID = tag(10);
+      const { c, hook } = await inFolder5('rs-j');
+      await endSessions(c, hook);
+      const events = track(c);
+      const term = terminal(c);
+      await setSession(c, { autoResume: false });
+      try {
+        await hook(c, 'SessionStart', ID);
+        await hook(c, 'UserPromptSubmit', ID, { prompt: 'go' });
+        const before = await panePid(c);
+        await c.call('session.restart', {}); // (Restart shell: the shell dies, and Claude with it)
+        await newShell(c, before);
+        await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
+        await settle();
+        expect(events).toEqual([]);
+        expect(term.text()).not.toContain('RESUMED:');
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID);
+        await c.call('claude.resume.dismiss', {});
+      } finally {
+        await setSession(c, { autoResume: true });
+        c.close();
+      }
+    }, 40_000);
+  });
 });
 
 describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {

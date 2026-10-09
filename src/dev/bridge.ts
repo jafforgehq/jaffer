@@ -39,6 +39,8 @@ const SHIM = `(() => {
     appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false, openAtLogin: !!window.__loginItem }),
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
     reset: async () => { window.__resetCalled = (window.__resetCalled || 0) + 1; return { cancelled: true }; }, // the real app asks first; this stand-in is a person saying no
+    // tests only: no dialog here, so it restarts at once (the UI tests put their own answer in its place)
+    restartClaude: async () => { const r = await window.jaffer.call('claude.restart', {}); return { cancelled: false, resumable: !!(r && r.resumable) }; },
     updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
     setLoginItem: async (on) => { window.__loginItem = on; }, pathForFile: () => '', platform: 'darwin',
   };

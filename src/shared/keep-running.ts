@@ -31,6 +31,14 @@ export const AUTO_RESUME_TEST = {
   healthyMs: 1_500,
 } as const;
 
+/**
+ * Restart Claude Code: how long the daemon holds the person's request for the new shell's first prompt (a shell with a heavy startup
+ * file takes a while). Past it the request is stale and nothing is typed for it. The daemon uses the second only in its test mode
+ * (`JAFFER_TEST_AUTORESUME_FAST=1`), like `AUTO_RESUME_TEST`.
+ */
+export const RESTART_HOLD_MS = 30_000;
+export const RESTART_HOLD_TEST_MS = 5_000;
+
 /** Keeping the Mac awake (an idle-sleep assertion, no admin rights) while Claude works. */
 export const STAY_AWAKE = {
   /** A command running this long in the shell holds the Mac awake too. */

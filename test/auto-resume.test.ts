@@ -361,8 +361,7 @@ describe('AutoResumer', () => {
     expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
     expect(events.at(-1)).toEqual({ state: 'gave-up', id: ID });
 
-    // later prompts, checks, Restart Claude at the limit, and even the 10 minutes passing: no second notice, nothing typed
-    r.check({ explicit: true });
+    // later prompts, checks, and even the 10 minutes passing: no second notice, nothing typed
     r.check();
     advance(60_000);
     r.check();
@@ -374,6 +373,64 @@ describe('AutoResumer', () => {
     expect(tries.get(ID)).toHaveLength(3);
     expect(cleared).toEqual([]);
     expect(events.map((e) => e.state)).toEqual(['pending', 'typed', 'pending', 'typed', 'pending', 'typed', 'gave-up']);
+  });
+
+  it('Restart Claude at the attempt limit answers the click: it says so once for that request, types nothing, and later checks stay quiet', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check(); // an earlier give-up: told once
+    r.check();
+    expect(gaveUp()).toEqual([{ state: 'gave-up', id: ID }]);
+    r.check({ explicit: true }); // the person asks: the click must not be silent
+    expect(gaveUp()).toEqual([
+      { state: 'gave-up', id: ID },
+      { state: 'gave-up', id: ID },
+    ]);
+    expect(events.at(-1)).toEqual({ state: 'gave-up', id: ID });
+    // and that is all: automatic checks, prompts and time passing tell nothing more and type nothing
+    r.check();
+    advance(60_000);
+    r.check();
+    expect(gaveUp()).toHaveLength(2);
+    expect(typed).toEqual([]);
+    expect(liveTimers()).toBe(0);
+  });
+
+  it('Restart Claude at the limit with no earlier give-up says so once', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    enabled = false; // (it does not need the setting)
+    r.check({ explicit: true });
+    expect(events).toEqual([{ state: 'gave-up', id: ID }]);
+    r.check();
+    advance(60_000);
+    expect(events).toHaveLength(1);
+    expect(typed).toEqual([]);
+  });
+
+  it('a give-up whose attempts have aged out no longer blocks Restart Claude; automatic checks still stay quiet', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check();
+    expect(gaveUp()).toHaveLength(1);
+    advance(AUTO_RESUME.windowMs + 1); // ten minutes later the attempts no longer count
+    r.check();
+    advance(60_000);
+    r.check();
+    expect(typed).toEqual([]); // the person was told once: automatic keeps its word
+    expect(events).toHaveLength(1);
+    r.check({ explicit: true }); // but they asked now
+    expect(events.at(-1)).toEqual({ state: 'pending', id: ID, typesAt: now + 3_000 });
+    advance(3_000);
+    expect(typed).toEqual([RESUME]);
+    expect(gaveUp()).toHaveLength(1);
+  });
+
+  it('a Restart Claude that was given up on is over: a later automatic check does not carry it on', () => {
+    tries.set(ID, [T0 - 3, T0 - 2, T0 - 1]);
+    r.check({ explicit: true });
+    advance(AUTO_RESUME.windowMs + 1);
+    r.check(); // the attempts aged out, but the request ended with its give-up
+    advance(60_000);
+    expect(typed).toEqual([]);
+    expect(events.map((e) => e.state)).toEqual(['gave-up']);
   });
 
   it('a new offer after giving up starts over', () => {

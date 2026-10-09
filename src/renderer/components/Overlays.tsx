@@ -3,7 +3,7 @@ import type { VNode } from 'preact';
 import { activePane, appVersion, cfg, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
-import { actions, runClaude, type Action } from '../actions';
+import { actions, restartClaude, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
@@ -449,6 +449,18 @@ export function Settings(): VNode {
               </Field>
               <Field label="Resume Claude automatically" hint="instead of waiting for a click, types claude --resume for that conversation by itself, after a few seconds’ notice you can cancel; after 3 tries in 10 minutes it stops and leaves the button">
                 <Switch disabled={c.session?.resumeClaude === false} checked={c.session?.autoResume !== false && c.session?.resumeClaude !== false} onChange={(v) => set({ session: { autoResume: v } })} />
+              </Field>
+              <Field buttons label="After a Claude Code update" hint="restarts your shell in the same folder and takes up the same conversation on the new version; asks first">
+                <button
+                  class="btn"
+                  disabled={busy === 'rcc'}
+                  onClick={() => {
+                    setBusy('rcc');
+                    void restartClaude().finally(() => setBusy(''));
+                  }}
+                >
+                  Restart Claude Code
+                </button>
               </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
