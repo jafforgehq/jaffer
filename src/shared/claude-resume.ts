@@ -27,14 +27,52 @@ export function endsConversation(cmd: string): boolean {
 }
 
 /**
- * `claude -p` (`--print`) answers once and exits: it is never a conversation to come back to, however it ended. Words in quotes are a
- * prompt, not options.
+ * How much of a command line is read. The line comes from the terminal (the shell's marks, which any output can forge), so it can be
+ * any length; the options that matter are at its start.
+ */
+export const COMMAND_HEAD = 4096;
+
+/**
+ * The words of a command line as the shell splits them: single quotes, double quotes (with backslash escapes inside) and a backslash
+ * outside quotes, all removed from the words. One pass over the text, so a crafted line cannot make it slow.
+ */
+function shellWords(line: string): string[] {
+  const out: string[] = [];
+  let word = '';
+  let inWord = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else word += ch;
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === '\\' && i + 1 < line.length) word += line[++i];
+      else word += ch;
+    } else if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      if (inWord) out.push(word);
+      word = '';
+      inWord = false;
+    } else {
+      inWord = true;
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '\\' && i + 1 < line.length) word += line[++i];
+      else word += ch;
+    }
+  }
+  if (inWord) out.push(word);
+  return out;
+}
+
+/**
+ * `claude -p` (`--print`, or `-p` clustered with `-c`, the other switch, as in `-cp`) answers once and exits: it is never a conversation
+ * to come back to, however it ended. A `-p` inside a quoted prompt is a word of the prompt, not an option. Reads at most `COMMAND_HEAD`.
  */
 export function isPrintMode(cmd: string): boolean {
-  const m = CLAUDE_LINE.exec(cmd);
+  const m = CLAUDE_LINE.exec(cmd.slice(0, COMMAND_HEAD));
   if (!m) return false;
-  const args = (m[1] ?? '').replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, ' ').split(/\s+/);
-  return args.some((a) => a === '-p' || a === '--print');
+  return shellWords(m[1] ?? '').some((w) => w === '--print' || (/^-[cp]+$/.test(w) && w.includes('p')));
 }
 
 /** What the daemon tells the window: Claude Code was running here when Jaffer last stopped, and can be resumed. */

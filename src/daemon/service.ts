@@ -16,7 +16,7 @@ import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
+import { COMMAND_HEAD, endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
 import { ResumeStore } from '../core/claude/resume';
 import { AutoResumer, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
 import { AUTO_RESUME, AUTO_RESUME_TEST } from '../shared/keep-running';
@@ -279,10 +279,13 @@ export class JafferService {
         return;
       }
       this.sendPty(e.pane, e.event);
+      // A command line comes from the shell's marks, which any output in the terminal can forge, at any length: only its start is
+      // read to tell what it was (memory gets it whole, through its own redaction)
+      const head = e.event.type === 'command' ? e.event.cmd.slice(0, COMMAND_HEAD) : '';
       // A `claude` run that held a conversation (not `claude --version`) ended, and was not only stopped (Ctrl+Z reports 128 + a stop
       // signal; it comes back with `fg`): a crash is resumed again, a deliberate end is not. Told before anything below looks at the
       // offer, so every check that sets off already sees this run as over (one give-up, not one before it and one after).
-      if (e.event.type === 'command' && isClaudeCommand(e.event.cmd) && endsConversation(e.event.cmd) && !stoppedExit(e.event.exit)) {
+      if (e.event.type === 'command' && isClaudeCommand(head) && endsConversation(head) && !stoppedExit(e.event.exit)) {
         this.autoResume.claudeEnded({ exit: e.event.exit, durMs: e.event.durMs });
       }
       // where the shell is, and whether it is busy, decide whether a conversation can be offered back
@@ -306,13 +309,13 @@ export class JafferService {
         const ev = e.event;
         // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
         // stopped (Ctrl+Z reports 128 + a stop signal): it comes back with `fg`.
-        if (!stoppedExit(ev.exit) && isClaudeCommand(ev.cmd)) {
+        if (!stoppedExit(ev.exit) && isClaudeCommand(head)) {
           this.claudeWatcher.endAll();
           // quit on purpose (exit 0, or Ctrl+C): nothing to offer afterwards. A crash or a kill leaves the offer, and a daemon that is
           // stopping must not take it away (the shell dying with it is not the person ending the conversation). `claude -p` answered
           // once and is gone, however it ended: a failing one must not leave an offer that starts an interactive Claude by itself.
-          const quit = (ev.exit === 0 || ev.exit === 130) && endsConversation(ev.cmd);
-          if (!this.stopping && (quit || isPrintMode(ev.cmd))) this.resume.forget();
+          const quit = (ev.exit === 0 || ev.exit === 130) && endsConversation(head);
+          if (!this.stopping && (quit || isPrintMode(head))) this.resume.forget();
           this.pushResume();
         }
         const proj = resolveProject(ev.cwd, this.userHome);

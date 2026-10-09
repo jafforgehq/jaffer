@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ResumeStore } from '../src/core/claude/resume';
 import { endsConversation, isPrintMode, isSessionId, resumeCommand } from '../src/shared/claude-resume';
 import { AUTO_RESUME } from '../src/shared/keep-running';
+import { isClaudeCommand } from '../src/shared/process-badge';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -365,4 +366,33 @@ describe('isPrintMode: a `claude` that answers once and exits (-p, --print) is n
   it('is not an interactive Claude Code, nor -p inside the words of a prompt', () => {
     for (const c of ['claude', 'claude --resume abcdef12', 'claude -c', 'claude "explain what -p does"', "claude 'use --print here'", 'claude --model opus', 'claude --permission-mode plan', 'claude mcp list', 'echo claude -p', 'claudex -p hi']) expect(isPrintMode(c), c).toBe(false);
   });
+});
+
+describe('reading a `claude` command line that came from the terminal (untrusted text, on the daemon thread)', () => {
+  it('a quoted -p is still -p (the shell removes the quotes), and -p clustered with -c (both switches) is print mode', () => {
+    for (const c of ['claude "-p" hi', "claude '--print' x", 'claude -cp "and now?"', 'claude -pc', 'claude \\-p hi']) expect(isPrintMode(c), c).toBe(true);
+    for (const c of ['claude "fix -p handling"', 'claude -c "a \\"-p\\" in words"', 'claude -r abcdef12', 'claude -c', "claude 'it''s -p'"]) expect(isPrintMode(c), c).toBe(false);
+  });
+
+  // Output shown in the terminal can forge the shell's marks (OSC 133/633), and with them a "command line" of any length.
+  const MB = 1_000_000;
+  const hostile = {
+    'escaped quotes and no closing one': 'claude ' + '\\"'.repeat(MB / 2),
+    'unclosed single quotes after a word': 'claude ' + "a='".repeat(MB / 3),
+    'a run of backslashes': 'claude ' + '\\'.repeat(MB),
+    'an unclosed double quote': 'claude -c "' + 'x '.repeat(MB / 2),
+    'many short words': 'claude ' + 'a '.repeat(MB / 2) + '-p',
+    'variables and no claude': 'A=1 '.repeat(MB / 4),
+    'a path of slashes and no claude': '/'.repeat(MB),
+    'spaces and no claude': ' '.repeat(MB),
+  };
+  for (const [what, line] of Object.entries(hostile)) {
+    it(`stays fast on ${what} (1 MB)`, () => {
+      for (const [name, fn] of [['isPrintMode', isPrintMode], ['endsConversation', endsConversation], ['isClaudeCommand', isClaudeCommand]] as const) {
+        const t0 = performance.now();
+        fn(line);
+        expect(performance.now() - t0, `${name}: ${what}`).toBeLessThan(200); // well under that in practice; generous for CI
+      }
+    });
+  }
 });
