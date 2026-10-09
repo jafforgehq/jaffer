@@ -1710,7 +1710,7 @@ describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, 
       const cmds = commands(c);
       try {
         ssh.clear();
-        ssh.staysFor(3);
+        ssh.staysFor(6); // (the loop below asks for about a second: the margin to the stand-in ending is seconds, also on a loaded machine)
         await hook(c, 'SessionStart', ID);
         await hook(c, 'SessionEnd', ID, { reason: 'other' }); // Claude Code stopped from outside: the conversation is kept, and offered
         await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
@@ -1723,9 +1723,11 @@ describe('Resuming Claude Code: the button, and Restart Claude (bundled daemon, 
           await sleep(150);
         }
         expect(pushed.filter((o) => o !== null)).toEqual([]); // and the window was never told otherwise while it ran
-        // ssh ends: the shell's own prompt brings the button back
-        await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID, 10_000);
-        expect(pushed.at(-1)).toMatchObject({ id: ID });
+        // ssh ends: the shell's own prompt brings the button back. Waited for in what the window is told, not by asking: an ask the
+        // daemon answers with the offer counts as the window being told it (`claude.resume`), so one landing just before the prompt's
+        // own push takes that push away (a flake on a loaded machine)
+        await waitUntil(() => pushed.at(-1)?.id === ID, 10_000);
+        expect((await c.call('claude.resume', {}))?.id).toBe(ID);
         expect(ssh.got()).toBe('');
         expect(term.text()).not.toContain('RESUMED:');
         await c.call('claude.resume.dismiss', {});
@@ -2448,6 +2450,9 @@ describe('the login agent in a test home: refused, and nothing is touched (bundl
     let e3: TestEnv;
     let server: RpcServer;
     let calls: string[] = [];
+    /** What `service.status` answers (a test sets it): `old` stands in for a daemon from before 0.5 (no such method). */
+    let agent: { state: string; pid?: number } | 'old' = { state: 'running', pid: 4242 };
+    let patches: unknown[] = [];
     /** The bundled CLI, run without blocking this process (it is the daemon the CLI talks to). */
     const run = (extra: Record<string, string>, ...a: string[]) =>
       new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
@@ -2465,7 +2470,13 @@ describe('the login agent in a test home: refused, and nothing is touched (bundl
       fs.mkdirSync(e3.paths.runDir, { recursive: true });
       server = new RpcServer();
       server.handle('hello', () => ({ version: '0.4.9', protocol: 1 }));
-      server.handle('service.status', () => (calls.push('service.status'), { state: 'running', pid: 4242 }));
+      server.handle('service.status', () => {
+        calls.push('service.status');
+        if (agent === 'old') throw new Error('unknown method: service.status');
+        return agent;
+      });
+      // `config.patch` answers with what the patch asked (a config that took it as it is)
+      server.handle('config.patch', (p) => (calls.push('config.patch'), patches.push(p), p));
       server.handle('service.remove', () => (calls.push('service.remove'), { state: 'not-installed', note: 'The session ends now.' }));
       await server.listen(e3.paths.socket);
     });
@@ -2492,6 +2503,82 @@ describe('the login agent in a test home: refused, and nothing is touched (bundl
       expect(elsewhere.stderr).toContain(keepRunningOffText().detail); // (said first, as before)
       expect(calls).toEqual(['service.status', 'service.remove']);
     }, 30_000);
+
+    describe('`jaffer config set` turning session.keepRunning off (the same rule as `service remove`)', () => {
+      const reset = () => ((calls = []), (patches = []));
+      const off = ['config', 'set', 'session.keepRunning', 'false'];
+      afterEach(() => {
+        agent = { state: 'running', pid: 4242 };
+      });
+
+      it('typed in the session launchd runs (JAFFER_SESSION=1) it says what ends, exits 1 and sends no patch without --yes, also for the whole section', async () => {
+        reset();
+        const asked = await run({ JAFFER_SESSION: '1' }, ...off);
+        expect(asked.status).toBe(1);
+        expect(asked.stderr).toContain(keepRunningOffText().detail);
+        expect(asked.stderr).toContain('--yes');
+        expect(asked.stdout).not.toContain('ok');
+        expect(calls).toEqual(['service.status']);
+        expect(patches).toEqual([]);
+        reset();
+        const section = await run({ JAFFER_SESSION: '1' }, 'config', 'set', 'session', '{"keepRunning":false}');
+        expect(section.status).toBe(1);
+        expect(section.stderr).toContain(keepRunningOffText().detail);
+        expect(calls).toEqual(['service.status']);
+        expect(patches).toEqual([]);
+      }, 30_000);
+
+      it('with --yes (wherever it stands, never part of the value) it sends the patch; from another terminal it says it first and goes ahead', async () => {
+        reset();
+        const yes = await run({ JAFFER_SESSION: '1' }, ...off, '--yes');
+        expect(yes.status, yes.stderr).toBe(0);
+        expect(yes.stdout).toContain('ok');
+        expect(calls).toEqual(['service.status', 'config.patch']);
+        expect(patches).toEqual([{ session: { keepRunning: false } }]);
+        reset();
+        const yesFirst = await run({ JAFFER_SESSION: '1' }, 'config', 'set', '--yes', 'session.keepRunning', 'false');
+        expect(yesFirst.status, yesFirst.stderr).toBe(0);
+        expect(patches).toEqual([{ session: { keepRunning: false } }]);
+        reset();
+        const elsewhere = await run({}, ...off); // Terminal.app: the session that ends is not this shell's
+        expect(elsewhere.status, elsewhere.stderr).toBe(0);
+        expect(elsewhere.stderr).toContain(keepRunningOffText().detail); // (said first, as `service remove` does)
+        expect(calls).toEqual(['service.status', 'config.patch']);
+      }, 30_000);
+
+      it('when launchd runs nothing (not loaded, installed, not installed) nothing ends, so nothing is asked and the patch goes ahead', async () => {
+        for (const state of ['not-loaded', 'installed', 'not-installed']) {
+          agent = { state };
+          reset();
+          const r = await run({ JAFFER_SESSION: '1' }, ...off);
+          expect(r.status, `${state}: ${r.stderr}`).toBe(0);
+          expect(r.stderr).not.toContain(keepRunningOffText().detail);
+          expect(calls).toEqual(['service.status', 'config.patch']);
+        }
+      }, 30_000);
+
+      it('a patch that does not turn it off never asks for the status', async () => {
+        for (const set of [
+          ['session.keepRunning', 'true'],
+          ['session.stayAwake', 'false'],
+          ['session', '{"stayAwake":false}'],
+        ]) {
+          reset();
+          const r = await run({ JAFFER_SESSION: '1' }, 'config', 'set', ...set);
+          expect(r.status, `${set.join(' ')}: ${r.stderr}`).toBe(0);
+          expect(calls).toEqual(['config.patch']);
+        }
+      }, 30_000);
+
+      it('a daemon from before 0.5 (no service.status) does not reconcile: nothing to ask, the patch goes ahead and "unknown method" is not shown', async () => {
+        agent = 'old';
+        reset();
+        const old = await run({ JAFFER_SESSION: '1' }, ...off);
+        expect(old.status, old.stderr).toBe(0);
+        expect(old.stderr).not.toContain('unknown method');
+        expect(calls).toEqual(['service.status', 'config.patch']);
+      }, 30_000);
+    });
 
     it('a session daemon from before 0.5 (no service.install) is said as Settings says it: "Restart your session to use this"', async () => {
       const r = await run({}, 'service', 'install');

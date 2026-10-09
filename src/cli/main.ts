@@ -367,7 +367,9 @@ async function main(): Promise<void> {
         const key = args[2];
         console.log(JSON.stringify(key ? key.split('.').reduce((o: any, k) => o?.[k], cfg) : cfg, null, 2));
       } else if (args[1] === 'set') {
-        const [key, raw] = [args[2], args.slice(3).join(' ')];
+        // (--yes answers the question below: it is never part of a key or a value, wherever it stands)
+        const words = args.filter((a) => a !== '--yes');
+        const [key, raw] = [words[2], words.slice(3).join(' ')];
         if (!key || raw === '') throw new Error('Usage: jaffer config set <dot.path> <json value>');
         let value: unknown;
         try {
@@ -377,6 +379,25 @@ async function main(): Promise<void> {
         }
         const patch: any = {};
         key.split('.').reduce((o, k, i, a) => (o[k] = i === a.length - 1 ? value : {}), patch);
+        // Turning keeping the session running off while launchd runs the session ends it (the daemon takes the agent away right after
+        // the reply): said first, as `jaffer service remove` does, and typed in that very session it ends the shell it was typed in, so
+        // only with --yes. A daemon that cannot say (one from before 0.5 answers "unknown method: service.status", or the status fails)
+        // does not reconcile the agent either: nothing can end, so the patch goes ahead.
+        if (client && patch.session?.keepRunning === false) {
+          const running = await (client.call('service.status', {}, 30_000) as Promise<AgentStatus>).then(
+            (st) => st.state === 'running',
+            () => false,
+          );
+          if (running) {
+            process.stderr.write(`${keepRunningOffText().detail}\n`);
+            if (process.env.JAFFER_SESSION === '1' && !flag('yes')) {
+              client.close();
+              process.exitCode = 1;
+              process.stderr.write(red('This shell is that session: nothing was changed. Run the same command with --yes to turn it off and end the session, or turn it off in Settings.\n'));
+              return;
+            }
+          }
+        }
         const after: any = client ? await client.call('config.patch', patch) : cfgStore.patch(patch);
         const kept = key.split('.').reduce((o: any, k) => o?.[k], after);
         // a value of the wrong kind is refused by the config (a switch is true or false, a list is a JSON list): say so

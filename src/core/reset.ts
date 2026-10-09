@@ -155,8 +155,9 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
   };
 
   // First, in this order, while Jaffer's folder is still there: the switch off (in a daemon that runs, and in the file), so nothing
-  // started meanwhile puts the agent back; the agent away, so launchd starts nothing for a session being reset (when launchd runs the
-  // daemon, that is what ends it); then the session ends; then the rest.
+  // started meanwhile puts the agent back (when launchd runs the daemon, that patch itself ends it: the daemon takes the agent away
+  // about 50 ms after its reply); the agent away, so launchd starts nothing for a session being reset (a duplicate of what the daemon
+  // did, and the only thing that does it when none answered); then the session ends; then the rest.
   await o.keepRunningOff?.().catch(() => undefined);
   keepRunningOffOnDisk(home);
   for (const m of await removeAgentForReset({ home, userHome, launchctl: o.launchctl, uid: o.uid })) did(m);
