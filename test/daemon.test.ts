@@ -2016,3 +2016,56 @@ describe('the Mac stays awake while Claude or a long command works (bundled daem
     expect(ops()[held]).toBe('release');
   }, 30_000);
 });
+
+describe('the exit code of the daemon tells launchd whether to bring it back (bundled daemon, started and watched here)', () => {
+  /** Start the bundled daemon in a home of its own and wait until it answers. `exited` resolves with how it ended. */
+  async function start(e: TestEnv) {
+    fs.writeFileSync(path.join(e.userHome, '.zshenv'), 'skip_global_compinit=1\n');
+    const child = spawn(process.execPath, [path.join(root, 'dist/daemon/jafferd.cjs')], {
+      env: { ...process.env, HOME: e.userHome, JAFFER_HOME: e.home, SHELL: '/bin/bash', PS1: '$ ', JAFFER_TICK_MS: '400' },
+      stdio: 'ignore',
+    });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    let c: RpcClient | null = null;
+    await waitUntil(async () => {
+      c = await tryConnect(e.paths, 300);
+      return !!c;
+    }, 15_000);
+    return { child, exited, c: c! as RpcClient };
+  }
+  const savedAt = (e: TestEnv): number => Date.parse(JSON.parse(fs.readFileSync(e.paths.sessionState, 'utf8')).savedAt);
+
+  it.each([
+    ['SIGTERM', 143],
+    ['SIGINT', 130],
+  ] as const)('%s ends it with code %i (so launchd brings it back), after the state was saved', async (signal, code) => {
+    const e = makeEnv();
+    try {
+      const { child, exited, c } = await start(e);
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      c.close();
+      await sleep(600);
+      const sent = Date.now();
+      child.kill(signal);
+      const ended = await exited;
+      expect(ended).toEqual({ code, signal: null });
+      expect(savedAt(e)).toBeGreaterThanOrEqual(sent); // written while stopping, not by the periodic save before the signal
+      expect(fs.existsSync(e.paths.socket)).toBe(false); // and it let go of the socket
+    } finally {
+      e.cleanup();
+    }
+  }, 40_000);
+
+  it('app.shutdown (a deliberate end: End Session, an update, Reset) still ends it with code 0, which launchd leaves alone', async () => {
+    const e = makeEnv();
+    try {
+      const { exited, c } = await start(e);
+      await c.call('app.shutdown', {});
+      expect(await exited).toEqual({ code: 0, signal: null });
+      c.close();
+    } finally {
+      e.cleanup();
+    }
+  }, 40_000);
+});
