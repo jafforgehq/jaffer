@@ -37,6 +37,9 @@ export interface ServiceOptions {
 /** Backpressure: if a client falls this far behind we stop streaming and resync from a snapshot. */
 const MAX_BACKLOG = 8 * 1024 * 1024;
 
+/** A Claude killed with its shell may say SessionEnd (an async hook) a moment after the shell's exit was seen: that is not the person quitting. */
+const SHELL_EXIT_GRACE_MS = 5000;
+
 export class JafferService {
   readonly paths: JafferPaths;
   readonly config: ConfigStore;
@@ -64,6 +67,8 @@ export class JafferService {
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
+  /** When the main shell last exited (0: never in this daemon's life); a SessionEnd right after it is the dying Claude's. */
+  private lastShellExitAt = 0;
   private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
@@ -224,6 +229,7 @@ export class JafferService {
       // The shell is gone and took its Claude with it: no conversation is running any more. The resume point stays (a dying shell is
       // not the person ending the conversation), and a daemon that is stopping leaves everything as it is.
       if (e.event.type === 'exit' && !this.stopping) {
+        this.lastShellExitAt = Date.now();
         this.claudeWatcher.endAll();
         this.pushResume();
       }
@@ -316,8 +322,10 @@ export class JafferService {
     const o = p as Record<string, unknown>;
     const id = typeof o.session_id === 'string' ? o.session_id : '';
     if (!isSessionId(id)) return;
-    if (o.hook_event_name === 'SessionEnd') this.resume.forget(id);
-    else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
+    if (o.hook_event_name === 'SessionEnd') {
+      // a Claude that died with its shell did not end the conversation on purpose: its resume point stays
+      if (Date.now() - this.lastShellExitAt > SHELL_EXIT_GRACE_MS) this.resume.forget(id);
+    } else if (this.config.get().session.resumeClaude) this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
     this.pushResume();
   }
 

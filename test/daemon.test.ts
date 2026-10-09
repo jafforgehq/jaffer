@@ -339,6 +339,27 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(true);
     }, 40_000);
 
+    it('a SessionEnd that the dying Claude sends just after its shell exited does not forget the conversation', async () => {
+      const DYING = '0e9a4f85-6d60-4a31-8c7d-9c3c1f5c9d44'; // its own id, as above
+      const { c, real, hook } = await inFolder('resume-i');
+      const file = path.join(env.paths.sessionDir, 'claude.json');
+      await hook(c, 'SessionStart', DYING);
+      await hook(c, 'UserPromptSubmit', DYING, { prompt: 'go' });
+      await waitUntil(() => fs.existsSync(file), 8000);
+      const before = (await c.call('pane.list', {}))[0];
+      await c.call('session.restart', {});
+      await waitUntil(async () => {
+        const p = (await c.call('pane.list', {}))[0];
+        return p.alive && p.pid !== before.pid;
+      }, 10_000);
+      // the hook is asynchronous: Claude, killed with its shell, says goodbye after the shell's exit was seen
+      await hook(c, 'SessionEnd', DYING);
+      await sleep(400);
+      expect(fs.existsSync(file)).toBe(true);
+      expect(await c.call('claude.resume', {})).toMatchObject({ id: DYING, cwd: real });
+      expect((await c.call('claude.state', {})).sessions.every((s: any) => s.state === 'ended')).toBe(true); // the watcher still ends it
+    }, 40_000);
+
     it('is not offered when the person turned it off, and never from a made-up id', async () => {
       const { c, hook } = await inFolder('resume-d');
       await c.call('config.patch', { session: { resumeClaude: false } });
