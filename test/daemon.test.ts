@@ -2187,6 +2187,46 @@ describe('the Resume button with a shell of another name (SHELL=/bin/sh: bash on
       c.close();
     }
   }, 40_000);
+
+  // Restart Claude takes the conversation up at the new shell's first prompt, which only the marks tell: this sh prints none, so the
+  // request would wait its 30 s and lapse with nothing typed. The plan says so before: no conversation would come back (the question
+  // then says "Restart the shell?"), and afterwards the Resume button offers it, asked again at its click.
+  it('Restart Claude in this sh is a plain shell restart, and says so: nothing would come back by its prompt (it prints no marks), and the button offers the conversation afterwards', async () => {
+    const ID3 = '1a2b3c4d-0000-4a00-8a00-000000000303';
+    const c = await ensureDaemon(env7.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env7.userHome, SHELL: '/bin/sh', JAFFER_TICK_MS: '400', PS1: '$ ', JAFFER_TEST_AUTORESUME_FAST: '1' },
+    });
+    const notices = collect(c, 'claude.autoresume');
+    try {
+      await c.call('session.attach', { cols: 100, rows: 30 });
+      await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+      await sleep(800); // (the shell is at its prompt)
+      const cwd = (await c.call('session.info', {})).cwd as string;
+      const transcript = path.join(env7.userHome, 'sh3.jsonl');
+      fs.writeFileSync(transcript, '{}\n');
+      const hook = (ev: string, over: object = {}) => c.call('claude.event', { session_id: ID3, hook_event_name: ev, cwd, transcript_path: transcript, ...over });
+      await hook('SessionStart');
+      await hook('SessionEnd', { reason: 'other' }); // stopped from outside: kept, to be offered
+      await waitUntil(async () => (await c.call('claude.resume', {}))?.id === ID3, 10_000);
+      expect(await c.call('claude.restart.plan', {})).toEqual({ resumable: false, busy: false });
+      const before = (await c.call('pane.list', {}))[0].pid;
+      expect(await c.call('claude.restart', {})).toEqual({ resumable: false });
+      await waitUntil(async () => {
+        const p = (await c.call('pane.list', {}))[0];
+        return p.alive && p.pid !== before;
+      }, 10_000);
+      await waitUntil(async () => (await c.call('claude.resume', { fresh: true }))?.id === ID3, 10_000); // the button, in the same folder
+      await sleep(AUTO_RESUME_TEST.noticeMs + AUTO_RESUME_TEST.quietMs + 1000);
+      expect(notices).toEqual([]); // no notice: nothing was going to be typed
+      expect(((await c.call('session.snapshot', {})) as { data: string }).data).not.toContain('RESUMED:');
+      await c.call('claude.resume.dismiss', {});
+    } finally {
+      c.close();
+    }
+  }, 40_000);
 });
 
 describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {

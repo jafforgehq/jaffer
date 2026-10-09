@@ -694,11 +694,14 @@ export class JafferService {
   /**
    * What a Restart Claude Code would do now: would a conversation come back in the new shell (the one that would be offered once
    * nothing runs: an open Claude that has a saved point counts, and nothing does when the offer is off), and is Claude working or
-   * waiting for the person. Read before the shell is restarted: its exit ends the watcher's sessions.
+   * waiting for the person. Read before the shell is restarted: its exit ends the watcher's sessions. A shell that prints none of
+   * Jaffer's marks (any shell besides zsh, bash and fish) never says that the new shell's prompt is there, which is when the conversation
+   * is typed: nothing would come back by itself, so it is a plain shell restart, said so, and the Resume button offers the conversation.
    */
   private restartPlan(): { resumable: boolean; busy: boolean; id?: string } {
     const pane = this.host.mainPane;
-    const offer = this.resume.offer({ shellCwd: pane?.cwd, active: false, busy: false, enabled: this.config.get().session.resumeClaude });
+    const marks = pane?.shellKind !== 'other';
+    const offer = marks ? this.resume.offer({ shellCwd: pane?.cwd, active: false, busy: false, enabled: this.config.get().session.resumeClaude }) : null;
     const busy = this.claudeWatcher.sessions().some((s) => s.state === 'working' || s.state === 'needs-you');
     return { resumable: offer !== null, busy, ...(offer ? { id: offer.id } : {}) };
   }

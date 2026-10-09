@@ -28,6 +28,8 @@ export interface PtyOptions {
   foregroundGroup?: (pid: number) => number | null;
   /** The clock of the foreground check's short memory (tests). */
   now?: () => number;
+  /** What `buildShellSpawn` made of the shell: `other` prints none of Jaffer's marks (no prompt, no command). Unknown when not given. */
+  shellKind?: 'zsh' | 'bash' | 'fish' | 'other';
 }
 
 const MAX_OUTPUT_LINES = 400;
@@ -123,6 +125,8 @@ export class PtySession {
   title = '';
   /** True once the shell has emitted integration marks, i.e. we can trust the state below. */
   integrated = false;
+  /** The kind of shell it was started as (`PtyOptions.shellKind`): `other` never says when its prompt is there. */
+  readonly shellKind: PtyOptions['shellKind'];
   promptReady = false;
   private pendingCmd = '';
   private running: { cmd: string; startedAt: number; marker: ReturnType<Terminal['registerMarker']> } | null = null;
@@ -136,6 +140,7 @@ export class PtySession {
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
+    this.shellKind = opts.shellKind;
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
