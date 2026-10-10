@@ -9,6 +9,7 @@ import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-clie
 import { RpcServer, type RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
 import { findClaude } from '../src/core/integrations/claude';
+import { STOP_AFTER_END_GRACE_MS } from '../src/core/claude/cost';
 import type { ClaudeSession } from '../src/core/claude/watcher';
 import { AUTO_RESUME_TEST, keepRunningOffText, RESTART_HOLD_TEST_MS } from '../src/shared/keep-running';
 
@@ -736,6 +737,27 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await cost())?.answers === 3, 5_000);
     expect((await cost())!.last.output).toBe(100);
   });
+
+  it('a Stop that arrives after SessionEnd (async hooks, `claude -p`) still says what the answer cost; after a grace nothing of the session is kept', async () => {
+    const transcript = path.join(env3.root, 'sess-late.jsonl');
+    const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 10, output_tokens: output } } })}\n`;
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-late', transcript_path: transcript };
+    const cost = async () => (await states()).find((s) => s.id === 'sess-late')?.cost;
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'once' }));
+    fs.appendFileSync(transcript, reply('l1', 500));
+    await c.call('claude.event', ev('SessionEnd', base));
+    await c.call('claude.event', ev('Stop', base)); // overtaken by the SessionEnd
+    await waitUntil(async () => (await cost())?.answers === 1, 5_000);
+    expect((await cost())!.last.output).toBe(500);
+    expect((await states()).find((s) => s.id === 'sess-late')?.state).toBe('ended');
+    // once the grace has passed, where the answer began is forgotten: a Stop that turns up later has nothing to measure from
+    await sleep(STOP_AFTER_END_GRACE_MS + 500);
+    fs.appendFileSync(transcript, reply('l2', 700));
+    await c.call('claude.event', ev('Stop', base));
+    await sleep(2_500); // longer than the read (300 ms) and its one retry (1.5 s later)
+    expect((await cost())!.answers).toBe(1);
+  }, 30_000);
 
   it('says nothing about cost when it is switched off in Settings, and starts again when it is switched on', async () => {
     const transcript = path.join(env3.root, 'sess-nocost.jsonl');

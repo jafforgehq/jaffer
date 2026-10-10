@@ -226,6 +226,9 @@ export class ClaudeWatcher {
 
     switch (ev) {
       case 'SessionStart':
+        // A new or resumed session is idle. But `claude "<prompt>"` and `claude -p` fire SessionStart and UserPromptSubmit a moment
+        // apart, both async: a SessionStart that lands after the prompt must not take a working (or waiting) session back to idle.
+        if (s.state === 'working' || s.state === 'needs-you') break;
         this.setState(s, 'idle');
         s.tool = undefined;
         s.notice = undefined;

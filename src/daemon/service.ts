@@ -20,7 +20,7 @@ import { endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '..
 import { ResumeStore } from '../core/claude/resume';
 import { AutoResumer, shellChecks, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
 import { AUTO_RESUME, AUTO_RESUME_TEST, RESTART_HOLD_MS, RESTART_HOLD_TEST_MS } from '../shared/keep-running';
-import { readTurnCost, transcriptSize } from '../core/claude/cost';
+import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { PROTOCOL, VERSION } from '../core/version';
 import type { PtyEvent, PtySession } from '../core/session/terminal';
@@ -490,7 +490,11 @@ export class JafferService {
       this.turnStart.set(id, transcriptSize(file));
       if (this.turnStart.size > 20) this.turnStart.delete(this.turnStart.keys().next().value!);
     } else if (o.hook_event_name === 'SessionEnd') {
-      this.turnStart.delete(id);
+      // Hooks are async: the Stop of the last answer may still be on its way (`claude -p` ends at once), so where it began is kept a
+      // moment longer. Then it goes, unless the session came back meanwhile (a resume: the watcher has it alive again).
+      this.later(STOP_AFTER_END_GRACE_MS, () => {
+        if ((this.claudeWatcher.sessions().find((s) => s.id === id)?.state ?? 'ended') === 'ended') this.turnStart.delete(id);
+      });
     } else if (o.hook_event_name === 'Stop') {
       const start = this.turnStart.get(id);
       if (start === undefined || !file) return;
@@ -503,7 +507,7 @@ export class JafferService {
         const end = transcriptSize(file);
         const turn = readTurnCost(file, start, end);
         if (turn) {
-          this.turnStart.set(id, end);
+          if (this.turnStart.has(id)) this.turnStart.set(id, end); // (a session forgotten since, after its end, is not brought back)
           this.claudeWatcher.setCost(id, turn);
         } else if (retry) this.later(1500, () => read(false));
       };

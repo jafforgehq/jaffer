@@ -8,7 +8,7 @@
  * - A stop that hangs still ends: at the deadline the process exits with the first reason's code.
  */
 
-/** Past what a stop takes (it waits for the reflection 3 s at most), and well inside launchd's own 20 s before it kills. */
+/** Well past what a stop takes (it saves the state, ends the shell and closes the socket: nothing slow), and inside launchd's own 20 s. */
 export const SHUTDOWN_DEADLINE_MS = 8_000;
 
 export interface ShutdownDeps {

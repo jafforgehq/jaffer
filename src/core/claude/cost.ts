@@ -1,6 +1,12 @@
 import fs from 'node:fs';
 import { summarizeLines, type TurnCost } from '../../shared/claude-cost';
 
+/**
+ * Hooks are async, so the Stop of a session's last answer can arrive after its SessionEnd (`claude -p` ends at once): where that answer
+ * began is kept this long after the end, then dropped.
+ */
+export const STOP_AFTER_END_GRACE_MS = 10_000;
+
 /** A long agentic answer can run to a few megabytes of transcript; beyond this only the end of it is read. */
 const MAX_READ = 24 * 1024 * 1024;
 

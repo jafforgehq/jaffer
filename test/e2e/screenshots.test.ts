@@ -91,7 +91,6 @@ async function clearToasts(): Promise<void> {
   }
 }
 
-
 /** The caller's environment minus anything that would change how Claude Code or the shell behaves in the demo. */
 function git(...args: string[]): void {
   execFileSync('git', args, { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: 'Maya Chen', GIT_AUTHOR_EMAIL: 'maya@acme.dev', GIT_COMMITTER_NAME: 'Maya Chen', GIT_COMMITTER_EMAIL: 'maya@acme.dev' }, stdio: 'ignore' });

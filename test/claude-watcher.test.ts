@@ -88,6 +88,35 @@ describe('ClaudeWatcher', () => {
     expect(only()).toMatchObject({ state: 'idle', notice: undefined });
   });
 
+  it('a SessionStart that arrives after the prompt leaves the session working', () => {
+    // `claude "<prompt>"` and `claude -p` fire SessionStart and UserPromptSubmit a moment apart, both async: either may land first
+    w.handle(fx('UserPromptSubmit', { prompt: 'fix the build' }));
+    w.handle(fx('PreToolUse', bash('npm test')));
+    const turn = only().turnStartedAt;
+    t += 20;
+    w.handle(fx('SessionStart'));
+    expect(only()).toMatchObject({ state: 'working', tool: { name: 'Bash', id: 'toolu_2' }, turnStartedAt: turn });
+    w.handle(fx('Notification')); // and one that lands while Claude waits for the person leaves it waiting
+    expect(only().state).toBe('needs-you');
+    w.handle(fx('SessionStart'));
+    expect(only()).toMatchObject({ state: 'needs-you', notice: expect.stringMatching(/permission/i) });
+    w.handle(fx('Stop'));
+    expect(only().state).toBe('idle'); // the turn still ends as usual
+  });
+
+  it('a SessionStart on a session it does not know, or one that ended, still makes an idle session', () => {
+    w.handle(fx('SessionStart'));
+    expect(only()).toMatchObject({ state: 'idle', since: 1_000 });
+    w.handle(fx('SessionEnd'));
+    expect(only().state).toBe('ended');
+    t += 50;
+    w.handle(fx('SessionStart', { transcript_path: '/tmp/resumed/sess-1.jsonl' })); // a resumed session
+    expect(only()).toMatchObject({ state: 'idle', since: 1_050, transcriptPath: '/tmp/resumed/sess-1.jsonl', tool: undefined, notice: undefined });
+    w.handle(fx('Stop'));
+    w.handle(fx('SessionStart')); // a SessionStart while idle (after /compact) keeps it idle
+    expect(only().state).toBe('idle');
+  });
+
   it('needs-you clears on PostToolUse, Stop, UserPromptSubmit and interrupted', () => {
     const needs = () => {
       w = new ClaudeWatcher({ now: () => t });
