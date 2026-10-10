@@ -11,7 +11,7 @@ export interface QuitAsk {
 }
 
 export const QUIT_BUTTONS = ['Quit', 'Cancel'] as const;
-/** Return and Esc both mean Cancel: a stray Return (typing into Claude as the question appears) must not end it. */
+/** The default button is Cancel, and Esc cancels: a stray keystroke (typing into Claude as the question appears) must not end the session. */
 export const QUIT_DEFAULT_ID = 1;
 export const QUIT_CANCEL_ID = 1;
 
@@ -50,7 +50,7 @@ export function legacyDaemonAction(o: { answers: boolean; pid: number | null; ow
   return 'ask';
 }
 
-/** Return and Esc both mean Quit, the choice that ends nothing: only a click on End it ends that session. */
+/** The default button is Quit, the choice that ends nothing, and Esc quits: only a click on End it ends that session. */
 export const LEGACY_DIALOG = {
   message: 'Another Jaffer session is running in the background.',
   detail: 'Jaffer no longer keeps sessions running. End it and start a fresh terminal? Its shell and anything running in it stop.',

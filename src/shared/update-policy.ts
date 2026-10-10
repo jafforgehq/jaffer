@@ -23,7 +23,7 @@ export interface PromptText {
   message: string;
   detail: string;
   buttons: [string, string];
-  /** Return and Esc both mean Later: someone typing in the terminal when the prompt appears must not accept it by accident. */
+  /** The default button is Later, and Esc means Later: someone typing in the terminal when the prompt appears must not accept it by accident. */
   defaultId: number;
   cancelId: number;
 }

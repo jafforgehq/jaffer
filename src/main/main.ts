@@ -177,7 +177,7 @@ async function onConnectionLost(o: OwnedDaemon): Promise<void> {
 
 /**
  * An older Jaffer kept its session running in the background, and it may still hold the socket (a new version installed over a running
- * one). The person is asked once (Return and Esc mean Quit); then it is asked to end (`app.shutdown`, which every older version knows)
+ * one). The person is asked once (the default button is Quit, and Esc quits); then it is asked to end (`app.shutdown`, which every older version knows)
  * and the start waits for the socket to go. False: the person chose Quit, it did not end, or this is not the first instance.
  */
 async function endOlderSession(): Promise<boolean> {
