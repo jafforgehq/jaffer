@@ -251,10 +251,12 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       await sleep(800);
       await c.call('pty.write', { data: `echo fresh-${marker}\r` });
       await waitUntil(() => cmds.some((x) => x.cmd === `echo fresh-${marker}` && x.exit === 0), 10_000);
-      await waitUntil(() => afterLastReset().text.includes(`\nfresh-${marker}`), 5_000);
+      // (a line start is a \r or a \n: bash on Linux answers Enter with \r only, before the command's output)
+      const lineStart = (name: string) => new RegExp(`[\\r\\n]${name}`);
+      await waitUntil(() => lineStart(`fresh-${marker}`).test(afterLastReset().text), 5_000);
       const end = afterLastReset();
       expect(end.inOrder).toBe(true);
-      expect(end.text).not.toContain(`\n${marker}`);
+      expect(end.text).not.toMatch(lineStart(marker));
     };
     await replaced(() => c.call('pty.write', { data: 'exit\r' }), 'replaced-by-exit-53');
     await replaced(() => c.call('session.restart', {}), 'replaced-by-restart-54');
