@@ -25,8 +25,8 @@ export interface ResetOptions {
   /** The user whose launchd domain (`gui/<uid>`) holds the agent (default: this process's). */
   uid?: number;
   /**
-   * Ends the session (the daemon owns Jaffer's folder; when this returns it must be stopped). Called once the login agent of an older
-   * Jaffer is gone, before anything else is removed. Left out: the caller has ended it already.
+   * Ends the session (the terminal host writes in Jaffer's folder, so when this returns it must be stopped). Called once the login
+   * agent of an older Jaffer is gone, before anything else is removed. Left out: the caller has ended it already.
    */
   endSession?: () => Promise<void>;
 }
