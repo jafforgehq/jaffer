@@ -39,8 +39,6 @@ export interface JafferConfig {
     claudeFinished: boolean;
   };
   session: {
-    /** Save the screen and scrollback so they come back after a reboot or an update. Off: nothing of the screen is kept on disk (the folder is still restored). */
-    restoreScreen: boolean;
     /** After a restart (a reboot, an update, a crash), offer to resume the Claude Code conversation that was running in this folder. */
     resumeClaude: boolean;
     /** Keep the session and Claude Code running after the window is closed and across a login: the daemon starts at login (a user LaunchAgent). Off by default: it is installed only on a click. */
@@ -72,7 +70,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   claude: { skipped: false, showCost: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
-  session: { restoreScreen: true, resumeClaude: true, keepRunning: false, stayAwake: true },
+  session: { resumeClaude: true, keepRunning: false, stayAwake: true },
   hotkey: 'Control+`',
 };
 

@@ -376,9 +376,6 @@ export function Settings(): VNode {
               <Field label="Global hotkey" hint="summons Jaffer from anywhere">
                 <input type="text" value={c.hotkey} onChange={(e) => set({ hotkey: (e.target as HTMLInputElement).value })} />
               </Field>
-              <Field label="Keep the screen for a restart" hint="saves your screen and scrollback so they come back after a reboot or an update; off keeps nothing of the screen on disk (the folder still comes back)">
-                <Switch checked={c.session?.restoreScreen !== false} onChange={(v) => set({ session: { restoreScreen: v } })} />
-              </Field>
               <KeepRunningField flag={c.session?.keepRunning === true} />
               <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
                 <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />

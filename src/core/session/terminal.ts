@@ -273,7 +273,7 @@ export class PtySession {
     );
   }
 
-  /** Inject text into the terminal buffer without going through the shell (e.g. a restore banner). */
+  /** Write text into the terminal buffer without going through the shell (the tests feed it screens and modes this way). */
   async inject(text: string): Promise<void> {
     await new Promise<void>((resolve) => this.term.write(text, resolve));
   }

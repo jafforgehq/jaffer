@@ -71,14 +71,20 @@ describe('claude.showCost', () => {
   });
 });
 
-describe('session.restoreScreen', () => {
-  it('is on by default, also for a config file saved before the setting existed, and can be switched off and stays off', () => {
-    expect(DEFAULT_CONFIG.session.restoreScreen).toBe(true);
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+describe('session.restoreScreen, gone in 0.6.0', () => {
+  it('is not a setting and not a default; an old file that has it loads, changes nothing, and keeps the key as it was after a patch of another key', () => {
+    expect('restoreScreen' in DEFAULT_CONFIG.session).toBe(false);
+    // @ts-expect-error the screen is no longer saved: no code can read the switch from the config's type
+    void DEFAULT_CONFIG.session.restoreScreen;
+    // what 0.5.x left behind: the screen switched off, and another choice beside it
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, stayAwake: false } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session.restoreScreen).toBe(true);
-    store.patch({ session: { restoreScreen: false } });
-    expect(new ConfigStore(env.paths).get().session.restoreScreen).toBe(false);
+    expect(store.get().onboarded).toBe(true);
+    expect(store.get().session).toMatchObject({ resumeClaude: true, keepRunning: false, stayAwake: false });
+    store.patch({ appearance: { fontSize: 15 } });
+    const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
+    expect(saved.session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
+    expect(new ConfigStore(env.paths).get().appearance.fontSize).toBe(15);
   });
 });
 
@@ -94,10 +100,10 @@ describe('notifications.claudeFinished', () => {
 });
 
 describe('session.resumeClaude', () => {
-  it('is on by default, also for a config file saved before the setting existed (and the screen setting beside it is untouched)', () => {
-    expect(DEFAULT_CONFIG.session).toEqual({ restoreScreen: true, resumeClaude: true, keepRunning: false, stayAwake: true });
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false } }));
-    expect(new ConfigStore(env.paths).get().session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: true });
+  it('is on by default, also for a config file saved before the setting existed (and the setting beside it is untouched)', () => {
+    expect(DEFAULT_CONFIG.session).toEqual({ resumeClaude: true, keepRunning: false, stayAwake: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { stayAwake: false } }));
+    expect(new ConfigStore(env.paths).get().session).toEqual({ resumeClaude: true, keepRunning: false, stayAwake: false });
   });
 });
 
@@ -107,19 +113,19 @@ describe('session.keepRunning and session.stayAwake, and the autoResume an old c
     // @ts-expect-error resuming by itself is not a setting any more: no code can read it from the config's type
     void DEFAULT_CONFIG.session.autoResume;
     // what a 0.5.0 left behind, with resuming by itself on
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, autoResume: true } }));
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false, autoResume: true } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session).toMatchObject({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: true });
+    expect(store.get().session).toMatchObject({ resumeClaude: false, keepRunning: false, stayAwake: true });
     store.patch({ session: { stayAwake: false } });
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: false, autoResume: true }); // kept as it was, like any key a config does not know
+    expect(saved.session).toEqual({ resumeClaude: false, keepRunning: false, stayAwake: false, autoResume: true }); // kept as it was, like any key a config does not know
     expect(new ConfigStore(env.paths).get().session.stayAwake).toBe(false);
   });
 
   it('keepRunning and stayAwake are off and on by default, also for a config file saved before they existed, and a choice is kept', () => {
     expect(DEFAULT_CONFIG.session.keepRunning).toBe(false);
     expect(DEFAULT_CONFIG.session.stayAwake).toBe(true);
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, resumeClaude: false } }));
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false } }));
     const store = new ConfigStore(env.paths);
     expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: true });
     store.patch({ session: { keepRunning: true, stayAwake: false } });

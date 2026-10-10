@@ -12,8 +12,6 @@ export interface JafferPaths {
   socket: string;
   logFile: string;
   sessionDir: string;
-  sessionState: string;
-  screenSnapshot: string;
   shellDir: string;
   binDir: string;
 }
@@ -35,8 +33,6 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     socket: path.join(runDir, 'jafferd.sock'),
     logFile: path.join(runDir, 'jafferd.log'),
     sessionDir,
-    sessionState: path.join(sessionDir, 'state.json'),
-    screenSnapshot: path.join(sessionDir, 'screen.json'),
     shellDir: path.join(home, 'shell'),
     binDir: path.join(home, 'bin'),
   };

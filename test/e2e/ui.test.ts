@@ -873,14 +873,8 @@ describe('Jaffer UI end to end', () => {
     await finishedSwitch.locator('.switch').click();
     await until(async () => (await notif()) === true, 5_000, 'and on again');
     await nav('Appearance');
-    // the screen is kept for a restart unless this is switched off
-    const keep = page.locator('label.field', { hasText: 'Keep the screen for a restart' });
-    const restoreScreen = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session.restoreScreen;
-    expect(await keep.locator('input').isChecked()).toBe(true);
-    await keep.locator('.switch').click();
-    await until(async () => (await restoreScreen()) === false, 5_000, 'the screen restore to be switched off');
-    await keep.locator('.switch').click();
-    await until(async () => (await restoreScreen()) === true, 5_000, 'and on again');
+    // there is no switch for keeping the screen: nothing of it is saved
+    expect(await page.locator('label.field', { hasText: 'Keep the screen' }).count()).toBe(0);
     const login = () => page.locator('label.field', { hasText: 'Open at login' }).locator('input');
     expect(await login().isChecked()).toBe(false);
     await page.locator('label.field', { hasText: 'Open at login' }).locator('.switch').click();
@@ -904,7 +898,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
-  it('Settings: "Keep my Mac awake while Claude works" is on by default, writes session.stayAwake, sits by the screen switch and says what it cannot do', async () => {
+  it('Settings: "Keep my Mac awake while Claude works" is on by default, writes session.stayAwake, sits by the keep-running switch and says what it cannot do', async () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
@@ -913,10 +907,10 @@ describe('Jaffer UI end to end', () => {
     expect(await awake.count()).toBe(1);
     expect(await stayAwake()).toBe(true);
     expect(await awake.locator('input').isChecked()).toBe(true);
-    // by "Keep the screen for a restart": right after it comes "Keep my session running in the background", then this one
+    // right after "Keep my session running in the background" comes this one
     const next = await page.evaluate(() => {
       const fields = [...document.querySelectorAll('.settings .field')];
-      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 2]?.textContent ?? '';
+      return fields[fields.findIndex((f) => f.textContent?.includes('Keep my session running in the background')) + 1]?.textContent ?? '';
     });
     expect(next).toContain('Keep my Mac awake while Claude works');
     // the hint says what it does and what it does not do (a closed lid)
@@ -934,7 +928,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
-  it('Settings: "Keep my session running in the background" follows the screen switch, shows what the daemon says, and in this test home is off, disabled and says why', async () => {
+  it('Settings: "Keep my session running in the background" follows the global hotkey, shows what the daemon says, and in this test home is off, disabled and says why', async () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
@@ -942,7 +936,7 @@ describe('Jaffer UI end to end', () => {
     expect(await keep.count()).toBe(1);
     const next = await page.evaluate(() => {
       const fields = [...document.querySelectorAll('.settings .field')];
-      return fields[fields.findIndex((f) => f.textContent?.includes('Keep the screen for a restart')) + 1]?.textContent ?? '';
+      return fields[fields.findIndex((f) => f.textContent?.includes('Global hotkey')) + 1]?.textContent ?? '';
     });
     expect(next).toContain('Keep my session running in the background');
     // a hint like its neighbours', and under it a line from the daemon: here, why it cannot be (not the person's own ~/.jaffer)

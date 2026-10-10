@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -205,7 +206,8 @@ describe('one session, ever', () => {
   it('runs a single shell, drops extra panes an older version saved, and refuses to start another', async () => {
     const host = new SessionHost(env.paths, env.config, 'test');
     const pane = (id: string) => ({ id, cwd: env.userHome, cols: 100, rows: 30 });
-    fs.writeFileSync(env.paths.sessionState, JSON.stringify({ version: 1, startedAt: new Date().toISOString(), savedAt: new Date().toISOString(), panes: [pane('main'), pane('p9x1')] }));
+    fs.mkdirSync(env.paths.sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(env.paths.sessionDir, 'state.json'), JSON.stringify({ version: 1, startedAt: new Date().toISOString(), savedAt: new Date().toISOString(), panes: [pane('main'), pane('p9x1')] }));
     await host.start();
     try {
       expect(host.list().map((p) => p.id)).toEqual(['main']);
@@ -271,7 +273,7 @@ async function waitUntilTrue(fn: () => boolean, ms: number): Promise<void> {
   }
 }
 
-describe('screen restore, and the switch that turns it off', () => {
+describe('a plain terminal: nothing of the screen is saved, and a shell that exits is replaced by a fresh one', () => {
   const screenOf = (host: SessionHost) => host.get('main')!.snapshot().data;
   const shows = async (host: SessionHost, text: string, ms = 10_000) => {
     const t0 = Date.now();
@@ -286,72 +288,68 @@ describe('screen restore, and the switch that turns it off', () => {
     if (main) await stopShell(main);
   };
 
-  it('saves the screen and the folder, and a new daemon shows the old screen above a fresh shell in the same folder', async () => {
+  it('a new host after the old one stopped starts with a blank screen in the home folder, and reads nothing an older version saved', async () => {
     const a = new SessionHost(env.paths, env.config, 'test');
     await a.start();
-    const folder = path.join(env.userHome, 'restore-here');
+    const folder = path.join(env.userHome, 'not-restored');
     fs.mkdirSync(folder);
     a.get('main')!.write(`cd ${JSON.stringify(folder)} && echo screen-marker-one\r`);
     await shows(a, 'screen-marker-one');
     await new Promise((r) => setTimeout(r, 600)); // the shell integration reports the new folder
-    a.persist();
-    expect(fs.readFileSync(env.paths.screenSnapshot, 'utf8')).toContain('screen-marker-one');
     await stop(a);
-    const b = new SessionHost(env.paths, env.config, 'test');
-    await b.start();
-    try {
-      await shows(b, 'screen-marker-one');
-      expect(screenOf(b)).toContain('session restored');
-      expect(b.get('main')!.cwd).toBe(fs.realpathSync(folder));
-    } finally {
-      await stop(b);
-    }
-  }, 40_000);
-
-  it('with the switch off nothing of the screen is kept: what was saved is removed at once, nothing is written, and a new daemon starts with a blank screen in the same folder', async () => {
-    const a = new SessionHost(env.paths, env.config, 'test');
-    await a.start();
-    const folder = path.join(env.userHome, 'blank-here');
-    fs.mkdirSync(folder);
-    a.get('main')!.write(`cd ${JSON.stringify(folder)} && echo screen-marker-two\r`);
-    await shows(a, 'screen-marker-two');
-    await new Promise((r) => setTimeout(r, 600));
-    a.persist();
-    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(true);
-    env.config.patch({ session: { restoreScreen: false } });
-    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false); // gone the moment it is switched off, not at the next save
-    a.get('main')!.write('echo more-output-after\r');
-    await shows(a, 'more-output-after');
-    a.persist();
-    expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false); // and it stays gone
-    expect(JSON.parse(fs.readFileSync(env.paths.sessionState, 'utf8')).panes[0].cwd).toBe(fs.realpathSync(folder)); // the folder is still kept
-    await stop(a);
+    // what an older version left behind (a saved folder and screen): nothing reads it any more
+    fs.mkdirSync(env.paths.sessionDir, { recursive: true });
+    const now = new Date().toISOString();
+    fs.writeFileSync(path.join(env.paths.sessionDir, 'state.json'), JSON.stringify({ version: 1, startedAt: now, savedAt: now, panes: [{ id: 'main', cwd: folder, cols: 100, rows: 30 }] }));
+    fs.writeFileSync(path.join(env.paths.sessionDir, 'screen.json'), JSON.stringify({ main: { data: 'screen-marker-old\r\n' } }));
     const b = new SessionHost(env.paths, env.config, 'test');
     await b.start();
     try {
       await new Promise((r) => setTimeout(r, 1200));
-      expect(screenOf(b)).not.toContain('screen-marker-two');
-      expect(screenOf(b)).not.toContain('session restored');
-      expect(b.get('main')!.cwd).toBe(fs.realpathSync(folder));
-      expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false);
+      for (const gone of ['screen-marker-one', 'screen-marker-old', 'session restored']) expect(screenOf(b)).not.toContain(gone);
+      expect(b.get('main')!.cwd).toBe(fs.realpathSync(os.homedir()));
     } finally {
       await stop(b);
     }
   }, 40_000);
 
-  it('switching it back on starts saving again', async () => {
-    env.config.patch({ session: { restoreScreen: false } });
+  it('writes nothing of the session to disk: no saved folder and no saved screen, however long it runs', async () => {
     const a = new SessionHost(env.paths, env.config, 'test');
     await a.start();
     try {
-      expect(fs.existsSync(env.paths.screenSnapshot)).toBe(false);
-      env.config.patch({ session: { restoreScreen: true } });
-      a.get('main')!.write('echo screen-marker-three\r');
-      await shows(a, 'screen-marker-three');
-      a.persist();
-      expect(fs.readFileSync(env.paths.screenSnapshot, 'utf8')).toContain('screen-marker-three');
+      a.get('main')!.write('echo screen-marker-two\r');
+      await shows(a, 'screen-marker-two');
+      await new Promise((r) => setTimeout(r, 600));
     } finally {
       await stop(a);
+    }
+    expect(fs.existsSync(env.paths.sessionDir) ? fs.readdirSync(env.paths.sessionDir) : []).toEqual([]);
+  }, 40_000);
+
+  it('a shell that exits is replaced by a fresh one in the same folder, with a blank screen', async () => {
+    const host = new SessionHost(env.paths, env.config, 'test');
+    await host.start();
+    const seen: string[] = [];
+    host.events.on((e) => {
+      if ('lifecycle' in e) seen.push(e.lifecycle);
+    });
+    try {
+      const folder = path.join(env.userHome, 'stays-here');
+      fs.mkdirSync(folder);
+      const first = host.get('main')!;
+      first.write(`cd ${JSON.stringify(folder)} && echo screen-marker-three\r`);
+      await shows(host, 'screen-marker-three');
+      await waitUntilTrue(() => first.cwd === fs.realpathSync(folder), 8_000);
+      first.write('exit\r');
+      await waitUntilTrue(() => seen.includes('restarted'), 8_000);
+      const second = host.get('main')!;
+      expect(second).not.toBe(first);
+      expect(second.alive).toBe(true);
+      expect(second.cwd).toBe(fs.realpathSync(folder));
+      await new Promise((r) => setTimeout(r, 1200));
+      for (const gone of ['screen-marker-three', 'session restored']) expect(screenOf(host)).not.toContain(gone);
+    } finally {
+      await stop(host);
     }
   }, 40_000);
 });
