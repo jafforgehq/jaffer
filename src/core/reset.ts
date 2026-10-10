@@ -75,13 +75,17 @@ export function assertJafferHome(home: string, userHome: string): string {
   return h;
 }
 
-/** `p` with every link in it resolved; for a path that is not there (yet), its nearest folder that is, resolved, and the rest as written. */
+/**
+ * `p` with every link in it resolved and in the file system's own capitals (the system's realpath: on a Mac `/Users/Jaffer` is the folder
+ * `/Users/jaffer`, and Node's own `realpathSync` keeps the capitals it was given); for a path that is not there (yet), its nearest folder
+ * that is, resolved, and the rest as written.
+ */
 function realPath(p: string): string {
   let head = path.resolve(p);
   const rest: string[] = [];
   for (;;) {
     try {
-      return path.join(fs.realpathSync(head), ...rest);
+      return path.join(fs.realpathSync.native(head), ...rest);
     } catch {
       /* not there (or a link to nothing): one folder up */
     }

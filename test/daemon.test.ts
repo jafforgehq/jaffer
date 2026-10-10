@@ -336,8 +336,8 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await waitUntil(() => cmds.some((x) => x.cmd === 'claude' && x.exit === 1), 8000);
     standIn.exitWith(0);
     await waitUntil(allEnded, 8000);
-    // it works again, and the shell is restarted: the shell takes its Claude with it
-    await hook('SessionStart');
+    // it works again (the same conversation, so a resume), and the shell is restarted: the shell takes its Claude with it
+    await hook('SessionStart', { source: 'resume' });
     await hook('UserPromptSubmit', { prompt: 'go on' });
     expect((await c.call('claude.state', {})).sessions.some((x: any) => x.state === 'working')).toBe(true);
     const before = (await c.call('pane.list', {}))[0];

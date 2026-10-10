@@ -53,6 +53,13 @@ const STALE_MS = 5 * 60_000;
 /** With a tool running there is nothing to hear for as long as the tool takes (a build), so be patient. */
 const STALE_TOOL_MS = 30 * 60_000;
 const MAX_NOTICE = 200;
+/**
+ * A SessionStart this soon after its session ended is that run's own start arriving late (hooks are async: `claude -p` that fails at
+ * once ends before its start is heard), not a new run, unless Claude Code says the session goes on (`CONTINUES`).
+ */
+const LATE_START_MS = 3_000;
+/** SessionStart sources that continue a session that just ended: resumed (`--resume`, `--continue`), cleared, compacted. */
+const CONTINUES = new Set(['resume', 'clear', 'compact']);
 const KNOWN = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd']);
 
 /** Redact first (on a bounded slice, so a huge field stays cheap), then collapse whitespace and cut. */
@@ -217,6 +224,8 @@ export class ClaudeWatcher {
     // record what happened (the last reply, a finished tool), but only a SessionStart (a resumed session) brings an
     // ended session back to life.
     const prior = this.map.get(id)?.s;
+    // ...except a SessionStart that is the ended run's own start, arriving late: it would leave an idle session nothing ever sweeps
+    if (ev === 'SessionStart' && prior?.state === 'ended' && this.now() - prior.since < LATE_START_MS && !CONTINUES.has(str(o.source))) return;
     const stayEnded = prior?.state === 'ended' && ev !== 'SessionStart';
     const endedSince = prior?.since ?? 0;
     if (stayEnded && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Notification')) return; // things that start something cannot be late

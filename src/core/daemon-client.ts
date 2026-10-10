@@ -16,6 +16,21 @@ export async function tryConnect(paths: JafferPaths, timeoutMs = 1200): Promise<
   }
 }
 
+/**
+ * Waits up to `ms` for nothing to answer on the socket any more (a session on its way out). True as soon as nothing answers (at once when
+ * nothing did); false when something still answers once the wait is over.
+ */
+export async function waitForSocketGone(paths: JafferPaths, ms: number): Promise<boolean> {
+  const t0 = Date.now();
+  for (;;) {
+    const c = await tryConnect(paths, 300);
+    if (!c) return true;
+    c.close();
+    if (Date.now() - t0 >= ms) return false;
+    await sleep(200);
+  }
+}
+
 export interface Launcher {
   /** Binary to run (Electron's own binary with ELECTRON_RUN_AS_NODE, or node). */
   execPath: string;

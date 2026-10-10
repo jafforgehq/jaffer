@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
-import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
+import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification } from '../shared/notify-policy';
 import { isAppUrl, isWebUrl } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
@@ -15,7 +15,7 @@ import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
-import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, type QuitAsk } from '../shared/quit-policy';
+import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { isClaudeCommand } from '../shared/process-badge';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
@@ -41,6 +41,8 @@ const launcher: Launcher = {
 };
 /** How long the start waits for an older Jaffer's session to let go of the socket once it was asked to end. */
 const LEGACY_END_MS = 10_000;
+/** Before asking about such a session, how long the start lets one that is already on its way out (an update just ended it) go by itself. */
+const LEGACY_GRACE_MS = 3_000;
 /** `prepareHome` gets this long at most: the terminal starts all the same. */
 const PREPARE_HOME_MS = 30_000;
 
@@ -52,6 +54,8 @@ let client: RpcClient | null = null;
 let quitting = false;
 /** ⌘Q has nothing (more) to ask: the person said Quit, nothing ran, or the session had already ended. */
 let quitConfirmed = false;
+/** Set by the menu's Quit Jaffer (⌘Q) for the quit it starts: only that quit may ask. A quit the system starts never does. */
+let askOnQuit = false;
 let askingToQuit = false;
 /** The child was ended for the quit (or did not end in time and was killed): the quit goes on. */
 let childStopped = false;
@@ -178,6 +182,8 @@ async function onConnectionLost(o: OwnedDaemon): Promise<void> {
  */
 async function endOlderSession(): Promise<boolean> {
   if (!gotLock) return false; // (never reached in a second instance; and never its call to make)
+  // a session already on its way out (an update from an older version ended it a moment ago) is let go by itself first: no question
+  if (await waitForSocketGone(paths, LEGACY_GRACE_MS)) return true;
   const c = await tryConnect(paths);
   const hello = c ? await c.call<{ pid?: unknown }>('hello', { client: 'app', protocol: 1 }, 3_000).catch(() => null) : null;
   const action = legacyDaemonAction({ answers: !!c, pid: typeof hello?.pid === 'number' ? hello.pid : null, ownPid: owned?.pid ?? null, firstInstance: gotLock });
@@ -196,13 +202,7 @@ async function endOlderSession(): Promise<boolean> {
   }
   await c?.call('app.shutdown', {}, 5_000).catch(() => undefined);
   c?.close();
-  const t0 = Date.now();
-  while (Date.now() - t0 < LEGACY_END_MS) {
-    const still = await tryConnect(paths, 300);
-    if (!still) return true;
-    still.close();
-    await sleep(200);
-  }
+  if (await waitForSocketGone(paths, LEGACY_END_MS)) return true;
   await dialog.showMessageBox({ type: 'error', message: LEGACY_NOT_ENDED.message, detail: LEGACY_NOT_ENDED.detail });
   return false;
 }
@@ -491,7 +491,16 @@ function buildMenu(): void {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit', label: 'Quit Jaffer' }, // ⌘Q: ends the terminal, and asks first when something runs (before-quit)
+        // ⌘Q ends the terminal and asks first when something runs (before-quit). Not `role: 'quit'`: only this item marks its quit as
+        // one that may ask; a quit the system starts (logout, restart, shut down, the Dock's Quit) must never wait on a question.
+        {
+          label: 'Quit Jaffer',
+          accelerator: 'Cmd+Q',
+          click: () => {
+            askOnQuit = true;
+            app.quit();
+          },
+        },
       ],
     },
     {
@@ -686,13 +695,17 @@ async function smokeTest(): Promise<void> {
   }
 }
 
-// ⌘Q (and the Dock's Quit) ends the terminal: when Claude Code or a command would stop, the person is asked first. Not for an update (its
-// prompt said so), a session that has already ended, or a quit the person has already confirmed.
+// Every quit ends the terminal. Only ⌘Q (the menu's Quit Jaffer) asks first, when Claude Code or a command would stop
+// (`shouldAskOnQuit`). A quit the system starts (logout, restart, shut down, AppleScript, the Dock's Quit) never asks: macOS would take
+// the question as the app refusing and cancel the logout. It ends the terminal through will-quit like any other quit.
 app.on('before-quit', (e) => {
+  const requested = askOnQuit;
+  askOnQuit = false; // (it belongs to this one quit: a later one, from the system, must not inherit it)
   if (!quitConfirmed) {
     const o = owned;
-    const ask = o && !o.ended && !installing ? quitNeedsConfirm({ claudeWorking: claudeBusy() || (runningCommand !== null && isClaudeCommand(runningCommand)), commandRunning: runningCommand !== null }) : null;
-    if (ask) {
+    const childEnded = !o || o.ended;
+    const ask = childEnded ? null : quitNeedsConfirm({ claudeWorking: claudeBusy() || (runningCommand !== null && isClaudeCommand(runningCommand)), commandRunning: runningCommand !== null });
+    if (ask && shouldAskOnQuit({ askRequested: requested, confirmed: quitConfirmed, installing, childEnded, needsConfirm: !!ask })) {
       e.preventDefault();
       void confirmQuit(ask);
       return;
@@ -706,9 +719,10 @@ async function confirmQuit(ask: QuitAsk): Promise<void> {
   if (askingToQuit) return;
   askingToQuit = true;
   try {
+    showWindow(); // in front, as a sheet on the window: a hidden window (⌘W) would leave the question behind other apps
     const opts = { type: 'warning' as const, message: ask.message, detail: ask.detail, buttons: [...QUIT_BUTTONS], defaultId: QUIT_DEFAULT_ID, cancelId: QUIT_CANCEL_ID };
-    const r = win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-    if (r.response !== 0) return;
+    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    if (r.response !== 0) return; // Cancel: nothing ends (and the next quit asks again only if it is a ⌘Q)
     quitConfirmed = true;
     app.quit();
   } finally {

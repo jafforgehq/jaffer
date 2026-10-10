@@ -373,7 +373,7 @@ export function Settings(): VNode {
               <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
                 <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />
               </Field>
-              <Field label="Open at login" hint="so your session is always one keystroke away">
+              <Field label="Open at login" hint="so Jaffer is always one keystroke away">
                 <Switch
                   checked={openAtLogin}
                   onChange={(v) => {

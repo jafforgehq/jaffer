@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { resetJaffer } from '../src/core/reset';
+import { assertJafferHome, resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
 import { BEGIN, END, SKILL_MARKER } from '../src/core/integrations/legacy-claude';
 import { AGENT_LABEL } from '../src/core/service/legacy-agent';
@@ -179,6 +179,16 @@ describe('resetJaffer', () => {
     }
     expect(fs.existsSync(path.join(checkout, 'package.json'))).toBe(true);
     expect(hooksInstalled(env.userHome)).toBe(true); // and nothing outside was touched either
+  });
+
+  it('refuses the person\'s home written with other capitals: macOS ignores case, so a JAFFER_HOME of /Users/Jaffer is the home /Users/jaffer', () => {
+    const user = path.join(env.root, 'jaffer-person'); // a person whose home has jaffer in its name...
+    fs.mkdirSync(path.join(user, 'bin'), { recursive: true }); // ...and a ~/bin, a name Jaffer's own folder has too
+    const variant = path.join(env.root, 'JAFFER-PERSON');
+    if (!fs.existsSync(variant)) return; // a file system that tells case apart: there is no such folder, and nothing to refuse
+    expect(() => assertJafferHome(variant, user)).toThrow(/Refusing/);
+    expect(() => assertJafferHome(path.join(variant, 'sub', '..'), user)).toThrow(/Refusing/);
+    expect(fs.existsSync(path.join(user, 'bin'))).toBe(true);
   });
 
   it('on a Mac that never ran Jaffer there is nothing to do, and that is fine', async () => {

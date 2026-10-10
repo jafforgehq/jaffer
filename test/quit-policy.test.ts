@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm } from '../src/shared/quit-policy';
+import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, shouldAskOnQuit } from '../src/shared/quit-policy';
 
 /** The app owns its terminal: quitting ends it, so the app asks when something would stop; another Jaffer's background session is ended only on a click. */
 
@@ -87,5 +87,32 @@ describe('childExitAction: what the app does when its terminal host ends', () =>
     expect(crash.detail).toContain('/x/jafferd.log');
     expect(crash.buttons).toEqual(['Restart terminal', 'Quit']);
     expect(childExitText({ code: null, signal: 'SIGKILL', log: '/x/jafferd.log' }).detail).toMatch(/SIGKILL/);
+  });
+});
+
+describe('shouldAskOnQuit: only ⌘Q asks; a quit the system starts (logout, restart, shut down, the Dock\'s Quit) never does', () => {
+  const base = { askRequested: true, confirmed: false, installing: false, childEnded: false, needsConfirm: true };
+  it('⌘Q while Claude Code or a command runs: ask', () => {
+    expect(shouldAskOnQuit(base)).toBe(true);
+  });
+  it('a quit that did not come from ⌘Q (logout, restart, shut down, AppleScript, the Dock\'s Quit): never ask, or macOS takes it as the app refusing and cancels the logout', () => {
+    expect(shouldAskOnQuit({ ...base, askRequested: false })).toBe(false);
+  });
+  it('already confirmed, an update being installed (its prompt said so), or a terminal that has ended: no question', () => {
+    expect(shouldAskOnQuit({ ...base, confirmed: true })).toBe(false);
+    expect(shouldAskOnQuit({ ...base, installing: true })).toBe(false);
+    expect(shouldAskOnQuit({ ...base, childEnded: true })).toBe(false);
+  });
+  it('nothing would stop: no question', () => {
+    expect(shouldAskOnQuit({ ...base, needsConfirm: false })).toBe(false);
+  });
+  it('the whole truth table: it asks in exactly one case of the 32', () => {
+    const keys = ['askRequested', 'confirmed', 'installing', 'childEnded', 'needsConfirm'] as const;
+    const asked: string[] = [];
+    for (let n = 0; n < 32; n++) {
+      const o = Object.fromEntries(keys.map((k, i) => [k, !!(n & (1 << i))])) as Record<(typeof keys)[number], boolean>;
+      if (shouldAskOnQuit(o)) asked.push(keys.filter((k) => o[k]).join('+'));
+    }
+    expect(asked).toEqual(['askRequested+needsConfirm']);
   });
 });

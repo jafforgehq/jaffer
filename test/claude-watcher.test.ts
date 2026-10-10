@@ -110,7 +110,7 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('SessionEnd'));
     expect(only().state).toBe('ended');
     t += 50;
-    w.handle(fx('SessionStart', { transcript_path: '/tmp/resumed/sess-1.jsonl' })); // a resumed session
+    w.handle(fx('SessionStart', { transcript_path: '/tmp/resumed/sess-1.jsonl', source: 'resume' })); // a resumed session
     expect(only()).toMatchObject({ state: 'idle', since: 1_050, transcriptPath: '/tmp/resumed/sess-1.jsonl', tool: undefined, notice: undefined });
     w.handle(fx('Stop'));
     w.handle(fx('SessionStart')); // a SessionStart while idle (after /compact) keeps it idle
@@ -172,8 +172,40 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Stop', { last_assistant_message: 'the last reply arrived late' }));
     w.handle(fx('UserPromptSubmit', { prompt: 'late too' }));
     expect(only()).toMatchObject({ state: 'ended', since: endedAt, tool: undefined, notice: undefined });
-    w.handle(fx('SessionStart')); // a resumed session
+    w.handle(fx('SessionStart', { source: 'resume' })); // a resumed session
     expect(only().state).toBe('idle');
+  });
+
+  // An async SessionStart can land after its own SessionEnd: `claude -p` that fails within milliseconds. Taken as a new start it would
+  // leave an idle session that nothing sweeps, and the companion would show Claude open for good.
+  it('a SessionStart that lands just after its own SessionEnd (`claude -p` failing at once) leaves the session ended', () => {
+    w.handle(fx('SessionEnd'));
+    expect(only().state).toBe('ended');
+    const endedAt = only().since;
+    t += 100;
+    w.handle(fx('SessionStart')); // source: startup, the late one
+    expect(only()).toMatchObject({ state: 'ended', since: endedAt });
+    w.endAll();
+    t += 100;
+    w.handle(fx('SessionStart', { source: undefined })); // (a Claude Code that does not say why it started: the same)
+    expect(only().state).toBe('ended');
+  });
+
+  it('a SessionStart 3 s or more after the end is a new run of that session, and brings it back', () => {
+    w.handle(fx('SessionEnd'));
+    t += 3_000;
+    w.handle(fx('SessionStart'));
+    expect(only()).toMatchObject({ state: 'idle', since: t });
+  });
+
+  it('a session resumed (or cleared, or compacted) right after it ended comes back at once: Claude Code says it goes on', () => {
+    for (const source of ['resume', 'clear', 'compact']) {
+      w = new ClaudeWatcher({ now: () => t });
+      w.handle(fx('SessionEnd'));
+      t += 100;
+      w.handle(fx('SessionStart', { source }));
+      expect(only().state, source).toBe('idle');
+    }
   });
 
   it('userAnswered: input while Claude waits means the user is answering, so it is working again (tool kept); other states are untouched', () => {

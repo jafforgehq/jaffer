@@ -1,6 +1,6 @@
 /**
  * Pure rules for the life of the app's terminal. The app starts the terminal host as its own child, so quitting the app ends the shell and
- * anything running in it: ⌘Q asks first when that would stop something. A session found on the socket at the start that is not the app's
+ * anything running in it: ⌘Q asks first when that would stop something (a quit the system starts does not ask). A session found on the socket at the start that is not the app's
  * own child is another Jaffer's background session (an older version's), ended only on a click, and never by a second instance of the
  * app. And when the child ends, the app quits with it, or offers a fresh one after a crash.
  */
@@ -23,6 +23,17 @@ export function quitNeedsConfirm(o: { claudeWorking: boolean; commandRunning: bo
   if (o.claudeWorking) return { message: 'Quit Jaffer?', detail: 'Claude Code is running and will stop.' };
   if (o.commandRunning) return { message: 'Quit Jaffer?', detail: 'A command is running and will stop.' };
   return null;
+}
+
+/**
+ * Whether this quit asks first (with `quitNeedsConfirm`'s text). Only a quit the person asked for with ⌘Q (the menu's Quit Jaffer:
+ * `askRequested`) ever asks. A quit the system starts (logout, restart, shut down, AppleScript, the Dock's Quit) never does: macOS takes
+ * a question as the app refusing to quit and cancels the logout; the terminal then ends as on any quit (its pipe ends, a moment, then a
+ * kill). Not for a quit already confirmed, an update being installed (its prompt said so), or a terminal that has ended, and only when
+ * something would stop (`needsConfirm`).
+ */
+export function shouldAskOnQuit(o: { askRequested: boolean; confirmed: boolean; installing: boolean; childEnded: boolean; needsConfirm: boolean }): boolean {
+  return o.askRequested && !o.confirmed && !o.installing && !o.childEnded && o.needsConfirm;
 }
 
 /**

@@ -6,8 +6,9 @@ import { PassThrough } from 'node:stream';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { detachedSpawnArgs, ensureDaemon, ownedSpawnArgs, startOwnedDaemon, tryConnect, type Launcher, type SpawnFn } from '../src/core/daemon-client';
-import { sleep } from '../src/shared/util';
+import { detachedSpawnArgs, ensureDaemon, ownedSpawnArgs, startOwnedDaemon, tryConnect, waitForSocketGone, type Launcher, type SpawnFn } from '../src/core/daemon-client';
+import { RpcServer } from '../src/core/rpc';
+import { ensureDir, sleep } from '../src/shared/util';
 
 /**
  * The app owns its terminal host: it starts `jafferd` as its own child (not detached, `JAFFER_OWNED=1`, its stdin a pipe the app holds and
@@ -297,5 +298,44 @@ describe('how the app starts its child, and how ensureDaemon starts a detached o
     const l: Launcher = { ...launcherFor(e), spawn: (_c, _a, o) => (spawned.push(o), { unref: () => undefined }) };
     await expect(ensureDaemon(e.paths, l, 400)).rejects.toThrow(/Could not start/);
     expect(spawned).toHaveLength(1);
+  });
+});
+
+describe('waitForSocketGone: the start gives a session that is on its way out a moment before it asks about it (an RPC server on a temp socket)', () => {
+  async function listening(e: TestEnv): Promise<RpcServer> {
+    ensureDir(e.paths.runDir);
+    const srv = new RpcServer();
+    await srv.listen(e.paths.socket);
+    return srv;
+  }
+
+  it('nothing on the socket: true at once (the ordinary start waits for nothing)', async () => {
+    const e = env();
+    const t0 = Date.now();
+    expect(await waitForSocketGone(e.paths, 3_000)).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  it('a session that lets go during the wait (an older daemon an update just ended): true as soon as it has', async () => {
+    const e = env();
+    const srv = await listening(e);
+    setTimeout(() => void srv.close(), 400);
+    const t0 = Date.now();
+    expect(await waitForSocketGone(e.paths, 3_000)).toBe(true);
+    const took = Date.now() - t0;
+    expect(took).toBeGreaterThanOrEqual(300);
+    expect(took).toBeLessThan(2_500);
+  });
+
+  it('one that stays: false once the wait is over (then the person is asked)', async () => {
+    const e = env();
+    const srv = await listening(e);
+    try {
+      const t0 = Date.now();
+      expect(await waitForSocketGone(e.paths, 600)).toBe(false);
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(600);
+    } finally {
+      await srv.close();
+    }
   });
 });
