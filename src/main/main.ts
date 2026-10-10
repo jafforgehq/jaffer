@@ -99,7 +99,7 @@ async function offerRestart(oldVersion: string): Promise<void> {
   const r = await dialog.showMessageBox({
     type: 'info',
     message: 'Jaffer was updated',
-    detail: `Your session is still running the previous version (${oldVersion}). Restart it to use ${VERSION}? Your shell restarts in the same folder; memory and the conversation are kept.`,
+    detail: `Your session is still running the previous version (${oldVersion}). Restart it to use ${VERSION}? Your shell restarts in the same folder; the conversation is kept.`,
     buttons: ['Restart session', 'Later'],
     defaultId: 0,
   });
@@ -385,7 +385,7 @@ function buildMenu(): void {
           label: 'Quit and End Session',
           accelerator: 'Alt+Cmd+Q',
           click: async () => {
-            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. Memory is kept. No Resume Claude button will offer this conversation; your conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
+            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. No Resume Claude button will offer this conversation; your conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
             if (r.response === 0) {
               quitting = true;
               // ending the session on purpose: the next start does not offer the Claude Code conversation again (also with a
@@ -417,8 +417,6 @@ function buildMenu(): void {
       submenu: [
         { label: 'Command Palette…', accelerator: 'Cmd+P', click: act('palette') },
         { type: 'separator' },
-        { label: 'Toggle Memory', accelerator: 'Shift+Cmd+M', click: act('toggle-memory') },
-        { type: 'separator' },
         { label: 'Bigger', accelerator: 'Cmd+=', click: act('zoom-in') },
         { label: 'Smaller', accelerator: 'Cmd+-', click: act('zoom-out') },
         { label: 'Actual Size', accelerator: 'Cmd+0', click: act('zoom-reset') },
@@ -449,7 +447,7 @@ function trusted(e: Electron.IpcMainInvokeEvent): boolean {
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   if (!client || !client.connected) throw new Error('The session daemon is not connected.');
-  const long = method.startsWith('setup.') || method === 'memory.reflect' || method === 'memory.consolidate';
+  const long = method.startsWith('setup.');
   const r = await client.call(method, params, long ? 120_000 : 30_000);
   if (method === 'config.patch') {
     void syncHotkey();
@@ -480,7 +478,7 @@ ipcMain.handle('jaffer:reset', async (e) => {
   const ask = {
     type: 'warning' as const,
     message: 'Reset Jaffer and start from scratch?',
-    detail: `This ends your terminal session and removes Jaffer's memory, settings, hooks and memory tools from this Mac. Claude Code itself, its login and your own Claude settings are not touched.\n\n“Reset and keep a backup” moves ${paths.home.replace(os.homedir(), '~')} aside (as ${paths.home.replace(os.homedir(), '~')}.backup-…) so you can get it back; “Reset and delete everything” does not.`,
+    detail: `This ends your terminal session and removes Jaffer's settings and hooks from this Mac. Claude Code itself, its login and your own Claude settings are not touched.\n\n“Reset and keep a backup” moves ${paths.home.replace(os.homedir(), '~')} aside (as ${paths.home.replace(os.homedir(), '~')}.backup-…) so you can get it back; “Reset and delete everything” does not.`,
     buttons: ['Cancel', 'Reset and keep a backup', 'Reset and delete everything'],
     defaultId: 0,
     cancelId: 0,

@@ -1,4 +1,4 @@
-import { activePane, cfg, info, openOverlay, patchConfig, refreshMemory, resumeOffer, safeCommand, toast, toggleSide } from './state';
+import { activePane, cfg, info, openOverlay, patchConfig, resumeOffer, safeCommand, toast } from './state';
 import { isClaudeCommand } from '../shared/process-badge';
 import { isSessionId, resumeCommand, type ResumeOffer } from '../shared/claude-resume';
 import { errorText } from '../shared/keep-running';
@@ -115,7 +115,6 @@ export async function restartClaude(): Promise<void> {
 }
 
 export const actions: Action[] = [
-  { id: 'toggle-memory', title: 'Memory: show or hide', section: 'View', keys: '⇧⌘M', run: () => toggleSide('memory') },
   { id: 'resume-claude', title: 'Resume the Claude Code conversation that was running here', section: 'Terminal', keywords: 'claude code continue restart', run: resumeClaude },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
@@ -127,9 +126,7 @@ export const actions: Action[] = [
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },
   { id: 'zoom-out', title: 'Smaller text', section: 'View', keys: '⌘-', run: () => zoom(-1) },
   { id: 'zoom-reset', title: 'Actual size', section: 'View', keys: '⌘0', run: () => zoom(0) },
-  { id: 'reflect', title: 'Memory: learn from recent activity now', section: 'Memory', keywords: 'reflect evolve', run: () => guarded(async () => (toast({ kind: 'learn', text: (await call('memory.reflect', { force: true })).summary }), refreshMemory(0))) },
-  { id: 'consolidate', title: 'Memory: tidy up (merge duplicates, fade stale)', section: 'Memory', keywords: 'consolidate dream cleanup', run: () => guarded(async () => (toast({ kind: 'info', text: (await call('memory.consolidate', {})).summary }), refreshMemory(0))) },
-  { id: 'setup-claude', title: 'Connect Claude Code to Jaffer memory (MCP + hooks)', section: 'Integrations', keywords: 'claude mcp hooks', run: () => guarded(async () => (await call('setup.claude.install', {}), undefined), 'Claude Code now shares Jaffer’s memory.') },
+  { id: 'setup-claude', title: 'Connect Claude Code to Jaffer (hooks)', section: 'Integrations', keywords: 'claude hooks companion notifications', run: () => guarded(async () => (await call('setup.claude.install', {}), undefined), 'Claude Code is connected: Jaffer’s hooks are installed.') },
   { id: 'install-cli', title: 'Install the `jaffer` command in ~/.local/bin', section: 'Integrations', keywords: 'cli path shell command', run: () => guarded(async () => { const r = await call('setup.cli.install', {}); toast({ kind: 'info', text: r.hint ?? `Installed ${r.link}` }, 9000); }) },
   { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: () => void window.jaffer.reveal() },
   ...THEMES.map<Action>((t) => ({ id: `theme:${t.id}`, title: `Theme: ${t.name}`, section: 'Appearance', keywords: 'color scheme', run: () => patchConfig({ appearance: { theme: t.id } }) })),

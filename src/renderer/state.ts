@@ -8,22 +8,6 @@ import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 
 const jaffer = () => window.jaffer;
-const store = {
-  get(k: string): string | null {
-    try {
-      return localStorage.getItem(k);
-    } catch {
-      return null;
-    }
-  },
-  set(k: string, v: string): void {
-    try {
-      localStorage.setItem(k, v);
-    } catch {
-      /* private mode etc. */
-    }
-  },
-};
 
 // ------------------------------------------------------------------ session & ui
 
@@ -38,7 +22,6 @@ export interface SessionInfo {
   startedAt?: string;
 }
 
-export type Side = 'memory' | null;
 export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find';
 
 export const cfg = signal<JafferConfig | null>(null);
@@ -49,8 +32,6 @@ export const activePane = signal('main');
 /** A slow clock for relative times ("2m ago") without a timer per component. */
 export const clock = signal(Date.now());
 setInterval(() => (clock.value = Date.now()), 15_000);
-export const side = signal<Side>(store.get('jaffer.side') === 'memory' ? 'memory' : null); // the memory drawer; closed unless the person opened it
-export const sideWidth = signal(Number(store.get('jaffer.sideWidth')) || 420);
 export const overlay = signal<Overlay>(null);
 /** Open a dialog, but not over the first-run screen: that has to be answered, and a shortcut would replace it and leave first run unfinished. */
 export function openOverlay(next: Exclude<Overlay, 'onboarding' | null>): void {
@@ -62,23 +43,11 @@ export const appVersion = signal('');
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
 export const updateState = signal<UpdateState | null>(null);
 
-export function setSide(s: Side): void {
-  side.value = s;
-  store.set('jaffer.side', s ?? '');
-}
-export function toggleSide(s: Exclude<Side, null>): void {
-  setSide(side.value === s ? null : s);
-}
-export function setSideWidth(w: number): void {
-  sideWidth.value = Math.max(300, Math.min(760, Math.round(w)));
-  store.set('jaffer.sideWidth', String(sideWidth.value));
-}
-
 // ------------------------------------------------------------------ toasts
 
 export interface Toast {
   id: number;
-  kind: 'learn' | 'info' | 'error';
+  kind: 'info' | 'error';
   text: string;
   action?: { label: string; run: () => void };
 }
@@ -87,8 +56,7 @@ let toastId = 1;
 /** Shows a toast for `ttl` ms (or until it is dismissed); returns its id, for `dismissToast`. */
 export function toast(t: Omit<Toast, 'id'>, ttl = 6000): number {
   const id = toastId++;
-  // memory notices replace each other instead of piling up over the terminal
-  toasts.value = [...toasts.value.filter((x) => !(t.kind === 'learn' && x.kind === 'learn')).slice(-3), { ...t, id }];
+  toasts.value = [...toasts.value.slice(-3), { ...t, id }];
   setTimeout(() => dismissToast(id), ttl);
   return id;
 }
@@ -151,73 +119,6 @@ async function loadClaudeState(): Promise<void> {
   }
 }
 
-// ------------------------------------------------------------------ memory
-
-export interface MemItemView {
-  id: string;
-  kind: string;
-  scope: string;
-  text: string;
-  confidence: number;
-  evidence: number;
-  uses: number;
-  pinned: boolean;
-  status: string;
-  source: string;
-  updatedAt: string;
-  lastSeenAt: string;
-}
-export interface SkillView {
-  id: string;
-  name: string;
-  description: string;
-  whenToUse: string;
-  steps: string[];
-  scope: string;
-  confidence: number;
-  evidence: number;
-  uses: number;
-  pinned: boolean;
-}
-/** What the Memory drawer counts (the memory engine is gone: the drawer itself goes with the rest of the window's memory). */
-interface MemoryStats {
-  active: number;
-  skills: number;
-  episodesPending: number;
-}
-export interface LogRun {
-  runId: string;
-  ts: string;
-  source: string;
-  sources: string[];
-  reason?: string;
-  ops: { op: string; id: string; text?: string }[];
-}
-
-export const memItems = signal<MemItemView[]>([]);
-export const memSkills = signal<SkillView[]>([]);
-export const memStats = signal<MemoryStats | null>(null);
-export const memLog = signal<LogRun[]>([]);
-export const memPulse = signal(0); // bumps whenever memory changes, drives the "evolving" indicator
-
-let memTimer: ReturnType<typeof setTimeout> | null = null;
-export function refreshMemory(delay = 150): void {
-  if (memTimer) clearTimeout(memTimer);
-  memTimer = setTimeout(async () => {
-    try {
-      const [list, stats, log] = await Promise.all([jaffer().call('memory.list', {}), jaffer().call('memory.stats', {}), jaffer().call('memory.log', { limit: 300 })]);
-      batch(() => {
-        memItems.value = list.items;
-        memSkills.value = list.skills;
-        memStats.value = stats;
-        memLog.value = log.runs;
-      });
-    } catch {
-      /* daemon restarting */
-    }
-  }, delay);
-}
-
 // ------------------------------------------------------------------ pty bus (consumed by terminal views)
 
 export const ptyBus = new Emitter<{ event: string; data: any }>();
@@ -229,7 +130,7 @@ async function refreshInfo(): Promise<void> {
     const i = await jaffer().call('session.info', {});
     batch(() => {
       const { recentCommands: _recent, panes: _panes, ...rest } = i as SessionInfo & { panes?: unknown; recentCommands?: unknown };
-      info.value = { ...info.value, ...rest };
+      info.value = { ...info.value, project: undefined, branch: undefined, ...rest }; // (the answer leaves out what there is none of: outside a repository there is no branch, not the last one)
     });
   } catch {
     /* ignore */
@@ -264,7 +165,6 @@ export async function bootstrap(): Promise<void> {
       daemonUp.value = true;
       void refreshInfo();
       void loadClaudeState();
-      refreshMemory(0);
       ptyBus.emit({ event: 'daemon.up', data: {} });
     }
   });
@@ -279,7 +179,6 @@ export async function bootstrap(): Promise<void> {
   });
   await Promise.all([refreshInfo(), loadClaudeState()]);
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
-  refreshMemory(0);
   ready.value = true;
 }
 

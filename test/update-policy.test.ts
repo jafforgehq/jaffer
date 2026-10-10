@@ -19,7 +19,7 @@ describe('promptText', () => {
     expect(t.message).toContain('0.2.0');
     expect(t.buttons).toEqual(['Update and restart', 'Later']);
     expect(t.detail).toMatch(/ends your terminal session/i);
-    expect(t.detail).toMatch(/memory is kept/i);
+    expect(t.detail).not.toMatch(/memory/i); // there is no memory to keep any more
     expect(t.detail).not.toMatch(/claude is working/i);
   });
   it('warns when Claude is working or waiting right now', () => {

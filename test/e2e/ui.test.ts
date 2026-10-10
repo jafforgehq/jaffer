@@ -121,7 +121,8 @@ describe('Jaffer UI end to end', () => {
     expect(choices).not.toMatch(/codex|gemini|other agents|api key/i);
     expect(choices).toMatch(/hooks/i); // what connecting Claude Code does is said plainly: the hooks see its prompts and tool calls
     expect(choices).toMatch(/your prompts, its tool calls and replies/i);
-    expect(choices).not.toMatch(/MCP/); // the memory tools are Settings → Claude Code, not a first-run decision
+    expect(choices).not.toMatch(/MCP/); // Jaffer has no tools of its own for Claude Code: only the hooks
+    expect(choices).not.toMatch(/memory|learn from my sessions|curate/i); // and no memory to switch on
     // starting Claude Code is a choice too, on by default, and it says who answers Claude Code's own questions
     const startBox = page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('input[type=checkbox]');
     expect(await startBox.count()).toBe(1);
@@ -164,11 +165,11 @@ describe('Jaffer UI end to end', () => {
   }, 90_000);
 
   it('a calm window: only the terminal, the title bar and the mole, whatever keys are pressed', async () => {
-    for (const k of ['Meta+b', 'Meta+j']) await page.keyboard.press(k); // the sidebar and the Claude panel are gone
+    for (const k of ['Meta+b', 'Meta+j', 'Meta+Shift+M']) await page.keyboard.press(k); // the sidebar, the Claude panel and the memory drawer are gone
     await sleep(300);
     expect(await page.locator('.rail, .statusbar, .agent, .panel-head, .side').count()).toBe(0);
-    expect(await page.locator('.titlebar .seg-btn', { hasText: 'Memory' }).count()).toBe(1); // memory is the one drawer, one click away
-    expect(await page.locator('.titlebar .seg-btn', { hasText: 'Claude' }).count()).toBe(0);
+    expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // no buttons in the title bar: the folder, the branch, the ring, the cost
+    expect(await page.locator('.titlebar', { hasText: /memory/i }).count()).toBe(0);
     const term = (await page.locator('.terminal-area').boundingBox())!;
     const pet = (await page.locator('.pet-corner').boundingBox())!;
     expect(pet.x + pet.width).toBeLessThanOrEqual(term.x + term.width + 0.5); // the mole sits inside a corner of the terminal
@@ -194,23 +195,23 @@ describe('Jaffer UI end to end', () => {
     await page.locator('.onboard button', { hasText: 'plain terminal' }).click();
     await page.waitForSelector('.onboard[data-step="choices"]');
     const text = (await page.textContent('.onboard')) ?? '';
-    expect(text).toContain('Learn from my sessions');
-    expect(text).not.toMatch(/Start Claude Code|Show what Claude is doing|curate memory/i);
+    expect(text).not.toMatch(/Start Claude Code|Show what Claude is doing|curate memory|Learn from my sessions|memory/i);
     expect(text).toMatch(/Settings → Claude Code/i); // and how to add Claude later
     await shot('01b-onboarding-plain-terminal');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
     await page.waitForSelector('.term .xterm');
     const cfg = await page.evaluate(() => window.jaffer.call('config.get'));
-    expect(cfg).toMatchObject({ onboarded: true, claude: { skipped: true }, ingest: { claudeCode: false }, memory: { llm: 'off' } }); // nothing is sent to Claude unless they switch it on later
+    expect(cfg).toMatchObject({ onboarded: true, claude: { skipped: true } }); // nothing about Claude is on unless they switch it on later
+    expect(cfg).not.toHaveProperty('memory');
+    expect(cfg).not.toHaveProperty('ingest');
     expect((await page.evaluate(() => window.jaffer.call('setup.claude.status'))).hooks).toBe(false);
     await sleep(1_800);
     expect(noArgCalls()).toBe(before); // no `claude` was typed
     // adopting Claude later, from the panel: signed in and connected, and "skipped" is gone
     fake.setLoggedIn(true);
-    await page.evaluate(() => window.jaffer.call('setup.claude.install', { mcp: false }));
+    await page.evaluate(() => window.jaffer.call('setup.claude.install', {}));
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).claude.skipped).toBe(false);
-    await page.evaluate(() => window.jaffer.call('config.patch', { memory: { llm: 'auto' }, ingest: { claudeCode: true } }));
   }, 60_000);
 
   it('first run with "Start Claude Code" switched off: Get started types nothing into the terminal', async () => {
@@ -279,8 +280,7 @@ describe('Jaffer UI end to end', () => {
 
     // back to a Mac where Claude Code is connected, as the tests after this one expect
     fake.setLoggedIn(true);
-    await page.evaluate(() => window.jaffer.call('setup.claude.install', { mcp: false }));
-    await page.evaluate(() => window.jaffer.call('config.patch', { memory: { llm: 'auto' }, ingest: { claudeCode: true } }));
+    await page.evaluate(() => window.jaffer.call('setup.claude.install', {}));
   }, 90_000);
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
@@ -298,6 +298,20 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.type('cd /tmp');
     await page.keyboard.press('Enter');
     await until(async () => (await page.textContent('.session-pill .cwd'))?.includes('/tmp'), 10_000, 'cwd in the title bar');
+  });
+
+  it('the title bar shows the git branch of the folder, and nothing outside a repository', async () => {
+    const dir = path.join(env.userHome, 'branch-pill', 'app');
+    fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/feature/login\n');
+    await page.click('.term');
+    await page.keyboard.type(`cd ${dir}`);
+    await page.keyboard.press('Enter');
+    await until(async () => /feature\/login/.test((await page.textContent('.session-pill')) ?? ''), 10_000, 'the branch in the title bar');
+    expect(await page.locator('.session-pill .branch').textContent()).toContain('feature/login');
+    await page.keyboard.type('cd /tmp');
+    await page.keyboard.press('Enter');
+    await until(async () => (await page.locator('.session-pill .branch').count()) === 0, 10_000, 'the branch to leave the title bar outside a repository');
   });
 
   it('Settings → Updates: the version, the automatic-checks switch, Check now, and what a ready update looks like', async () => {
@@ -838,47 +852,15 @@ describe('Jaffer UI end to end', () => {
     for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
   }, 90_000);
 
-  it('the Notes tab: opening it never rewrites NOTES.md, what was typed is saved even if the tab is left at once, and it cannot grow without limit', async () => {
-    const notes = path.join(env.home, 'memory', 'NOTES.md');
-    const tab = (name: string) => page.locator('.tabs button', { hasText: name }).click();
-    fs.mkdirSync(path.dirname(notes), { recursive: true });
-    const long = 'a line of the person’s own notes\n'.repeat(900); // over the 20 000 characters the tab edits
-    fs.writeFileSync(notes, long);
-    const before = fs.statSync(notes).mtimeMs;
-    await page.keyboard.press('Meta+Shift+M');
-    await page.waitForSelector('.memory');
-    await tab('Notes');
-    await page.waitForSelector('.notes textarea');
-    await sleep(1300); // longer than the half second the tab waits before saving
-    expect(fs.readFileSync(notes, 'utf8')).toBe(long); // just looking changed nothing: not cut, not rewritten
-    expect(fs.statSync(notes).mtimeMs).toBe(before);
-    expect(await page.getAttribute('.notes textarea', 'maxlength')).toBe('20000');
-    // typed, then the tab is left within the half second: it is saved all the same
-    fs.writeFileSync(notes, 'old note\n');
-    await tab('Learned');
-    await tab('Notes');
-    await until(async () => (await page.inputValue('.notes textarea')) === 'old note\n', 8_000, 'the notes to load');
-    await page.fill('.notes textarea', 'typed and left at once');
-    await tab('Learned');
-    await until(async () => fs.readFileSync(notes, 'utf8') === 'typed and left at once', 5_000, 'the notes to be saved on leaving the tab');
-    // and again when the whole drawer is closed straight after typing
-    await tab('Notes');
-    await until(async () => (await page.inputValue('.notes textarea')) === 'typed and left at once', 8_000, 'the notes to load again');
-    await page.fill('.notes textarea', 'typed, drawer closed');
-    await page.keyboard.press('Meta+Shift+M');
-    await until(async () => fs.readFileSync(notes, 'utf8') === 'typed, drawer closed', 5_000, 'the notes to be saved on closing the drawer');
-    fs.rmSync(notes, { force: true });
-  }, 60_000);
-
   it('Settings: no label wraps a button, focus goes into the dialog and back, Open at login tells the truth, the colour scheme follows the theme', async () => {
     const dialogFocused = () => page.evaluate(() => !!document.activeElement?.closest('.modal'));
     const nav = (name: string) => page.locator('.settings-nav button', { hasText: name }).click();
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await until(dialogFocused, 3_000, 'the keyboard to move into the dialog'); // the terminal does not keep it behind the dialog
-    for (const section of ['Appearance', 'Memory', 'Claude Code', 'Updates', 'Reset']) {
+    for (const section of ['Appearance', 'Claude Code', 'Updates', 'Reset']) {
       await nav(section);
-      // a <label> around a button forwards a click on its words to the button: "Add memory tools" or "Reset…" by a stray click
+      // a <label> around a button forwards a click on its words to the button: "Reinstall" or "Reset…" by a stray click
       expect(await page.locator('label.field:has(button)').count(), section).toBe(0);
     }
     // "Claude finished" notifications are on until switched off (the notification itself is the main process's; the switch is the setting)
@@ -1294,8 +1276,7 @@ describe('Jaffer UI end to end', () => {
     await page.click('.resume-x');
     await until(async () => (await page.locator(chip).count()) === 0, 5_000, 'the dismissed button to go');
     expect(await page.evaluate(() => !!document.activeElement?.closest('.term'))).toBe(true); // focus goes back to the terminal, not to nowhere
-    // (the stand-in `claude` stays for the next test, which takes it away: a command more or less moves when memory reflects, and its
-    // toast, into another test)
+    // (the stand-in `claude` stays for the next test, which takes it away)
     // the setting
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
@@ -1616,25 +1597,6 @@ describe('Jaffer UI end to end', () => {
     }
   }, 30_000);
 
-  it('shows memory being learned, lets you pin and forget, and logs every change', async () => {
-    await page.keyboard.press('Meta+Shift+M');
-    await page.waitForSelector('.memory');
-    // an explicit memory from the CLI shows up live, with an undo toast
-    await page.evaluate(() => window.jaffer.call('memory.remember', { text: 'Prefer pnpm over npm in every JavaScript project', kind: 'preference' }));
-    await page.waitForSelector('.mem');
-    await page.waitForSelector('.toast.learn');
-    expect(await page.textContent('.mem-list')).toContain('Prefer pnpm over npm');
-    await shot('05-memory');
-    await page.click('.mem .icon-btn[title^="Pin"]');
-    await page.waitForSelector('.mem.pinned');
-    await page.click('.tabs button:has-text("Activity")');
-    await page.waitForSelector('.run');
-    expect(await page.textContent('.mem-list')).toContain('add');
-    await page.click('.tabs button:has-text("Learned")');
-    await page.click('.mem .icon-btn[title="Forget"]');
-    await until(async () => !(await page.$('.mem')), 8000, 'memory to disappear');
-  }, 40_000);
-
   it('command palette runs actions', async () => {
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
@@ -1665,9 +1627,9 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Memory', 'Claude Code', 'Updates', 'Reset']);
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Claude Code', 'Updates', 'Reset']);
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
-    for (const section of ['Memory', 'Claude Code']) {
+    for (const section of ['Appearance', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);
       const body = (await page.textContent('.settings')) ?? '';
       expect(body, `Settings > ${section}`).not.toMatch(/api key|Anthropic key|sk-ant/i);
@@ -1710,49 +1672,31 @@ describe('Jaffer UI end to end', () => {
     await shot('10-restored');
   }, 40_000);
 
-  it('the layout lines up at any window size: the title bar shares one centre line, the card has even margins, the drawer matches the card, the mole sits inside, nothing overflows', async () => {
+  it('the layout lines up at any window size: the pill is centred in the title bar and on the window, the card has even margins, the mole sits inside, nothing overflows', async () => {
     const box = async (sel: string) => (await page.locator(sel).first().boundingBox())!;
     const cy = (b: { y: number; height: number }) => b.y + b.height / 2;
     const cx = (b: { x: number; width: number }) => b.x + b.width / 2;
-    const measure = async (w: number, h: number, drawer: boolean) => {
+    const measure = async (w: number, h: number) => {
       const bar = await box('.titlebar');
       const pill = await box('.session-pill');
-      const mem = await box('.titlebar .seg');
       const card = await box('.terminal-area');
       const pet = await box('.pet-corner');
-      const where = `${w}x${h}${drawer ? ' with the memory drawer' : ''}`;
+      const where = `${w}x${h}`;
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 0.5), `no sideways scroll at ${where}`).toBe(true);
       expect(Math.abs(cy(pill) - cy(bar)), `pill centred in the title bar at ${where}`).toBeLessThan(1.5);
-      expect(Math.abs(cy(mem) - cy(bar)), `Memory button centred in the title bar at ${where}`).toBeLessThan(1.5);
       expect(Math.abs(cx(pill) - w / 2), `pill centred on the window at ${where}`).toBeLessThan(2);
       const left = card.x;
       const bottom = h - (card.y + card.height);
       expect(Math.abs(left - bottom), `card margins even (left ${left}, bottom ${bottom}) at ${where}`).toBeLessThan(1.5);
       expect(pet.x + pet.width, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.x + card.width);
       expect(pet.y + pet.height, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.y + card.height);
-      if (drawer) {
-        const side = await box('.side');
-        expect(Math.abs(side.y - card.y), `drawer top meets the card top at ${where}`).toBeLessThan(1);
-        expect(Math.abs(side.height - card.height), `drawer as tall as the card at ${where}`).toBeLessThan(1);
-        if (w > 760) expect(Math.abs(side.x - (card.x + card.width) - left), `gap between card and drawer equals the margin at ${where}`).toBeLessThan(1.5); // a narrow window lets the drawer lie over the terminal instead
-        expect(Math.abs(w - (side.x + side.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
-      } else {
-        expect(Math.abs(w - (card.x + card.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
-      }
+      expect(Math.abs(w - (card.x + card.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
     };
-    if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // start with the drawer closed
-    await page.waitForSelector('.side', { state: 'detached' });
     for (const [w, h] of [[1360, 860], [900, 640], [660, 520]] as const) {
       await page.setViewportSize({ width: w, height: h });
       await sleep(200);
-      await measure(w, h, false);
-      await page.keyboard.press('Meta+Shift+M');
-      await page.waitForSelector('.side');
-      await sleep(200);
-      await measure(w, h, true);
+      await measure(w, h);
       if (w < 1000) await shot(`15-layout-${w}`);
-      await page.keyboard.press('Meta+Shift+M');
-      await page.waitForSelector('.side', { state: 'detached' });
     }
     await page.setViewportSize({ width: 1360, height: 860 });
   });

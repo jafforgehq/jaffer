@@ -30,7 +30,7 @@ export interface PromptText {
 
 export function promptText(o: { version: string; claudeBusy: boolean }): PromptText {
   const lines = [
-    'Updating restarts Jaffer and ends your terminal session: anything running in it stops. Your memory is kept, and the shell comes back in the same folder.',
+    'Updating restarts Jaffer and ends your terminal session: anything running in it stops. The shell comes back in the same folder.',
   ];
   if (o.claudeBusy) lines.push('Claude is working or waiting for you right now; updating stops it.');
   lines.push('Choose Later to keep working. Jaffer will ask again the next time it starts.');

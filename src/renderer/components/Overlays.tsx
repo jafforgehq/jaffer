@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, overlay, patchConfig, setSide, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, overlay, patchConfig, toast, updateState, type ClaudeAuthState } from '../state';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, restartClaude, runClaude, type Action } from '../actions';
@@ -9,7 +9,7 @@ import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { agentStatusText, errorText, isOldDaemonError, OLD_DAEMON_TEXT, type AgentStatus } from '../../shared/keep-running';
-import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
+import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -57,12 +57,11 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (
 
 // ------------------------------------------------------------------ palette
 
-const SECTION_ORDER = ['View', 'Claude', 'Terminal', 'Memory', 'Integrations', 'Appearance', 'App'];
+const SECTION_ORDER = ['View', 'Claude', 'Terminal', 'Integrations', 'Appearance', 'App'];
 const SECTION_ICON: Record<string, (p: { size: number }) => VNode> = {
   View: IconLayout,
   Claude: IconAgent,
   Terminal: IconTerminal,
-  Memory: IconBrain,
   Integrations: IconPlug,
   Appearance: IconPalette,
   App: IconGear,
@@ -231,16 +230,16 @@ function Field({ label, hint, status, children, buttons }: { label: string; hint
       <span class="field-ctl">{children}</span>
     </>
   );
-  // A <label> forwards a click on its words to its first button, which would press "Add memory tools" or "Reset…" for a stray click.
+  // A <label> forwards a click on its words to its first button, which would press "Reinstall" or "Reset…" for a stray click.
   return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
-type Section = 'appearance' | 'memory' | 'integrations' | 'updates' | 'reset';
+type Section = 'appearance' | 'integrations' | 'updates' | 'reset';
 
 export function Settings(): VNode {
   const c = cfg.value!;
   const [section, setSection] = useState<Section>('appearance');
-  const [claude, setClaude] = useState<{ claudeInstalled: boolean; hooks: boolean; mcp: boolean } | null>(null);
+  const [claude, setClaude] = useState<{ claudeInstalled: boolean; hooks: boolean } | null>(null);
   const [busy, setBusy] = useState('');
   const refresh = () => {
     void call('setup.claude.status', {}).then(setClaude).catch(() => undefined);
@@ -264,7 +263,6 @@ export function Settings(): VNode {
 
   const nav: { id: Section; label: string; icon: VNode }[] = [
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
-    { id: 'memory', label: 'Memory', icon: <IconBrain size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
     { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
     { id: 'reset', label: 'Reset', icon: <IconReset size={14} /> },
@@ -397,30 +395,17 @@ export function Settings(): VNode {
             </>
           )}
 
-          {section === 'memory' && (
-            <>
-              <h4>Memory</h4>
-              <p class="lede">What Jaffer learns, how, and for how long. Everything stays on this Mac.</p>
-              <div class="settings-foot">
-                Session data lives in{' '}
-                <button class="linkish" onClick={() => void window.jaffer.reveal()}>
-                  ~/.jaffer
-                </button>
-              </div>
-            </>
-          )}
-
           {section === 'integrations' && (
             <>
               <h4>Claude Code</h4>
-              <p class="lede">Jaffer runs on your Claude subscription, through your Claude Code login. Share what Jaffer learns with Claude Code, and learn from it in return. Install and sign-in help is right here too; Claude is optional.</p>
+              <p class="lede">Jaffer follows the Claude Code you run in its terminal, through hooks: the companion and the notification show what Claude is doing. Install and sign-in help is right here too; Claude is optional.</p>
               <SignInStep onDone={refresh} />
-              <Field buttons label="Claude Code" hint={claude ? (claude.claudeInstalled ? `${claude.hooks ? 'hooks on' : 'hooks off'} · ${claude.mcp ? 'memory tools (MCP) on' : 'memory tools (MCP) off'}` : 'not found on PATH') : '…'}>
+              <Field buttons label="Claude Code" hint={claude ? (claude.claudeInstalled ? (claude.hooks ? 'hooks on' : 'hooks off') : 'not found on PATH') : '…'}>
                 <span class="row">
-                  <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code now shares Jaffer’s memory.')}>
-                    {claude?.mcp && claude.hooks ? 'Reinstall' : claude?.hooks ? 'Add memory tools' : 'Connect'}
+                  <button class="btn primary" disabled={busy === 'cc' || !claude?.claudeInstalled} onClick={() => void run('cc', () => call('setup.claude.install', {}), 'Claude Code is connected: Jaffer’s hooks are installed.')}>
+                    {claude?.hooks ? 'Reinstall' : 'Connect'}
                   </button>
-                  {(claude?.mcp || claude?.hooks) && (
+                  {claude?.hooks && (
                     <button class="btn" disabled={busy === 'ccr'} onClick={() => void run('ccr', () => call('setup.claude.remove', {}), 'Disconnected from Claude Code.')}>
                       Disconnect
                     </button>
@@ -532,7 +517,7 @@ function ResetSection(): VNode {
   return (
     <>
       <h4>Reset</h4>
-      <p class="lede">Start from scratch, for a clean install. This ends your terminal session and removes Jaffer's memory, settings, hooks and memory tools from this Mac. Claude Code itself, its login and your own Claude settings are not touched. Unless you choose to delete it, a backup of ~/.jaffer is kept next to it.</p>
+      <p class="lede">Start from scratch, for a clean install. This ends your terminal session and removes Jaffer's settings and hooks from this Mac. Claude Code itself, its login and your own Claude settings are not touched. Unless you choose to delete it, a backup of ~/.jaffer is kept next to it.</p>
       <Field buttons label="Reset Jaffer" hint="asks first; the app restarts as if it were freshly installed">
         <button class="btn danger" disabled={busy} onClick={() => void reset()}>
           Reset…
@@ -701,8 +686,6 @@ async function startClaudeWhenReady(): Promise<void> {
 export function Onboarding(): VNode {
   const [stage, setStage] = useState<'signin' | 'choices'>('signin');
   const [plain, setPlain] = useState(false); // chose a terminal without Claude: no Claude choices, nothing installed, nothing typed
-  const [learn, setLearn] = useState(true);
-  const [curate, setCurate] = useState(true);
   const [claude, setClaude] = useState(true);
   const [start, setStart] = useState(true);
   // on in the Claude path; the plain terminal installs nothing unless the person turns it on (`null`: not touched, so it follows the path)
@@ -718,22 +701,16 @@ export function Onboarding(): VNode {
     setBusy(true);
     try {
       if (plain) {
-        // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks, not the curation of memory by Claude
-        await patchConfig({ onboarded: true, memory: { enabled: learn, llm: 'off' }, ingest: { claudeCode: false }, claude: { skipped: true } });
+        // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks
+        await patchConfig({ onboarded: true, claude: { skipped: true } });
         if (keepOn) keepRunning(); // (only when the person turned it on here)
         overlay.value = null;
-        setSide(null);
         return;
       }
-      await patchConfig({
-        onboarded: true,
-        memory: { enabled: learn, llm: curate && learn ? 'auto' : 'off' },
-        ingest: { claudeCode: claude && learn },
-      });
-      if (claude) await call('setup.claude.install', { mcp: false }).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude; the memory tools are a Settings choice
+      await patchConfig({ onboarded: true });
+      if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude
       if (keepOn) keepRunning();
       overlay.value = null;
-      setSide(null); // just the terminal at first
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
     } catch (e) {
       toast({ kind: 'error', text: `Could not save your choices: ${e instanceof Error ? e.message : String(e)}` });
@@ -756,7 +733,7 @@ export function Onboarding(): VNode {
             </p>
           ) : (
             <p>
-              A terminal with <b>one session that never ends</b> and a memory that <b>keeps learning from you</b>.
+              A terminal with <b>one session that never ends</b>.
             </p>
           )}
         </div>
@@ -774,41 +751,20 @@ export function Onboarding(): VNode {
               </div>
               <div class="feature">
                 <div class="f-ico">
-                  <IconBrain size={15} />
-                </div>
-                <b>Memory that evolves</b>
-                Jaffer notices your preferences, your projects' conventions and the fixes that worked, and lets stale things fade. See, edit, pin and undo all of it.
-              </div>
-              <div class="feature">
-                <div class="f-ico">
                   <IconBolt size={15} />
                 </div>
                 <b>Claude Code, supercharged</b>
-                Run <code>claude</code> right here. Jaffer feeds it what it has learned and learns from what you do together.
+                Run <code>claude</code> right here. A little companion shows when it works and when it needs you, and Jaffer tells you when it has finished.
               </div>
             </div>
             <div class="choices">
-              <label>
-                <Switch checked={learn} onChange={setLearn} />
-                <span class="t">
-                  <b>Learn from my sessions</b>
-                  <small>{plain ? 'Commands are redacted for secrets and stay on this Mac.' : 'Commands and conversations are redacted for secrets and stay on this Mac.'}</small>
-                </span>
-              </label>
               {!plain && (
               <>
-              <label class={learn ? '' : 'off'}>
-                <Switch disabled={!learn} checked={curate && learn} onChange={setCurate} />
-                <span class="t">
-                  <b>Let Claude curate memory</b>
-                  <small>Sends redacted summaries of recent activity to Claude (through your Claude login) for smarter notes. Otherwise Jaffer learns offline with simple rules.</small>
-                </span>
-              </label>
               <label>
                 <Switch checked={claude} onChange={setClaude} />
                 <span class="t">
                   <b>Let Jaffer follow Claude Code</b>
-                  <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the mole can react and you get a notification when Claude needs you; they only listen to a Claude Code running in Jaffer's own terminal. It also learns from Claude Code's local transcripts. More options are in Settings → Claude Code.</small>
+                  <small>Adds hooks to Claude Code. They tell Jaffer what it does in this terminal (your prompts, its tool calls and replies) so the mole can react and you get a notification when Claude needs you; they only listen to a Claude Code running in Jaffer's own terminal. More options are in Settings → Claude Code.</small>
                 </span>
               </label>
               <label>

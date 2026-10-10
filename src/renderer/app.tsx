@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, openOverlay, overlay, ready, setSideWidth, side, sideWidth, toggleSide, appVersion } from './state';
+import { activePane, cfg, openOverlay, overlay, ready, appVersion } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
-import { MemoryPanel } from './components/MemoryPanel';
 import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
@@ -21,22 +20,6 @@ function applyTheme(): void {
   root.dataset.motion = c.appearance.animations === false ? 'off' : 'on';
 }
 
-function SideResizer(): VNode {
-  const down = (e: PointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sideWidth.value;
-    const move = (ev: PointerEvent) => setSideWidth(startW - (ev.clientX - startX));
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  };
-  return <div class="side-resizer" onPointerDown={down} />;
-}
-
 export function App(): VNode | null {
   useEffect(() => effect(applyTheme), []);
   const off = useRef<(() => void) | null>(null);
@@ -48,7 +31,6 @@ export function App(): VNode | null {
       if (!e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === 'p' && !e.shiftKey) (e.preventDefault(), overlay.value === 'palette' ? (overlay.value = null) : openOverlay('palette'));
-      else if (k === 'm' && e.shiftKey) (e.preventDefault(), toggleSide('memory'));
       else if (k === ',') (e.preventDefault(), openOverlay('settings'));
       else if (k === 'f' && !e.shiftKey) (e.preventDefault(), openOverlay('find'));
     };
@@ -73,12 +55,6 @@ export function App(): VNode | null {
             <Pet />
             {overlay.value === 'find' && <FindBar />}
           </div>
-          {side.value === 'memory' && (
-            <aside class="side" style={{ width: `${sideWidth.value}px` }}>
-              <SideResizer />
-              <MemoryPanel />
-            </aside>
-          )}
         </div>
       </div>
       <Toasts />

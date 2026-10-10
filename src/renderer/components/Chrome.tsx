@@ -1,9 +1,9 @@
 import type { VNode } from 'preact';
-import { cfg, currentClaude, resumeOffer, daemonUp, dismissToast, info, memPulse, safeCommand, side, tildePath, toasts, toggleSide } from '../state';
+import { cfg, currentClaude, resumeOffer, daemonUp, dismissToast, info, safeCommand, tildePath, toasts } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
 import type { ClaudeCost } from '../../core/claude/watcher';
-import { IconBrain, IconBranch, IconInfo, IconPlay, IconX } from './icons';
+import { IconBranch, IconInfo, IconPlay, IconX } from './icons';
 import { dismissResume, resumeClaude } from '../actions';
 
 function shortPath(p: string): string {
@@ -72,12 +72,6 @@ export function TitleBar(): VNode {
           </span>
         )}
         {cost && <CostChip cost={cost} />}
-        <div class="seg">
-          <button class={`seg-btn seg-mem ${side.value === 'memory' ? 'on' : ''}`} title="Memory (⇧⌘M)" onClick={() => toggleSide('memory')}>
-            <IconBrain size={14} /> Memory
-            {memPulse.value > 0 && <span class="pulse" key={memPulse.value} />}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -88,7 +82,7 @@ export function Toasts(): VNode {
     <div class="toasts">
       {toasts.value.map((t) => (
         <div key={t.id} class={`toast ${t.kind}`}>
-          <span class="toast-ico">{t.kind === 'learn' ? <IconBrain size={13} /> : t.kind === 'error' ? <IconX size={13} /> : <IconInfo size={13} />}</span>
+          <span class="toast-ico">{t.kind === 'error' ? <IconX size={13} /> : <IconInfo size={13} />}</span>
           <span class="toast-text">{t.text}</span>
           {t.action && (
             <button
