@@ -137,17 +137,24 @@ export function hooksInstalled(home: string = os.homedir()): boolean {
 
 // ------------------------------------------------------------------ the claude CLI
 
+/**
+ * Runs a program and gives up at `timeout`: it is killed with SIGKILL, because the one that may hang is a login shell (`findClaude`), and an
+ * interactive shell ignores SIGTERM (a shell stuck in its rc files would otherwise outlive the call, and the call would wait for it).
+ */
 function run(file: string, args: string[], env: NodeJS.ProcessEnv, timeout = 20_000): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    execFile(file, args, { env, timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(file, args, { env, timeout, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err ? ((err as { code?: number }).code ?? 1) : 0;
       resolve({ code: typeof code === 'number' ? code : 1, out: `${stdout}${stderr}` });
     });
   });
 }
 
-/** Locate `claude` the way the user's own shell would (the daemon may have a minimal PATH). */
-export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+/**
+ * Locate `claude` the way the user's own shell would (the daemon may have a minimal PATH). The last resort, the person's login shell, gets
+ * `lookupMs` at most (8 s).
+ */
+export async function findClaude(env: NodeJS.ProcessEnv = process.env, lookupMs = 8_000): Promise<string | null> {
   // PATH first, in order (the first hit is the one the user's shell runs), then the usual install locations.
   const candidates = [
     ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, 'claude')),
@@ -166,7 +173,7 @@ export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<
   }
   const shell = env.SHELL && fs.existsSync(env.SHELL) ? env.SHELL : '/bin/zsh';
   if (fs.existsSync(shell)) {
-    const r = await run(shell, ['-lic', 'command -v claude'], env, 8000);
+    const r = await run(shell, ['-lic', 'command -v claude'], env, lookupMs);
     const line = r.out.trim().split('\n').pop()?.trim();
     if (r.code === 0 && line && line.startsWith('/')) return line;
   }

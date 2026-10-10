@@ -172,6 +172,7 @@ describe('removeLegacyAgent: the login agent of an older Jaffer (a fake launchct
       expect(execFileMock).toHaveBeenCalledTimes(1);
       expect(execFileMock.mock.calls[0]![0]).toBe('/bin/launchctl');
       expect(execFileMock.mock.calls[0]![1]).toEqual(['bootout', TARGET(501)]);
+      expect(execFileMock.mock.calls[0]![2]).toMatchObject({ timeout: 20_000, killSignal: 'SIGKILL' }); // (bounded: a launchctl that hangs is killed)
     } else {
       expect(execFileMock).not.toHaveBeenCalled(); // (no launchd off macOS)
     }

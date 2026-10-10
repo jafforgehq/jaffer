@@ -50,13 +50,20 @@ const OWN_ENTRIES = ['config.json', 'run', 'shell', 'bin', 'window.json', 'updat
  * in its name, never a code checkout (a `.git` or `package.json` in it), and a folder that exists must hold Jaffer's own files
  * (or nothing at all). JAFFER_HOME pointed at the wrong place must not cost anyone a project. Reset and the first start's clean-up
  * (`migrate.ts`) both ask it before they remove anything in it.
+ * The folder is judged by where it really is, links resolved: a `~/.jaffer` that is a link to the person's home (or a folder above it) is
+ * refused like the home itself, and one that is a link must point at a folder named like Jaffer's (a link that points nowhere is refused).
  */
 export function assertJafferHome(home: string, userHome: string): string {
   const h = path.resolve(home);
   const u = path.resolve(userHome);
   const inside = (parent: string, child: string) => child === parent || child.startsWith(parent + path.sep);
   const refuse = () => new Error(`Refusing to reset ${h}: it is not clearly Jaffer's own folder.`);
-  if (h === path.parse(h).root || inside(h, u) || path.dirname(h) === path.parse(h).root || !/jaffer/i.test(path.basename(h))) throw refuse();
+  const unsafe = (p: string) => p === path.parse(p).root || inside(p, u) || path.dirname(p) === path.parse(p).root || !/jaffer/i.test(path.basename(p));
+  if (unsafe(h)) throw refuse();
+  const realHome = realPath(h);
+  const realUser = realPath(u);
+  if (unsafe(realHome) || inside(realHome, realUser)) throw refuse();
+  if (isLink(h) && !fs.existsSync(h)) throw refuse(); // a link to nothing: there is nothing of Jaffer's there, and nothing to write into
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(h);
@@ -66,6 +73,23 @@ export function assertJafferHome(home: string, userHome: string): string {
   if (entries.includes('.git') || entries.includes('package.json')) throw refuse();
   if (entries.length > 0 && !entries.some((e) => OWN_ENTRIES.includes(e))) throw refuse();
   return h;
+}
+
+/** `p` with every link in it resolved; for a path that is not there (yet), its nearest folder that is, resolved, and the rest as written. */
+function realPath(p: string): string {
+  let head = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(head), ...rest);
+    } catch {
+      /* not there (or a link to nothing): one folder up */
+    }
+    const up = path.dirname(head);
+    if (up === head) return path.resolve(p);
+    rest.unshift(path.basename(head));
+    head = up;
+  }
 }
 
 const stamp = (d: Date) => {

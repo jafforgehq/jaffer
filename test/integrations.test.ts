@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { fakeClaude } from './helpers/fake-claude';
 import { claudeStatus, findClaude, hooksInstalled, hooksPointAt, installHooks, removeHooks, removeMcp, setupClaude, teardownClaude } from '../src/core/integrations/claude';
@@ -10,7 +10,10 @@ let env: TestEnv;
 beforeEach(() => {
   env = makeEnv();
 });
-afterEach(() => env.cleanup());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  env.cleanup();
+});
 
 describe('Claude Code hooks', () => {
   it('merges into existing settings without disturbing the user\'s own hooks and removes cleanly', () => {
@@ -140,6 +143,27 @@ describe('findClaude', () => {
     const second = mk('second');
     expect(await findClaude({ HOME: env.userHome, PATH: `${first}:${second}` })).toBe(path.join(first, 'claude'));
     expect(await findClaude({ HOME: env.userHome, PATH: `${second}:${first}` })).toBe(path.join(second, 'claude'));
+  });
+
+  it.skipIf(['/opt/homebrew/bin/claude', '/usr/local/bin/claude'].some((p) => fs.existsSync(p)))('a login shell that hangs in its rc files is stopped at the time limit, also one that ignores SIGTERM (as an interactive shell does), and nothing is left running', async () => {
+    vi.stubEnv('HOME', env.userHome); // (the usual install places under the home: none here, so the login shell is asked)
+    const shell = path.join(env.root, 'stuck-shell');
+    const pidFile = path.join(env.root, 'shell.pid');
+    fs.writeFileSync(shell, `#!/bin/sh\necho $$ > '${pidFile}'\ntrap '' TERM\nexec /bin/sleep 30\n`, { mode: 0o755 });
+    const t0 = Date.now();
+    expect(await findClaude({ HOME: env.userHome, PATH: '', SHELL: shell }, 800)).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 50 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(alive()).toBe(false);
   });
 });
 

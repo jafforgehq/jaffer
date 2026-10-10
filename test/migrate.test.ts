@@ -223,7 +223,7 @@ describe('migrateToPlainTerminal: the first start of 0.6.0 on a Mac an older Jaf
     for (const k of ['restoreScreen', 'resumeClaude', 'keepRunning', 'autoResume']) expect(cfg.session, k).not.toHaveProperty(k);
     expect(cfg.migrated).toBe(1);
     // and it says what it did
-    expect(read(P.log())).toMatch(/config done, agent done, backup done, oldData done, claudeMd done, skills done, firstDayBlocks done, mcp done/);
+    expect(read(P.log())).toMatch(/agent done, backup done, oldData done, claudeMd done, skills done, firstDayBlocks done, config done, mcp done/); // (in the order they ran)
   });
 
   it('keeps what is the person\'s, byte for byte: their text around the block, their own skills and hooks, the other agents\' files, Jaffer\'s live settings and what the terminal still uses', async () => {
@@ -591,6 +591,125 @@ describe('migrateToPlainTerminal: the first start of 0.6.0 on a Mac an older Jaf
     const r = await migrateToPlainTerminal(opts({ launchctl: fakeLaunchctl().launchctl, claudeBin: path.join(dir, 'claude') }));
     expect(r.steps.mcp).toBe('done');
     expect(read(path.join(env.root, 'npm-calls.log'))).toBe('mcp remove jaffer -s user\n');
+  });
+
+  it('an interrupted first start (the app killed while launchctl is still asked) leaves the marker unset and a trace in migrate.log, and the next start does it all', async () => {
+    asDefaultHome();
+    upgradedMac();
+    const claude = fakeClaude();
+    let asked = 0;
+    // the first start: launchctl never answers, and the app is quit or killed meanwhile (this run never goes on)
+    void migrateToPlainTerminal(opts({ launchctl: () => (asked++, new Promise<never>(() => undefined)), claudeBin: claude.bin }));
+    for (let i = 0; i < 100 && !asked; i++) await new Promise((res) => setTimeout(res, 20));
+    expect(asked).toBe(1);
+    expect(read(P.log())).toMatch(/clean-up started/);
+    expect(read(P.log())).not.toMatch(/config done/);
+    const cfg = JSON.parse(read(P.config()));
+    expect(cfg).not.toHaveProperty('migrated'); // not marked: the next start runs it again
+    expect(cfg).toHaveProperty('memory');
+    expect(fs.existsSync(path.join(env.home, 'memory', 'NOTES.md'))).toBe(true);
+    expect(fs.existsSync(path.join(env.home, 'session', 'screen.json'))).toBe(true);
+    expect(claude.calls()).toEqual([]);
+    // the next start
+    const lc = fakeLaunchctl();
+    const r = await migrateToPlainTerminal(opts({ launchctl: lc.launchctl, claudeBin: claude.bin }));
+    expect(r.steps).toEqual(allDone);
+    expect(lc.calls).toEqual([['bootout', `gui/501/${AGENT_LABEL}`]]);
+    expect(gone(path.join(env.home, 'memory'))).toBe(true);
+    expect(gone(path.join(env.home, 'session'))).toBe(true);
+    expect(fs.readdirSync(P.backup()).sort()).toEqual(['NOTES.md', 'POLICY.md']);
+    expect(JSON.parse(read(P.config()))).toMatchObject({ migrated: 1 });
+    expect(JSON.parse(read(P.config()))).not.toHaveProperty('memory');
+    expect(claude.calls()).toEqual(['mcp remove jaffer -s user']);
+    expect(read(P.log()).match(/clean-up started/g)).toHaveLength(2);
+  });
+
+  it('migrate.log says what happened: a line when it starts, and on a fresh install it does not claim to have cleaned up after an older version', async () => {
+    asDefaultHome();
+    await migrateToPlainTerminal(opts({ launchctl: fakeLaunchctl({ code: 3 }).launchctl }));
+    const fresh = read(P.log());
+    expect(fresh).toMatch(/clean-up started/);
+    expect(fresh).not.toMatch(/after an older version/);
+    expect(fresh).toMatch(/no older Jaffer folder/);
+    fs.rmSync(env.home, { recursive: true });
+    upgradedMac();
+    await migrateToPlainTerminal(opts({ launchctl: fakeLaunchctl().launchctl, claudeBin: fakeClaude().bin }));
+    expect(read(P.log())).toMatch(/after an older version/);
+    expect(read(P.log())).not.toContain(env.root);
+  });
+
+  it('a failed backup and another removal that fails are both in the log: the memory is kept, and why the other did not go', async () => {
+    asDefaultHome();
+    upgradedMac();
+    mk(P.backup().replace(/\/$/, ''), 'a file where the backup folder would go');
+    const outside = path.join(env.root, 'usr-local-bin');
+    mk(path.join(outside, 'jafferd'), "someone else's jafferd");
+    fs.rmSync(path.join(env.home, 'bin'), { recursive: true });
+    fs.symlinkSync(outside, path.join(env.home, 'bin'));
+    const log = quiet();
+    try {
+      const r = await migrateToPlainTerminal(opts({ launchctl: fakeLaunchctl().launchctl, claudeBin: fakeClaude().bin }));
+      expect(r.steps.oldData).toBe('failed');
+      const text = read(P.log());
+      expect(text).toMatch(/oldData failed: .*memory kept/);
+      expect(text).toMatch(/oldData failed: .*bin\/jafferd/);
+      expect(read(path.join(env.home, 'memory', 'NOTES.md'))).toBe(NOTES);
+      expect(read(path.join(outside, 'jafferd'))).toBe("someone else's jafferd");
+      expect(gone(path.join(env.home, 'session'))).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('a Jaffer folder that is a link is judged by where it points: a link to the person\'s home (or a folder above it, or one not named like Jaffer\'s, or nowhere) is refused and nothing in it is deleted', async () => {
+    // the person's home holds folders with the names the clean-up removes
+    for (const d of ['bin', 'memory', 'session']) mk(path.join(env.userHome, d, 'mine.txt'), 'the person\'s');
+    mk(path.join(env.userHome, 'bin', 'jafferd'), 'the person\'s');
+    const victim = path.join(env.root, 'projects');
+    for (const d of ['bin', 'memory', 'session']) mk(path.join(victim, d, 'mine.txt'), 'the person\'s');
+    const log = quiet();
+    try {
+      for (const [name, target] of [
+        ['to-home', env.userHome],
+        ['to-parent', env.root],
+        ['to-other', victim],
+        ['to-nothing', path.join(env.root, 'gone', 'jaffer-home')], // (a link that points nowhere: nothing is written through it either)
+      ] as const) {
+        const linked = path.join(env.root, 'links', name, '.jaffer');
+        fs.mkdirSync(path.dirname(linked), { recursive: true });
+        fs.symlinkSync(target, linked);
+        forcedHomes.add(linked);
+        const before = snapshot(env.root);
+        const lc = fakeLaunchctl();
+        const claude = fakeClaude();
+        const r = await migrateToPlainTerminal({ home: linked, userHome: env.userHome, uid: 501, launchctl: lc.launchctl, claudeBin: claude.bin });
+        expect(r.steps, name).toEqual({ home: 'failed', ...allSkipped });
+        expect(lc.calls).toEqual([]);
+        expect(claude.calls()).toEqual([]);
+        const after = snapshot(env.root);
+        for (const k of Object.keys(after)) if (k.includes('fake-bin')) delete after[k];
+        for (const k of Object.keys(before)) if (k.includes('fake-bin')) delete before[k];
+        expect(after, name).toEqual(before);
+      }
+    } finally {
+      log.mockRestore();
+    }
+    for (const d of ['bin', 'memory', 'session']) expect(read(path.join(env.userHome, d, 'mine.txt'))).toBe('the person\'s');
+    expect(read(path.join(victim, 'memory', 'mine.txt'))).toBe('the person\'s');
+  });
+
+  it('a Jaffer folder that is a link to a folder named like Jaffer\'s (kept in a synced folder) is still Jaffer\'s: it is cleaned up inside its target', async () => {
+    upgradedMac();
+    const synced = path.join(env.root, 'Dropbox', 'jaffer-home');
+    fs.mkdirSync(path.dirname(synced), { recursive: true });
+    fs.renameSync(env.home, synced);
+    fs.symlinkSync(synced, env.home);
+    const r = await migrateToPlainTerminal(opts({ launchctl: fakeLaunchctl().launchctl, claudeBin: fakeClaude().bin }));
+    expect(r.steps.oldData).toBe('done');
+    expect(gone(path.join(synced, 'memory'))).toBe(true);
+    expect(gone(path.join(synced, 'session'))).toBe(true);
+    expect(fs.lstatSync(env.home).isSymbolicLink()).toBe(true); // (the link itself stays: it is how the person keeps it)
+    expect(JSON.parse(read(path.join(synced, 'config.json'))).migrated).toBe(1);
   });
 
   it('a claude that is not a stand-in in the test\'s folder is never run (the fake execFile refuses it): the step fails, nothing else changes', async () => {

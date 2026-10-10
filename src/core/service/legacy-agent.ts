@@ -22,7 +22,7 @@ function realLaunchctl(args: string[]): Promise<{ code: number }> {
   return new Promise((resolve) => {
     if (process.platform !== 'darwin') return resolve({ code: 1 });
     try {
-      execFile('/bin/launchctl', args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 1 << 20 }, (err) => {
+      execFile('/bin/launchctl', args, { encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: 1 << 20 }, (err) => {
         if (!err) return resolve({ code: 0 });
         const code = (err as NodeJS.ErrnoException).code;
         resolve({ code: typeof code === 'number' && code !== 0 ? code : 1 });

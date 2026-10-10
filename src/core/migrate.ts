@@ -12,11 +12,9 @@ import { readJson, writeJson } from '../shared/util';
 /**
  * The first start of 0.6.0 on a Mac an older Jaffer ran on. Jaffer is now a plain terminal: no memory, no saved session, no login agent.
  * What those left is taken away once, at the app's start (after an older Jaffer's background session has ended, before the app's own
- * terminal starts), and `migrated: 1` in `config.json` says it is done:
+ * terminal starts), and `migrated: 1` in `config.json` says it is done. The steps, in the order they run:
  *
- * - `config`: the settings 0.6.0 no longer has are pruned (`DEAD_KEYS`) and the marker is set. First, and whatever the other steps do: a
- *   step that failed is not retried at every start (it is in `migrate.log`; Reset still cleans up).
- * - `agent`: the login agent of 0.5 (`removeLegacyAgent`: its plist, its wrapper, its job in launchd).
+ * - `agent`: the login agent of 0.5 (`removeLegacyAgent`: its plist, its wrapper, its job in launchd; `launchctl` gets 20 s at most).
  * - `backup`: the two files of the memory the person wrote, `memory/NOTES.md` and `memory/POLICY.md`, are copied to
  *   `~/.jaffer-memory-backup/` (a private folder; an earlier copy is never overwritten), when they hold anything of the person's.
  * - `oldData`: `memory/`, `session/` and `bin/jafferd` are deleted. The memory only once the backup is made.
@@ -24,6 +22,11 @@ import { readJson, writeJson } from '../shared/util';
  *   `~/.claude/CLAUDE.md` (and, from the first builds, in `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`), the `jaffer-*` skills that
  *   carry Jaffer's marker, and the user-scope MCP server `jaffer` (`claude mcp remove jaffer -s user`, last: it can take seconds).
  *   Claude Code's hooks are not touched here: the terminal rewrites Jaffer's own at its start.
+ * - `config` (just before `mcp`): the settings 0.6.0 no longer has are pruned (`DEAD_KEYS`) and the marker is set, whatever the steps
+ *   before did: a step that failed is not retried at every start (it is in `migrate.log`; Reset still cleans up). A first start that is
+ *   ended before it (the app quit or killed while `launchctl` is asked) has not set it, and the next start runs it all again: every step
+ *   is safe to repeat. Every wait before it is bounded (20 s), inside the 30 s the app gives the whole, so the terminal (which starts after
+ *   it) loads the pruned settings with the marker.
  *
  * Safety. Every step is on its own: one that fails is recorded (`failed`, and a line in `<home>/migrate.log` with the step's name and an
  * error code, nothing else) and the others still run. It never throws. Nothing is removed from a folder that is not clearly Jaffer's
@@ -33,7 +36,8 @@ import { readJson, writeJson } from '../shared/util';
  * Jaffer folder yet) has nothing an older Jaffer registered: no `claude` is run for it.
  */
 
-export const MIGRATION_STEPS = ['config', 'agent', 'backup', 'oldData', 'claudeMd', 'skills', 'firstDayBlocks', 'mcp'] as const;
+/** The steps, in the order they run (`migrate.log` lists them so). */
+export const MIGRATION_STEPS = ['agent', 'backup', 'oldData', 'claudeMd', 'skills', 'firstDayBlocks', 'config', 'mcp'] as const;
 export type StepResult = 'done' | 'skipped' | 'failed';
 
 export interface MigrateOptions {
@@ -125,18 +129,25 @@ export async function migrateToPlainTerminal(o: MigrateOptions): Promise<{ steps
   } catch {
     /* not the person's own */
   }
-  // An older Jaffer ran here when its folder holds anything (a fresh install has no folder yet: the app has not written any).
+  // An older Jaffer ran here when its folder holds anything (a fresh install has no folder yet: the app has not written any; a first start
+  // that was ended early has left only its log).
   let older = false;
   try {
-    older = fs.readdirSync(home).length > 0;
+    older = fs.readdirSync(home).some((e) => e !== 'migrate.log');
   } catch {
     /* no folder: a fresh install */
   }
-
-  await step('config', () => {
-    writeMarker(path.join(home, 'config.json'));
-    return 'done';
-  });
+  const logLines = (...lines: string[]) => {
+    try {
+      const at = (o.now?.() ?? new Date()).toISOString();
+      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+      fs.appendFileSync(path.join(home, 'migrate.log'), lines.map((l) => `${at} ${l}\n`).join(''), { mode: 0o600 });
+    } catch {
+      /* the log is only for diagnosis */
+    }
+  };
+  // first a trace, so that a start that is ended before the clean-up is done leaves one
+  logLines(`Jaffer ${VERSION}: one-time clean-up started (${older ? 'an older Jaffer folder' : 'no older Jaffer folder'})`);
 
   await step('agent', async () => {
     if (!mine) return 'skipped';
@@ -156,16 +167,16 @@ export async function migrateToPlainTerminal(o: MigrateOptions): Promise<{ steps
   await step('oldData', () => {
     const keepMemory = steps.backup === 'failed';
     let removed = false;
-    let refused: unknown;
+    const why: string[] = [];
+    if (keepMemory && lstat(path.join(home, 'memory'))) why.push('memory kept (its backup failed)');
     for (const rel of [...(keepMemory ? [] : [['memory']]), ['session'], ['bin', 'jafferd']]) {
       try {
         if (removeInside(home, rel)) removed = true;
       } catch (e) {
-        refused ??= e;
+        why.push(whyOf(e));
       }
     }
-    if (refused !== undefined) throw refused;
-    if (keepMemory && lstat(path.join(home, 'memory'))) throw new Failed('memory kept (its backup failed)');
+    if (why.length) throw new Failed(why.join('; '));
     return removed ? 'done' : 'skipped';
   });
 
@@ -195,6 +206,11 @@ export async function migrateToPlainTerminal(o: MigrateOptions): Promise<{ steps
     return 'done';
   });
 
+  await step('config', () => {
+    writeMarker(path.join(home, 'config.json'));
+    return 'done';
+  });
+
   await step('mcp', async () => {
     if (!mine || !older) return 'skipped';
     const claude = o.claudeBin ?? (await o.findClaude?.()) ?? null;
@@ -205,13 +221,8 @@ export async function migrateToPlainTerminal(o: MigrateOptions): Promise<{ steps
     return 'done';
   });
 
-  try {
-    const at = (o.now?.() ?? new Date()).toISOString();
-    const lines = [`${at} Jaffer ${VERSION} cleaned up after an older version: ${MIGRATION_STEPS.map((s) => `${s} ${steps[s]}`).join(', ')}`, ...problems.map((p) => `${at} ${p}`)];
-    fs.appendFileSync(path.join(home, 'migrate.log'), lines.join('\n') + '\n', { mode: 0o600 });
-  } catch {
-    /* the log is only for diagnosis */
-  }
+  const summary = MIGRATION_STEPS.map((s) => `${s} ${steps[s]}`).join(', ');
+  logLines(older ? `Jaffer ${VERSION}: clean-up after an older version: ${summary}` : `Jaffer ${VERSION}: first start, no older Jaffer folder: ${summary}`, ...problems);
   return { steps };
 }
 
