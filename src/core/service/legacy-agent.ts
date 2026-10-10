@@ -49,10 +49,10 @@ function there(file: string): boolean {
  * because when launchd runs the daemon, the bootout ends it (and whatever asked for it from inside that session). A job launchd does
  * not know is fine. `JAFFER_NO_LAUNCHCTL=1` (set for every test run) skips the `launchctl` call, the one given as well; the files still
  * go. It never throws: a failure (a file that cannot be removed, a `launchctl` that cannot run) is logged and gives `removed: false`,
- * and the rest is still done. `removed` is true when something of the agent was taken away (a file, or a job launchd had loaded) and
- * nothing failed.
+ * and the rest is still done (`onError` is told of each failure: the first start's clean-up logs it). `removed` is true when something
+ * of the agent was taken away (a file, or a job launchd had loaded) and nothing failed.
  */
-export async function removeLegacyAgent(opts: { home: string; userHome: string; uid: number; launchctl?: Launchctl }): Promise<{ removed: boolean }> {
+export async function removeLegacyAgent(opts: { home: string; userHome: string; uid: number; launchctl?: Launchctl; onError?: (e: unknown) => void }): Promise<{ removed: boolean }> {
   try {
     if (!isDefaultHome(opts.home)) return { removed: false };
     let failed = false;
@@ -60,6 +60,11 @@ export async function removeLegacyAgent(opts: { home: string; userHome: string; 
     const fail = (what: string, e: unknown) => {
       failed = true;
       console.error(`jaffer: could not ${what}: ${e instanceof Error ? e.message : String(e)}`);
+      try {
+        opts.onError?.(e);
+      } catch {
+        /* the caller's to mind */
+      }
     };
 
     const plist = path.join(opts.userHome, 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`);
@@ -67,6 +72,8 @@ export async function removeLegacyAgent(opts: { home: string; userHome: string; 
     for (const file of [plist, wrapper]) {
       try {
         if (!there(file)) continue;
+        // the wrapper is Jaffer's own file: a `bin` that is a link out of Jaffer's folder is not followed to remove what is in its target
+        if (file === wrapper && fs.lstatSync(path.dirname(wrapper)).isSymbolicLink()) throw Object.assign(new Error(`${path.dirname(wrapper)} is a link`), { code: 'ELINK' });
         fs.rmSync(file, { force: true }); // (a link is removed, never what it points at; a folder in its place is refused)
         found = true;
       } catch (e) {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { findClaude, removeMcp, teardownClaude } from './integrations/claude';
-import { removeClaudeBlock, removeJafferSkills } from './integrations/legacy-claude';
+import { firstDayBlockFiles, removeClaudeBlock, removeJafferSkills } from './integrations/legacy-claude';
 import { AGENT_LABEL, removeLegacyAgent } from './service/legacy-agent';
 import { APP_BUNDLE_ID } from '../shared/stay-awake-config';
 
@@ -38,15 +38,20 @@ export interface ResetResult {
 
 const BUNDLE_ID = APP_BUNDLE_ID;
 
-/** What Jaffer keeps in its folder: a folder that is neither empty nor holds at least one of these is not Jaffer's. */
-const OWN_ENTRIES = ['config.json', 'memory', 'run', 'session', 'shell', 'bin'];
+/**
+ * What Jaffer keeps in its folder: a folder that is neither empty nor holds at least one of these is not Jaffer's. Today's (the settings,
+ * the socket and log, the shell scripts, the `jaffer` command, the window's place, the update log, the first start's log) and what an
+ * older version kept there (`memory`, `session`), so that a folder an older Jaffer left is still known as Jaffer's.
+ */
+const OWN_ENTRIES = ['config.json', 'run', 'shell', 'bin', 'window.json', 'updater.log', 'migrate.log', 'memory', 'session'];
 
 /**
  * Only ever remove a folder that is clearly Jaffer's: never the home folder or a parent of it, never something without "jaffer"
  * in its name, never a code checkout (a `.git` or `package.json` in it), and a folder that exists must hold Jaffer's own files
- * (or nothing at all). JAFFER_HOME pointed at the wrong place must not cost anyone a project.
+ * (or nothing at all). JAFFER_HOME pointed at the wrong place must not cost anyone a project. Reset and the first start's clean-up
+ * (`migrate.ts`) both ask it before they remove anything in it.
  */
-function assertJafferHome(home: string, userHome: string): string {
+export function assertJafferHome(home: string, userHome: string): string {
   const h = path.resolve(home);
   const u = path.resolve(userHome);
   const inside = (parent: string, child: string) => child === parent || child.startsWith(parent + path.sep);
@@ -103,18 +108,20 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
   // First, in this order, while Jaffer's folder is still there: the login agent of an older Jaffer away, so launchd starts nothing for
   // a session being reset (when launchd runs the daemon, that ends it); then the session ends; then the rest.
   const agent = await removeLegacyAgent({ home, userHome, uid: o.uid ?? process.getuid?.() ?? -1, launchctl: o.launchctl });
-  if (agent.removed) did(`Removed the background agent that kept the session running (~/Library/LaunchAgents/${AGENT_LABEL}.plist).`);
+  if (agent.removed) did(`Removed the background agent an older Jaffer had installed to keep the session running (${AGENT_LABEL}).`);
   await o.endSession?.();
 
   const td = await teardownClaude(userHome, env);
   if (td.messages.some((m) => /^Removed/.test(m))) changed = true;
   messages.push(...td.messages);
 
-  // what Jaffer's memory left in Claude Code before 0.6.0 (only Jaffer's own entries): the MCP server, the block, the skills
+  // what Jaffer's memory left in Claude Code before 0.6.0 (only Jaffer's own entries), as the first start of 0.6.0 takes it away (for a
+  // Mac that never ran it): the MCP server, the block in CLAUDE.md (and, from the first builds, in two other agents' files), the skills
   const claude = await findClaude(env);
   if (claude && (await removeMcp(claude, env)).ok) did('Removed the MCP server registration.');
-  const claudeMd = path.join(userHome, '.claude', 'CLAUDE.md');
-  if (removeClaudeBlock(claudeMd)) did(`Removed Jaffer's memory block from ${claudeMd.replace(userHome, '~')}.`);
+  for (const file of [path.join(userHome, '.claude', 'CLAUDE.md'), ...firstDayBlockFiles(userHome)]) {
+    if (removeClaudeBlock(file)) did(`Removed Jaffer's memory block from ${file.replace(userHome, '~')}.`);
+  }
   const skills = removeJafferSkills(path.join(userHome, '.claude', 'skills'));
   if (skills) did(`Removed ${skills} skill${skills === 1 ? '' : 's'} Jaffer had published to Claude Code.`);
 

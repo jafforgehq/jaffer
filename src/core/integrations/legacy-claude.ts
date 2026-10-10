@@ -14,6 +14,14 @@ export const END = '<!-- jaffer:memory:end -->';
 /** The line every skill Jaffer published carries: how Jaffer tells its own skills from a `jaffer-…` directory of the person's. */
 export const SKILL_MARKER = '_Learned by Jaffer from repeated use in this terminal._';
 
+/**
+ * The instructions files of two other agents that the first builds (2026-10-06) also wrote the block into, under the person's home.
+ * Only the block is ever taken out of them (`removeClaudeBlock`); a file without it is not touched.
+ */
+export function firstDayBlockFiles(userHome: string): string[] {
+  return [path.join(userHome, '.codex', 'AGENTS.md'), path.join(userHome, '.gemini', 'GEMINI.md')];
+}
+
 /** The block (from BEGIN to the first END after it) and the line break that ends it. Bounded: indexOf, no regular expression. */
 function withoutBlocks(text: string): string {
   let out = '';

@@ -11,17 +11,39 @@ import { AGENT_LABEL } from '../src/core/service/legacy-agent';
 /**
  * `isDefaultHome` says yes to the temporary homes a test names in `forcedHomes` (a test home is never the person's own ~/.jaffer, which is
  * the only home the cleanup of the login agent touches), and otherwise answers as the real one does.
+ * `claude` is a stand-in in the test's folder, first on the PATH Reset is given (it records its arguments), and `execFile`, through which
+ * Reset runs programs, runs only programs inside the test's folder and refuses anything else (the real `/bin/launchctl`, a real `claude`,
+ * a login shell looking for one): a test cannot reach the real ones.
  */
-const { forcedHomes } = vi.hoisted(() => ({ forcedHomes: new Set<string>() }));
+const { forcedHomes, execFileMock, real } = vi.hoisted(() => ({
+  forcedHomes: new Set<string>(),
+  execFileMock: vi.fn(),
+  real: { execFile: null as unknown as typeof import('node:child_process').execFile, root: '', refused: [] as string[] },
+}));
 vi.mock('../src/core/session/caffeinate', async (orig) => {
   const actual = await orig<typeof import('../src/core/session/caffeinate')>();
   return { ...actual, isDefaultHome: (home: string) => forcedHomes.has(home) || actual.isDefaultHome(home) };
+});
+vi.mock('node:child_process', async (orig) => {
+  const actual = await orig<typeof import('node:child_process')>();
+  real.execFile = actual.execFile;
+  return { ...actual, execFile: execFileMock };
 });
 
 let env: TestEnv;
 beforeEach(() => {
   env = makeEnv();
   forcedHomes.clear();
+  real.root = env.root;
+  real.refused = [];
+  execFileMock.mockReset();
+  execFileMock.mockImplementation((file: string, args: string[], opts: object, cb: (e: Error | null, out: string, err: string) => void) => {
+    if (typeof file === 'string' && file.startsWith(real.root + path.sep)) return real.execFile(file, args, opts, cb);
+    real.refused.push(file);
+    setImmediate(() => cb(Object.assign(new Error(`not run by a test: ${file}`), { code: 1 }), '', ''));
+    return { kill: () => true };
+  });
+  fakeClaude();
 });
 afterEach(() => env.cleanup());
 
@@ -29,7 +51,19 @@ const mk = (p: string, text = 'x') => {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, text);
 };
-const claudeEnv = () => ({ ...process.env, HOME: env.userHome, CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude') });
+const fakeBin = () => path.join(env.root, 'fake-bin');
+const claudeCalls = () => (fs.existsSync(path.join(env.root, 'claude-calls.log')) ? fs.readFileSync(path.join(env.root, 'claude-calls.log'), 'utf8').split('\n').filter(Boolean) : []);
+/**
+ * A stand-in `claude` that records its arguments. Like the real one, `claude mcp remove jaffer -s user` exits 0 when an MCP server of that
+ * name is registered (here: `mcpRegistered()` was called, as an older Jaffer's memory did), and 1 when there is none.
+ */
+function fakeClaude(): void {
+  const registered = path.join(env.root, 'mcp-registered');
+  mk(path.join(fakeBin(), 'claude'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${path.join(env.root, 'claude-calls.log')}'\n[ -f '${registered}' ] || { echo 'No user-scoped MCP server found with name: jaffer' >&2; exit 1; }\nrm -f '${registered}'\nexit 0\n`);
+  fs.chmodSync(path.join(fakeBin(), 'claude'), 0o755);
+}
+const mcpRegistered = () => mk(path.join(env.root, 'mcp-registered'), '');
+const claudeEnv = () => ({ ...process.env, PATH: `${fakeBin()}${path.delimiter}${process.env.PATH ?? ''}`, HOME: env.userHome, CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude') });
 
 /** A Mac that has been running Jaffer for a while, with the user's own things next to Jaffer's. */
 function lived(): { wrapper: string } {
@@ -53,6 +87,15 @@ function lived(): { wrapper: string } {
   mk(path.join(env.userHome, 'Library', 'Caches', 'jaffer-updater', 'pending', 'Jaffer.zip'));
   mk(path.join(env.userHome, 'Library', 'Application Support', 'Jaffer', 'Preferences'));
   mk(path.join(env.userHome, 'Library', 'Preferences', 'com.jafforge.jaffer.plist'));
+  // what else is in Jaffer's folder: an older version's saved session, and what the terminal uses today
+  mk(path.join(env.home, 'session', 'claude.json'), '{}');
+  mk(path.join(env.home, 'run', 'jafferd.log'), 'log\n');
+  mk(path.join(env.home, 'shell', 'jaffer.zsh'), '# zsh\n');
+  mk(path.join(env.home, 'window.json'), '{}');
+  // the first builds also wrote the memory block for two other agents
+  mk(path.join(env.userHome, '.codex', 'AGENTS.md'), `${BEGIN}\n- Prefer pnpm\n${END}\n`);
+  mk(path.join(env.userHome, '.gemini', 'GEMINI.md'), `# Mine\n\n${BEGIN}\n- Prefer pnpm\n${END}\n`);
+  mcpRegistered(); // and the MCP server its memory registered with Claude Code
   return { wrapper };
 }
 
@@ -143,6 +186,28 @@ describe('resetJaffer', () => {
     expect(res.backupDir).toBeUndefined();
     expect(res.messages.join('\n')).toMatch(/nothing/i);
   });
+
+  it('takes away what the memory of an older Jaffer left in Claude Code, as the first start of 0.6.0 does: the MCP server (a stand-in claude: the real one is never run) and the block in two other agents\' files too', async () => {
+    lived();
+    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true });
+    expect(claudeCalls()).toEqual(['mcp remove jaffer -s user']);
+    expect(real.refused).toEqual([]);
+    expect(fs.existsSync(path.join(env.userHome, '.codex', 'AGENTS.md'))).toBe(false); // (it held nothing but the block)
+    expect(fs.readFileSync(path.join(env.userHome, '.gemini', 'GEMINI.md'), 'utf8')).toBe('# Mine\n\n');
+    const said = res.messages.join('\n');
+    expect(said).toMatch(/MCP server/);
+    expect(said).toMatch(/~\/\.codex\/AGENTS\.md/);
+    expect(said).toMatch(/~\/\.gemini\/GEMINI\.md/);
+  });
+
+  it('knows a folder 0.6.0 left as Jaffer\'s (no memory or session in it: its window place, its logs, the first start\'s log), and still one an older version left', async () => {
+    for (const entries of [['window.json'], ['migrate.log'], ['updater.log', 'run'], ['session'], ['memory']]) {
+      fs.rmSync(env.home, { recursive: true, force: true });
+      for (const e of entries) mk(path.join(env.home, e, ...(e.includes('.') ? [] : ['x'])), 'x');
+      await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: false });
+      expect(fs.existsSync(env.home), entries.join()).toBe(false);
+    }
+  });
 });
 
 describe('resetJaffer and the login agent an older Jaffer left (removeLegacyAgent, a fake launchctl; the real one is never run)', () => {
@@ -206,7 +271,7 @@ describe('resetJaffer and the login agent an older Jaffer left (removeLegacyAgen
 describe('jaffer reset (the bundled command)', () => {
   const run = (args: string[], over: Record<string, string> = {}) =>
     new Promise<{ code: number | null; out: string }>((resolve) => {
-      const child = spawn(process.execPath, [path.resolve('dist/cli/jaffer.cjs'), 'reset', ...args], { env: { ...process.env, HOME: env.userHome, JAFFER_HOME: env.home, CLAUDE_CONFIG_DIR: path.join(env.userHome, '.claude'), ...over }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [path.resolve('dist/cli/jaffer.cjs'), 'reset', ...args], { env: { ...claudeEnv(), JAFFER_HOME: env.home, ...over }, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
       child.stdout.on('data', (d) => (out += d));
       child.stderr.on('data', (d) => (out += d));

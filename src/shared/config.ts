@@ -43,6 +43,11 @@ export interface JafferConfig {
     stayAwake: boolean;
   };
   hotkey: string;
+  /**
+   * The one-time clean-up of a Mac an older Jaffer ran on (`core/migrate.ts`) has run (1). It runs at the app's start while this is 0, and
+   * sets it whatever its steps did, so a step that failed is not retried at every start (`jaffer config set migrated 0` runs it again).
+   */
+  migrated: number;
 }
 
 export const DEFAULT_CONFIG: JafferConfig = {
@@ -68,7 +73,31 @@ export const DEFAULT_CONFIG: JafferConfig = {
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
   hotkey: 'Control+`',
+  migrated: 0,
 };
+
+/**
+ * The settings older versions had and 0.6.0 does not (the memory, its learning and exports, the Safety edges, the saved screen, Resume,
+ * the login agent). A config file keeps them (the store keeps any key it does not know) until the first start's clean-up prunes them
+ * with `pruneDeadKeys`. `claude.skipped` is a live setting and is not one of them.
+ */
+export const DEAD_KEYS = ['memory', 'ingest', 'export', 'safety', 'session.restoreScreen', 'session.resumeClaude', 'session.keepRunning', 'session.autoResume'] as const;
+
+/** `raw` (a config file's content) without the `DEAD_KEYS`; everything else, unknown keys included, as it was. `raw` is not changed. */
+export function pruneDeadKeys(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...raw };
+  for (const key of DEAD_KEYS) {
+    const [section, name] = key.split('.') as [string, string | undefined];
+    const value = out[section];
+    if (name === undefined) delete out[section];
+    else if (isRecord(value) && name in value) {
+      const rest = { ...value };
+      delete rest[name];
+      out[section] = rest;
+    }
+  }
+  return out;
+}
 
 function merge<T>(base: T, over: unknown): T {
   if (over === null || typeof over !== 'object' || Array.isArray(over)) return (over === undefined ? base : (over as T)) ?? base;

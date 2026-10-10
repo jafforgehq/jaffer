@@ -215,6 +215,27 @@ describe('removeLegacyAgent: the login agent of an older Jaffer (a fake launchct
     }
   });
 
+  it('a bin folder that is a link out of Jaffer\'s folder is not followed: the jafferd in its target stays, the failure is told (onError) and the plist still goes', async () => {
+    asDefaultHome();
+    seed();
+    const outside = path.join(env.root, 'usr-local-bin');
+    mk(path.join(outside, 'jafferd'), "someone else's jafferd");
+    fs.rmSync(path.join(env.home, 'bin'), { recursive: true });
+    fs.symlinkSync(outside, path.join(env.home, 'bin'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const errors: unknown[] = [];
+      const f = fakeLaunchctl();
+      expect(await removeLegacyAgent({ home: env.home, userHome: env.userHome, uid: 501, launchctl: f.launchctl, onError: (e) => errors.push(e) })).toEqual({ removed: false });
+      expect(fs.readFileSync(path.join(outside, 'jafferd'), 'utf8')).toBe("someone else's jafferd");
+      expect(errors.map((e) => (e as { code?: string }).code)).toEqual(['ELINK']);
+      expect(fs.existsSync(plistPath())).toBe(false);
+      expect(f.calls).toEqual([['bootout', TARGET(501)]]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('removes a link in the plist\'s place, and never what it points at', async () => {
     asDefaultHome();
     const elsewhere = path.join(env.root, 'elsewhere.plist');

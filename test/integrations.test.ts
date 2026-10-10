@@ -164,4 +164,14 @@ describe('connecting Claude Code', () => {
     expect(r.ok).toBe(false); // (this stand-in knows no MCP: a `claude` that fails or has none says so, and nothing else happens)
     expect(fake.calls().map((l) => l.replace(/ HOME=.*/, ''))).toEqual(['mcp remove jaffer -s user']);
   });
+
+  it('removeMcp runs claude with its own folder first on its PATH: a claude installed with npm is a script that starts the node next to it, and an app opened from the Finder has a short PATH', async () => {
+    const dir = path.join(env.root, 'npm-bin');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'jaffer-test-node'), '#!/bin/sh\nexec /bin/sh "$@"\n', { mode: 0o755 }); // (a stand-in for node: it runs the script)
+    fs.writeFileSync(path.join(dir, 'claude'), `#!/usr/bin/env jaffer-test-node\necho "$*" >> '${path.join(env.root, 'npm-calls.log')}'\nexit 0\n`, { mode: 0o755 });
+    const r = await removeMcp(path.join(dir, 'claude'), { HOME: env.userHome, PATH: '/usr/bin:/bin' });
+    expect(r.ok).toBe(true);
+    expect(fs.readFileSync(path.join(env.root, 'npm-calls.log'), 'utf8')).toBe('mcp remove jaffer -s user\n');
+  });
 });

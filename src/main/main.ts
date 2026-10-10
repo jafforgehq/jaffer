@@ -56,6 +56,8 @@ let askingToQuit = false;
 /** The child was ended for the quit (or did not end in time and was killed): the quit goes on. */
 let childStopped = false;
 let restarting = false;
+/** The start has made the window (from then on the window is shown again or, if it was destroyed, made anew). */
+let windowMade = false;
 let hotkey = '';
 const windowFile = path.join(paths.home, 'window.json');
 
@@ -67,7 +69,9 @@ app.setName('Jaffer');
  */
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.exit(0);
-else app.on('second-instance', () => showWindow());
+// (in the first instance: brings its window forward, once the start has made it; before that, during the start's own dialog or the
+// first start's clean-up, there is nothing to show yet, and a window made then would be a second one)
+else app.on('second-instance', () => windowMade && showWindow());
 
 // ---------------------------------------------------------------- the terminal (the app's child)
 
@@ -392,6 +396,8 @@ function loadBounds(): Electron.Rectangle | undefined {
 }
 
 function createWindow(): void {
+  if (win && !win.isDestroyed()) return; // one window, ever
+  windowMade = true;
   const saved = loadBounds();
   win = new BrowserWindow({
     width: saved?.width ?? 1280,

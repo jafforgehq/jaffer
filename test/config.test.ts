@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { ConfigStore, DEFAULT_CONFIG } from '../src/shared/config';
+import { ConfigStore, DEAD_KEYS, DEFAULT_CONFIG, pruneDeadKeys } from '../src/shared/config';
 
 let env: TestEnv;
 beforeEach(() => {
@@ -227,5 +227,40 @@ describe('a config file or patch with values of the wrong kind', () => {
     expect(load({ memory: 'oops', ingest: null, export: [] }).get().session).toEqual(DEFAULT_CONFIG.session); // even sections of the wrong kind do not stop it loading
     store.patch({ session: { stayAwake: false } });
     expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8'))).toMatchObject(old); // left as they were by a patch of another key
+  });
+});
+
+describe('migrated, and the settings 0.6.0 no longer has (the first start\'s clean-up prunes them once)', () => {
+  it('migrated is 0 by default, also for a config file saved before it existed; a number stays a number, anything else is 0', () => {
+    expect(DEFAULT_CONFIG.migrated).toBe(0);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().migrated).toBe(0);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, migrated: 1 }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().migrated).toBe(1);
+    store.patch({ appearance: { fontSize: 15 } });
+    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).migrated).toBe(1); // a patch of another key keeps it
+    fs.writeFileSync(env.paths.config, JSON.stringify({ migrated: 'yes' }));
+    expect(new ConfigStore(env.paths).get().migrated).toBe(0);
+  });
+
+  it('pruneDeadKeys takes out exactly the settings that are gone, and leaves everything else as it was (claude.skipped, the other session keys, keys it does not know)', () => {
+    expect([...DEAD_KEYS]).toEqual(['memory', 'ingest', 'export', 'safety', 'session.restoreScreen', 'session.resumeClaude', 'session.keepRunning', 'session.autoResume']);
+    const old = {
+      onboarded: true,
+      appearance: { theme: 'jaffer-light' },
+      claude: { skipped: true, showCost: false },
+      session: { stayAwake: false, restoreScreen: false, resumeClaude: true, keepRunning: true, autoResume: true },
+      memory: { enabled: true },
+      ingest: { claudeCode: true },
+      export: { targets: ['claude-code'] },
+      safety: { dangerTint: true },
+      future: { x: 1 },
+    };
+    const copy = structuredClone(old);
+    expect(pruneDeadKeys(old)).toEqual({ onboarded: true, appearance: { theme: 'jaffer-light' }, claude: { skipped: true, showCost: false }, session: { stayAwake: false }, future: { x: 1 } });
+    expect(old).toEqual(copy); // (what it was given is not changed)
+    expect(pruneDeadKeys({ session: 'oops', memory: null })).toEqual({ session: 'oops' }); // a section of the wrong kind is not its to fix: the store does that
+    expect(pruneDeadKeys({})).toEqual({});
   });
 });

@@ -178,7 +178,9 @@ export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<
  * start of an upgraded Mac run it once. Nothing registers one any more. `ok` is false when there was none (or `claude` failed).
  */
 export async function removeMcp(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
-  const r = await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], env, 15_000);
+  // (`claude`'s own folder first on its PATH: a `claude` installed with npm is a script that starts the `node` next to it, and an app
+  // opened from the Finder has a short PATH)
+  const r = await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], { ...env, PATH: [path.dirname(claude), env.PATH].filter(Boolean).join(path.delimiter) }, 15_000);
   return { ok: r.code === 0, message: r.out.trim() };
 }
 

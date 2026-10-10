@@ -60,7 +60,8 @@ describe('legacyDaemonAction: a session on the socket that is not this app\'s ch
   it('when that session does not end, the advice is one that works: Activity Monitor or a restart, not the request that just failed', () => {
     expect(LEGACY_NOT_ENDED.message).toMatch(/did not end/);
     expect(LEGACY_NOT_ENDED.detail).toMatch(/Activity Monitor/);
-    expect(LEGACY_NOT_ENDED.detail).toMatch(/jafferd/);
+    expect(LEGACY_NOT_ENDED.detail).toMatch(/the other Jaffer process/); // (the name Activity Monitor shows: the daemon is the app's own binary)
+    expect(LEGACY_NOT_ENDED.detail).not.toMatch(/jafferd/);
     expect(LEGACY_NOT_ENDED.detail).toMatch(/restart the Mac/);
     expect(LEGACY_NOT_ENDED.detail).not.toMatch(/jaffer daemon stop|app\.shutdown/);
   });

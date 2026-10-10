@@ -48,10 +48,13 @@ export const LEGACY_DIALOG = {
   cancelId: 1,
 };
 
-/** That session was asked to end (`app.shutdown`) and still answers after the wait: asking again would not help. */
+/**
+ * That session was asked to end (`app.shutdown`) and still answers after the wait: asking again would not help. (It is the app's own binary
+ * run as a plain program, so Activity Monitor shows it as Jaffer, or node: not by the name of its script.)
+ */
 export const LEGACY_NOT_ENDED = {
   message: 'The other Jaffer session did not end',
-  detail: 'It is still running after 10 seconds. Quit jafferd in Activity Monitor (or restart the Mac), then open Jaffer again.',
+  detail: 'It is still running after 10 seconds. Quit the other Jaffer process in Activity Monitor (or restart the Mac) and open Jaffer again.',
 };
 
 /**
