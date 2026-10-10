@@ -1,17 +1,16 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { fakeClaude } from './helpers/fake-claude';
 import { MockAnthropic } from './helpers/mock-anthropic';
 import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-client';
-import { RpcServer, type RpcClient } from '../src/core/rpc';
+import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
 import { findClaude } from '../src/core/integrations/claude';
 import { STOP_AFTER_END_GRACE_MS } from '../src/core/claude/cost';
 import type { ClaudeSession } from '../src/core/claude/watcher';
-import { keepRunningOffText } from '../src/shared/keep-running';
 
 const CLAUDE = await findClaude().catch(() => null);
 
@@ -909,7 +908,7 @@ describe('the Mac stays awake while Claude or a long command works (bundled daem
   }, 30_000);
 });
 
-describe('the exit code of the daemon tells launchd whether to bring it back (bundled daemon, started and watched here)', () => {
+describe('how the daemon ends: the exit code and the socket (bundled daemon, started and watched here)', () => {
   /** Start the bundled daemon in a home of its own and wait until it answers. `exited` resolves with how it ended. */
   async function start(e: TestEnv) {
     fs.writeFileSync(path.join(e.userHome, '.zshenv'), 'skip_global_compinit=1\n');
@@ -929,7 +928,7 @@ describe('the exit code of the daemon tells launchd whether to bring it back (bu
   it.each([
     ['SIGTERM', 143],
     ['SIGINT', 130],
-  ] as const)('%s ends it with code %i (so launchd brings it back)', async (signal, code) => {
+  ] as const)('%s ends it with code %i, and it lets go of the socket', async (signal, code) => {
     const e = makeEnv();
     try {
       const { child, exited, c } = await start(e);
@@ -946,7 +945,7 @@ describe('the exit code of the daemon tells launchd whether to bring it back (bu
     }
   }, 40_000);
 
-  it('app.shutdown (a deliberate end: End Session, an update, Reset) still ends it with code 0, which launchd leaves alone', async () => {
+  it('app.shutdown (a deliberate end: an update, Reset) ends it with code 0', async () => {
     const e = makeEnv();
     try {
       const { exited, c } = await start(e);
@@ -983,7 +982,7 @@ describe('the exit code of the daemon tells launchd whether to bring it back (bu
         await sleep(ms);
         if (child.exitCode === null) child.kill('SIGTERM');
       }
-      expect(await exited).toEqual({ code: 0, signal: null }); // the person ended it: launchd must not bring it back
+      expect(await exited).toEqual({ code: 0, signal: null }); // the person ended it: a signal that follows does not turn that into 143
       c.close();
     } finally {
       e2.cleanup();
@@ -991,227 +990,24 @@ describe('the exit code of the daemon tells launchd whether to bring it back (bu
   }, 60_000);
 });
 
-describe('the login agent in a test home: refused, and nothing is touched (bundled daemon and CLI)', () => {
+describe('the login agent is gone (bundled daemon and CLI): no service.* methods, no `jaffer service`, nothing written under the user\'s Library/LaunchAgents', () => {
   const cli = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8', cwd: env.userHome });
-  const agentsDir = () => path.join(env.userHome, 'Library', 'LaunchAgents');
-  /** Why: this is not the person's own ~/.jaffer (or, off macOS, not a Mac). */
-  const REASON = /~\/\.jaffer|another folder|macOS only/;
 
-  it("service.status, service.install and service.remove say why, leave the switch off, and create nothing under the user's Library/LaunchAgents", async () => {
+  it('service.status, service.install and service.remove are unknown methods, and the config has no keepRunning', async () => {
     const c = await connect();
-    for (const m of ['service.status', 'service.install', 'service.remove', 'service.status']) {
-      expect(await c.call(m, {}), m).toEqual({ state: 'refused', reason: expect.stringMatching(REASON) });
-    }
-    expect((await c.call('config.get', {})).session.keepRunning).toBe(false);
-    expect(fs.existsSync(agentsDir())).toBe(false);
-    expect(fs.existsSync(path.join(env.home, 'bin', 'jafferd'))).toBe(false); // no wrapper either
+    for (const m of ['service.status', 'service.install', 'service.remove']) await expect(c.call(m, {}), m).rejects.toThrow(/unknown method/);
+    const session = (await c.call('config.get', {})).session;
+    expect(session).toMatchObject({ stayAwake: true });
+    expect(session).not.toHaveProperty('keepRunning');
+    expect(fs.existsSync(path.join(env.userHome, 'Library', 'LaunchAgents'))).toBe(false);
+    expect(fs.existsSync(path.join(env.home, 'bin', 'jafferd'))).toBe(false); // no wrapper for launchd either
   });
 
-  it('`jaffer service status` prints the refusal in words, `jaffer service install` exits non-zero with the reason, and the group has a usage', async () => {
-    const st = cli('service', 'status');
-    expect(st.status, st.stderr).toBe(0);
-    expect(st.stdout).toMatch(/refused: /);
-    expect(st.stdout).toMatch(REASON);
-    expect(cli('service').stdout).toMatch(/refused: /); // status is what it shows by default
-    const inst = cli('service', 'install');
-    expect(inst.status).not.toBe(0);
-    expect(inst.stderr).toMatch(REASON);
-    const rm = cli('service', 'remove');
-    expect(rm.stdout + rm.stderr).toMatch(REASON);
-    const help = cli('service', '--help');
-    expect(help.status).toBe(0);
-    expect(help.stdout).toMatch(/jaffer service install/);
-    expect(help.stdout).toMatch(/remove/);
-    const bad = cli('service', 'frobnicate');
-    expect(bad.status).not.toBe(0);
-    expect(bad.stderr).toMatch(/Usage: jaffer service/);
-    expect(cli('--help').stdout).toMatch(/jaffer service/);
-    expect(fs.existsSync(agentsDir())).toBe(false);
-    expect((await (await connect()).call('config.get', {})).session.keepRunning).toBe(false);
+  it('`jaffer service` is not a command any more, and the help does not mention it or a login agent', () => {
+    const r = cli('service', 'status');
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/Unknown command: service/);
+    expect(cli('--help').stdout).not.toMatch(/jaffer service|keepRunning|login agent|launchd/i);
+    expect(fs.existsSync(path.join(env.userHome, 'Library', 'LaunchAgents'))).toBe(false);
   }, 30_000);
-
-  // 0.5.1: the switch and the agent agree whichever way the switch changes (`jaffer config set` too): in this test home that is a refusal,
-  // and nothing is touched; the daemon says what it did with the change in its log.
-  it('a change of the switch with `jaffer config set` in this test home touches nothing: no agent, no wrapper, the status still says why', async () => {
-    const c = await connect();
-    const logged = () => (fs.existsSync(env.paths.logFile) ? fs.readFileSync(env.paths.logFile, 'utf8') : '');
-    const on = cli('config', 'set', 'session.keepRunning', 'true');
-    expect(on.status, on.stderr).toBe(0);
-    await waitUntil(() => /keep running: switched on: refused/.test(logged()), 5000);
-    expect(fs.existsSync(agentsDir())).toBe(false);
-    expect(fs.existsSync(path.join(env.home, 'bin', 'jafferd'))).toBe(false);
-    expect(await c.call('service.status', {})).toEqual({ state: 'refused', reason: expect.stringMatching(REASON) });
-    const off = cli('config', 'set', 'session.keepRunning', 'false');
-    expect(off.status, off.stderr).toBe(0);
-    await waitUntil(() => /keep running: switched off: refused/.test(logged()), 5000);
-    expect(fs.existsSync(agentsDir())).toBe(false);
-    expect((await c.call('config.get', {})).session.keepRunning).toBe(false);
-  }, 30_000);
-
-  // A session daemon is stood in for here (an RPC server of this test on the CLI's socket): launchd running the session, and a daemon
-  // from before 0.5, cannot be had in a test home.
-  describe('`jaffer service` against a session daemon stood in for', () => {
-    let e3: TestEnv;
-    let server: RpcServer;
-    let calls: string[] = [];
-    /** What `service.status` answers (a test sets it): `old` stands in for a daemon from before 0.5 (no such method). */
-    let agent: { state: string; pid?: number } | 'old' = { state: 'running', pid: 4242 };
-    let patches: unknown[] = [];
-    /** The bundled CLI, run without blocking this process (it is the daemon the CLI talks to). */
-    const run = (extra: Record<string, string>, ...a: string[]) =>
-      new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-        const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launcher.env, HOME: e3.userHome, JAFFER_HOME: e3.home, ...extra };
-        if (!('JAFFER_SESSION' in extra)) delete childEnv.JAFFER_SESSION; // (these tests may run inside a Jaffer session)
-        const child = spawn(process.execPath, [launcher.cliScript!, ...a], { env: childEnv, cwd: e3.userHome });
-        let stdout = '';
-        let stderr = '';
-        child.stdout.on('data', (d) => (stdout += d));
-        child.stderr.on('data', (d) => (stderr += d));
-        child.on('close', (status) => resolve({ status, stdout, stderr }));
-      });
-    beforeAll(async () => {
-      e3 = makeEnv();
-      fs.mkdirSync(e3.paths.runDir, { recursive: true });
-      server = new RpcServer();
-      server.handle('hello', () => ({ version: '0.4.9', protocol: 1 }));
-      server.handle('service.status', () => {
-        calls.push('service.status');
-        if (agent === 'old') throw new Error('unknown method: service.status');
-        return agent;
-      });
-      // `config.patch` answers with what the patch asked (a config that took it as it is)
-      server.handle('config.patch', (p) => (calls.push('config.patch'), patches.push(p), p));
-      server.handle('service.remove', () => (calls.push('service.remove'), { state: 'not-installed', note: 'The session ends now.' }));
-      await server.listen(e3.paths.socket);
-    });
-    afterAll(async () => {
-      await server?.close();
-      e3?.cleanup();
-    });
-
-    it('`jaffer service remove` typed in the session launchd runs (JAFFER_SESSION=1) says what ends and changes nothing without --yes; with --yes it removes; from another terminal it goes ahead as before', async () => {
-      calls = [];
-      const asked = await run({ JAFFER_SESSION: '1' }, 'service', 'remove');
-      expect(asked.status).not.toBe(0);
-      expect(asked.stderr).toContain(keepRunningOffText().detail);
-      expect(asked.stderr).toContain('--yes');
-      expect(calls).toEqual(['service.status']); // nothing was taken away
-      calls = [];
-      const yes = await run({ JAFFER_SESSION: '1' }, 'service', 'remove', '--yes');
-      expect(yes.status, yes.stderr).toBe(0);
-      expect(calls).toEqual(['service.status', 'service.remove']);
-      expect(yes.stdout).toContain('not installed');
-      calls = [];
-      const elsewhere = await run({}, 'service', 'remove'); // Terminal.app: the session that ends is not this shell's
-      expect(elsewhere.status, elsewhere.stderr).toBe(0);
-      expect(elsewhere.stderr).toContain(keepRunningOffText().detail); // (said first, as before)
-      expect(calls).toEqual(['service.status', 'service.remove']);
-    }, 30_000);
-
-    describe('`jaffer config set` turning session.keepRunning off (the same rule as `service remove`)', () => {
-      const reset = () => ((calls = []), (patches = []));
-      const off = ['config', 'set', 'session.keepRunning', 'false'];
-      afterEach(() => {
-        agent = { state: 'running', pid: 4242 };
-      });
-
-      it('typed in the session launchd runs (JAFFER_SESSION=1) it says what ends, exits 1 and sends no patch without --yes, also for the whole section', async () => {
-        reset();
-        const asked = await run({ JAFFER_SESSION: '1' }, ...off);
-        expect(asked.status).toBe(1);
-        expect(asked.stderr).toContain(keepRunningOffText().detail);
-        expect(asked.stderr).toContain('--yes');
-        expect(asked.stdout).not.toContain('ok');
-        expect(calls).toEqual(['service.status']);
-        expect(patches).toEqual([]);
-        reset();
-        const section = await run({ JAFFER_SESSION: '1' }, 'config', 'set', 'session', '{"keepRunning":false}');
-        expect(section.status).toBe(1);
-        expect(section.stderr).toContain(keepRunningOffText().detail);
-        expect(calls).toEqual(['service.status']);
-        expect(patches).toEqual([]);
-      }, 30_000);
-
-      it('with --yes (wherever it stands, never part of the value) it sends the patch; from another terminal it says it first and goes ahead', async () => {
-        reset();
-        const yes = await run({ JAFFER_SESSION: '1' }, ...off, '--yes');
-        expect(yes.status, yes.stderr).toBe(0);
-        expect(yes.stdout).toContain('ok');
-        expect(calls).toEqual(['service.status', 'config.patch']);
-        expect(patches).toEqual([{ session: { keepRunning: false } }]);
-        reset();
-        const yesFirst = await run({ JAFFER_SESSION: '1' }, 'config', 'set', '--yes', 'session.keepRunning', 'false');
-        expect(yesFirst.status, yesFirst.stderr).toBe(0);
-        expect(patches).toEqual([{ session: { keepRunning: false } }]);
-        reset();
-        const elsewhere = await run({}, ...off); // Terminal.app: the session that ends is not this shell's
-        expect(elsewhere.status, elsewhere.stderr).toBe(0);
-        expect(elsewhere.stderr).toContain(keepRunningOffText().detail); // (said first, as `service remove` does)
-        expect(calls).toEqual(['service.status', 'config.patch']);
-      }, 30_000);
-
-      it('when launchd runs nothing (not loaded, installed, not installed) nothing ends, so nothing is asked and the patch goes ahead', async () => {
-        for (const state of ['not-loaded', 'installed', 'not-installed']) {
-          agent = { state };
-          reset();
-          const r = await run({ JAFFER_SESSION: '1' }, ...off);
-          expect(r.status, `${state}: ${r.stderr}`).toBe(0);
-          expect(r.stderr).not.toContain(keepRunningOffText().detail);
-          expect(calls).toEqual(['service.status', 'config.patch']);
-        }
-      }, 30_000);
-
-      it('a patch that does not turn it off never asks for the status', async () => {
-        for (const set of [
-          ['session.keepRunning', 'true'],
-          ['session.stayAwake', 'false'],
-          ['session', '{"stayAwake":false}'],
-        ]) {
-          reset();
-          const r = await run({ JAFFER_SESSION: '1' }, 'config', 'set', ...set);
-          expect(r.status, `${set.join(' ')}: ${r.stderr}`).toBe(0);
-          expect(calls).toEqual(['config.patch']);
-        }
-      }, 30_000);
-
-      it('a daemon from before 0.5 (no service.status) does not reconcile: nothing to ask, the patch goes ahead and "unknown method" is not shown', async () => {
-        agent = 'old';
-        reset();
-        const old = await run({ JAFFER_SESSION: '1' }, ...off);
-        expect(old.status, old.stderr).toBe(0);
-        expect(old.stderr).not.toContain('unknown method');
-        expect(calls).toEqual(['service.status', 'config.patch']);
-      }, 30_000);
-    });
-
-    it('a session daemon from before 0.5 (no service.install) is said as Settings says it: "Restart your session to use this"', async () => {
-      const r = await run({}, 'service', 'install');
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain('Restart your session to use this');
-      expect(r.stderr).not.toContain('unknown method');
-    }, 30_000);
-  });
-
-  it('`jaffer service remove` needs no daemon: with none answering it starts none and takes the agent away itself (in this test home: refused, and nothing is touched, not even the switch)', async () => {
-    const e2 = makeEnv(); // a home whose daemon is not running (or cannot start)
-    const cli2 = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, HOME: e2.userHome, JAFFER_HOME: e2.home }, encoding: 'utf8', cwd: e2.userHome, timeout: 30_000 });
-    try {
-      fs.mkdirSync(e2.home, { recursive: true });
-      fs.writeFileSync(e2.paths.config, JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
-      const t0 = Date.now();
-      const rm = cli2('service', 'remove');
-      expect(rm.status, rm.stderr).toBe(0);
-      expect(rm.stdout + rm.stderr).toMatch(REASON); // this test home is not the person's own: nothing of launchd's is touched
-      expect(Date.now() - t0).toBeLessThan(8000); // it did not wait for a daemon to come up
-      expect(await tryConnect(e2.paths, 300)).toBeNull(); // and none was started for it
-      expect(JSON.parse(fs.readFileSync(e2.paths.config, 'utf8')).session.keepRunning).toBe(true); // (refused: as the daemon's own service.remove)
-      expect(fs.existsSync(path.join(e2.userHome, 'Library', 'LaunchAgents'))).toBe(false);
-    } finally {
-      const started = await tryConnect(e2.paths, 300);
-      await started?.call('app.shutdown', {}).catch(() => undefined);
-      started?.close();
-      await sleep(300);
-      e2.cleanup();
-    }
-  }, 60_000);
 });

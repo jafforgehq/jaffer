@@ -39,8 +39,6 @@ export interface JafferConfig {
     claudeFinished: boolean;
   };
   session: {
-    /** Keep the session and Claude Code running after the window is closed and across a login: the daemon starts at login (a user LaunchAgent). Off by default: it is installed only on a click. */
-    keepRunning: boolean;
     /** Keep the Mac from idle sleep while Claude works (and while a long command runs). Takes no admin rights and lets go when the work stops. */
     stayAwake: boolean;
   };
@@ -68,7 +66,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   claude: { skipped: false, showCost: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
-  session: { keepRunning: false, stayAwake: true },
+  session: { stayAwake: true },
   hotkey: 'Control+`',
 };
 

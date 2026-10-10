@@ -80,10 +80,10 @@ describe('session.restoreScreen, gone in 0.6.0', () => {
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, stayAwake: false } }));
     const store = new ConfigStore(env.paths);
     expect(store.get().onboarded).toBe(true);
-    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: false });
+    expect(store.get().session).toMatchObject({ stayAwake: false });
     store.patch({ appearance: { fontSize: 15 } });
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.session).toEqual({ restoreScreen: false, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
+    expect(saved.session).toEqual({ restoreScreen: false, stayAwake: false }); // kept as it was, like any key a config does not know
     expect(new ConfigStore(env.paths).get().appearance.fontSize).toBe(15);
   });
 });
@@ -101,20 +101,24 @@ describe('notifications.claudeFinished', () => {
 
 describe('session.resumeClaude, gone in 0.6.0', () => {
   it('is not a setting and not a default; an old file that has it loads, changes nothing, and keeps the key as it was after a patch of another key', () => {
-    expect(DEFAULT_CONFIG.session).toEqual({ keepRunning: false, stayAwake: true });
+    expect(DEFAULT_CONFIG.session).toEqual({ stayAwake: true });
     // @ts-expect-error there is no Resume button any more: no code can read the switch from the config's type
     void DEFAULT_CONFIG.session.resumeClaude;
-    // what 0.5.x left behind: the offer switched off, and another choice beside it
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false, stayAwake: false } }));
+    // nor a login agent that keeps the session running (the switch was `session.keepRunning`)
+    expect('keepRunning' in DEFAULT_CONFIG.session).toBe(false);
+    // @ts-expect-error there is no login agent any more: no code can read the switch from the config's type
+    void DEFAULT_CONFIG.session.keepRunning;
+    // what 0.5.x left behind: the offer switched off, the agent switched on, and another choice beside them
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false, keepRunning: true, stayAwake: false } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: false });
+    expect(store.get().session).toMatchObject({ stayAwake: false });
     store.patch({ appearance: { fontSize: 15 } });
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.session).toEqual({ resumeClaude: false, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
+    expect(saved.session).toEqual({ resumeClaude: false, keepRunning: true, stayAwake: false }); // kept as it was, like any key a config does not know
   });
 });
 
-describe('session.keepRunning and session.stayAwake, and the autoResume an old config may still have', () => {
+describe('session.stayAwake, and the autoResume an old config may still have', () => {
   it('autoResume is gone (0.5.1): not a setting and not a default; an old file that has it loads, keeps it after a patch of another key, and nothing reads it', () => {
     expect('autoResume' in DEFAULT_CONFIG.session).toBe(false);
     // @ts-expect-error resuming by itself is not a setting any more: no code can read it from the config's type
@@ -122,26 +126,25 @@ describe('session.keepRunning and session.stayAwake, and the autoResume an old c
     // what a 0.5.0 left behind, with resuming by itself on
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false, autoResume: true } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session).toMatchObject({ resumeClaude: false, keepRunning: false, stayAwake: true });
+    expect(store.get().session).toMatchObject({ resumeClaude: false, stayAwake: true });
     store.patch({ session: { stayAwake: false } });
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.session).toEqual({ resumeClaude: false, keepRunning: false, stayAwake: false, autoResume: true }); // kept as it was, like any key a config does not know
+    expect(saved.session).toEqual({ resumeClaude: false, stayAwake: false, autoResume: true }); // kept as it was, like any key a config does not know
     expect(new ConfigStore(env.paths).get().session.stayAwake).toBe(false);
   });
 
-  it('keepRunning and stayAwake are off and on by default, also for a config file saved before they existed, and a choice is kept', () => {
-    expect(DEFAULT_CONFIG.session.keepRunning).toBe(false);
+  it('stayAwake is on by default, also for a config file saved before it existed, and a choice is kept', () => {
     expect(DEFAULT_CONFIG.session.stayAwake).toBe(true);
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false } }));
     const store = new ConfigStore(env.paths);
-    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: true });
-    store.patch({ session: { keepRunning: true, stayAwake: false } });
-    expect(new ConfigStore(env.paths).get().session).toMatchObject({ keepRunning: true, stayAwake: false });
+    expect(store.get().session).toMatchObject({ stayAwake: true });
+    store.patch({ session: { stayAwake: false } });
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ stayAwake: false });
   });
 
   it('keep the default when the saved value is not a boolean (the switch stays a switch)', () => {
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { keepRunning: 1, stayAwake: null } }));
-    expect(new ConfigStore(env.paths).get().session).toMatchObject({ keepRunning: false, stayAwake: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { stayAwake: null } }));
+    expect(new ConfigStore(env.paths).get().session).toMatchObject({ stayAwake: true });
   });
 });
 

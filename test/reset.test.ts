@@ -1,16 +1,28 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { removeAgentForReset, removeAgentWithoutDaemon, resetJaffer } from '../src/core/reset';
+import { resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
 import { BEGIN, END, SKILL_MARKER } from '../src/core/integrations/legacy-claude';
-import type { Launchctl } from '../src/core/service/launch-agent';
-import { AGENT_LABEL } from '../src/shared/keep-running';
+import { AGENT_LABEL } from '../src/core/service/legacy-agent';
+
+/**
+ * `isDefaultHome` says yes to the temporary homes a test names in `forcedHomes` (a test home is never the person's own ~/.jaffer, which is
+ * the only home the cleanup of the login agent touches), and otherwise answers as the real one does.
+ */
+const { forcedHomes } = vi.hoisted(() => ({ forcedHomes: new Set<string>() }));
+vi.mock('../src/core/session/caffeinate', async (orig) => {
+  const actual = await orig<typeof import('../src/core/session/caffeinate')>();
+  return { ...actual, isDefaultHome: (home: string) => forcedHomes.has(home) || actual.isDefaultHome(home) };
+});
 
 let env: TestEnv;
-beforeEach(() => (env = makeEnv()));
+beforeEach(() => {
+  env = makeEnv();
+  forcedHomes.clear();
+});
 afterEach(() => env.cleanup());
 
 const mk = (p: string, text = 'x') => {
@@ -133,9 +145,9 @@ describe('resetJaffer', () => {
   });
 });
 
-describe('resetJaffer and the login agent that keeps the session running (a fake launchctl; the real one is never run)', () => {
+describe('resetJaffer and the login agent an older Jaffer left (removeLegacyAgent, a fake launchctl; the real one is never run)', () => {
   const TARGET = `gui/501/${AGENT_LABEL}`;
-  /** The agent as the switch leaves it: the plist in the person's LaunchAgents, the wrapper in Jaffer's folder. */
+  /** The agent as 0.5 left it: the plist in the person's LaunchAgents, the wrapper in Jaffer's folder. */
   function agentOnDisk(): { plist: string; wrapper: string } {
     const plist = path.join(env.userHome, 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`);
     const wrapper = path.join(env.home, 'bin', 'jafferd');
@@ -143,146 +155,51 @@ describe('resetJaffer and the login agent that keeps the session running (a fake
     mk(wrapper, '#!/bin/sh\n');
     return { plist, wrapper };
   }
-  function fakeLaunchctl(bootout: { code: number; out: string } = { code: 0, out: '' }, onBootout?: () => void) {
+  function fakeLaunchctl(onBootout?: () => void) {
     const calls: string[][] = [];
-    const launchctl: Launchctl = {
-      async run(args) {
-        calls.push(args);
-        if (args[0] !== 'bootout') return { code: 1, out: `unexpected: ${args.join(' ')}` };
-        onBootout?.();
-        return bootout;
-      },
+    const launchctl = async (args: string[]) => {
+      calls.push(args);
+      onBootout?.();
+      return { code: 0 };
     };
     return { launchctl, calls };
   }
+  beforeEach(() => vi.stubEnv('JAFFER_NO_LAUNCHCTL', '')); // (the run sets it: the fake launchctl below must be reachable)
+  afterEach(() => vi.unstubAllEnvs());
 
-  it('removes the agent first: deletes its plist and wrapper and boots it out before the folder is moved away, and says what launchd did', async () => {
+  it('takes the agent away first: its plist and wrapper go and the job is booted out once, before the session ends and before the folder is moved away', async () => {
     lived();
     const { plist, wrapper } = agentOnDisk();
-    let atBootout: { plist: boolean; wrapper: boolean; folder: boolean } | null = null;
-    const f = fakeLaunchctl({ code: 0, out: '' }, () => (atBootout = { plist: fs.existsSync(plist), wrapper: fs.existsSync(wrapper), folder: fs.existsSync(path.join(env.home, 'config.json')) }));
-    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
-    expect(f.calls).toEqual([['bootout', TARGET]]);
-    // the files go first (the bootout ends the daemon when launchd runs it), and Jaffer's folder is still where it was
-    expect(atBootout).toEqual({ plist: false, wrapper: false, folder: true });
-    expect(fs.existsSync(plist)).toBe(false);
-    expect(fs.existsSync(path.join(res.backupDir!, 'bin', 'jafferd'))).toBe(false); // nothing of it in the backup either
-    const said = res.messages.join('\n');
-    expect(said).toMatch(/background/i);
-    expect(said).toMatch(/launchd/);
-    expect(said.indexOf('background')).toBeLessThan(said.indexOf('backup')); // the first thing it did
-  });
-
-  it('turns the switch off first, then takes the agent away, then ends the session, then moves the folder: a daemon started in between cannot put the agent back', async () => {
-    lived();
-    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
-    const { plist } = agentOnDisk();
-    const flag = () => JSON.parse(fs.readFileSync(path.join(env.home, 'config.json'), 'utf8')).session.keepRunning;
+    forcedHomes.add(env.home); // (this test home stands in for the person's own ~/.jaffer)
     const order: string[] = [];
-    const f = fakeLaunchctl({ code: 0, out: '' }, () => order.push(`bootout: switch ${flag()}, folder ${fs.existsSync(env.home)}`));
-    await resetJaffer({
+    const f = fakeLaunchctl(() => order.push(`bootout: plist ${fs.existsSync(plist)}, wrapper ${fs.existsSync(wrapper)}, folder ${fs.existsSync(path.join(env.home, 'config.json'))}`));
+    const res = await resetJaffer({
       home: env.home,
       userHome: env.userHome,
       env: claudeEnv(),
       backup: true,
       launchctl: f.launchctl,
       uid: 501,
-      keepRunningOff: async () => void order.push('the running daemon is told the switch is off'),
-      endSession: async () => void order.push(`session ends: switch ${flag()}, agent ${fs.existsSync(plist)}, folder ${fs.existsSync(env.home)}`),
+      endSession: async () => void order.push(`session ends: agent ${fs.existsSync(plist) || fs.existsSync(wrapper)}, folder ${fs.existsSync(env.home)}`),
     });
-    expect(order).toEqual([
-      'the running daemon is told the switch is off',
-      'bootout: switch false, folder true', // (the file says off too, whatever the daemon did)
-      'session ends: switch false, agent false, folder true',
-    ]);
-    expect(fs.existsSync(env.home)).toBe(false);
+    expect(f.calls).toEqual([['bootout', TARGET]]);
+    expect(order).toEqual(['bootout: plist false, wrapper false, folder true', 'session ends: agent false, folder true']); // the files go before launchd is told (the bootout ends the daemon when launchd runs it)
+    expect(fs.existsSync(plist)).toBe(false);
+    expect(fs.existsSync(path.join(res.backupDir!, 'bin', 'jafferd'))).toBe(false); // nothing of it in the backup either
+    const said = res.messages.join('\n');
+    expect(said).toMatch(/background agent/i);
+    expect(said.indexOf('background agent')).toBeLessThan(said.indexOf('backup')); // the first thing it did
   });
 
-  it('a config file that cannot be written (a full disk, a locked folder) does not stop the reset: the agent is still taken away and the session ended', async () => {
+  it('in a home that is not the person\'s own (this test home), a reset leaves launchd and the agent\'s plist alone', async () => {
     lived();
-    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true } }));
-    const { plist, wrapper } = agentOnDisk();
-    const order: string[] = [];
-    const f = fakeLaunchctl({ code: 0, out: '' }, () => {
-      fs.chmodSync(env.home, 0o700); // (the folder can be written again from here on)
-      order.push('bootout');
-    });
-    try {
-      const res = await resetJaffer({
-        home: env.home,
-        userHome: env.userHome,
-        env: claudeEnv(),
-        backup: true,
-        launchctl: f.launchctl,
-        uid: 501,
-        keepRunningOff: async () => fs.chmodSync(env.home, 0o500), // writing the switch off into the config file fails now
-        endSession: async () => void order.push('session ends'),
-      });
-      expect(order).toEqual(['bootout', 'session ends']);
-      expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
-      expect(res.backupDir).toBeDefined();
-    } finally {
-      if (fs.existsSync(env.home)) fs.chmodSync(env.home, 0o700);
-    }
-  });
-
-  it('says what launchd answered when it had nothing loaded (the result of the bootout is told, not hidden)', async () => {
-    lived();
-    agentOnDisk();
-    const f = fakeLaunchctl({ code: 3, out: 'Boot-out failed: 3: No such process\n' });
-    const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
-    expect(res.messages.join('\n')).toContain('No such process');
-  });
-
-  it('is a no-op without an agent: launchd is not asked, and nothing about it is said', async () => {
-    lived();
+    const { plist } = agentOnDisk();
     const f = fakeLaunchctl();
     const res = await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true, launchctl: f.launchctl, uid: 501 });
     expect(f.calls).toEqual([]);
-    expect(res.messages.join('\n')).not.toMatch(/background|launchd/i);
-  });
-
-  it('what `jaffer reset` and Settings → Reset run before they end the session does the same, once: a second time it is silent', async () => {
-    lived();
-    const { plist, wrapper } = agentOnDisk();
-    const f = fakeLaunchctl();
-    const said = await removeAgentForReset({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 });
-    expect(said.join('\n')).toMatch(/background/i);
-    expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
-    expect(await removeAgentForReset({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 })).toEqual([]);
-    expect(f.calls).toEqual([['bootout', TARGET]]);
-  });
-
-  it('`jaffer service remove` with no daemon to answer (none runs, or one cannot start): the switch off in the config file first, then the agent away as Reset does it', async () => {
-    mk(path.join(env.home, 'config.json'), JSON.stringify({ onboarded: true, session: { keepRunning: true, stayAwake: false } }));
-    const { plist, wrapper } = agentOnDisk();
-    const config = () => JSON.parse(fs.readFileSync(path.join(env.home, 'config.json'), 'utf8'));
-    let atBootout: boolean | null = null;
-    const f = fakeLaunchctl({ code: 0, out: '' }, () => (atBootout = config().session.keepRunning));
-    const { status, messages: said } = await removeAgentWithoutDaemon({ home: env.home, userHome: env.userHome, launchctl: f.launchctl, uid: 501 });
-    expect(status).toEqual({ state: 'not-installed' });
-    expect(said.join('\n')).toMatch(/background/i);
-    expect(fs.existsSync(plist) || fs.existsSync(wrapper)).toBe(false);
-    expect(f.calls).toEqual([['bootout', TARGET]]);
-    expect(atBootout).toBe(false); // off before launchd was touched: a daemon that starts now does not put the agent back
-    expect(config().session).toMatchObject({ keepRunning: false, stayAwake: false }); // and nothing else of the person's settings changed
-    expect(fs.existsSync(path.join(env.home, 'config.json'))).toBe(true);
-    // a home that is not the person's own (this test home, no launchctl given) is refused, and nothing is touched, the switch neither
-    mk(path.join(env.home, 'config.json'), JSON.stringify({ session: { keepRunning: true } }));
-    const again = agentOnDisk();
-    const refused = await removeAgentWithoutDaemon({ home: env.home, userHome: env.userHome });
-    expect(refused).toEqual({ status: { state: 'refused', reason: expect.stringMatching(/~\/\.jaffer|macOS only/) }, messages: [] });
-    expect(fs.existsSync(again.plist) && fs.existsSync(again.wrapper)).toBe(true);
-    expect(config().session.keepRunning).toBe(true);
-  });
-
-  it('in a home that is not the person\'s own (this test home), a reset leaves launchd and the agent\'s plist alone by default', async () => {
-    lived();
-    const { plist } = agentOnDisk();
-    await resetJaffer({ home: env.home, userHome: env.userHome, env: claudeEnv(), backup: true }); // no launchctl given
     expect(fs.existsSync(plist)).toBe(true);
-    expect(await removeAgentForReset({ home: env.home, userHome: env.userHome })).toEqual([]);
-    expect(fs.existsSync(plist)).toBe(true);
+    expect(fs.existsSync(path.join(res.backupDir!, 'bin', 'jafferd'))).toBe(true); // (moved with Jaffer's folder as a whole, not taken away on its own)
+    expect(res.messages.join('\n')).not.toMatch(/background agent/i);
   });
 });
 

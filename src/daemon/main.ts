@@ -41,14 +41,10 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // The login agent's wrapper says that launchd runs this daemon. Read once and not passed on: the session's shell, and anything started
-  // from it (a daemon the CLI spawns detached), are not launchd's job.
-  const launchd = process.env.JAFFER_LAUNCHD === '1';
-  delete process.env.JAFFER_LAUNCHD;
   const cliScript = process.env.JAFFER_CLI_SCRIPT ?? path.join(__dirname, '..', 'cli', 'jaffer.cjs');
-  const service = new JafferService({ paths, version: VERSION, cliScript: fs.existsSync(cliScript) ? cliScript : undefined, log, launchd, daemonScript: __filename });
-  // The exit code is what the login agent (launchd) reads: 0 for a deliberate end, which it leaves alone; SIGTERM 143 and SIGINT 130,
-  // which it restarts. The first reason wins, the state is saved before the exit, and a stop that hangs ends at a deadline (see shutdown.ts).
+  const service = new JafferService({ paths, version: VERSION, cliScript: fs.existsSync(cliScript) ? cliScript : undefined, log });
+  // The exit code: 0 for a deliberate end (`app.shutdown`), 143 for SIGTERM and 130 for SIGINT, the shell's own 128 + number. The first
+  // reason wins, the shell is let go before the exit, and a stop that hangs ends at a deadline (see shutdown.ts).
   const shutdown = makeShutdown({ stop: () => service.stop(), exit: (code) => process.exit(code), log, deadlineMs: SHUTDOWN_DEADLINE_MS });
   service.onShutdown.fn = () => shutdown('rpc', 0, 50); // (claimed at once; the stop begins once the reply has gone out)
   process.on('SIGTERM', () => shutdown('SIGTERM', 143));
@@ -56,7 +52,7 @@ async function main(): Promise<void> {
   process.on('SIGHUP', () => undefined); // survive the launching terminal closing
 
   await service.start();
-  log(`ready pid=${process.pid}${launchd ? ' (run by launchd)' : ''}`);
+  log(`ready pid=${process.pid}`);
 }
 
 main().catch((e) => {

@@ -230,58 +230,6 @@ describe('Jaffer UI end to end', () => {
     expect(noArgCalls()).toBe(before);
   }, 60_000);
 
-  it('first run: "Keep my session running in the background" is on in the Claude path and off in the plain one; only on asks the daemon, and a refusal never holds up Get started', async () => {
-    const reload = () => page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-    const keepBox = () => page.locator('.onboard .choices label', { hasText: 'Keep my session running in the background' }).locator('input[type=checkbox]');
-    /** Notes every call the page makes to the daemon from here on (and still makes it). */
-    const spy = () =>
-      page.evaluate(() => {
-        const w = window as any;
-        const real = w.jaffer.call;
-        w.__calls = [];
-        w.jaffer.call = (m: string, p: unknown) => (w.__calls.push(m), real(m, p));
-      });
-    const calls = (): Promise<string[]> => page.evaluate(() => (window as any).__calls);
-    const agentsDir = path.join(env.userHome, 'Library', 'LaunchAgents');
-
-    // with Claude (already signed in: straight to the choices): on by default, said plainly
-    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
-    await reload();
-    await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
-    expect(await keepBox().count()).toBe(1);
-    expect(await keepBox().isChecked()).toBe(true);
-    expect((await page.textContent('.onboard')) ?? '').toMatch(/restart it automatically after a crash or a reboot/i);
-    // and from when: the agent is written now, and launchd takes over at the next login or restart (0.5.1)
-    expect((await page.locator('.onboard .choices label', { hasText: 'Keep my session running in the background' }).textContent()) ?? '').toMatch(/next login or restart/i);
-    await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click(); // (nothing is typed in this test)
-    await spy();
-    await page.click('.onboard .btn.primary');
-    await page.waitForSelector('.onboard', { state: 'detached' }); // not held up by the refusal of this test home
-    await until(async () => (await calls()).includes('service.install'), 5_000, 'Get started to ask the daemon to keep the session running');
-    await page.locator('.toast', { hasText: /~\/\.jaffer|another folder|macOS only/ }).waitFor({ timeout: 5_000 }); // and why it could not, in a toast
-    expect((await page.evaluate(() => window.jaffer.call('config.get'))).session.keepRunning).toBe(false);
-    expect(fs.existsSync(agentsDir)).toBe(false);
-
-    // the plain terminal: off by default (that path installs nothing), and Get started asks the daemon for nothing of the kind
-    fake.setLoggedIn(false);
-    await page.evaluate(() => window.jaffer.call('config.patch', { onboarded: false }));
-    await reload();
-    await page.waitForSelector('.onboard[data-step="signin"]', { timeout: 20_000 });
-    await page.locator('.onboard button', { hasText: 'plain terminal' }).click();
-    await page.waitForSelector('.onboard[data-step="choices"]');
-    expect(await keepBox().count()).toBe(1);
-    expect(await keepBox().isChecked()).toBe(false);
-    await spy();
-    await page.click('.onboard .btn.primary');
-    await page.waitForSelector('.onboard', { state: 'detached' });
-    await sleep(1_000);
-    expect((await calls()).filter((m) => m.startsWith('service.'))).toEqual([]);
-    expect(fs.existsSync(agentsDir)).toBe(false);
-
-    // back to a Mac where Claude Code is connected, as the tests after this one expect
-    fake.setLoggedIn(true);
-    await page.evaluate(() => window.jaffer.call('setup.claude.install', {}));
-  }, 90_000);
   it('hosts a working shell: type, run, see output; colours and prompt render', async () => {
     await until(async () => /❯/.test(await termText()), 20_000, 'the shell prompt');
     await page.click('.term');
@@ -802,7 +750,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
-  it('Settings: "Keep my Mac awake while Claude works" is on by default, writes session.stayAwake, sits by the keep-running switch and says what it cannot do', async () => {
+  it('Settings: "Keep my Mac awake while Claude works" is on by default, writes session.stayAwake, sits after the global hotkey and says what it cannot do', async () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
@@ -811,11 +759,12 @@ describe('Jaffer UI end to end', () => {
     expect(await awake.count()).toBe(1);
     expect(await stayAwake()).toBe(true);
     expect(await awake.locator('input').isChecked()).toBe(true);
-    // right after "Keep my session running in the background" comes this one
+    // right after "Global hotkey" comes this one (there is no switch for keeping the session running in the background any more)
     const next = await page.evaluate(() => {
       const fields = [...document.querySelectorAll('.settings .field')];
-      return fields[fields.findIndex((f) => f.textContent?.includes('Keep my session running in the background')) + 1]?.textContent ?? '';
+      return fields[fields.findIndex((f) => f.textContent?.includes('Global hotkey')) + 1]?.textContent ?? '';
     });
+    expect(await page.locator('label.field', { hasText: 'Keep my session running in the background' }).count()).toBe(0);
     expect(next).toContain('Keep my Mac awake while Claude works');
     // the hint says what it does and what it does not do (a closed lid)
     const hint = (await awake.textContent()) ?? '';
@@ -830,255 +779,6 @@ describe('Jaffer UI end to end', () => {
     expect(await awake.locator('input').isChecked()).toBe(true);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
-  }, 60_000);
-
-  it('Settings: "Keep my session running in the background" follows the global hotkey, shows what the daemon says, and in this test home is off, disabled and says why', async () => {
-    await page.keyboard.press('Meta+,');
-    await page.waitForSelector('.settings');
-    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-    const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-    expect(await keep.count()).toBe(1);
-    const next = await page.evaluate(() => {
-      const fields = [...document.querySelectorAll('.settings .field')];
-      return fields[fields.findIndex((f) => f.textContent?.includes('Global hotkey')) + 1]?.textContent ?? '';
-    });
-    expect(next).toContain('Keep my session running in the background');
-    // a hint like its neighbours', and under it a line from the daemon: here, why it cannot be (not the person's own ~/.jaffer)
-    expect((await keep.locator('.field-label small').first().textContent()) ?? '').toMatch(/after a crash or a reboot/);
-    const status = await page.evaluate(() => window.jaffer.call('service.status', {}));
-    expect(status).toEqual({ state: 'refused', reason: expect.stringMatching(/~\/\.jaffer|another folder|macOS only/) });
-    await until(async () => ((await keep.locator('.field-status').textContent()) ?? '').includes(status.reason), 5_000, 'the reason under the switch');
-    expect(await keep.locator('input').isDisabled()).toBe(true);
-    expect(await keep.locator('input').isChecked()).toBe(false);
-    await keep.scrollIntoViewIfNeeded();
-    await shot('08b-settings-keep-running-refused');
-    await keep.locator('.field-label').click({ force: true }); // a click on its words does nothing either (forced: Playwright waits for a disabled control's label)
-    await sleep(400);
-    expect(await keep.locator('input').isChecked()).toBe(false);
-    expect((await page.evaluate(() => window.jaffer.call('config.get'))).session.keepRunning).toBe(false);
-    expect(fs.existsSync(path.join(env.userHome, 'Library', 'LaunchAgents'))).toBe(false);
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.settings', { state: 'detached' });
-  }, 60_000);
-
-  it('Settings: the keep-running line says what launchd does, and the switch asks the daemon to install or remove the agent (the daemon\'s answers stood in for)', async () => {
-    // a Mac where the agent can be: the daemon's three answers are played here, so nothing reaches launchd
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.__svcCalls = [];
-      w.__svc = { state: 'running', pid: 4242 };
-      w.jaffer.call = (m: string, p: unknown) => {
-        if (!m.startsWith('service.')) return w.__realCall(m, p);
-        w.__svcCalls.push(m);
-        if (m === 'service.install') w.__svc = { state: 'installed' };
-        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'The session ends now: launchd was running it.' };
-        return Promise.resolve(w.__svc);
-      };
-    });
-    try {
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
-      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
-      expect(await keep.locator('input').isDisabled()).toBe(false);
-      expect(await keep.locator('input').isChecked()).toBe(true);
-      await keep.locator('.switch').click(); // off
-      await until(async () => (await line()).includes('not installed'), 5_000, 'the removed line');
-      expect(await keep.locator('input').isChecked()).toBe(false);
-      await page.locator('.toast', { hasText: 'The session ends now' }).waitFor({ timeout: 5_000 }); // what the daemon said about it
-      await keep.locator('.switch').click(); // on again
-      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
-      expect(await keep.locator('input').isChecked()).toBe(true);
-      // (off asks the daemon how it stands now, before it removes: what the field read when it opened may be out of date)
-      expect(await page.evaluate(() => (window as any).__svcCalls)).toEqual(['service.status', 'service.status', 'service.remove', 'service.install']);
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__realCall;
-      });
-    }
-  }, 60_000);
-
-  it('Settings: turning it off while macOS runs the session asks first (the app\'s own dialog, stood in for): Cancel changes nothing; with the agent only installed nothing is asked', async () => {
-    // the daemon's answers are played (nothing reaches launchd), and so is the app's question (its words are keep-running-off.test.ts)
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.__realOff = w.jaffer.keepRunningOff;
-      w.__svcCalls = [];
-      w.__svc = { state: 'running', pid: 4242 };
-      w.jaffer.call = (m: string, p: unknown) => {
-        if (!m.startsWith('service.')) return w.__realCall(m, p);
-        w.__svcCalls.push(m);
-        if (m === 'service.install') w.__svc = { state: 'installed' };
-        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'Turned off.' };
-        return Promise.resolve(w.__svc);
-      };
-      w.__offAsked = 0;
-      w.__offAnswer = 'cancel';
-      // the question only: every switch-off goes through keepRunningOff, which asks it when the daemon says launchd runs the session
-      w.__keepRunningOffAsk = async () => {
-        w.__offAsked++;
-        return w.__offAnswer !== 'cancel';
-      };
-    });
-    const asked = () => page.evaluate(() => (window as any).__offAsked as number);
-    const removes = async () => ((await page.evaluate(() => (window as any).__svcCalls)) as string[]).filter((m) => m === 'service.remove').length;
-    try {
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
-      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
-      // launchd runs the session: off asks first, and Cancel leaves everything as it was
-      await keep.locator('.switch').click();
-      await until(async () => (await asked()) === 1, 5_000, 'the app to be asked');
-      await sleep(300);
-      expect(await keep.locator('input').isChecked()).toBe(true);
-      expect(await removes()).toBe(0);
-      expect(await line()).toContain('running (pid 4242)');
-      // a yes: the agent goes (the session with it)
-      await page.evaluate(() => ((window as any).__offAnswer = 'yes'));
-      await keep.locator('.switch').click();
-      await until(async () => (await line()).includes('not installed'), 5_000, 'the removed line');
-      expect(await asked()).toBe(2);
-      expect(await removes()).toBe(1);
-      expect(await keep.locator('input').isChecked()).toBe(false);
-      // installed but launchd is not running this session (it was started by Jaffer): off ends nothing, so nothing is asked
-      await keep.locator('.switch').click();
-      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
-      await keep.locator('.switch').click();
-      await until(async () => (await line()).includes('not installed'), 5_000, 'removed again');
-      expect(await asked()).toBe(2);
-      expect(await removes()).toBe(2);
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__realCall;
-        w.jaffer.keepRunningOff = w.__realOff;
-        delete w.__keepRunningOffAsk;
-      });
-      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
-    }
-  }, 60_000);
-
-  // 0.5.1: the line under the switch was what Settings read when it opened; after a Cancel it is read again (the daemon was asked how
-  // it stands for the question, and things may have changed while the question was up).
-  it('Settings: after Cancel in the question before turning it off, the keep-running line is read again from the daemon', async () => {
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.__statusCalls = 0;
-      w.__svc = { state: 'running', pid: 4242 };
-      w.jaffer.call = (m: string, p: unknown) => {
-        if (!m.startsWith('service.')) return w.__realCall(m, p);
-        if (m === 'service.status') w.__statusCalls++;
-        return Promise.resolve(w.__svc);
-      };
-      w.__keepRunningOffAsk = async () => {
-        w.__svc = { state: 'running', pid: 5151 }; // meanwhile launchd brought the session back with another pid
-        return false; // Cancel
-      };
-    });
-    try {
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
-      await until(async () => (await line()).includes('running (pid 4242)'), 5_000, 'the running line');
-      await keep.locator('.switch').click();
-      await until(async () => (await line()).includes('running (pid 5151)'), 5_000, 'the line read again after Cancel');
-      expect(await keep.locator('input').isChecked()).toBe(true);
-      expect(await page.evaluate(() => (window as any).__statusCalls)).toBeGreaterThanOrEqual(3); // when it opened, for the question, after Cancel
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__realCall;
-        delete w.__keepRunningOffAsk;
-      });
-      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
-    }
-  }, 60_000);
-
-  it('Settings: what the window saw when it opened is not what decides: off with a stale "installed" while the daemon now says launchd runs the session still asks first', async () => {
-    // the daemon's answers are played (nothing reaches launchd); the app's question is stood in for, the decision to ask is the app's own
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.__svcCalls = [];
-      w.__svc = { state: 'installed' }; // what Settings reads when it opens
-      w.jaffer.call = (m: string, p: unknown) => {
-        if (!m.startsWith('service.')) return w.__realCall(m, p);
-        w.__svcCalls.push(m);
-        if (m === 'service.remove') w.__svc = { state: 'not-installed', note: 'The session ends now.' };
-        return Promise.resolve(w.__svc);
-      };
-      w.__offAsked = 0;
-      w.__keepRunningOffAsk = async () => {
-        w.__offAsked++;
-        return false; // Cancel
-      };
-    });
-    const removes = async () => ((await page.evaluate(() => (window as any).__svcCalls)) as string[]).filter((m) => m === 'service.remove').length;
-    try {
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-      const line = async () => (await keep.locator('.field-status').textContent()) ?? '';
-      await until(async () => (await line()).includes('installed, active from the next login or restart'), 5_000, 'the installed line');
-      // meanwhile the detached daemon died and launchd brought the session back: the daemon now says it runs it
-      await page.evaluate(() => ((window as any).__svc = { state: 'running', pid: 4343 }));
-      await keep.locator('.switch').click(); // off, with the window still showing "installed"
-      await until(async () => (await page.evaluate(() => (window as any).__offAsked)) === 1, 5_000, 'the person to be asked');
-      await sleep(300);
-      expect(await removes()).toBe(0); // Cancel: nothing taken away, the session goes on
-      expect(await keep.locator('input').isChecked()).toBe(true);
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__realCall;
-        delete w.__keepRunningOffAsk;
-      });
-      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
-    }
-  }, 60_000);
-
-  it('Settings: against a session daemon from before this version (no service.status), the keep-running line says to restart the session', async () => {
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.jaffer.call = (m: string, p: unknown) => (m === 'service.status' ? Promise.reject(new Error('unknown method: service.status')) : w.__realCall(m, p));
-    });
-    try {
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
-      const keep = page.locator('label.field', { hasText: 'Keep my session running in the background' });
-      await until(async () => ((await keep.locator('.field-status').textContent()) ?? '') === 'Restart your session to use this', 5_000, 'the restart line');
-      expect(await keep.locator('input').isDisabled()).toBe(true);
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__realCall;
-      });
-      if ((await page.locator('.settings').count()) > 0) await page.keyboard.press('Escape');
-    }
   }, 60_000);
 
   it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {

@@ -8,7 +8,6 @@ import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
-import { agentStatusText, errorText, isOldDaemonError, OLD_DAEMON_TEXT, type AgentStatus } from '../../shared/keep-running';
 import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -215,17 +214,12 @@ export function FindBar(): VNode {
 
 // ------------------------------------------------------------------ settings
 
-function Field({ label, hint, status, children, buttons }: { label: string; hint?: string; status?: { text: string; state: string }; children: preact.ComponentChildren; buttons?: boolean }): VNode {
+function Field({ label, hint, children, buttons }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean }): VNode {
   const body = (
     <>
       <span class="field-label">
         {label}
         {hint && <small>{hint}</small>}
-        {status && (
-          <small class="field-status" data-state={status.state}>
-            {status.text}
-          </small>
-        )}
       </span>
       <span class="field-ctl">{children}</span>
     </>
@@ -376,7 +370,6 @@ export function Settings(): VNode {
               <Field label="Global hotkey" hint="summons Jaffer from anywhere">
                 <input type="text" value={c.hotkey} onChange={(e) => set({ hotkey: (e.target as HTMLInputElement).value })} />
               </Field>
-              <KeepRunningField flag={c.session?.keepRunning === true} />
               <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
                 <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />
               </Field>
@@ -423,63 +416,6 @@ export function Settings(): VNode {
         </div>
       </div>
     </Modal>
-  );
-}
-
-/** The switch's line under it: launchd's own state in words, or why it cannot be here. */
-function keepRunningLine(s: AgentStatus): { text: string; state: string } {
-  return { text: s.state === 'refused' ? s.reason : agentStatusText(s), state: s.state };
-}
-
-/**
- * Settings → Appearance: *Keep my session running in the background*, the login agent (launchd) that starts the session at login and
- * again after a crash. What it shows comes from the daemon (launchd and the plist on disk), not from the switch alone; where it cannot be
- * (not the person's own ~/.jaffer, an app run from a disk image) it is off, cannot be turned on, and says why.
- */
-function KeepRunningField({ flag }: { flag: boolean }): VNode {
-  const [status, setStatus] = useState<AgentStatus | null>(null);
-  /** Why the daemon could not say: a session daemon from before this version (after an app update) does not know the question. */
-  const [unknown, setUnknown] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(
-    () =>
-      void call<AgentStatus>('service.status', {})
-        .then(setStatus)
-        .catch((e) => setUnknown(isOldDaemonError(e) ? OLD_DAEMON_TEXT : 'The session could not say')),
-    [],
-  );
-  const refused = status?.state === 'refused';
-  const on = status ? status.state === 'running' || status.state === 'installed' || status.state === 'not-loaded' : flag;
-  const toggle = async (v: boolean) => {
-    setBusy(true);
-    try {
-      let s: AgentStatus;
-      if (!v) {
-        // every switch-off goes through the app, which asks the daemon how it stands now (what this field read when it opened may be
-        // out of date) and, when launchd runs this session, the person first: taking the agent away ends it (Cancel leaves it all)
-        const r = await window.jaffer.keepRunningOff();
-        if (r.cancelled || !r.status) {
-          // nothing was changed, but the line is read again: the daemon was asked how it stands for the question, and it may have
-          // changed while the question was up (launchd brought the session back with another pid, or the agent went)
-          const now = await call<AgentStatus>('service.status', {}).catch(() => null); // (a no is not an error: one reading it is not news)
-          if (now) setStatus(now);
-          return;
-        }
-        s = r.status;
-      } else s = await call<AgentStatus>('service.install', {});
-      setStatus(s);
-      if (s.state === 'refused') toast({ kind: 'error', text: s.reason });
-      else if (s.note) toast({ kind: 'info', text: s.note }, 10_000);
-    } catch (e) {
-      toast({ kind: 'error', text: errorText(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Field label="Keep my session running in the background" hint="macOS starts your session at login and again after a crash or a reboot, with or without the window open (a login agent); off takes the agent away" status={status ? keepRunningLine(status) : { text: unknown ?? '…', state: 'unknown' }}>
-      <Switch checked={on && !refused} disabled={busy || !status || refused} onChange={(v) => void toggle(v)} />
-    </Field>
   );
 }
 
@@ -670,28 +606,18 @@ export function Onboarding(): VNode {
   const [plain, setPlain] = useState(false); // chose a terminal without Claude: no Claude choices, nothing installed, nothing typed
   const [claude, setClaude] = useState(true);
   const [start, setStart] = useState(true);
-  // on in the Claude path; the plain terminal installs nothing unless the person turns it on (`null`: not touched, so it follows the path)
-  const [keep, setKeep] = useState<boolean | null>(null);
-  const keepOn = keep ?? !plain;
   const [busy, setBusy] = useState(false);
-  /** Asks the daemon to keep the session running. It never holds up Get started: a refusal or a failure is a toast with the reason. */
-  const keepRunning = () =>
-    void call<AgentStatus>('service.install', {})
-      .then((s) => s.state === 'refused' && toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${s.reason}` }, 10_000))
-      .catch((e) => toast({ kind: 'error', text: `Your session cannot be kept running in the background: ${errorText(e)}` }, 10_000));
   const go = async () => {
     setBusy(true);
     try {
       if (plain) {
         // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks
         await patchConfig({ onboarded: true, claude: { skipped: true } });
-        if (keepOn) keepRunning(); // (only when the person turned it on here)
         overlay.value = null;
         return;
       }
       await patchConfig({ onboarded: true });
       if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude
-      if (keepOn) keepRunning();
       overlay.value = null;
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
     } catch (e) {
@@ -758,13 +684,6 @@ export function Onboarding(): VNode {
               </label>
               </>
               )}
-              <label>
-                <Switch checked={keepOn} onChange={setKeep} />
-                <span class="t">
-                  <b>Keep my session running in the background</b>
-                  <small>Restart it automatically after a crash or a reboot. Active from your next login or restart.</small>
-                </span>
-              </label>
               {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}
             </div>
             <div class="onboard-foot">

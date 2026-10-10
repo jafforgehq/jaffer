@@ -3,11 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { findClaude, removeMcp, teardownClaude } from './integrations/claude';
 import { removeClaudeBlock, removeJafferSkills } from './integrations/legacy-claude';
-import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, REFUSED_NOT_MAC, REFUSED_OTHER_HOME, type AgentStatus, type Launchctl } from './service/launch-agent';
-import { isDefaultHome } from './session/caffeinate';
-import { ConfigStore } from '../shared/config';
+import { AGENT_LABEL, removeLegacyAgent } from './service/legacy-agent';
 import { APP_BUNDLE_ID } from '../shared/stay-awake-config';
-import { makePaths } from '../shared/paths';
 
 export interface ResetOptions {
   /** Jaffer's own folder (default ~/.jaffer). */
@@ -20,21 +17,16 @@ export interface ResetOptions {
   appData?: boolean;
   now?: Date;
   /**
-   * launchd, for the login agent that keeps the session running. Left out: the real `launchctl`, and only for the person's own
-   * `~/.jaffer` on macOS (`isDefaultHome`): a reset of any other home (a test, a second install) never touches launchd or the agent's
-   * plist. `null`: leave the agent alone. Tests pass a fake.
+   * launchd, for the login agent an older Jaffer may have left (`removeLegacyAgent`, which touches launchd and the agent's plist only
+   * for the person's own `~/.jaffer`: a reset of any other home, a test or a second install, leaves them alone). Left out: the real
+   * `launchctl`. Tests pass a fake.
    */
-  launchctl?: Launchctl | null;
+  launchctl?: (args: string[]) => Promise<{ code: number }>;
   /** The user whose launchd domain (`gui/<uid>`) holds the agent (default: this process's). */
   uid?: number;
   /**
-   * Tells a daemon that still runs that the switch is off (`config.patch`: its config lives in memory, and it would write it back). The
-   * config file is set to off as well, whatever this does. Left out: no daemon runs.
-   */
-  keepRunningOff?: () => Promise<void>;
-  /**
-   * Ends the session (the daemon owns Jaffer's folder; when this returns it must be stopped). Called once the switch is off and the agent
-   * is gone, before anything else is removed. Left out: the caller has ended it already.
+   * Ends the session (the daemon owns Jaffer's folder; when this returns it must be stopped). Called once the login agent of an older
+   * Jaffer is gone, before anything else is removed. Left out: the caller has ended it already.
    */
   endSession?: () => Promise<void>;
 }
@@ -90,59 +82,12 @@ function isLink(p: string): boolean {
 }
 
 /**
- * The switch "Keep my session running in the background" off in Jaffer's config file, so that a daemon that starts while the reset runs
- * (an open app reconnecting) does not put the agent back. Only a config that is there is written: a reset makes no folder. A config
- * that cannot be written (a full disk) stops nothing: what comes next (the agent away, the session ended) matters more.
- */
-function keepRunningOffOnDisk(home: string): void {
-  try {
-    const paths = makePaths(home);
-    if (!fs.existsSync(paths.config)) return;
-    const config = new ConfigStore(paths);
-    if (config.get().session.keepRunning) config.patch({ session: { keepRunning: false } });
-  } catch {
-    /* carry on */
-  }
-}
-
-/**
- * Take away the login agent that keeps the session running: its plist (in the person's LaunchAgents), its wrapper (`<home>/bin/jafferd`)
- * and the job in launchd (`bootout`; when launchd runs the daemon, that ends it, after it saved the state, and launchd does not start it
- * again). A step of `resetJaffer`, after the switch is off and before the session ends; silent when it was done already. Nothing at all
- * without an agent on disk. Returns what to tell the person, with what launchd answered.
- */
-export async function removeAgentForReset(o: Pick<ResetOptions, 'home' | 'userHome' | 'launchctl' | 'uid'>): Promise<string[]> {
-  const home = path.resolve(o.home);
-  const launchctl = o.launchctl !== undefined ? o.launchctl : process.platform === 'darwin' && isDefaultHome(home) ? execLaunchctl() : null;
-  if (!launchctl) return [];
-  const files = agentPaths({ home, userHome: o.userHome ?? os.homedir() });
-  if (!fs.existsSync(files.plistPath) && !fs.existsSync(files.wrapperPath)) return [];
-  const agent = new LaunchAgent({ launchctl, uid: o.uid ?? process.getuid?.() ?? -1, fs });
-  const r = await agent.remove(files);
-  return [`Removed the background agent that kept the session running (${files.plistPath.replace(o.userHome ?? os.homedir(), '~')}); ${bootoutNote(r)}`];
-}
-
-/**
- * `jaffer service remove` when no daemon answers (none runs, or one that cannot start crash-loops under launchd, and Settings needs a
- * daemon too): the switch off in the config file first, so a daemon that starts later does not put the agent back, then the agent away
- * as Reset does it. Starts nothing. A home that is not the person's own (or not a Mac) is refused and nothing is touched, not even the
- * switch, as the daemon's `service.remove` does it.
- */
-export async function removeAgentWithoutDaemon(o: Pick<ResetOptions, 'home' | 'userHome' | 'launchctl' | 'uid'>): Promise<{ status: AgentStatus; messages: string[] }> {
-  const home = path.resolve(o.home);
-  const ours = o.launchctl !== undefined ? o.launchctl !== null : process.platform === 'darwin' && isDefaultHome(home);
-  if (!ours) return { status: { state: 'refused', reason: process.platform === 'darwin' ? REFUSED_OTHER_HOME : REFUSED_NOT_MAC }, messages: [] };
-  keepRunningOffOnDisk(home);
-  return { status: { state: 'not-installed' }, messages: await removeAgentForReset({ ...o, home }) };
-}
-
-/**
- * Take Jaffer off this Mac so the next install starts from scratch: the login agent that keeps the session running (first), its hooks in
+ * Take Jaffer off this Mac so the next install starts from scratch: the login agent an older Jaffer left (first), its hooks in
  * Claude Code and what its memory left there before 0.6.0 (an MCP server, a block in CLAUDE.md, published skills), the `jaffer` command
  * link, the update cache, its own folder (moved aside as a backup unless `backup` is false) and, optionally, the app's own data. Claude
  * Code itself, its login and the person's own settings are not touched.
- * The order: the switch off, the login agent away, the session ended (`endSession`; without it the daemon must already be stopped, as it
- * owns the folder), then the rest.
+ * The order: the login agent away, the session ended (`endSession`; without it the daemon must already be stopped, as it owns the
+ * folder), then the rest.
  */
 export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
   const userHome = o.userHome ?? os.homedir();
@@ -155,13 +100,10 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
     messages.push(m);
   };
 
-  // First, in this order, while Jaffer's folder is still there: the switch off (in a daemon that runs, and in the file), so nothing
-  // started meanwhile puts the agent back (when launchd runs the daemon, that patch itself ends it: the daemon takes the agent away
-  // about 50 ms after its reply); the agent away, so launchd starts nothing for a session being reset (a duplicate of what the daemon
-  // did, and the only thing that does it when none answered); then the session ends; then the rest.
-  await o.keepRunningOff?.().catch(() => undefined);
-  keepRunningOffOnDisk(home);
-  for (const m of await removeAgentForReset({ home, userHome, launchctl: o.launchctl, uid: o.uid })) did(m);
+  // First, in this order, while Jaffer's folder is still there: the login agent of an older Jaffer away, so launchd starts nothing for
+  // a session being reset (when launchd runs the daemon, that ends it); then the session ends; then the rest.
+  const agent = await removeLegacyAgent({ home, userHome, uid: o.uid ?? process.getuid?.() ?? -1, launchctl: o.launchctl });
+  if (agent.removed) did(`Removed the background agent that kept the session running (~/Library/LaunchAgents/${AGENT_LABEL}.plist).`);
   await o.endSession?.();
 
   const td = await teardownClaude(userHome, env);

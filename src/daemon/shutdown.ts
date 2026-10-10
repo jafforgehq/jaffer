@@ -1,18 +1,17 @@
 /**
- * How the daemon ends. The exit code is what the login agent (launchd) reads: 0 is a deliberate end (`app.shutdown`), which it leaves
- * alone; a signal ends it with the shell's own 128 + number (SIGTERM 143, SIGINT 130), which it restarts (a `kill`, a crash or `kill -9`
- * must not end the one session). launchd's own stop at logout, shutdown or `bootout` is not restarted whatever the code.
+ * How the daemon ends. The exit code is 0 for a deliberate end (`app.shutdown`); a signal ends it with the shell's own 128 + number
+ * (SIGTERM 143, SIGINT 130).
  *
- * - The first reason wins: a second signal, or a signal during `app.shutdown`, neither exits before the first stop has saved the state
- *   nor changes the code (a SIGTERM must not turn a deliberate 0 into 143, so launchd would bring back a session the person ended).
+ * - The first reason wins: a second signal, or a signal during `app.shutdown`, neither exits before the first stop has let go of the
+ *   shell nor changes the code (a SIGTERM must not turn a deliberate 0 into 143).
  * - A stop that hangs still ends: at the deadline the process exits with the first reason's code.
  */
 
-/** Well past what a stop takes (it saves the state, ends the shell and closes the socket: nothing slow), and inside launchd's own 20 s. */
+/** Well past what a stop takes (it ends the shell and closes the socket: nothing slow). */
 export const SHUTDOWN_DEADLINE_MS = 8_000;
 
 export interface ShutdownDeps {
-  /** Saves the state and lets go of everything (`JafferService.stop`). */
+  /** Lets go of everything: the shell, the socket (`JafferService.stop`). */
   stop: () => Promise<void>;
   exit: (code: number) => void;
   log: (msg: string) => void;
@@ -37,7 +36,7 @@ export function makeShutdown(d: ShutdownDeps): (why: string, code: number, start
   };
   return (why, code, startAfterMs = 0) => {
     if (first) {
-      d.log(`${why} while shutting down (${first.why}); still saving, the exit code stays ${first.code}`);
+      d.log(`${why} while shutting down (${first.why}); still stopping, the exit code stays ${first.code}`);
       return;
     }
     first = { why, code };

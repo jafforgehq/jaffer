@@ -6,8 +6,7 @@ import { tryConnect, ensureDaemon, launchDaemon } from '../core/daemon-client';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
-import { removeAgentWithoutDaemon, resetJaffer } from '../core/reset';
-import { agentStatusText, errorText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
+import { resetJaffer } from '../core/reset';
 
 const paths = makePaths();
 const args = process.argv.slice(2);
@@ -47,17 +46,7 @@ ${bold('Claude Code')}
 
 ${bold('Session')}
   jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
-  jaffer service [status|install|remove]    keep the session running in the background (a login agent; macOS, ~/.jaffer only)
-  jaffer config get|set <dot.path> <json>   (session.keepRunning false ends a session launchd runs: typed in it, it needs --yes)
-`;
-
-const SERVICE_HELP = `Usage: jaffer service [status|install|remove]
-  jaffer service status    whether macOS keeps your session running in the background: not installed, installed (active from the
-                           next login or restart), running (pid), installed but not loaded, or refused (and why)
-  jaffer service install   install the login agent: launchd starts the session at login and again after a crash
-  jaffer service remove    remove it (when launchd runs the session, that ends the session now, and typed in that
-                           session it needs --yes; with no session running, or one that cannot start, it is removed
-                           without starting one)
+  jaffer config get|set <dot.path> <json>
 `;
 
 async function main(): Promise<void> {
@@ -130,13 +119,11 @@ async function main(): Promise<void> {
           return;
         }
       }
-      // resetJaffer keeps the order: the switch off, the login agent away (launchd must not start the session again; when launchd runs
-      // it, that ends it), the session ended, then the rest
+      // resetJaffer keeps the order: the login agent of an older Jaffer away, the session ended, then the rest
       const running = await tryConnect(paths);
       const res = await resetJaffer({
         home: paths.home,
         backup: !del,
-        keepRunningOff: async () => void (await running?.call('config.patch', { session: { keepRunning: false } })),
         endSession: async () => {
           if (!running) return;
           await running.call('app.shutdown', {}).catch(() => undefined);
@@ -180,8 +167,8 @@ async function main(): Promise<void> {
           console.log('already running');
           client.close();
         } else {
-          const how = await launchDaemon(paths, launcher());
-          console.log(how === 'launchd' ? 'starting (through launchd, the login agent)…' : 'starting…');
+          launchDaemon(paths, launcher());
+          console.log('starting…');
         }
       } else if (sub === 'stop') {
         if (!client) console.log('not running');
@@ -194,46 +181,6 @@ async function main(): Promise<void> {
       return;
     }
 
-    // The login agent that keeps the session running, through the daemon (started like any other command that needs it).
-    case 'service': {
-      const sub = args[1] ?? 'status';
-      if (flag('help') || sub === 'help') {
-        process.stdout.write(SERVICE_HELP);
-        return;
-      }
-      const method = { status: 'service.status', install: 'service.install', remove: 'service.remove' }[sub];
-      if (!method) throw new Error(SERVICE_HELP.trimEnd());
-      // Turning it off needs no daemon: with none answering (none runs, or one that cannot start crash-loops under launchd), the agent
-      // is taken away here, as Reset does it, and no daemon is started for it.
-      const client = sub === 'remove' ? await tryConnect(paths) : await ensureDaemon(paths, launcher());
-      if (!client) {
-        const off = await removeAgentWithoutDaemon({ home: paths.home });
-        for (const m of off.messages) console.log(m);
-        console.log(agentStatusText(off.status));
-        return;
-      }
-      let s: AgentStatus;
-      try {
-        // turned off while launchd runs the session, it ends: asked for here, so said first (the app asks in a dialog). Typed in that very
-        // session (Jaffer's own terminal), it ends the terminal it was typed in: only with --yes.
-        if (sub === 'remove' && ((await client.call('service.status', {}, 30_000)) as AgentStatus).state === 'running') {
-          process.stderr.write(`${keepRunningOffText().detail}\n`);
-          if (process.env.JAFFER_SESSION === '1' && !flag('yes')) {
-            process.exitCode = 1;
-            process.stderr.write(red('This shell is that session: nothing was changed. Run `jaffer service remove --yes` to turn it off and end the session, or turn it off in Settings.\n'));
-            return;
-          }
-        }
-        s = await client.call(method, {}, 30_000);
-      } finally {
-        client.close();
-      }
-      if (sub === 'install' && s.state === 'refused') throw new Error(`Not installed: ${s.reason}`);
-      console.log(agentStatusText(s));
-      if (s.note) console.log(dim(s.note));
-      return;
-    }
-
     case 'config': {
       const client = await tryConnect(paths);
       const cfgStore = new ConfigStore(paths);
@@ -243,9 +190,7 @@ async function main(): Promise<void> {
         const key = args[2];
         console.log(JSON.stringify(key ? key.split('.').reduce((o: any, k) => o?.[k], cfg) : cfg, null, 2));
       } else if (args[1] === 'set') {
-        // (--yes answers the question below: it is never part of a key or a value, wherever it stands)
-        const words = args.filter((a) => a !== '--yes');
-        const [key, raw] = [words[2], words.slice(3).join(' ')];
+        const [key, raw] = [args[2], args.slice(3).join(' ')];
         if (!key || raw === '') throw new Error('Usage: jaffer config set <dot.path> <json value>');
         let value: unknown;
         try {
@@ -255,25 +200,6 @@ async function main(): Promise<void> {
         }
         const patch: any = {};
         key.split('.').reduce((o, k, i, a) => (o[k] = i === a.length - 1 ? value : {}), patch);
-        // Turning keeping the session running off while launchd runs the session ends it (the daemon takes the agent away right after
-        // the reply): said first, as `jaffer service remove` does, and typed in that very session it ends the shell it was typed in, so
-        // only with --yes. A daemon that cannot say (one from before 0.5 answers "unknown method: service.status", or the status fails)
-        // does not reconcile the agent either: nothing can end, so the patch goes ahead.
-        if (client && patch.session?.keepRunning === false) {
-          const running = await (client.call('service.status', {}, 30_000) as Promise<AgentStatus>).then(
-            (st) => st.state === 'running',
-            () => false,
-          );
-          if (running) {
-            process.stderr.write(`${keepRunningOffText().detail}\n`);
-            if (process.env.JAFFER_SESSION === '1' && !flag('yes')) {
-              client.close();
-              process.exitCode = 1;
-              process.stderr.write(red('This shell is that session: nothing was changed. Run the same command with --yes to turn it off and end the session, or turn it off in Settings.\n'));
-              return;
-            }
-          }
-        }
         const after: any = client ? await client.call('config.patch', patch) : cfgStore.patch(patch);
         const kept = key.split('.').reduce((o: any, k) => o?.[k], after);
         // a value of the wrong kind is refused by the config (a switch is true or false, a list is a JSON list): say so
@@ -294,7 +220,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  // (a session daemon older than this CLI does not know what 0.5 added: said as Settings says it)
-  process.stderr.write(red(`jaffer: ${errorText(e)}\n`));
+  process.stderr.write(red(`jaffer: ${e instanceof Error ? e.message : String(e)}\n`));
   process.exit(1);
 });

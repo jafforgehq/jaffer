@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { makeShutdown, SHUTDOWN_DEADLINE_MS } from '../src/daemon/shutdown';
 
 /**
- * How the daemon ends (src/daemon/main.ts): the first reason to stop wins, the state is saved before the process exits, and a stop that
- * hangs still ends at a deadline. The exit code is what launchd reads (0: a deliberate end it leaves alone; 143/130: a signal it restarts).
+ * How the daemon ends (src/daemon/main.ts): the first reason to stop wins, the shell is let go before the process exits, and a stop that
+ * hangs still ends at a deadline. The exit code is 0 for a deliberate end (`app.shutdown`) and 143/130 for a signal.
  */
 
 function deferred() {
@@ -49,7 +49,7 @@ describe("the daemon's shutdown: the first reason wins, the state is saved first
     t.shutdown('SIGINT', 130);
     t.shutdown('SIGTERM', 143);
     await tick();
-    expect(t.exits).toEqual([]); // still saving
+    expect(t.exits).toEqual([]); // still stopping
     expect(t.stops()).toBe(1);
     d.resolve();
     await tick();

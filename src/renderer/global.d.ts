@@ -1,5 +1,4 @@
 import type { UpdateState } from '../shared/update-policy';
-import type { AgentStatus } from '../shared/keep-running';
 
 export interface JafferBridge {
   call<T = any>(method: string, params?: unknown): Promise<T>;
@@ -14,12 +13,6 @@ export interface JafferBridge {
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */
   reset(): Promise<{ cancelled: boolean }>;
-  /**
-   * Turn "Keep my session running in the background" off: every switch-off goes through this. The app asks the daemon how it stands now;
-   * when launchd runs the session, turning it off ends it, so the app asks first (`cancelled`: the person said no and nothing changed);
-   * `status` is the daemon's answer to `service.remove`.
-   */
-  keepRunningOff(): Promise<{ cancelled: boolean; status?: AgentStatus }>;
   pathForFile(f: File): string;
   platform: string;
 }

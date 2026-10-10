@@ -11,9 +11,7 @@ import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, tear
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { StayAwake, type Work } from '../core/session/stay-awake';
-import { caffeinateHold, isDefaultHome } from '../core/session/caffeinate';
-import { agentFiles, execLaunchctl, LaunchAgent, planAgent, REFUSED_OTHER_HOME, type AgentPlan, type PlanInput } from '../core/service/launch-agent';
-import { KeepRunning } from './keep-running';
+import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
@@ -29,10 +27,6 @@ export interface ServiceOptions {
   /** Where "~" is: Claude Code's settings (the hooks) and `~/.local/bin` live there (tests move it). */
   userHome?: string;
   log?: (msg: string) => void;
-  /** launchd runs this daemon (the login agent's wrapper says so with JAFFER_LAUNCHD=1). */
-  launchd?: boolean;
-  /** The daemon's own script, which the login agent's wrapper runs (default: the script this process was started with). */
-  daemonScript?: string;
 }
 
 /** Backpressure: if a client falls this far behind we stop streaming and resync from a snapshot. */
@@ -65,8 +59,6 @@ export class JafferService {
   private stayAwake: StayAwake;
   /** Looks at a running command every few seconds, so that it counts once it has run half a minute; only while one runs. */
   private commandTicker: NodeJS.Timeout | null = null;
-  /** The switch "Keep my session running in the background": the login agent (launchd) that owns this daemon. */
-  private keepRunning: KeepRunning;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
   private userHome: string;
@@ -80,21 +72,6 @@ export class JafferService {
     ensureDir(this.paths.home);
     ensureDir(this.paths.runDir);
     this.config = new ConfigStore(this.paths);
-    this.keepRunning = new KeepRunning({
-      agent: new LaunchAgent({ launchctl: execLaunchctl(), uid: process.getuid?.() ?? -1, fs }),
-      plan: () => this.agentPlan(),
-      files: () => {
-        const i = this.agentInput();
-        return i && isDefaultHome(this.paths.home) ? agentFiles(i) : null;
-      },
-      launchd: opts.launchd === true,
-      keepRunning: () => this.config.get().session.keepRunning,
-      setKeepRunning: (on) => {
-        if (this.config.get().session.keepRunning !== on) this.config.patch({ session: { keepRunning: on } });
-      },
-      later: (fn, ms) => void setTimeout(() => void fn(), ms), // (not unref'd: it must run)
-      log: this.log,
-    });
     this.stayAwake = new StayAwake({
       ...caffeinateHold(this.paths.home),
       pid: process.pid,
@@ -133,12 +110,6 @@ export class JafferService {
     this.timers.push(setInterval(() => this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000)), 30_000));
     this.timers[this.timers.length - 1]!.unref?.();
     this.log(`jafferd ${this.version} listening on ${this.paths.socket}`);
-    // The login agent agrees with the switch (files refreshed after an update or a move; taken away when it is off). Only now that the
-    // socket listens: launchd's instance must find this daemon there, and taking the agent away from a daemon launchd runs ends it.
-    void this.keepRunning
-      .reconcileAtStart()
-      .then((s) => s.state !== 'not-installed' && s.state !== 'refused' && this.log(`keep running: ${s.state}`))
-      .catch((e) => this.log(`keep running: ${errMsg(e)}`));
   }
 
   async stop(): Promise<void> {
@@ -184,38 +155,6 @@ export class JafferService {
 
   get cliWrapper(): string {
     return path.join(this.paths.binDir, 'jaffer');
-  }
-
-  // ------------------------------------------------------------------ keep running (the login agent)
-
-  /**
-   * What the login agent would be made of. Its `defaultHome` is the real `~/.jaffer` of the user running this (not `os.homedir()`, which a
-   * `HOME` set to a temporary folder moves), so any other home is refused; null when the user cannot be told.
-   */
-  private agentInput(): PlanInput | null {
-    try {
-      return {
-        home: this.paths.home,
-        defaultHome: path.join(os.userInfo().homedir, '.jaffer'),
-        userHome: this.userHome,
-        uid: process.getuid!(),
-        platform: process.platform,
-        execPath: process.execPath,
-        daemonScript: this.opts.daemonScript ?? process.argv[1] ?? '',
-        electron: !!process.versions.electron,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /** The agent for this daemon, or why there can be none. Both the plan and `isDefaultHome` must say this is the person's own home. */
-  private agentPlan(): AgentPlan | { refused: string } {
-    const i = this.agentInput();
-    if (!i) return { refused: REFUSED_OTHER_HOME };
-    const plan = planAgent(i);
-    if ('refused' in plan) return plan;
-    return isDefaultHome(this.paths.home) ? plan : { refused: REFUSED_OTHER_HOME };
   }
 
   // ------------------------------------------------------------------ terminal info
@@ -299,14 +238,6 @@ export class JafferService {
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
       this.refreshStayAwake(); // (the switch for staying awake)
-      // Keep my session running: the agent follows the switch however it changed (Settings, `jaffer service`, `jaffer config set`), with
-      // every guard of install and remove (a refused home is not touched; in the daemon launchd runs, the bootout comes after the reply).
-      // What install and remove set themselves is already in line (null).
-      const on = c.session.keepRunning;
-      void this.keepRunning
-        .switchChanged(on)
-        .then((s) => s && this.log(`keep running: switched ${on ? 'on' : 'off'}: ${s.state === 'refused' ? `refused (${s.reason})` : s.state}`))
-        .catch((e) => this.log(`keep running: ${errMsg(e)}`));
     });
   }
 
@@ -486,11 +417,6 @@ export class JafferService {
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
-
-    // ---- keep running in the background (the login agent; refused, and nothing touched, in any home but the person's own ~/.jaffer)
-    r.handle('service.status', () => this.keepRunning.status());
-    r.handle('service.install', () => this.keepRunning.install());
-    r.handle('service.remove', () => this.keepRunning.remove());
 
     // ---- config
     r.handle('config.get', () => this.config.get());
