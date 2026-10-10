@@ -98,6 +98,25 @@ describe('files', () => {
   });
 });
 
+describe('writeFileAtomic', () => {
+  it('can follow a link and keep the mode of a file that is already there', () => {
+    const real = path.join(env.root, 'real.txt');
+    const link = path.join(env.root, 'link.txt');
+    fs.writeFileSync(real, 'a', { mode: 0o640 });
+    fs.symlinkSync(real, link);
+    writeFileAtomic(link, 'b', 0o600, { preserve: true });
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(real, 'utf8')).toBe('b');
+    expect(fs.statSync(real).mode & 0o777).toBe(0o640);
+    // without the option, Jaffer’s own files are written as asked
+    writeFileAtomic(real, 'c', 0o600);
+    expect(fs.statSync(real).mode & 0o777).toBe(0o600);
+    // and a file that is not there yet gets the mode asked for
+    writeFileAtomic(path.join(env.root, 'new.txt'), 'x', 0o644, { preserve: true });
+    expect(fs.statSync(path.join(env.root, 'new.txt')).mode & 0o777).toBe(0o644);
+  });
+});
+
 describe('strings, ids, days, errors', () => {
   it('truncate keeps the start and says it cut; tail keeps the end', () => {
     expect(truncate('short', 10)).toBe('short');

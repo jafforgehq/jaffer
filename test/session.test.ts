@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Terminal } from '@xterm/headless';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
-import { runInShell, startShell, stopShell, untilReady, waitFor } from './helpers/pty';
+import { nextCommand, runInShell, startShell, stopShell, untilReady, waitFor } from './helpers/pty';
 import { ForegroundCheck, FOREGROUND_CACHE_MS, FOREGROUND_READ_MS, readForegroundGroup, type PtySession, type PtyEvent } from '../src/core/session/terminal';
 import { SessionHost } from '../src/core/session/host';
 import { shellChecks } from '../src/core/claude/auto-resume';
@@ -29,7 +29,7 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     sh = startShell(env, { shell });
     await untilReady(sh);
     expect(sh.integrated).toBe(true);
-    const done = waitFor(sh, isCmd);
+    const done = nextCommand(sh);
     sh.write('echo "hello; world"\r');
     const ev = await done;
     expect(ev.cmd).toBe('echo "hello; world"');
@@ -40,7 +40,7 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
   it('reports failing exit codes', async () => {
     sh = startShell(env, { shell });
     await untilReady(sh);
-    const done = waitFor(sh, isCmd);
+    const done = nextCommand(sh);
     sh.write('ls /definitely/not/here\r');
     const ev = await done;
     expect(ev.exit).not.toBe(0);

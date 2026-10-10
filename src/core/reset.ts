@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { teardownClaude } from './integrations/claude';
-import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
+import { findClaude, removeMcp, teardownClaude } from './integrations/claude';
+import { removeClaudeBlock, removeJafferSkills } from './integrations/legacy-claude';
 import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, REFUSED_NOT_MAC, REFUSED_OTHER_HOME, type AgentStatus, type Launchctl } from './service/launch-agent';
 import { isDefaultHome } from './session/caffeinate';
 import { ConfigStore } from '../shared/config';
@@ -137,9 +137,10 @@ export async function removeAgentWithoutDaemon(o: Pick<ResetOptions, 'home' | 'u
 }
 
 /**
- * Take Jaffer off this Mac so the next install starts from scratch: the login agent that keeps the session running (first), its hooks and memory tools in Claude Code, what it wrote
- * into Claude's files, the `jaffer` command link, the update cache, its own folder (moved aside as a backup unless `backup` is
- * false) and, optionally, the app's own data. Claude Code itself, its login and the person's own settings are not touched.
+ * Take Jaffer off this Mac so the next install starts from scratch: the login agent that keeps the session running (first), its hooks in
+ * Claude Code and what its memory left there before 0.6.0 (an MCP server, a block in CLAUDE.md, published skills), the `jaffer` command
+ * link, the update cache, its own folder (moved aside as a backup unless `backup` is false) and, optionally, the app's own data. Claude
+ * Code itself, its login and the person's own settings are not touched.
  * The order: the switch off, the login agent away, the session ended (`endSession`; without it the daemon must already be stopped, as it
  * owns the folder), then the rest.
  */
@@ -167,8 +168,12 @@ export async function resetJaffer(o: ResetOptions): Promise<ResetResult> {
   if (td.messages.some((m) => /^Removed/.test(m))) changed = true;
   messages.push(...td.messages);
 
-  for (const def of Object.values(targetDefs(userHome))) if (applyBlock(def.file, null) === 'removed') did(`Removed Jaffer's memory block from ${def.file.replace(userHome, '~')}.`);
-  const skills = removeClaudeSkills(userHome);
+  // what Jaffer's memory left in Claude Code before 0.6.0 (only Jaffer's own entries): the MCP server, the block, the skills
+  const claude = await findClaude(env);
+  if (claude && (await removeMcp(claude, env)).ok) did('Removed the MCP server registration.');
+  const claudeMd = path.join(userHome, '.claude', 'CLAUDE.md');
+  if (removeClaudeBlock(claudeMd)) did(`Removed Jaffer's memory block from ${claudeMd.replace(userHome, '~')}.`);
+  const skills = removeJafferSkills(path.join(userHome, '.claude', 'skills'));
   if (skills) did(`Removed ${skills} skill${skills === 1 ? '' : 's'} Jaffer had published to Claude Code.`);
 
   const link = path.join(userHome, '.local', 'bin', 'jaffer');

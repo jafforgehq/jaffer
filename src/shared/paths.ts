@@ -16,17 +16,6 @@ export interface JafferPaths {
   screenSnapshot: string;
   shellDir: string;
   binDir: string;
-  memoryDir: string;
-  memoryIndex: string;
-  memoryItems: string;
-  memorySkills: string;
-  memorySkillsDir: string;
-  memoryEpisodesDir: string;
-  memoryJournal: string;
-  memoryCursor: string;
-  memoryPolicy: string;
-  memoryNotes: string;
-  memoryHistoryDir: string;
 }
 
 export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -38,7 +27,6 @@ export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
 export function makePaths(home: string = resolveHome()): JafferPaths {
   const runDir = path.join(home, 'run');
   const sessionDir = path.join(home, 'session');
-  const memoryDir = path.join(home, 'memory');
   return {
     home,
     config: path.join(home, 'config.json'),
@@ -51,16 +39,5 @@ export function makePaths(home: string = resolveHome()): JafferPaths {
     screenSnapshot: path.join(sessionDir, 'screen.json'),
     shellDir: path.join(home, 'shell'),
     binDir: path.join(home, 'bin'),
-    memoryDir,
-    memoryIndex: path.join(memoryDir, 'MEMORY.md'),
-    memoryItems: path.join(memoryDir, 'items.jsonl'),
-    memorySkills: path.join(memoryDir, 'skills.jsonl'),
-    memorySkillsDir: path.join(memoryDir, 'skills'),
-    memoryEpisodesDir: path.join(memoryDir, 'episodes'),
-    memoryJournal: path.join(memoryDir, 'journal.jsonl'),
-    memoryCursor: path.join(memoryDir, 'cursor.json'),
-    memoryPolicy: path.join(memoryDir, 'POLICY.md'),
-    memoryNotes: path.join(memoryDir, 'NOTES.md'),
-    memoryHistoryDir: path.join(memoryDir, 'history'),
   };
 }

@@ -241,11 +241,9 @@ export function Settings(): VNode {
   const c = cfg.value!;
   const [section, setSection] = useState<Section>('appearance');
   const [claude, setClaude] = useState<{ claudeInstalled: boolean; hooks: boolean; mcp: boolean } | null>(null);
-  const [targets, setTargets] = useState<{ target: string; label: string; installed: boolean }[]>([]);
   const [busy, setBusy] = useState('');
   const refresh = () => {
     void call('setup.claude.status', {}).then(setClaude).catch(() => undefined);
-    void call('setup.targets', {}).then(setTargets).catch(() => undefined);
   };
   useEffect(refresh, []);
   const set = (p: object) => void patchConfig(p).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }));
@@ -263,7 +261,6 @@ export function Settings(): VNode {
       refresh();
     }
   };
-  const toggleTarget = (t: string, on: boolean) => set({ export: { targets: on ? [...new Set([...c.export.targets, t])] : c.export.targets.filter((x) => x !== t) } });
 
   const nav: { id: Section; label: string; icon: VNode }[] = [
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
@@ -404,15 +401,6 @@ export function Settings(): VNode {
             <>
               <h4>Memory</h4>
               <p class="lede">What Jaffer learns, how, and for how long. Everything stays on this Mac.</p>
-              <Field label="Learn from my sessions" hint="commands and what you tell Claude Code; secrets are redacted first">
-                <Switch checked={c.memory.enabled} onChange={(v) => set({ memory: { enabled: v } })} />
-              </Field>
-              <Field label="Let Claude curate memory" hint="sends redacted summaries to Claude, through your Claude login">
-                <Switch checked={c.memory.llm === 'auto'} onChange={(v) => set({ memory: { llm: v ? 'auto' : 'off' } })} />
-              </Field>
-              <Field label="Keep raw activity for" hint="days; learned memory is kept regardless">
-                <input type="number" min={7} max={365} value={c.memory.retentionDays} onChange={(e) => set({ memory: { retentionDays: Number((e.target as HTMLInputElement).value) } })} />
-              </Field>
               <div class="settings-foot">
                 Session data lives in{' '}
                 <button class="linkish" onClick={() => void window.jaffer.reveal()}>
@@ -459,17 +447,6 @@ export function Settings(): VNode {
               </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
-              </Field>
-              <Field label="Learn from Claude Code sessions" hint="reads its local transcripts (read-only)">
-                <Switch checked={c.ingest.claudeCode} onChange={(v) => set({ ingest: { claudeCode: v } })} />
-              </Field>
-              {targets.map((t) => (
-                <Field key={t.target} label={`Share memory with ${t.label}`} hint={t.installed ? 'adds a managed block to its global instructions file' : 'not installed'}>
-                  <Switch disabled={!t.installed} checked={c.export.targets.includes(t.target as never)} onChange={(v) => toggleTarget(t.target, v)} />
-                </Field>
-              ))}
-              <Field label="Publish learned skills to Claude Code" hint="as real Claude Code skills">
-                <Switch checked={c.export.claudeSkills} onChange={(v) => set({ export: { claudeSkills: v } })} />
               </Field>
             </>
           )}

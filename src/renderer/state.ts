@@ -2,10 +2,8 @@ import type { ResumeOffer } from '../shared/claude-resume';
 import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
-import { memoryToast } from '../shared/memory-toast';
 import { TWO_RUNNING_NOTICE, TwoRunningNotice } from '../shared/one-claude';
 import type { UpdateState } from '../shared/update-policy';
-import type { MemoryStats, ReflectionResult } from '../core/memory/types';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 
@@ -181,6 +179,12 @@ export interface SkillView {
   uses: number;
   pinned: boolean;
 }
+/** What the Memory drawer counts (the memory engine is gone: the drawer itself goes with the rest of the window's memory). */
+interface MemoryStats {
+  active: number;
+  skills: number;
+  episodesPending: number;
+}
 export interface LogRun {
   runId: string;
   ts: string;
@@ -212,15 +216,6 @@ export function refreshMemory(delay = 150): void {
       /* daemon restarting */
     }
   }, delay);
-}
-
-function onMemoryEvent(e: { type: string; result?: ReflectionResult; items?: MemItemView[]; reason?: string }): void {
-  memPulse.value++;
-  refreshMemory();
-  const t = memoryToast(e as Parameters<typeof memoryToast>[0]);
-  if (!t) return; // housekeeping stays in the Memory drawer's Activity log
-  const undo = t.undo;
-  toast({ kind: 'learn', text: t.text, action: { label: 'Undo', run: () => void jaffer().call(undo.kind === 'forget' ? 'memory.forget' : 'memory.revert', undo.kind === 'forget' ? { id: undo.id } : { runId: undo.runId }).then(() => refreshMemory()) } }, 8000);
 }
 
 // ------------------------------------------------------------------ pty bus (consumed by terminal views)
@@ -260,7 +255,6 @@ export async function bootstrap(): Promise<void> {
     else if (event === 'claude.resume') resumeOffer.value = data ?? null;
     else if (event === 'claude.autoresume') onAutoResume(data);
     else if (event === 'update.state') updateState.value = data;
-    else if (event === 'memory.event') onMemoryEvent(data);
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
     else if (event === 'daemon.down') {

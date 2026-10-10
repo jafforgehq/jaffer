@@ -2,17 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePaths } from '../shared/paths';
 import { ConfigStore } from '../shared/config';
-import { MemoryEngine } from '../core/memory/engine';
-import { makeMemoryApi, type MemoryApi } from '../core/memory-api';
 import { tryConnect, ensureDaemon, launchDaemon } from '../core/daemon-client';
-import { runMcpServer } from '../core/mcp/server';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { removeAgentWithoutDaemon, resetJaffer } from '../core/reset';
 import { agentStatusText, errorText, keepRunningOffText, type AgentStatus } from '../shared/keep-running';
-import { detectTargets } from '../core/memory/exports';
-import type { RpcClient } from '../core/rpc';
 
 const paths = makePaths();
 const args = process.argv.slice(2);
@@ -25,25 +20,10 @@ const green = (s: string) => (process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s);
 
 const parsed = parseArgs(args);
 const flag = (name: string, def?: string): string | undefined => parsed.flags.get(name) ?? def;
-const positional = (): string[] => parsed.positional;
 
 function launcher() {
   const here = __dirname; // dist/cli
   return { execPath: process.execPath, daemonScript: path.join(here, '..', 'daemon', 'jafferd.cjs'), cliScript: path.join(here, 'jaffer.cjs'), electron: !!process.versions.electron };
-}
-
-let localEngine: MemoryEngine | null = null;
-function local(): MemoryApi {
-  if (!localEngine) localEngine = new MemoryEngine({ paths, config: new ConfigStore(paths) });
-  return makeMemoryApi(localEngine);
-}
-
-/** Talk to the daemon when it is up; otherwise operate on the memory files directly (hooks still work with the app closed). */
-async function memoryCall(method: string, params: unknown, client: RpcClient | null): Promise<any> {
-  if (client) return client.call(method, params);
-  const fn = local()[method];
-  if (!fn) throw new Error(`${method} needs the Jaffer daemon (open the app or run \`jaffer daemon start\`).`);
-  return fn(params);
 }
 
 async function readStdin(): Promise<string> {
@@ -60,20 +40,10 @@ async function readStdin(): Promise<string> {
   });
 }
 
-const HELP = `${bold('jaffer')} ${VERSION} — the command line for your Jaffer session and memory
-
-${bold('Memory')}
-  jaffer remember <text> [--kind preference|convention|fact|workflow|lesson] [--project] [--pin]
-  jaffer recall <query>
-  jaffer forget <id|description>
-  jaffer memory [list|log|reflect|consolidate|stats] ·  jaffer memory revert <runId>
-  jaffer context [--query q]            print what Jaffer knows for the current directory
-
-${bold('Agent')}
+const HELP = `${bold('jaffer')} ${VERSION} — the command line for your Jaffer session
 
 ${bold('Claude Code')}
-  jaffer setup claude [--remove|--status]   wire Claude Code to this memory (MCP server + hooks)
-  jaffer mcp                                run the MCP server (used by Claude Code)
+  jaffer setup claude [--remove|--status]   connect Claude Code to Jaffer (its hooks: the companion, notifications, the cost figure)
 
 ${bold('Session')}
   jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
@@ -101,20 +71,11 @@ async function main(): Promise<void> {
   }
 
   switch (cmd) {
-    case 'mcp': {
-      const client = await tryConnect(paths);
-      runMcpServer({ version: VERSION, call: (m, p) => memoryCall(m, p, client) });
-      client?.onClose.on(() => process.exit(0));
-      return; // keep running on stdin
-    }
-
     case 'hook': {
-      // Called by Claude Code; must be fast, silent on failure, and never block the session.
-      const which = args[1];
-      if (process.env.JAFFER_NO_HOOKS) return; // Jaffer's own `claude -p` helper calls must not be primed with memory
-      // Only a claude running inside Jaffer's terminal reports (the mole and the notification follow it); memory hooks work anywhere.
-      const inSession = process.env.JAFFER_SESSION === '1';
-      if (!inSession && which !== 'session-start' && which !== 'stop') return;
+      // Called by Claude Code (every event, `async`): must be fast, print nothing, exit 0 on every path, and never block the session.
+      if (process.env.JAFFER_NO_HOOKS) return; // a `claude` the daemon itself runs (`claude auth ...`) is not the terminal's
+      // Only a claude running inside Jaffer's terminal reports (the companion, the notification and the cost figure follow it).
+      if (process.env.JAFFER_SESSION !== '1') return;
       const input = await readStdin();
       let payload: Record<string, unknown> = {};
       try {
@@ -123,95 +84,13 @@ async function main(): Promise<void> {
       } catch {
         /* no payload */
       }
+      if (!Object.keys(payload).length) return;
       const client = await tryConnect(paths, 600);
       try {
-        if (inSession && Object.keys(payload).length) await client?.call('claude.event', payload, 800).catch(() => undefined);
-        if (which === 'session-start') {
-          const text: string = await memoryCall('memory.context', { cwd: (payload.cwd as string | undefined) ?? process.cwd(), budget: 4500 }, client);
-          if (text.trim()) process.stdout.write(`# Memory from Jaffer\nWhat the user's terminal has learned about them and this project. Background only; the user's instructions win.\n\n${text.trim()}\n`);
-        } else if (which === 'stop') {
-          await client?.call('ingest.now', {}, 1500).catch(() => undefined);
-        }
+        await client?.call('claude.event', payload, 800).catch(() => undefined);
       } catch {
         /* hooks never fail loudly */
       }
-      client?.close();
-      return;
-    }
-
-    case 'remember': {
-      const text = positional().join(' ');
-      if (!text) throw new Error('Usage: jaffer remember <text>');
-      const client = await tryConnect(paths);
-      const r = await memoryCall('memory.remember', { text, kind: flag('kind'), scope: flag('project') ? 'project' : 'global', cwd: process.cwd(), pinned: !!flag('pin') }, client);
-      console.log(r.deduped ? `${dim('already known, reinforced:')} ${r.item.text}` : `${green('remembered')} ${dim(`[${r.item.id}]`)} ${r.item.text}`);
-      client?.close();
-      return;
-    }
-
-    case 'recall': {
-      const q = positional().join(' ');
-      if (!q) throw new Error('Usage: jaffer recall <query>');
-      const client = await tryConnect(paths);
-      const r = await memoryCall('memory.recall', { query: q, cwd: process.cwd(), limit: 10 }, client);
-      for (const i of r.items) console.log(`${dim(i.id)} ${dim(`[${i.kind}${i.scope === 'global' ? '' : ' · project'}]`)} ${i.text}`);
-      for (const s of r.skills) console.log(`${dim('skill')} ${bold(s.name)} — ${s.whenToUse}`);
-      if (!r.items.length && !r.skills.length) console.log(dim('nothing matched'));
-      client?.close();
-      return;
-    }
-
-    case 'forget': {
-      const q = positional().join(' ');
-      if (!q) throw new Error('Usage: jaffer forget <id|description>');
-      const client = await tryConnect(paths);
-      const r = await memoryCall('memory.forget', { id: q }, client);
-      console.log(r.archived.length ? `forgot: ${r.archived.map((i: any) => i.text).join(' | ')}` : dim('nothing matched closely enough (use the id from `jaffer recall`; a pinned memory is forgotten by its id only)'));
-      client?.close();
-      return;
-    }
-
-    case 'context': {
-      const client = await tryConnect(paths);
-      const text = await memoryCall('memory.context', { cwd: process.cwd(), query: flag('query'), budget: 6000 }, client);
-      process.stdout.write((text.trim() || dim('(nothing learned yet)')) + '\n');
-      client?.close();
-      return;
-    }
-
-    case 'memory': {
-      const sub = args[1] ?? 'list';
-      const client = await tryConnect(paths);
-      if (sub === 'list') {
-        const r = await memoryCall('memory.list', { status: flag('all') ? 'all' : 'active' }, client);
-        const byScope = new Map<string, any[]>();
-        for (const i of r.items) byScope.set(i.scope, [...(byScope.get(i.scope) ?? []), i]);
-        for (const [scope, items] of byScope) {
-          console.log(bold(scope === 'global' ? 'Global' : `Project ${path.basename(scope.slice(8))}`));
-          for (const i of items.sort((a, b) => b.confidence - a.confidence)) console.log(`  ${dim(i.id)} ${i.pinned ? '📌' : '  '}${dim(`${i.kind.padEnd(10)} ${i.confidence.toFixed(2)}`)} ${i.text}`);
-        }
-        if (r.skills.length) {
-          console.log(bold('Skills'));
-          for (const s of r.skills) console.log(`  ${dim(s.id)} ${s.name} — ${s.whenToUse}`);
-        }
-        if (!r.items.length && !r.skills.length) console.log(dim('Nothing learned yet.'));
-      } else if (sub === 'log') {
-        const r = await memoryCall('memory.log', { limit: 200 }, client);
-        for (const run of r.runs.slice(0, 15)) {
-          console.log(`${bold(run.runId)} ${dim(run.ts.slice(0, 16).replace('T', ' '))} ${dim(run.source)}${run.reason ? dim(' · ' + run.reason) : ''}`);
-          for (const o of run.ops.slice(0, 6)) console.log(`   ${o.op.padEnd(10)} ${o.text ?? o.id}`);
-        }
-      } else if (sub === 'revert') {
-        const id = args[2];
-        if (!id) throw new Error('Usage: jaffer memory revert <runId>');
-        const r = await memoryCall('memory.revert', { runId: id }, client);
-        console.log(r.reverted ? `reverted ${r.reverted} change(s)` : 'nothing to revert (unknown run, or already reverted)');
-      } else if (sub === 'reflect' || sub === 'consolidate') {
-        const r = await memoryCall(sub === 'reflect' ? 'memory.reflect' : 'memory.consolidate', { force: true }, client);
-        console.log(r.summary);
-      } else if (sub === 'stats') {
-        console.log(JSON.stringify(await memoryCall('memory.stats', {}, client), null, 2));
-      } else throw new Error(`Unknown memory subcommand: ${sub}`);
       client?.close();
       return;
     }
@@ -230,8 +109,8 @@ async function main(): Promise<void> {
       }
       const res = flag('remove') ? await teardownClaude() : await setupClaude(wrapper);
       for (const m of res.messages) console.log(m);
-      console.log(dim(`claude: ${res.status.claudeInstalled ? res.status.claudePath : 'not found'} · hooks: ${res.status.hooks ? 'on' : 'off'} · mcp: ${res.status.mcp ? 'on' : 'off'}`));
-      if (!flag('remove')) console.log(dim('Open a new Claude Code session; it will start with your memory and can recall/remember on demand.'));
+      console.log(dim(`claude: ${res.status.claudeInstalled ? res.status.claudePath : 'not found'} · hooks: ${res.status.hooks ? 'on' : 'off'}`));
+      if (!flag('remove')) console.log(dim('A Claude Code started in Jaffer’s terminal is followed by the companion, the notifications and the cost figure.'));
       return;
     }
 
@@ -240,8 +119,8 @@ async function main(): Promise<void> {
       if (process.env.JAFFER_SESSION) throw new Error("This shell is Jaffer's own session, and resetting ends it. Run `jaffer reset` from another terminal (Terminal.app), or use Settings → Reset in the app.");
       const del = !!flag('delete');
       if (!flag('yes')) {
-        if (!process.stdin.isTTY) throw new Error(`This ends your Jaffer session and removes its memory, settings, hooks and memory tools${del ? '' : ' (a backup of ' + paths.home + ' is kept)'}. Run again with --yes to confirm.`);
-        console.log(`${bold('Reset Jaffer')}: ends the session and removes Jaffer's memory, settings and hooks (Claude Code and its login are not touched).`);
+        if (!process.stdin.isTTY) throw new Error(`This ends your Jaffer session and removes its settings and hooks${del ? '' : ' (a backup of ' + paths.home + ' is kept)'}. Run again with --yes to confirm.`);
+        console.log(`${bold('Reset Jaffer')}: ends the session and removes Jaffer's settings and hooks (Claude Code and its login are not touched).`);
         console.log(del ? 'Nothing is kept.' : `A copy of ${paths.home} is kept next to it as a backup.`);
         const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout });
         const answer = await rl.question('Type reset to continue: ');
@@ -279,18 +158,15 @@ async function main(): Promise<void> {
       } else {
         const hello = await client.call('hello', {});
         const info = await client.call('session.info', {});
-        const mem = await client.call('memory.stats', {});
         const auth = await client.call('setup.claude.auth', {});
         console.log(`daemon: ${green('running')} pid ${hello.pid} · v${hello.version} · since ${hello.startedAt}`);
         console.log(`session: cwd ${info.cwd}${info.project ? ` · project ${path.basename(info.project)}${info.branch ? '@' + info.branch : ''}` : ''}${info.busy ? ` · running: ${info.busy}` : ''}`);
-        console.log(`memory: ${mem.active} active · ${mem.pinned} pinned · ${mem.skills} skills · ${mem.episodesPending} events pending reflection`);
         console.log(`claude: ${auth.loggedIn ? green('signed in') : auth.installed ? red('signed out') + dim(' (run `claude auth login`)') : red('Claude Code not installed')}`);
         client.close();
       }
       if (cmd === 'doctor') {
         const cs = await claudeStatus();
-        console.log(`claude code: ${cs.claudeInstalled ? cs.claudePath : red('not found')} · hooks ${cs.hooks ? green('on') : 'off'} · mcp ${cs.mcp ? green('on') : 'off'}`);
-        for (const t of detectTargets()) console.log(`${t.label}: ${t.installed ? 'installed' : dim('not installed')}`);
+        console.log(`claude code: ${cs.claudeInstalled ? cs.claudePath : red('not found')} · hooks ${cs.hooks ? green('on') : 'off'}`);
         console.log(`shell integration: ${process.env.JAFFER_SESSION ? green('this shell is a Jaffer session') : dim('this shell is not inside Jaffer')}`);
       }
       return;

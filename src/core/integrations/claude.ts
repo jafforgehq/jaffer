@@ -5,12 +5,9 @@ import path from 'node:path';
 import { writeFileAtomic } from '../../shared/util';
 
 /**
- * One-step wiring of Claude Code to Jaffer's memory:
- *   - an MCP server (`jaffer mcp`) so Claude can recall/remember on demand
- *   - SessionStart hook: every Claude Code session (including after /compact) starts with the
- *     memory relevant to the project it was launched in
- *   - Stop hook: tell Jaffer a turn finished so it learns from it immediately
- * Everything Jaffer adds is tagged so it can be removed cleanly without touching the user's own hooks.
+ * Connecting Claude Code to Jaffer: its hooks (`jaffer hook <event>` in `~/.claude/settings.json`), which tell the companion, the
+ * notification and the cost figure what the `claude` in Jaffer's terminal is doing. Every entry Jaffer adds is tagged so it can be
+ * removed cleanly without touching the user's own hooks.
  */
 
 const MARK = 'jaffer-managed';
@@ -19,7 +16,6 @@ export interface ClaudeStatus {
   claudeInstalled: boolean;
   claudePath?: string;
   hooks: boolean;
-  mcp: boolean;
   settingsFile: string;
   error?: string;
 }
@@ -31,21 +27,27 @@ interface HookEntry {
 }
 
 /**
- * SessionStart and Stop feed memory, so Claude Code waits for them. Every other event only reports Claude's live
- * state (the mole, the notification) and is `async`, so it can never slow Claude Code down.
+ * Every event only reports Claude's live state (the companion, the notification, the cost figure) and is `async`, so it can never
+ * slow Claude Code down, and prints nothing.
  */
-const EVENTS: { event: string; arg: string; timeout: number; async?: boolean }[] = [
-  { event: 'SessionStart', arg: 'hook session-start', timeout: 8 },
-  { event: 'Stop', arg: 'hook stop', timeout: 5 },
-  { event: 'UserPromptSubmit', arg: 'hook user-prompt-submit', timeout: 5, async: true },
-  { event: 'PreToolUse', arg: 'hook pre-tool-use', timeout: 5, async: true },
-  { event: 'PostToolUse', arg: 'hook post-tool-use', timeout: 5, async: true },
-  { event: 'PostToolUseFailure', arg: 'hook post-tool-use-failure', timeout: 5, async: true },
-  { event: 'SubagentStart', arg: 'hook subagent-start', timeout: 5, async: true },
-  { event: 'SubagentStop', arg: 'hook subagent-stop', timeout: 5, async: true },
-  { event: 'Notification', arg: 'hook notification', timeout: 5, async: true },
-  { event: 'SessionEnd', arg: 'hook session-end', timeout: 5, async: true },
+const EVENTS: { event: string; arg: string }[] = [
+  { event: 'SessionStart', arg: 'hook session-start' },
+  { event: 'Stop', arg: 'hook stop' },
+  { event: 'UserPromptSubmit', arg: 'hook user-prompt-submit' },
+  { event: 'PreToolUse', arg: 'hook pre-tool-use' },
+  { event: 'PostToolUse', arg: 'hook post-tool-use' },
+  { event: 'PostToolUseFailure', arg: 'hook post-tool-use-failure' },
+  { event: 'SubagentStart', arg: 'hook subagent-start' },
+  { event: 'SubagentStop', arg: 'hook subagent-stop' },
+  { event: 'Notification', arg: 'hook notification' },
+  { event: 'SessionEnd', arg: 'hook session-end' },
 ];
+
+/** How long Claude Code lets one of them run (it does not wait for them: they are `async`). */
+const HOOK_TIMEOUT = 5;
+
+/** The hooks run for every Claude Code on the machine: this keeps them from starting the Jaffer binary at all outside a Jaffer session. */
+const GUARD = '[ "$JAFFER_SESSION" = 1 ] || exit 0; ';
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -86,10 +88,7 @@ export function installHooks(cliPath: string, home: string = os.homedir()): { ch
   for (const ev of EVENTS) {
     const list: HookEntry[] = Array.isArray(data.hooks[ev.event]) ? data.hooks[ev.event] : [];
     const rest = list.filter((h) => !isOurs(h));
-    // The companion-only hooks run for every Claude Code on the machine, so a shell guard keeps them from starting the Jaffer
-    // binary at all outside a Jaffer session. The memory hooks (SessionStart, Stop) are meant to work anywhere.
-    const guard = ev.async ? '[ "$JAFFER_SESSION" = 1 ] || exit 0; ' : '';
-    rest.push({ hooks: [{ type: 'command', command: `${guard}${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: ev.timeout, ...(ev.async ? { async: true } : {}) }] });
+    rest.push({ hooks: [{ type: 'command', command: `${GUARD}${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: HOOK_TIMEOUT, async: true }] });
     data.hooks[ev.event] = rest;
   }
   if (JSON.stringify(data) === before) return { changed: false };
@@ -136,7 +135,7 @@ export function hooksInstalled(home: string = os.homedir()): boolean {
   return EVENTS.every((ev) => (Array.isArray(data.hooks[ev.event]) ? data.hooks[ev.event] : []).some(isOurs));
 }
 
-// ------------------------------------------------------------------ claude CLI (MCP registration)
+// ------------------------------------------------------------------ the claude CLI
 
 function run(file: string, args: string[], env: NodeJS.ProcessEnv, timeout = 20_000): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -174,55 +173,31 @@ export async function findClaude(env: NodeJS.ProcessEnv = process.env): Promise<
   return null;
 }
 
-async function mcpInstalled(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  const r = await run(claude, ['mcp', 'get', 'jaffer'], env, 15_000);
-  return r.code === 0 && /jaffer/i.test(r.out);
-}
-
-async function installMcp(claude: string, cliPath: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
-  await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], env, 15_000); // refresh if present
-  const json = JSON.stringify({ type: 'stdio', command: cliPath, args: ['mcp'] });
-  const r = await run(claude, ['mcp', 'add-json', '--scope', 'user', 'jaffer', json], env, 20_000);
-  return { ok: r.code === 0, message: r.out.trim() };
-}
-
-async function removeMcp(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
+/**
+ * Takes back the MCP server (`jaffer`, user scope) that Jaffer's memory registered with Claude Code before 0.6.0: Reset and the first
+ * start of an upgraded Mac run it once. Nothing registers one any more. `ok` is false when there was none (or `claude` failed).
+ */
+export async function removeMcp(claude: string, env: NodeJS.ProcessEnv = process.env): Promise<{ ok: boolean; message: string }> {
   const r = await run(claude, ['mcp', 'remove', 'jaffer', '-s', 'user'], env, 15_000);
   return { ok: r.code === 0, message: r.out.trim() };
 }
 
 export async function claudeStatus(home: string = os.homedir(), env: NodeJS.ProcessEnv = process.env): Promise<ClaudeStatus> {
   const claude = await findClaude(env);
-  return { claudeInstalled: !!claude, claudePath: claude ?? undefined, hooks: hooksInstalled(home), mcp: claude ? await mcpInstalled(claude, env) : false, settingsFile: settingsPath(home) };
+  return { claudeInstalled: !!claude, claudePath: claude ?? undefined, hooks: hooksInstalled(home), settingsFile: settingsPath(home) };
 }
 
-export async function setupClaude(cliPath: string, opts: { home?: string; env?: NodeJS.ProcessEnv; mcp?: boolean; hooks?: boolean } = {}): Promise<{ status: ClaudeStatus; messages: string[] }> {
+/** Connects Claude Code: installs (or refreshes) Jaffer's hooks, and nothing else. */
+export async function setupClaude(cliPath: string, opts: { home?: string; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: ClaudeStatus; messages: string[] }> {
   const home = opts.home ?? os.homedir();
-  const env = opts.env ?? process.env;
-  const messages: string[] = [];
-  if (opts.hooks !== false) {
-    const h = installHooks(cliPath, home);
-    messages.push(h.error ? `Hooks: ${h.error}` : h.changed ? 'Installed Jaffer’s hooks in ~/.claude/settings.json.' : 'Hooks already installed.');
-  }
-  if (opts.mcp !== false) {
-    const claude = await findClaude(env);
-    if (!claude) messages.push('MCP: `claude` was not found on PATH, so the MCP server was not registered.');
-    else {
-      const m = await installMcp(claude, cliPath, env);
-      messages.push(m.ok ? 'Registered the Jaffer MCP server with Claude Code (user scope).' : `MCP: ${m.message || 'claude mcp add failed'}`);
-    }
-  }
-  return { status: await claudeStatus(home, env), messages };
+  const h = installHooks(cliPath, home);
+  const messages = [h.error ? `Hooks: ${h.error}` : h.changed ? 'Installed Jaffer’s hooks in ~/.claude/settings.json.' : 'Hooks already installed.'];
+  return { status: await claudeStatus(home, opts.env ?? process.env), messages };
 }
 
+/** Disconnects Claude Code: removes Jaffer's hooks (the person's own stay). */
 export async function teardownClaude(home: string = os.homedir(), env: NodeJS.ProcessEnv = process.env): Promise<{ status: ClaudeStatus; messages: string[] }> {
-  const messages: string[] = [];
   const h = removeHooks(home);
-  messages.push(h.error ? `Hooks: ${h.error}` : h.changed ? 'Removed Jaffer hooks.' : 'No Jaffer hooks were installed.');
-  const claude = await findClaude(env);
-  if (claude) {
-    const m = await removeMcp(claude, env);
-    messages.push(m.ok ? 'Removed the MCP server registration.' : 'MCP server was not registered.');
-  }
+  const messages = [h.error ? `Hooks: ${h.error}` : h.changed ? 'Removed Jaffer hooks.' : 'No Jaffer hooks were installed.'];
   return { status: await claudeStatus(home, env), messages };
 }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
 import { removeAgentForReset, removeAgentWithoutDaemon, resetJaffer } from '../src/core/reset';
 import { installHooks, hooksInstalled } from '../src/core/integrations/claude';
-import { applyBlock, BEGIN, END, SKILL_MARKER } from '../src/core/memory/exports';
+import { BEGIN, END, SKILL_MARKER } from '../src/core/integrations/legacy-claude';
 import type { Launchctl } from '../src/core/service/launch-agent';
 import { AGENT_LABEL } from '../src/shared/keep-running';
 
@@ -32,8 +32,7 @@ function lived(): { wrapper: string } {
   s.hooks.Stop.push({ hooks: [{ type: 'command', command: 'echo my own hook' }] });
   s.theme = 'dark';
   fs.writeFileSync(settings, JSON.stringify(s));
-  mk(path.join(env.userHome, '.claude', 'CLAUDE.md'), '# My rules\n\nBe brief.\n');
-  applyBlock(path.join(env.userHome, '.claude', 'CLAUDE.md'), `${BEGIN}\n- Prefer pnpm\n${END}`);
+  mk(path.join(env.userHome, '.claude', 'CLAUDE.md'), `# My rules\n\nBe brief.\n\n${BEGIN}\n- Prefer pnpm\n${END}\n`); // the block as Jaffer's memory wrote it
   mk(path.join(env.userHome, '.claude', 'skills', 'jaffer-release', 'SKILL.md'), `# Release\n\n${SKILL_MARKER}\n`); // one Jaffer published
   mk(path.join(env.userHome, '.claude', 'skills', 'jaffer-handwritten', 'SKILL.md'), '# A skill of the person, whose name starts the same way\n');
   mk(path.join(env.userHome, '.claude', 'skills', 'my-own-skill', 'SKILL.md'));

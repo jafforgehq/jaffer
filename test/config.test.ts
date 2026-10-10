@@ -10,25 +10,6 @@ beforeEach(() => {
 });
 afterEach(() => env.cleanup());
 
-describe('ConfigStore', () => {
-  it('drops export targets for agents Jaffer no longer supports, keeping Claude Code', () => {
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, export: { targets: ['claude-code', 'codex', 'gemini'], claudeSkills: true } }));
-    const cfg = new ConfigStore(env.paths).get();
-    expect(cfg.export.targets).toEqual(['claude-code']);
-    expect(cfg.export.claudeSkills).toBe(true);
-    expect(cfg.onboarded).toBe(true);
-  });
-
-  it('applies the same rule when the file is read and when a patch brings an old value back', () => {
-    fs.writeFileSync(env.paths.config, JSON.stringify({ export: { targets: ['codex'] } }));
-    const store = new ConfigStore(env.paths);
-    expect(store.get().export.targets).toEqual([]);
-    store.patch({ export: { targets: ['claude-code', 'gemini'] as never } });
-    expect(store.get().export.targets).toEqual(['claude-code']);
-    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).export.targets).toEqual(['claude-code']);
-  });
-});
-
 describe('appearance.animations', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.appearance.animations).toBe(true);
@@ -217,5 +198,18 @@ describe('a config file or patch with values of the wrong kind', () => {
     expect(load({ safety: 'oops' }).get().session).toEqual(DEFAULT_CONFIG.session); // even a section of the wrong kind does not stop it loading
     store.patch({ session: { stayAwake: false } });
     expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).safety).toEqual(old); // left as it was by a patch of another key
+  });
+
+  it('an old config with memory, ingest and export sections (0.5.x: the memory) loads: the keys are kept as they were, nothing reads them any more', () => {
+    for (const key of ['memory', 'ingest', 'export']) expect(key in DEFAULT_CONFIG, key).toBe(false);
+    // @ts-expect-error there is no memory: no code can read its sections from the config's type
+    void DEFAULT_CONFIG.memory;
+    const old = { memory: { enabled: true, llm: 'auto', retentionDays: 45 }, ingest: { claudeCode: true, backfillDays: 7 }, export: { targets: ['claude-code', 'codex'], claudeSkills: true } };
+    const store = load({ onboarded: true, ...old });
+    expect(store.get().onboarded).toBe(true);
+    expect(store.get()).toMatchObject(old); // as they were: an old list of targets is not filtered any more either
+    expect(load({ memory: 'oops', ingest: null, export: [] }).get().session).toEqual(DEFAULT_CONFIG.session); // even sections of the wrong kind do not stop it loading
+    store.patch({ session: { stayAwake: false } });
+    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8'))).toMatchObject(old); // left as they were by a patch of another key
   });
 });

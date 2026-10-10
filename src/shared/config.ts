@@ -3,7 +3,7 @@ import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
 
 export interface JafferConfig {
-  /** First-run consent flow completed. Until then nothing is exported and no model is called. */
+  /** First-run flow completed. */
   onboarded: boolean;
   appearance: {
     theme: string;
@@ -25,18 +25,6 @@ export interface JafferConfig {
     companion: Companion;
   };
   shell: { path: string; args: string[] };
-  memory: {
-    enabled: boolean;
-    /** "auto": use a model to curate memory when credentials exist. "off": offline heuristics only. */
-    llm: 'auto' | 'off';
-    reflectorModel: string;
-    reflectEveryN: number;
-    idleSeconds: number;
-    llmMinIntervalSec: number;
-    retentionDays: number;
-  };
-  export: { targets: 'claude-code'[]; claudeSkills: boolean };
-  ingest: { claudeCode: boolean; backfillDays: number };
   /** The person chose a plain terminal at first run. Claude stays on offer (Settings → Claude Code), nothing about it nags; connecting it clears this. */
   claude: {
     skipped: boolean;
@@ -81,17 +69,6 @@ export const DEFAULT_CONFIG: JafferConfig = {
     companion: DEFAULT_COMPANION,
   },
   shell: { path: '', args: [] },
-  memory: {
-    enabled: true,
-    llm: 'auto',
-    reflectorModel: 'claude-haiku-4-5',
-    reflectEveryN: 20,
-    idleSeconds: 90,
-    llmMinIntervalSec: 300,
-    retentionDays: 45,
-  },
-  export: { targets: [], claudeSkills: false },
-  ingest: { claudeCode: false, backfillDays: 7 },
   claude: { skipped: false, showCost: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
@@ -132,20 +109,12 @@ function conform(value: unknown, ref: unknown): unknown {
   return typeof value === typeof ref ? value : ref;
 }
 
-/** Jaffer is for Claude Code only. Targets saved by earlier builds for other agents are dropped when a config is loaded. */
-function supported(cfg: JafferConfig): JafferConfig {
-  return {
-    ...cfg,
-    export: { ...cfg.export, targets: cfg.export.targets.filter((t) => t === 'claude-code') },
-  };
-}
-
 export class ConfigStore {
   readonly onChange = new Emitter<JafferConfig>();
   private cfg: JafferConfig;
 
   constructor(private paths: JafferPaths) {
-    this.cfg = supported(conform(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})), DEFAULT_CONFIG) as JafferConfig);
+    this.cfg = conform(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})), DEFAULT_CONFIG) as JafferConfig;
   }
 
   get(): JafferConfig {
@@ -153,7 +122,7 @@ export class ConfigStore {
   }
 
   patch(p: DeepPartial<JafferConfig>): JafferConfig {
-    this.cfg = supported(conform(merge(this.cfg, p), this.cfg) as JafferConfig); // a value of the wrong kind leaves what was there
+    this.cfg = conform(merge(this.cfg, p), this.cfg) as JafferConfig; // a value of the wrong kind leaves what was there
     writeJson(this.paths.config, this.cfg);
     this.onChange.emit(this.cfg);
     return this.cfg;

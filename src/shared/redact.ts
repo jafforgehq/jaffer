@@ -1,7 +1,7 @@
 /**
- * Secret redaction. Everything that flows into memory (episodes, items, prompts to
- * the reflector) goes through here first. The bias is deliberately towards
- * over-redaction: losing a token from a note costs nothing, leaking one costs a lot.
+ * Secret redaction. What Jaffer shows of a command or of a Claude Code hook payload (the window, a notification) goes
+ * through here first. The bias is deliberately towards over-redaction: losing a token from a label costs nothing,
+ * leaking one costs a lot.
  */
 
 interface Rule {
@@ -120,7 +120,7 @@ export function redactText(input: string): string {
 }
 
 /**
- * Commands whose invocation or output should never reach memory at all.
+ * Commands that are not shown at all, not even redacted.
  * (A leading space follows the HISTCONTROL=ignorespace convention.)
  */
 const SENSITIVE_CMD: RegExp[] = [

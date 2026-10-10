@@ -7,10 +7,6 @@ import { ensureDir, errMsg, nowIso, writeFileAtomic } from '../shared/util';
 import { RpcError, RpcServer, type ServerConn } from '../core/rpc';
 import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
-import { MemoryEngine } from '../core/memory/engine';
-import { makeMemoryApi } from '../core/memory-api';
-import { ClaudeIngestor } from '../core/ingest/claude';
-import { ClaudeCliLlm } from '../core/agent/claude-cli';
 import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
@@ -26,7 +22,6 @@ import { AutoResumer, shellChecks, type AutoResumeEvent, type AutoResumeTiming }
 import { AUTO_RESUME, AUTO_RESUME_TEST, RESTART_HOLD_MS, RESTART_HOLD_TEST_MS } from '../shared/keep-running';
 import { readTurnCost, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
-import { detectTargets } from '../core/memory/exports';
 import { PROTOCOL, VERSION } from '../core/version';
 import type { PtyEvent, PtySession } from '../core/session/terminal';
 
@@ -35,7 +30,7 @@ export interface ServiceOptions {
   version?: string;
   /** Absolute path of the CLI bundle the ~/.jaffer/bin/jaffer wrapper should run. */
   cliScript?: string;
-  /** Where "~" is for exports/ingest (tests). */
+  /** Where "~" is: Claude Code's settings (the hooks) and `~/.local/bin` live there (tests move it). */
   userHome?: string;
   log?: (msg: string) => void;
   /** launchd runs this daemon (the login agent's wrapper says so with JAFFER_LAUNCHD=1). */
@@ -62,14 +57,12 @@ export class JafferService {
   readonly config: ConfigStore;
   readonly rpc = new RpcServer();
   host!: SessionHost;
-  memory!: MemoryEngine;
   private claudeBin: string | null = null;
   private claudeProbe: Promise<void> | null = null;
   private login: ClaudeLogin | null = null;
   private loginError: string | undefined;
   private startedAt = nowIso();
   private timers: NodeJS.Timeout[] = [];
-  private ingestor: ClaudeIngestor | null = null;
   /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
   private claudeWatcher = new ClaudeWatcher();
   /** The Claude Code conversation to offer back after a restart (ids and a folder only; see ResumeStore). */
@@ -79,8 +72,6 @@ export class JafferService {
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
   private costTimers = new Set<NodeJS.Timeout>();
-  /** The scan timers of Claude Code transcript ingest: kept so that switching it off stops them (and on again does not stack them). */
-  private ingestTimers: NodeJS.Timeout[] = [];
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
@@ -114,7 +105,6 @@ export class JafferService {
   private commandTicker: NodeJS.Timeout | null = null;
   /** The switch "Keep my session running in the background": the login agent (launchd) that owns this daemon. */
   private keepRunning: KeepRunning;
-  private cliLlm: ClaudeCliLlm | null = null;
   readonly onShutdown: { fn: () => void } = { fn: () => undefined };
   private log: (msg: string) => void;
   private userHome: string;
@@ -207,19 +197,13 @@ export class JafferService {
     await this.rpc.assertFree(this.paths.socket); // before a shell is spawned for a daemon that cannot take the socket
     this.writeWrapper();
     try {
-      // An install from before the live panel only has the memory hooks: add the new events (idempotent, only Jaffer's own
-      // entries). Only when they already run THIS daemon's wrapper: another Jaffer home's hooks are not ours to rewrite.
+      // Jaffer's hooks as this version writes them (idempotent, only Jaffer's own entries): an install from before gets the events it
+      // lacks, and its SessionStart and Stop (which fed the memory) become async and guarded like the rest. Only when they already run
+      // THIS daemon's wrapper: another Jaffer home's hooks are not ours to rewrite.
       if (hooksPointAt(this.cliWrapper, this.userHome)) installHooks(this.cliWrapper, this.userHome);
     } catch {
       /* the user's settings are theirs: never fail startup over them */
     }
-    this.memory = new MemoryEngine({
-      paths: this.paths,
-      config: this.config,
-      home: this.userHome,
-      // Jaffer runs on a Claude subscription: memory is curated through the user's own Claude Code login (`claude -p`).
-      llm: () => this.cliLlm,
-    });
     this.host = new SessionHost(this.paths, this.config, this.version);
     this.probeClaude();
 
@@ -227,11 +211,7 @@ export class JafferService {
     this.registerMethods();
     await this.host.start();
     await this.rpc.listen(this.paths.socket);
-    this.memory.start(tickMs());
     this.lastOffer = JSON.stringify(this.resumeOffer()); // the baseline for what changes after this
-    this.startIngest();
-    this.timers.push(setInterval(() => this.memory.syncExports(), 120_000));
-    this.timers[this.timers.length - 1]!.unref?.();
     // a turn that ended with no signal at all (Esc, an API error, a crash) must not stay "Working" for ever
     this.timers.push(setInterval(() => this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000)), 30_000));
     this.timers[this.timers.length - 1]!.unref?.();
@@ -258,17 +238,8 @@ export class JafferService {
     this.rejectionWatches.clear();
     for (const t of this.costTimers) clearTimeout(t);
     this.costTimers.clear();
-    for (const t of this.ingestTimers) clearTimeout(t);
-    this.ingestTimers = [];
-    this.memory?.stop();
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
     this.resume.flush();
-    try {
-      // Learn from whatever is pending before going away.
-      await Promise.race([this.memory?.reflect({ force: false, llm: false }), new Promise((r) => setTimeout(r, 3000))]);
-    } catch {
-      /* ignore */
-    }
     this.host?.dispose();
     await this.rpc.close();
     try {
@@ -389,7 +360,7 @@ export class JafferService {
       // a command began or ended, or the shell is gone: a long one holds the Mac awake, and none holds nothing
       if (e.event.type === 'start' || e.event.type === 'command' || e.event.type === 'exit') this.refreshStayAwake();
       // A command line comes from the shell's marks, which any output in the terminal can forge, at any length: only its start is
-      // read to tell what it was (memory gets it whole, through its own redaction)
+      // read to tell what it was
       const head = e.event.type === 'command' ? e.event.cmd.slice(0, COMMAND_HEAD) : '';
       // where the shell is, and whether it is busy, decide whether a conversation can be offered back
       if (e.event.type === 'cwd' || e.event.type === 'start' || e.event.type === 'command') this.pushResume();
@@ -424,8 +395,6 @@ export class JafferService {
           if (!this.stopping && (quit || isPrintMode(head))) this.resume.forget();
           this.pushResume();
         }
-        const proj = resolveProject(ev.cwd, this.userHome);
-        if (ev.cmd.trim()) this.memory.observeCommand({ cmd: ev.cmd, exit: ev.exit, cwd: ev.cwd, project: proj.root, branch: proj.branch, durMs: ev.durMs, out: ev.output });
       }
     });
     this.claudeWatcher.changes.on((sessions) => {
@@ -434,14 +403,11 @@ export class JafferService {
       this.watchForRejections(sessions);
       this.pushResume();
     });
-    this.memory.events.on((e) => this.rpc.broadcast('memory.event', e));
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
       if (!c.session.resumeClaude) this.resume.forget(); // off forgets it, as Settings says: nothing of the conversation stays on disk
       this.pushResume(); // (and a notice that is running ends with the offer)
       this.refreshStayAwake(); // (the switch for staying awake)
-      this.memory.syncExports();
-      this.startIngest();
       // Keep my session running: the agent follows the switch however it changed (Settings, `jaffer service`, `jaffer config set`), with
       // every guard of install and remove (a refused home is not touched; in the daemon launchd runs, the bootout comes after the reply).
       // What install and remove set themselves is already in line (null).
@@ -736,36 +702,6 @@ export class JafferService {
     }
   }
 
-  private startIngest(): void {
-    const on = this.config.get().ingest.claudeCode && this.config.get().onboarded;
-    if (!on) {
-      this.ingestor = null;
-      for (const t of this.ingestTimers) clearTimeout(t);
-      this.ingestTimers = [];
-      return;
-    }
-    if (this.ingestor) return;
-    this.ingestor = new ClaudeIngestor({
-      home: this.userHome,
-      backfillDays: this.config.get().ingest.backfillDays,
-      offsets: this.memory.cursorState().ingest,
-      emit: (e) => void this.memory.observe(e),
-      save: (offsets) => this.memory.updateCursor((c) => (c.ingest = offsets)),
-    });
-    const tick = () => {
-      try {
-        this.ingestor?.scan();
-      } catch (e) {
-        this.log(`ingest error: ${errMsg(e)}`);
-      }
-    };
-    const first = setTimeout(tick, Math.min(1500, tickMs()));
-    const every = setInterval(tick, Math.max(300, tickMs() * 2 / 3));
-    first.unref?.();
-    every.unref?.();
-    this.ingestTimers = [first, every];
-  }
-
   // ------------------------------------------------------------------ rpc
 
   private registerMethods(): void {
@@ -861,17 +797,11 @@ export class JafferService {
     r.handle('service.install', () => this.keepRunning.install());
     r.handle('service.remove', () => this.keepRunning.remove());
 
-    // ---- memory
-    const api = makeMemoryApi(this.memory);
-    for (const [method, fn] of Object.entries(api)) r.handle(method, (p) => fn(p ?? {}));
-    r.handle('ingest.now', () => this.ingestor?.scan() ?? { files: 0, turns: 0 });
-
     // ---- config
     r.handle('config.get', () => this.config.get());
     r.handle('config.patch', (p: DeepPartial<JafferConfig>) => this.config.patch(p ?? {}));
 
     // ---- integrations
-    r.handle('setup.targets', () => detectTargets(this.userHome));
     r.handle('setup.claude.status', async () => {
       await this.probeClaude();
       return claudeStatus(this.userHome, this.userEnv());
@@ -899,17 +829,13 @@ export class JafferService {
       });
       return { started: true };
     });
-    // `mcp: false` connects the hooks only (what the first run does); Settings adds the memory tools too.
-    r.handle('setup.claude.install', async (p: { mcp?: boolean } | undefined) => {
-      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv(), mcp: p?.mcp });
-      this.config.patch({ claude: { skipped: false }, ingest: { claudeCode: true }, export: { targets: [...new Set([...this.config.get().export.targets, 'claude-code' as const])] } });
+    // Connects Claude Code: its hooks, so the companion, the notification and the cost figure follow it (the first run, and Settings).
+    r.handle('setup.claude.install', async () => {
+      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv() });
+      this.config.patch({ claude: { skipped: false } });
       return res;
     });
-    r.handle('setup.claude.remove', async () => {
-      const res = await teardownClaude(this.userHome, this.userEnv());
-      this.config.patch({ export: { targets: this.config.get().export.targets.filter((t) => t !== 'claude-code') } });
-      return res;
-    });
+    r.handle('setup.claude.remove', () => teardownClaude(this.userHome, this.userEnv()));
 
     r.handle('setup.cli.install', () => {
       // A symlink in ~/.local/bin lets `jaffer` work from any terminal, not just Jaffer's own.
@@ -947,7 +873,7 @@ export class JafferService {
       delete env.ANTHROPIC_API_KEY;
       delete env.ANTHROPIC_AUTH_TOKEN;
     }
-    env.JAFFER_NO_HOOKS = '1'; // the panel injects memory itself; Jaffer's hooks must not add it twice
+    env.JAFFER_NO_HOOKS = '1'; // a `claude` the daemon runs itself is not the terminal's: Jaffer's hooks report nothing for it
     return env;
   }
 
@@ -955,11 +881,7 @@ export class JafferService {
   private probeClaude(): Promise<void> {
     if (!this.claudeProbe) {
       this.claudeProbe = findClaude(this.userEnv())
-        .then((p) => {
-          this.claudeBin = p;
-          // memory is curated through `claude -p` on the person's login, never an API key; picked up whenever Claude Code turns up
-          if (p && !this.cliLlm) this.cliLlm = new ClaudeCliLlm(p, this.claudeEnv());
-        })
+        .then((p) => void (this.claudeBin = p))
         .catch(() => void (this.claudeBin = null))
         .finally(() => {
           this.claudeProbe = null;
@@ -982,12 +904,6 @@ function autoResumeTiming(): AutoResumeTiming {
 /** How long a Restart Claude Code waits for the new shell's prompt: 30 s, or (tests only) a few seconds. */
 function restartHoldMs(): number {
   return process.env.JAFFER_TEST_AUTORESUME_FAST === '1' ? RESTART_HOLD_TEST_MS : RESTART_HOLD_MS;
-}
-
-/** Housekeeping cadence. Overridable so tests can watch memory evolve in seconds instead of minutes. */
-function tickMs(): number {
-  const v = Number(process.env.JAFFER_TICK_MS);
-  return Number.isFinite(v) && v >= 100 ? v : 30_000;
 }
 
 function shq(s: string): string {

@@ -14,8 +14,8 @@ import { findClaude } from '../../src/core/integrations/claude';
 /**
  * Generates the README screenshots: `npm run screenshots` (writes docs/screenshots/*.png).
  *
- * What is real: the renderer, the session daemon, a zsh PTY with Jaffer's shell integration, a git repository, the
- * mole and the memory engine. What is scripted: the Claude Code hook events the mole follows (what
+ * What is real: the renderer, the session daemon, a zsh PTY with Jaffer's shell integration, a git repository and the
+ * mole. What is scripted: the Claude Code hook events the mole follows (what
  * `jaffer hook` would deliver from a real session, injected through the daemon so the run is deterministic and needs
  * no sign-in), and the demo project's test script, which prints output in the style of a JS test runner. Nothing here
  * is a mock-up image.
@@ -91,7 +91,6 @@ async function clearToasts(): Promise<void> {
   }
 }
 
-const remember = (text: string, kind: string, extra: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('memory.remember', p), { text, kind, ...extra });
 
 /** The caller's environment minus anything that would change how Claude Code or the shell behaves in the demo. */
 function git(...args: string[]): void {
@@ -281,11 +280,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await typeCommand('git status -sb');
     await typeCommand('./bin/test');
     await until(async () => /1 failed/.test((await termLines()).join('\n')), 10_000, 'the failing test output');
-    await remember('Prefer pnpm over npm in every JavaScript project', 'preference', { pinned: true });
-    await remember('Keep answers short: show the diff, skip the lecture', 'preference');
-    await remember('Works on macOS with zsh; Homebrew lives in /opt/homebrew', 'environment', { source: 'agent' });
-    await remember('Run ./bin/test before calling a fix done', 'workflow', { scope: 'project', cwd: repo, source: 'agent' });
-    await remember('TypeScript strict mode; named exports only, no default exports', 'convention', { scope: 'project', cwd: repo });
     await sleep(600);
     await clearToasts();
   }, 120_000);
@@ -340,19 +334,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await shot('02-terminal');
   }, 120_000);
 
-  it('memory the app has built up, and the log of how it changed', async () => {
-    await remember('Session expiry checks must be inclusive (<=): tests freeze the clock at expiresAt', 'lesson', { scope: 'project', cwd: repo, source: 'agent' });
-    await page.keyboard.press('Meta+Shift+M');
-    await page.waitForSelector('.memory');
-    await page.waitForSelector('.mem');
-    await until(async () => (await page.$$('.mem')).length >= 6, 10_000, 'six memories');
-    await shot('04-memory');
-    await page.click('.tabs button:has-text("Activity")');
-    await page.waitForSelector('.run');
-    await clearToasts();
-    await page.click('.tabs button:has-text("Learned")');
-  }, 60_000);
-
   it('the other companions: the same busy moment in each, and the picker in Settings', async () => {
     await clearToasts();
     const sessions = () => page.evaluate(() => window.jaffer.call('claude.state')).then((r: any) => r.sessions as { id: string }[]);
@@ -397,7 +378,6 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('command palette, themes, settings', async () => {
     await clearToasts();
-    if (await page.$('.side')) await page.keyboard.press('Meta+Shift+M'); // the memory drawer was open: the terminal gets the room back
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await sleep(300); // an Escape sent the instant it appears can be lost

@@ -9,7 +9,7 @@ export type PtyEvent =
   | { type: 'data'; data: string; seq: number }
   | { type: 'exit'; code: number | null; signal: number | null }
   | { type: 'start'; cmd: string }
-  | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number; output: string }
+  | { type: 'command'; cmd: string; exit: number | null; cwd: string; durMs: number }
   | { type: 'cwd'; cwd: string }
   | { type: 'title'; title: string }
   | { type: 'prompt' }
@@ -31,9 +31,6 @@ export interface PtyOptions {
   /** What `buildShellSpawn` made of the shell: `other` prints none of Jaffer's marks (no prompt, no command). Unknown when not given. */
   shellKind?: 'zsh' | 'bash' | 'fish' | 'other';
 }
-
-const MAX_OUTPUT_LINES = 400;
-const MAX_OUTPUT_CHARS = 24_000;
 
 function unescapeOsc(s: string): string {
   return s.replace(/\\x([0-9a-fA-F]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
@@ -112,8 +109,8 @@ export class ForegroundCheck {
 
 /**
  * One pseudo-terminal running the user's shell, mirrored into a headless xterm so we can
- * (a) hand a faithful screen snapshot to any client that attaches later, (b) read command
- * output as clean text, and (c) track prompt/command state from the shell-integration marks.
+ * (a) hand a faithful screen snapshot to any client that attaches later, (b) read the screen
+ * as clean text, and (c) track prompt/command state from the shell-integration marks.
  */
 export class PtySession {
   readonly events = new Emitter<PtyEvent>();
@@ -129,7 +126,7 @@ export class PtySession {
   readonly shellKind: PtyOptions['shellKind'];
   promptReady = false;
   private pendingCmd = '';
-  private running: { cmd: string; startedAt: number; marker: ReturnType<Terminal['registerMarker']> } | null = null;
+  private running: { cmd: string; startedAt: number } | null = null;
   private batch: string[] = [];
   private batchBytes = 0;
   private flushTimer: NodeJS.Timeout | null = null;
@@ -299,9 +296,7 @@ export class PtySession {
       else out.push(text);
     }
     while (out.length && out[out.length - 1]!.trim() === '') out.pop();
-    let text = out.slice(-MAX_OUTPUT_LINES).join('\n');
-    if (text.length > MAX_OUTPUT_CHARS) text = '…' + text.slice(-MAX_OUTPUT_CHARS);
-    return text;
+    return out.join('\n');
   }
 
   // ------------------------------------------------------------------ shell integration
@@ -318,7 +313,7 @@ export class PtySession {
         this.integrated = true;
         this.promptReady = false;
         if (!this.running) {
-          this.running = { cmd: this.pendingCmd, startedAt: Date.now(), marker: this.term.registerMarker(0) };
+          this.running = { cmd: this.pendingCmd, startedAt: Date.now() };
           this.events.emit({ type: 'start', cmd: this.running.cmd });
         }
         this.pendingCmd = '';
@@ -379,11 +374,6 @@ export class PtySession {
     const run = this.running;
     if (!run) return;
     this.running = null;
-    const normal = this.term.buffer.normal;
-    const startLine = run.marker && run.marker.line >= 0 ? run.marker.line : Math.max(0, normal.baseY);
-    const endLine = normal.baseY + normal.cursorY;
-    const output = startLine <= endLine ? this.linesToText(normal, startLine, endLine) : '';
-    run.marker?.dispose();
-    this.events.emit({ type: 'command', cmd: run.cmd, exit, cwd: this.cwd, durMs: Date.now() - run.startedAt, output });
+    this.events.emit({ type: 'command', cmd: run.cmd, exit, cwd: this.cwd, durMs: Date.now() - run.startedAt });
   }
 }

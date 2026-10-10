@@ -151,8 +151,6 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.term .xterm');
     const cfg = await page.evaluate(() => window.jaffer.call('config.get'));
     expect(cfg.onboarded).toBe(true);
-    expect(cfg.memory.enabled).toBe(true);
-    expect(cfg.export.targets).not.toContain('codex');
     expect(fake.calls().some((l) => l.startsWith('auth login '))).toBe(true);
     expect(fake.calls().some((l) => l.startsWith('mcp add'))).toBe(false); // Get started connects the hooks for the panel, not the MCP server
     await until(async () => noArgCalls() === 1, 15_000, 'Get started to start Claude Code in the terminal'); // typed for the person, once

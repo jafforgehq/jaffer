@@ -33,8 +33,8 @@ afterEach(async () => {
 });
 afterAll(() => undefined);
 
-/** A daemon stand-in: records every request and answers it. */
-async function fakeDaemon(): Promise<void> {
+/** A daemon stand-in: records every request and answers it (by default `{ ok: true }`). */
+async function fakeDaemon(answer: (method: string) => unknown = () => ({ ok: true })): Promise<void> {
   fs.mkdirSync(path.dirname(env.paths.socket), { recursive: true });
   server = net.createServer((sock) => {
     connections++;
@@ -47,7 +47,7 @@ async function fakeDaemon(): Promise<void> {
         buf = buf.slice(i + 1);
         const msg = JSON.parse(line);
         received.push({ method: msg.method, params: msg.params });
-        sock.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + '\n');
+        sock.write(JSON.stringify({ id: msg.id, result: answer(msg.method) }) + '\n');
       }
     });
   });
@@ -85,18 +85,18 @@ describe('jaffer hook <event>', () => {
 
   it('inside a Jaffer session it forwards the payload to the daemon as claude.event', async () => {
     await fakeDaemon();
-    for (const arg of ['user-prompt-submit', 'pre-tool-use', 'post-tool-use', 'post-tool-use-failure', 'subagent-start', 'subagent-stop', 'notification', 'session-end']) {
+    for (const arg of ['session-start', 'user-prompt-submit', 'pre-tool-use', 'post-tool-use', 'post-tool-use-failure', 'subagent-start', 'subagent-stop', 'notification', 'stop', 'session-end']) {
       const r = await hook(arg, PAYLOAD, { JAFFER_SESSION: '1' });
       expect(r, arg).toMatchObject({ status: 0, stdout: '' });
     }
-    expect(received.filter((m) => m.method === 'claude.event')).toHaveLength(8);
+    expect(received.filter((m) => m.method === 'claude.event')).toHaveLength(10);
+    expect(received.map((m) => m.method).filter((m) => m !== 'claude.event')).toEqual([]); // nothing else is asked
     expect(received[0]!.params).toMatchObject({ session_id: 'sess-1', tool_name: 'Bash' });
   });
 
   it('outside a Jaffer session (a claude run in another terminal) it sends nothing', async () => {
     await fakeDaemon();
-    expect(await hook('pre-tool-use', PAYLOAD)).toMatchObject({ status: 0, stdout: '' });
-    expect(await hook('session-end', PAYLOAD)).toMatchObject({ status: 0, stdout: '' });
+    for (const arg of ['session-start', 'pre-tool-use', 'stop', 'session-end']) expect(await hook(arg, PAYLOAD), arg).toMatchObject({ status: 0, stdout: '' });
     expect(connections).toBe(0);
   });
 
@@ -106,10 +106,19 @@ describe('jaffer hook <event>', () => {
     expect(connections).toBe(0);
   });
 
-  it('stop also reports (and keeps feeding memory): the payload reaches the daemon and nothing is printed', async () => {
+  it('stop also reports: the payload reaches the daemon and nothing is printed', async () => {
     await fakeDaemon();
     const r = await hook('stop', JSON.stringify({ session_id: 'sess-1', hook_event_name: 'Stop', last_assistant_message: 'done' }), { JAFFER_SESSION: '1' });
     expect(r).toMatchObject({ status: 0, stdout: '' });
     expect(received.some((m) => m.method === 'claude.event' && m.params.hook_event_name === 'Stop')).toBe(true);
+    expect(received.map((m) => m.method)).toEqual(['claude.event']);
+  });
+
+  it('session-start only reports too: whatever the daemon answers, nothing is printed for Claude Code to read', async () => {
+    await fakeDaemon(() => 'something a daemon could say');
+    const r = await hook('session-start', JSON.stringify({ session_id: 'sess-1', hook_event_name: 'SessionStart', cwd: env.userHome, source: 'startup' }), { JAFFER_SESSION: '1' });
+    expect(r).toMatchObject({ status: 0, stdout: '' });
+    expect(received.map((m) => m.method)).toEqual(['claude.event']);
+    expect(received[0]!.params).toMatchObject({ hook_event_name: 'SessionStart' });
   });
 });

@@ -38,10 +38,60 @@ export function waitFor<T>(session: PtySession, pred: (e: PtyEvent) => T | false
   });
 }
 
+/** A command the shell ran, with what it printed. */
+export type CommandRun = Extract<PtyEvent, { type: 'command' }> & { output: string };
+
+/** The screen's text from line `start` to line `end`, a wrapped line joined to the one before it, blank lines at the end left out. */
+function screenText(session: PtySession, start: number, end: number): string {
+  const buf = session.term.buffer.normal;
+  const out: string[] = [];
+  for (let i = start; i <= end; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && out.length) out[out.length - 1] += text;
+    else out.push(text);
+  }
+  while (out.length && out[out.length - 1]!.trim() === '') out.pop();
+  return out.join('\n');
+}
+
+/**
+ * The next command the shell finishes, with its output: the screen from the line the command started on (its start mark) to where
+ * it ended (its end mark), read at that moment, as a person would see it. (The app itself does not keep what a command printed.)
+ */
+export function nextCommand(session: PtySession, ms = 8000): Promise<CommandRun> {
+  let marker: ReturnType<PtySession['term']['registerMarker']> | undefined;
+  let output = '';
+  // (registered before `waitFor`'s listener, so it reads the screen first, while the end mark is being parsed)
+  const off = session.events.on((e) => {
+    if (e.type === 'start' && !marker) marker = session.term.registerMarker(0);
+    else if (e.type === 'command') {
+      const buf = session.term.buffer.normal;
+      const start = marker && marker.line >= 0 ? marker.line : Math.max(0, buf.baseY);
+      const end = buf.baseY + buf.cursorY;
+      output = start <= end ? screenText(session, start, end) : '';
+      marker?.dispose();
+      marker = undefined;
+    }
+  });
+  const done = () => {
+    off();
+    marker?.dispose();
+  };
+  return waitFor(session, (e) => (e.type === 'command' ? e : false), ms).then(
+    (e) => (done(), { ...e, output }),
+    (err) => {
+      done();
+      throw err;
+    },
+  );
+}
+
 /** Type a command at a ready prompt and wait for it to finish, as a person would: how a test runs something and reads its output. */
-export async function runInShell(session: PtySession, cmd: string, ms = 15_000): Promise<Extract<PtyEvent, { type: 'command' }>> {
+export async function runInShell(session: PtySession, cmd: string, ms = 15_000): Promise<CommandRun> {
   await untilReady(session);
-  const done = waitFor(session, (e) => (e.type === 'command' ? e : false), ms);
+  const done = nextCommand(session, ms);
   session.write(cmd + '\r');
   const e = await done;
   await untilReady(session);
