@@ -8,7 +8,7 @@ import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
-import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
+import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -637,11 +637,11 @@ export function Onboarding(): VNode {
           <h2>Welcome to Jaffer</h2>
           {stage === 'signin' ? (
             <p>
-              A terminal with <b>one session that never ends</b>. <b>Claude Code</b> runs best in it: sign in to Claude to connect it, or start with a plain terminal.
+              A calm terminal with a companion that shows what <b>Claude Code</b> is doing. Sign in to Claude to connect it, or start with a plain terminal.
             </p>
           ) : (
             <p>
-              A terminal with <b>one session that never ends</b>.
+              A calm terminal, with a companion for <b>Claude Code</b>.
             </p>
           )}
         </div>
@@ -652,10 +652,10 @@ export function Onboarding(): VNode {
             <div class="features">
               <div class="feature">
                 <div class="f-ico">
-                  <IconClock size={15} />
+                  <IconTerminal size={15} />
                 </div>
-                <b>Always the same session</b>
-                Quit the app, close the lid, come back tomorrow — your shell, your running processes and Claude Code are exactly where you left them.
+                <b>One calm terminal</b>
+                One shell, a thin title bar and the companion. ⌘W hides the window; quitting Jaffer ends the shell and anything running in it.
               </div>
               <div class="feature">
                 <div class="f-ico">

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePaths } from '../shared/paths';
 import { ConfigStore } from '../shared/config';
-import { tryConnect, ensureDaemon, launchDaemon } from '../core/daemon-client';
+import { tryConnect } from '../core/daemon-client';
 import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
@@ -20,10 +20,8 @@ const green = (s: string) => (process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s);
 const parsed = parseArgs(args);
 const flag = (name: string, def?: string): string | undefined => parsed.flags.get(name) ?? def;
 
-function launcher() {
-  const here = __dirname; // dist/cli
-  return { execPath: process.execPath, daemonScript: path.join(here, '..', 'daemon', 'jafferd.cjs'), cliScript: path.join(here, 'jaffer.cjs'), electron: !!process.versions.electron };
-}
+/** The terminal runs only while the Jaffer app does: nothing here starts it (a session started from here would have no app to end it). */
+const NOT_RUNNING = 'Jaffer is not running. Open Jaffer and run this again.';
 
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return '';
@@ -45,7 +43,7 @@ ${bold('Claude Code')}
   jaffer setup claude [--remove|--status]   connect Claude Code to Jaffer (its hooks: the companion, notifications, the cost figure)
 
 ${bold('Session')}
-  jaffer status · jaffer doctor · jaffer daemon [start|stop|status]
+  jaffer status · jaffer doctor · jaffer daemon [status|stop]   (stop ends the terminal, and Jaffer quits with it)
   jaffer config get|set <dot.path> <json>
 `;
 
@@ -92,9 +90,11 @@ async function main(): Promise<void> {
         console.log(JSON.stringify(s, null, 2));
         return;
       }
-      if (!fs.existsSync(wrapper)) {
-        const client = await ensureDaemon(paths, launcher()); // creates the wrapper
-        client.close();
+      // the hooks run ~/.jaffer/bin/jaffer, which Jaffer writes when it starts: without it there is nothing for them to run yet
+      if (!flag('remove') && !fs.existsSync(wrapper)) {
+        const running = await tryConnect(paths);
+        running?.close();
+        throw new Error(running ? `${wrapper} is missing. Quit Jaffer and open it again: it writes it when it starts.` : NOT_RUNNING);
       }
       const res = flag('remove') ? await teardownClaude() : await setupClaude(wrapper);
       for (const m of res.messages) console.log(m);
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
         },
       });
       for (const m of res.messages) console.log(m);
-      console.log(green('Done.') + dim(' If the Jaffer app is open, quit it (⌘Q); it starts a new session straight away. To finish a clean install, drag Jaffer.app to the Trash and install the latest release.'));
+      console.log(green('Done.') + dim(`${running ? ' Jaffer’s terminal has ended, and the app quits with it.' : ''} To finish a clean install, drag Jaffer.app to the Trash and install the latest release.`));
       return;
     }
 
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       const client = await tryConnect(paths);
       console.log(`${bold('Jaffer')} ${VERSION}   home: ${paths.home}`);
       if (!client) {
-        console.log(`daemon: ${red('not running')} ${dim('(open the Jaffer app, or `jaffer daemon start`)')}`);
+        console.log(`daemon: ${red('not running')} ${dim(`(${NOT_RUNNING})`)}`);
       } else {
         const hello = await client.call('hello', {});
         const info = await client.call('session.info', {});
@@ -163,13 +163,11 @@ async function main(): Promise<void> {
       const sub = args[1] ?? 'status';
       const client = await tryConnect(paths);
       if (sub === 'start') {
-        if (client) {
-          console.log('already running');
-          client.close();
-        } else {
-          launchDaemon(paths, launcher());
-          console.log('starting…');
-        }
+        // the terminal starts with the app, and only there: one started from here would outlive everything meant to end it
+        client?.close();
+        if (client) console.log('already running');
+        else throw new Error(NOT_RUNNING);
+        return;
       } else if (sub === 'stop') {
         if (!client) console.log('not running');
         else {

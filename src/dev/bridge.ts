@@ -11,6 +11,8 @@ import { VERSION } from '../core/version';
  * Development/test bridge: serves the renderer in a plain browser and relays `window.jaffer`
  * calls to the real daemon over a WebSocket. It stands in for the Electron main process so the
  * whole UI can be exercised (and screenshotted) without Electron. Never shipped in the app.
+ * Unlike the app, it does not own the daemon: it starts a detached one (`ensureDaemon`, without
+ * `JAFFER_OWNED`), which the tests end with `app.shutdown`.
  */
 
 const root = path.resolve(__dirname, '..');

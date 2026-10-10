@@ -40,12 +40,6 @@ export const IconBranch = ({ size, class: c }: P): VNode => (
     <path d="M6 7.5v9M18 10.5c0 4-6 3-11 6.2" />
   </svg>
 );
-export const IconClock = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
-  </svg>
-);
 export const IconDownload = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M12 4v11" />

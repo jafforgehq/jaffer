@@ -1,9 +1,11 @@
+import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { makeShutdown, SHUTDOWN_DEADLINE_MS } from '../src/daemon/shutdown';
+import { makeShutdown, SHUTDOWN_DEADLINE_MS, watchParent } from '../src/daemon/shutdown';
 
 /**
  * How the daemon ends (src/daemon/main.ts): the first reason to stop wins, the shell is let go before the process exits, and a stop that
- * hangs still ends at a deadline. The exit code is 0 for a deliberate end (`app.shutdown`) and 143/130 for a signal.
+ * hangs still ends at a deadline. The exit code is 0 for a deliberate end (`app.shutdown`, the end of the app's pipe) and 143/130 for a
+ * signal. The app reads it: 0 is a session that was ended (it quits with it), anything else a crash (it offers a fresh terminal).
  */
 
 function deferred() {
@@ -41,8 +43,8 @@ function setup(stop: () => Promise<void>) {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-describe("the daemon's shutdown: the first reason wins, the state is saved first, a hung stop still ends", () => {
-  it('a second signal while stopping does not exit before the first stop() has finished saving, and keeps the first code', async () => {
+describe("the daemon's shutdown: the first reason wins, the shell is let go before the exit, a hung stop still ends", () => {
+  it('a second signal while stopping does not exit before the first stop() has let go of the shell, and keeps the first code', async () => {
     const d = deferred();
     const t = setup(() => d.promise);
     t.shutdown('SIGTERM', 143);
@@ -56,7 +58,7 @@ describe("the daemon's shutdown: the first reason wins, the state is saved first
     expect(t.exits).toEqual([143]);
   });
 
-  it('a SIGTERM during app.shutdown keeps the deliberate exit 0 (launchd must not bring back a session the person ended)', async () => {
+  it('a SIGTERM during app.shutdown keeps the deliberate exit 0 (the app quits with a session that was ended, and does not take it for a crash)', async () => {
     const d = deferred();
     const t = setup(() => d.promise);
     t.shutdown('rpc', 0);
@@ -107,8 +109,48 @@ describe("the daemon's shutdown: the first reason wins, the state is saved first
     expect(t.timers[0]!.cleared).toBe(true);
   });
 
-  it('the deadline is about eight seconds: past what a stop takes (the reflection waits 3 s at most), well inside launchd\'s own 20 s', () => {
+  it('the deadline is about eight seconds: past what a stop takes (it ends the shell and closes the socket: nothing slow)', () => {
     expect(SHUTDOWN_DEADLINE_MS).toBeGreaterThanOrEqual(5_000);
     expect(SHUTDOWN_DEADLINE_MS).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("the app's pipe (JAFFER_OWNED=1): its end, however it comes, is the cue to stop", () => {
+  it('the end of the pipe (the app quit, crashed or was killed) stops the daemon once', () => {
+    const pipe = new PassThrough();
+    let gone = 0;
+    watchParent(pipe, () => gone++);
+    expect(gone).toBe(0);
+    pipe.end();
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(gone).toBe(1); // 'end' and then 'close': once
+        resolve();
+      }, 20);
+    });
+  });
+
+  it('a pipe that closes or fails without an end stops it too, once', async () => {
+    for (const how of ['close', 'error'] as const) {
+      const pipe = new PassThrough();
+      let gone = 0;
+      watchParent(pipe, () => gone++);
+      if (how === 'close') pipe.destroy();
+      else pipe.destroy(new Error('EPIPE'));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(gone, how).toBe(1);
+    }
+  });
+
+  it('what the app writes on the pipe (it writes nothing) does not stop it: only the end does', async () => {
+    const pipe = new PassThrough();
+    let gone = 0;
+    watchParent(pipe, () => gone++);
+    pipe.write('anything\n');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(gone).toBe(0);
+    pipe.end();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(gone).toBe(1);
   });
 });

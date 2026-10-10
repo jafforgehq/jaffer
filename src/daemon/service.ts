@@ -46,7 +46,7 @@ export class JafferService {
   private loginError: string | undefined;
   private startedAt = nowIso();
   private timers: NodeJS.Timeout[] = [];
-  /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
+  /** What the Claude in the terminal is doing, from its hook events. Lives here, with the shell, where the hooks report. */
   private claudeWatcher = new ClaudeWatcher();
   private rejectionWatches = new Map<string, () => void>();
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
@@ -471,7 +471,8 @@ export class JafferService {
       return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
     });
 
-    // the session ends (Quit and End Session, an update, Restart session, `jaffer daemon stop`, Reset)
+    // a client ends the session on purpose (`jaffer daemon stop`, `jaffer reset`, a newer Jaffer taking over): exit 0, and the app that
+    // owns this daemon quits with it
     r.handle('app.shutdown', () => {
       this.onShutdown.fn(); // (the daemon's main claims the end now and begins the stop once this reply has gone out)
       return true;

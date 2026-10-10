@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
-import { ensureDaemon, tryConnect, type Launcher } from '../core/daemon-client';
+import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification } from '../shared/notify-policy';
 import { isAppUrl, isWebUrl } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
@@ -15,14 +15,18 @@ import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { childExitAction, childExitText, LEGACY_DIALOG, legacyDaemonAction, QUIT_BUTTONS, quitNeedsConfirm, type QuitAsk } from '../shared/quit-policy';
+import { isClaudeCommand } from '../shared/process-badge';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
+import { prepareHome } from './prepare-home';
 import { resetJaffer } from '../core/reset';
 
 /**
- * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications,
- * global hotkey) and relays between the renderer and the session daemon. The daemon — not this
- * process — owns the shell, so quitting the app never ends your session.
+ * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications, global hotkey), and it starts the terminal
+ * host (`jafferd`, which runs the shell) as its own child and relays between the renderer and it. The child lives as long as the app:
+ * quitting Jaffer ends the shell and anything running in it (⌘Q asks first when something runs), and if the app crashes or is killed the
+ * child sees its pipe end and stops too.
  */
 
 const paths = makePaths();
@@ -35,11 +39,23 @@ const launcher: Launcher = {
   cliScript: path.join(distRoot, 'cli', 'jaffer.cjs'),
   electron: true,
 };
+/** How long the start waits for an older Jaffer's session to let go of the socket once it was asked to end. */
+const LEGACY_END_MS = 10_000;
+/** `prepareHome` gets this long at most: the terminal starts all the same. */
+const PREPARE_HOME_MS = 30_000;
 
 let win: BrowserWindow | null = null;
+/** The app's own terminal host (its child), and the connection to it. */
+let owned: OwnedDaemon | null = null;
 let client: RpcClient | null = null;
+/** The app is on its way out (quit, an update, Reset): the window closes instead of hiding, and the end of the child is expected. */
 let quitting = false;
-let reconnecting = false;
+/** ⌘Q has nothing (more) to ask: the person said Quit, nothing ran, or the session had already ended. */
+let quitConfirmed = false;
+let askingToQuit = false;
+/** The child was ended for the quit (or did not end in time and was killed): the quit goes on. */
+let childStopped = false;
+let restarting = false;
 let hotkey = '';
 const windowFile = path.join(paths.home, 'window.json');
 
@@ -50,63 +66,137 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('second-instance', () => showWindow());
 
-// ---------------------------------------------------------------- daemon connection
+// ---------------------------------------------------------------- the terminal (the app's child)
 
 function sendToRenderer(channel: string, ...args: unknown[]): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
 }
 
-function wireClient(c: RpcClient): void {
+/** The command the shell runs now (from the daemon's events and `session.info`), for the question at ⌘Q. */
+let runningCommand: string | null = null;
+
+function wireClient(c: RpcClient, o: OwnedDaemon): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
-    if (event === 'pty.command') maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
+    if (event === 'pty.start') runningCommand = (data as { cmd?: string }).cmd || 'command';
+    if (event === 'pty.command') {
+      runningCommand = null;
+      maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
+    }
+    if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
     if (event === 'config.changed') appCfg = data as typeof appCfg;
   });
   void c.call('config.get', {}).then((x) => (appCfg = x as typeof appCfg)).catch(() => undefined);
-  c.onClose.on(() => void onDaemonDown());
+  void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
+  c.onClose.on(() => void onConnectionLost(o));
 }
 
-async function connect(): Promise<void> {
-  client = await ensureDaemon(paths, launcher);
-  wireClient(client);
-  const hello = await client.call('hello', { client: 'app', protocol: 1 });
-  if (hello.version !== VERSION) await offerRestart(hello.version);
+/** Start the app's own terminal host and connect to it. */
+async function startTerminal(): Promise<void> {
+  const o = await startOwnedDaemon(paths, launcher);
+  owned = o;
+  client = o.client;
+  runningCommand = null;
+  wireClient(o.client, o);
+  void o.exited.then((how) => onChildExit(o, how));
   await syncHotkey();
 }
 
-async function onDaemonDown(): Promise<void> {
-  if (quitting || reconnecting) return;
-  reconnecting = true;
-  sendToRenderer('jaffer:event', 'daemon.down', {});
-  for (let i = 0; i < 40 && !quitting; i++) {
-    try {
-      await connect();
-      sendToRenderer('jaffer:event', 'daemon.up', {});
-      break;
-    } catch {
-      await sleep(750);
-    }
+/** A fresh terminal (after a crash, or an update that did not install): the window starts over with it. */
+async function restartTerminal(): Promise<void> {
+  if (restarting || quitting) return;
+  restarting = true;
+  try {
+    await startTerminal();
+    sendToRenderer('jaffer:event', 'daemon.up', {});
+  } catch (e) {
+    await dialog.showMessageBox({ type: 'error', message: 'Jaffer could not start its terminal', detail: `${e instanceof Error ? e.message : e}\n\nLog: ${paths.logFile}` });
+    quitConfirmed = true;
+    app.quit();
+  } finally {
+    restarting = false;
   }
-  reconnecting = false;
 }
 
-async function offerRestart(oldVersion: string): Promise<void> {
-  const r = await dialog.showMessageBox({
-    type: 'info',
-    message: 'Jaffer was updated',
-    detail: `Your session is still running the previous version (${oldVersion}). Restart it to use ${VERSION}? This ends your terminal session: your shell and anything running in it stop, and a new shell starts.`,
-    buttons: ['Restart session', 'Later'],
-    defaultId: 0,
-  });
-  if (r.response !== 0) return;
-  await client?.call('app.shutdown', {}).catch(() => undefined);
-  client?.close();
-  for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);
-  client = await ensureDaemon(paths, launcher);
-  wireClient(client);
-  sendToRenderer('jaffer:event', 'daemon.up', {});
+/** The child ended: expected (the app ended it), a session a client ended (the app quits with it), or a crash (a fresh one, or Quit). */
+async function onChildExit(o: OwnedDaemon, how: ChildExit): Promise<void> {
+  if (owned !== o) return;
+  runningCommand = null;
+  const action = childExitAction({ ...how, quitting });
+  if (action === 'ignore') return;
+  if (action === 'quit') {
+    // `jaffer reset`, `jaffer daemon stop`: the session was ended on purpose, and there is nothing left to ask about
+    quitConfirmed = true;
+    app.quit();
+    return;
+  }
+  sendToRenderer('jaffer:event', 'daemon.down', {});
+  const t = childExitText({ ...how, log: paths.logFile });
+  const opts = { type: 'error' as const, message: t.message, detail: t.detail, buttons: [...t.buttons], defaultId: 0, cancelId: 1 };
+  const r = win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  if (quitting || owned !== o) return; // (quit meanwhile)
+  if (r.response === 0) await restartTerminal();
+  else {
+    quitConfirmed = true;
+    app.quit();
+  }
+}
+
+/**
+ * The connection closed. When the child ended, that is handled where its end is seen (`onChildExit`). When it still runs, the app connects
+ * to it again (the window attaches anew); a child that runs but cannot be reached is killed, and the person is offered a fresh one.
+ */
+async function onConnectionLost(o: OwnedDaemon): Promise<void> {
+  if (quitting || owned !== o || o.ended) return;
+  const ended = await Promise.race([o.exited.then(() => true), sleep(1_000).then(() => false)]);
+  if (ended || quitting || owned !== o) return;
+  const c = await o.reconnect(5_000);
+  if (quitting || owned !== o) return;
+  if (c) {
+    client = c;
+    wireClient(c, o);
+    sendToRenderer('jaffer:event', 'daemon.up', {});
+    return;
+  }
+  o.kill();
+}
+
+/**
+ * An older Jaffer kept its session running in the background, and it may still hold the socket (a new version installed over a running
+ * one). The person is asked once; then it is asked to end (`app.shutdown`, which every older version knows) and the start waits for the
+ * socket to go. False: the person chose Quit, or it did not end.
+ */
+async function endOlderSession(): Promise<boolean> {
+  const c = await tryConnect(paths);
+  const hello = c ? await c.call<{ pid?: unknown }>('hello', { client: 'app', protocol: 1 }, 3_000).catch(() => null) : null;
+  const action = legacyDaemonAction({ answers: !!c, pid: typeof hello?.pid === 'number' ? hello.pid : null, ownPid: owned?.pid ?? null });
+  if (action !== 'ask') {
+    c?.close();
+    return true;
+  }
+  const r = await dialog.showMessageBox({ type: 'warning', message: LEGACY_DIALOG.message, detail: LEGACY_DIALOG.detail, buttons: [...LEGACY_DIALOG.buttons], defaultId: 0, cancelId: 1 });
+  if (r.response !== 0) {
+    c?.close();
+    return false;
+  }
+  await c?.call('app.shutdown', {}, 5_000).catch(() => undefined);
+  c?.close();
+  const t0 = Date.now();
+  while (Date.now() - t0 < LEGACY_END_MS) {
+    const still = await tryConnect(paths, 300);
+    if (!still) return true;
+    still.close();
+    await sleep(200);
+  }
+  await dialog.showMessageBox({ type: 'error', message: 'The older Jaffer session did not end', detail: 'It is still running after 10 seconds. End it with `jaffer daemon stop` in Terminal, or restart the Mac, then open Jaffer again.' });
+  return false;
+}
+
+/** `prepareHome`, never in the terminal's way: a failure is let go, and it gets PREPARE_HOME_MS at most. */
+async function prepareHomeBounded(): Promise<void> {
+  await Promise.race([prepareHome(paths).catch(() => undefined), sleep(PREPARE_HOME_MS)]);
 }
 
 // ---------------------------------------------------------------- notifications & dock
@@ -132,6 +222,11 @@ function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
   lastTerminalNotifyAt = Date.now();
   notify(n.title || 'Terminal', n.body);
+}
+
+/** Claude Code works, or waits for the person (from its hooks). */
+function claudeBusy(): boolean {
+  return prevClaude.some((s) => s.state === 'working' || s.state === 'needs-you');
 }
 
 /** Claude, in the terminal, is waiting for the user and they are looking elsewhere. */
@@ -190,17 +285,19 @@ async function whenWindowFocused(version: string): Promise<void> {
 
 let installWatchdog: NodeJS.Timeout | undefined;
 
-/** The installer failed or never restarted us after the session was ended: keep running, with a fresh session, and say so. */
+/** The installer failed or never restarted us after the session was ended: keep running, with a fresh terminal, and say so. */
 function recoverFromFailedInstall(why: string): void {
   if (!installing) return;
   installing = false;
   quitting = false;
+  quitConfirmed = false;
+  childStopped = false;
   clearTimeout(installWatchdog);
   updates?.start();
-  void dialog.showMessageBox({ type: 'error', message: 'The update could not be installed', detail: `${why.slice(0, 300)}\n\nJaffer is still running, with a fresh session. You can download the latest version from GitHub.`, buttons: ['Open releases page', 'OK'], defaultId: 1 }).then((r) => {
+  void dialog.showMessageBox({ type: 'error', message: 'The update could not be installed', detail: `${why.slice(0, 300)}\n\nJaffer is still running, with a fresh terminal. You can download the latest version from GitHub.`, buttons: ['Open releases page', 'OK'], defaultId: 1 }).then((r) => {
     if (r.response === 0) void shell.openExternal(RELEASES_URL);
   });
-  void onDaemonDown();
+  void restartTerminal();
 }
 
 async function setupUpdates(): Promise<void> {
@@ -239,15 +336,16 @@ async function setupUpdates(): Promise<void> {
       const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
       return r.response === 0;
     },
-    claudeBusy: () => prevClaude.some((s) => s.state === 'working' || s.state === 'needs-you'),
+    claudeBusy,
     prepareInstall: async () => {
       installing = true;
       quitting = true;
+      quitConfirmed = true; // the prompt already said that updating ends the terminal session
       updates?.stop(); // a background tick must not be mistaken for an install failure
       installWatchdog = setTimeout(() => recoverFromFailedInstall('Jaffer did not restart in time.'), 60_000);
       installWatchdog.unref();
-      await client?.call('app.shutdown', {}).catch(() => undefined);
-      client?.close();
+      await owned?.stop(QUIT_WAIT_MS); // the shell and anything in it end before the app is replaced
+      childStopped = true;
     },
     log: updateLog,
     onState: (s) => sendToRenderer('jaffer:event', 'update.state', s),
@@ -310,7 +408,7 @@ function createWindow(): void {
   win.on('move', debounce(save, 400));
   win.on('focus', () => sendToRenderer('jaffer:focus', true));
   win.on('blur', () => sendToRenderer('jaffer:focus', false));
-  // Closing the window hides it; the session lives on in the daemon and ⌘Q is the way out.
+  // Closing the window (⌘W) hides it: the terminal runs on while the app does, the hotkey brings it back, and ⌘Q is the way out.
   win.on('close', (e) => {
     if (!quitting && process.platform === 'darwin') {
       e.preventDefault();
@@ -361,9 +459,6 @@ async function syncHotkey(): Promise<void> {
 
 // ---------------------------------------------------------------- menu
 
-/** How long Quit and End Session waits for the daemon to take the end. */
-const END_SESSION_MS = 5_000;
-
 function buildMenu(): void {
   const act = (id: string) => () => sendToRenderer('jaffer:menu', id);
   const template: MenuItemConstructorOptions[] = [
@@ -381,26 +476,13 @@ function buildMenu(): void {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        {
-          label: 'Quit and End Session',
-          accelerator: 'Alt+Cmd+Q',
-          click: async () => {
-            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This ends your terminal session: your shell and anything running in it stop.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
-            if (r.response === 0) {
-              quitting = true;
-              // a daemon that does not answer is let go of after 5 s: it does not hold the quit up for the RPC's usual 30 s
-              await client?.call('app.shutdown', {}, END_SESSION_MS).catch(() => undefined);
-              app.quit();
-            }
-          },
-        },
-        { role: 'quit', label: 'Quit Jaffer (session keeps running)' },
+        { role: 'quit', label: 'Quit Jaffer' }, // ⌘Q: ends the terminal, and asks first when something runs (before-quit)
       ],
     },
     {
       label: 'Shell',
       submenu: [
-        { label: 'Hide Window (session keeps running)', accelerator: 'Cmd+W', click: act('hide-window') },
+        { label: 'Hide Window', accelerator: 'Cmd+W', click: act('hide-window') },
         { type: 'separator' },
         { label: 'Clear Screen', accelerator: 'Cmd+K', click: act('clear') },
         { label: 'Find…', accelerator: 'Cmd+F', click: act('find') },
@@ -429,7 +511,7 @@ function buildMenu(): void {
       submenu: [
         { label: 'Jaffer on GitHub', click: () => void shell.openExternal('https://github.com/jafforgehq/jaffer') },
         { label: 'Reveal Session Folder', click: () => void shell.openPath(paths.home) },
-        { label: 'Show Daemon Log', click: () => void shell.openPath(paths.logFile) },
+        { label: 'Show Log', click: () => void shell.openPath(paths.logFile) },
       ],
     },
   ];
@@ -444,7 +526,7 @@ function trusted(e: Electron.IpcMainInvokeEvent): boolean {
 
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
-  if (!client || !client.connected) throw new Error('The session daemon is not connected.');
+  if (!client || !client.connected) throw new Error('The terminal is not running.');
   const long = method.startsWith('setup.');
   const r = await client.call(method, params, long ? 120_000 : 30_000);
   if (method === 'config.patch') {
@@ -483,7 +565,8 @@ ipcMain.handle('jaffer:reset', async (e) => {
   };
   const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
   if (r.response === 0) return { cancelled: true };
-  quitting = true; // from here the app is on its way out and must not reconnect to the session it is ending
+  quitting = true; // from here the app is on its way out: the end of its terminal is expected
+  quitConfirmed = true;
   updates?.stop();
   await client?.call('setup.claude.remove', {}).catch(() => undefined); // the daemon finds `claude` the way the terminal does
   try {
@@ -493,9 +576,8 @@ ipcMain.handle('jaffer:reset', async (e) => {
       backup: r.response === 1,
       appData: false,
       endSession: async () => {
-        await client?.call('app.shutdown', {}).catch(() => undefined);
-        client?.close();
-        for (let i = 0; i < 40 && (await tryConnect(paths, 300)); i++) await sleep(150);
+        await owned?.stop(QUIT_WAIT_MS);
+        childStopped = true;
       },
     });
     await session.defaultSession.clearStorageData();
@@ -520,10 +602,17 @@ ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
 
 app.whenReady().then(async () => {
   buildMenu();
+  // The start, in this order: an older Jaffer's background session ended (the person is asked first), Jaffer's home prepared, then the
+  // app's own terminal started and connected.
+  if (!(await endOlderSession())) {
+    app.quit();
+    return;
+  }
+  await prepareHomeBounded();
   try {
-    await connect();
+    await startTerminal();
   } catch (e) {
-    await dialog.showMessageBox({ type: 'error', message: 'Jaffer could not start its session daemon', detail: `${e instanceof Error ? e.message : e}\n\nLog: ${paths.logFile}` });
+    await dialog.showMessageBox({ type: 'error', message: 'Jaffer could not start its terminal', detail: `${e instanceof Error ? e.message : e}\n\nLog: ${paths.logFile}` });
     app.quit();
     return;
   }
@@ -553,7 +642,8 @@ async function smokeTest(): Promise<void> {
     const deadline = Date.now() + 40_000;
     while (Date.now() < deadline && !(await js<boolean>('!!document.querySelector(".term .xterm")'))) await sleep(200);
     if (!(await js<boolean>('!!document.querySelector(".term .xterm")'))) return fail('terminal never rendered');
-    const hello = await js<{ version: string }>('window.jaffer.call("hello", {})');
+    const hello = await js<{ version: string; pid: number }>('window.jaffer.call("hello", {})');
+    if (hello.pid !== owned?.pid) return fail(`the terminal (pid ${hello.pid}) is not the app's own child (${owned?.pid})`);
     const upd = await js<{ status: string; current: string }>('window.jaffer.updates.state()');
     if (upd.current !== hello.version) return fail(`update state is for ${upd.current}, the daemon is ${hello.version}`);
     await js('window.jaffer.call("config.patch", { onboarded: true })');
@@ -573,17 +663,54 @@ async function smokeTest(): Promise<void> {
     clearTimeout(timer);
     process.stdout.write(`SMOKE OK (daemon ${hello.version}, electron ${process.versions.electron}, ${process.platform}-${process.arch})\n`);
     quitting = true;
-    await client?.call('app.shutdown', {}).catch(() => undefined);
+    await owned?.stop(QUIT_WAIT_MS);
     app.exit(0);
   } catch (e) {
     fail(e instanceof Error ? e.message : String(e));
   }
 }
 
-app.on('before-quit', () => {
+// ⌘Q (and the Dock's Quit) ends the terminal: when Claude Code or a command would stop, the person is asked first. Not for an update (its
+// prompt said so), a session that has already ended, or a quit the person has already confirmed.
+app.on('before-quit', (e) => {
+  if (!quitConfirmed) {
+    const o = owned;
+    const ask = o && !o.ended && !installing ? quitNeedsConfirm({ claudeWorking: claudeBusy() || (runningCommand !== null && isClaudeCommand(runningCommand)), commandRunning: runningCommand !== null }) : null;
+    if (ask) {
+      e.preventDefault();
+      void confirmQuit(ask);
+      return;
+    }
+    quitConfirmed = true;
+  }
   quitting = true;
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+
+async function confirmQuit(ask: QuitAsk): Promise<void> {
+  if (askingToQuit) return;
+  askingToQuit = true;
+  try {
+    const opts = { type: 'warning' as const, message: ask.message, detail: ask.detail, buttons: [...QUIT_BUTTONS], defaultId: 0, cancelId: 1 };
+    const r = win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    if (r.response !== 0) return;
+    quitConfirmed = true;
+    app.quit();
+  } finally {
+    askingToQuit = false;
+  }
+}
+
+// The app's last step: its child is told to end (its pipe ends), given QUIT_WAIT_MS, then killed; then the app exits.
+app.on('will-quit', (e) => {
+  globalShortcut.unregisterAll();
+  const o = owned;
+  if (childStopped || !o || o.ended) return;
+  e.preventDefault();
+  void o.stop(QUIT_WAIT_MS).finally(() => {
+    childStopped = true;
+    app.quit();
+  });
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

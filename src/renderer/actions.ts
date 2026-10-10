@@ -50,7 +50,7 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 
 export const actions: Action[] = [
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
-  { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
+  { id: 'hide-window', title: 'Hide the window', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
   { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => openOverlay('find') },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },

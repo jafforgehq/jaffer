@@ -1,6 +1,7 @@
 /**
- * How the daemon ends. The exit code is 0 for a deliberate end (`app.shutdown`); a signal ends it with the shell's own 128 + number
- * (SIGTERM 143, SIGINT 130).
+ * How the daemon ends. The exit code is 0 for a deliberate end (`app.shutdown`, or the end of the app's pipe); a signal ends it with the
+ * shell's own 128 + number (SIGTERM 143, SIGINT 130). The app reads it: 0 is a session that was ended (the app quits with it), anything
+ * else a crash (the app offers a fresh terminal).
  *
  * - The first reason wins: a second signal, or a signal during `app.shutdown`, neither exits before the first stop has let go of the
  *   shell nor changes the code (a SIGTERM must not turn a deliberate 0 into 143).
@@ -56,4 +57,27 @@ export function makeShutdown(d: ShutdownDeps): (why: string, code: number, start
     if (startAfterMs > 0) setTimer(run, startAfterMs);
     else run();
   };
+}
+
+/** What the daemon reads of the app's pipe (its stdin). */
+export interface ParentPipe {
+  on(event: 'end' | 'close' | 'error', listener: () => void): unknown;
+  resume(): unknown;
+}
+
+/**
+ * The daemon the app starts (`JAFFER_OWNED=1`) has a pipe from the app on its stdin, which the app never writes. Its end, however it comes
+ * (the app quits, crashes or is killed: the system closes the app's end), calls `onGone` once. Whatever arrives on it is read and ignored.
+ */
+export function watchParent(pipe: ParentPipe, onGone: () => void): void {
+  let gone = false;
+  const go = () => {
+    if (gone) return;
+    gone = true;
+    onGone();
+  };
+  pipe.on('end', go);
+  pipe.on('close', go);
+  pipe.on('error', go);
+  pipe.resume();
 }

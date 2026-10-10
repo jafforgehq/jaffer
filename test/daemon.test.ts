@@ -1011,3 +1011,36 @@ describe('the login agent is gone (bundled daemon and CLI): no service.* methods
     expect(fs.existsSync(path.join(env.userHome, 'Library', 'LaunchAgents'))).toBe(false);
   }, 30_000);
 });
+
+describe('the CLI never starts a terminal: it runs only while the app does (bundled CLI, no daemon)', () => {
+  it('`jaffer status`, `jaffer daemon start` and `jaffer setup claude` with Jaffer not running say so, and start nothing', async () => {
+    const e = makeEnv();
+    const cli = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, HOME: e.userHome, JAFFER_HOME: e.home }, encoding: 'utf8', cwd: e.userHome, timeout: 30_000 });
+    try {
+      const status = cli('status');
+      expect(status.status).toBe(0);
+      expect(status.stdout).toMatch(/daemon: not running/);
+      expect(status.stdout).toContain('Jaffer is not running. Open Jaffer and run this again.');
+      const start = cli('daemon', 'start');
+      expect(start.status).toBe(1);
+      expect(start.stderr).toContain('Jaffer is not running. Open Jaffer and run this again.');
+      const setup = cli('setup', 'claude');
+      expect(setup.status).toBe(1);
+      expect(setup.stderr).toContain('Jaffer is not running. Open Jaffer and run this again.');
+      await sleep(1_500); // (a daemon started in the background would answer by now)
+      expect(await tryConnect(e.paths, 300)).toBeNull();
+      expect(fs.existsSync(e.paths.socket)).toBe(false);
+      expect(fs.existsSync(path.join(e.userHome, '.claude', 'settings.json'))).toBe(false); // and no hooks were written for a `jaffer` that is not there
+      // what works without the app still does: taking the hooks away, and the help, which no longer offers to start one
+      expect(cli('setup', 'claude', '--remove').status).toBe(0);
+      const help = cli('--help').stdout;
+      expect(help).toMatch(/jaffer daemon \[status\|stop\]/);
+      expect(help).not.toMatch(/daemon \[start|daemon start/);
+    } finally {
+      const c = await tryConnect(e.paths, 300); // (only if a test above failed: nothing may be left running)
+      await c?.call('app.shutdown', {}).catch(() => undefined);
+      c?.close();
+      e.cleanup();
+    }
+  }, 60_000);
+});

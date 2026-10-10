@@ -123,6 +123,8 @@ describe('Jaffer UI end to end', () => {
     expect(choices).toMatch(/your prompts, its tool calls and replies/i);
     expect(choices).not.toMatch(/MCP/); // Jaffer has no tools of its own for Claude Code: only the hooks
     expect(choices).not.toMatch(/memory|learn from my sessions|curate/i); // and no memory to switch on
+    expect(choices).toMatch(/quitting Jaffer ends the shell/i); // the app owns its terminal: said plainly, and nothing promises it lives on
+    expect(text + choices).not.toMatch(/never ends|same session|keeps running/i);
     // starting Claude Code is a choice too, on by default, and it says who answers Claude Code's own questions
     const startBox = page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('input[type=checkbox]');
     expect(await startBox.count()).toBe(1);
@@ -947,6 +949,17 @@ describe('Jaffer UI end to end', () => {
       if (w < 1000) await shot(`15-layout-${w}`);
     }
     await page.setViewportSize({ width: 1360, height: 860 });
+  });
+
+  it('when the terminal stops the window says so (the app offers a fresh one or Quit), and a fresh terminal clears it', async () => {
+    expect(await page.locator('.daemon-banner').count()).toBe(0);
+    await page.evaluate(() => (window as any).__event('daemon.down', {}));
+    await page.waitForSelector('.daemon-banner');
+    expect(await page.textContent('.daemon-banner')).toBe('The terminal stopped.');
+    expect(await page.textContent('.daemon-banner')).not.toMatch(/reconnect|session/i);
+    await page.evaluate(() => (window as any).__event('daemon.up', {}));
+    await page.waitForSelector('.daemon-banner', { state: 'detached' });
+    await page.waitForSelector('.term .xterm');
   });
 
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {

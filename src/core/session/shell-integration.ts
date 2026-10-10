@@ -44,7 +44,7 @@ export function installShellIntegration(paths: JafferPaths): void {
 }
 
 /** Environment variables that must never leak from the daemon into the user's shell. */
-const STRIP_ENV = [/^ELECTRON_/, /^NODE_OPTIONS$/, /^CLAUDECODE$/, /^CLAUDE_CODE_/, /^npm_lifecycle_/, /^npm_package_/, /^npm_command$/, /^npm_execpath$/, /^npm_node_execpath$/, /^INIT_CWD$/, /^JAFFER_USER_ZDOTDIR$/, /^_JAFFER_LOADED$/];
+const STRIP_ENV = [/^ELECTRON_/, /^NODE_OPTIONS$/, /^CLAUDECODE$/, /^CLAUDE_CODE_/, /^npm_lifecycle_/, /^npm_package_/, /^npm_command$/, /^npm_execpath$/, /^npm_node_execpath$/, /^INIT_CWD$/, /^JAFFER_USER_ZDOTDIR$/, /^_JAFFER_LOADED$/, /^JAFFER_OWNED$/];
 
 export interface SpawnOptions {
   shell: string;

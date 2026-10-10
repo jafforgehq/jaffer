@@ -95,6 +95,6 @@ export function Toasts(): VNode {
 
 export function DaemonBanner(): VNode | null {
   if (daemonUp.value) return null;
-  return <div class="daemon-banner">Reconnecting to your session…</div>;
+  return <div class="daemon-banner">The terminal stopped.</div>;
 }
 

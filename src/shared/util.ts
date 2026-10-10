@@ -52,6 +52,15 @@ export function writeJson(file: string, value: unknown): void {
   writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
 }
 
+/** Keep a log bounded: past `maxBytes` it is moved aside (`<file>.1`, replacing the one before) and a fresh one starts. */
+export function rotateLog(file: string, maxBytes = 5 * 1024 * 1024): void {
+  try {
+    if (fs.statSync(file).size > maxBytes) fs.renameSync(file, file + '.1');
+  } catch {
+    /* no log yet */
+  }
+}
+
 export function appendLine(file: string, value: unknown): void {
   ensureDir(path.dirname(file));
   fs.appendFileSync(file, JSON.stringify(value) + '\n', { mode: 0o600 });
