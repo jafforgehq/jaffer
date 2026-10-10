@@ -18,8 +18,6 @@ import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { resetJaffer } from '../core/reset';
-import { restartClaudeText } from '../shared/restart-claude';
-import { endSessionCalls } from '../shared/claude-resume';
 import { keepRunningOffText, turnKeepRunningOff, type AgentStatus } from '../shared/keep-running';
 
 /**
@@ -99,7 +97,7 @@ async function offerRestart(oldVersion: string): Promise<void> {
   const r = await dialog.showMessageBox({
     type: 'info',
     message: 'Jaffer was updated',
-    detail: `Your session is still running the previous version (${oldVersion}). Restart it to use ${VERSION}? Your shell restarts in the same folder; the conversation is kept.`,
+    detail: `Your session is still running the previous version (${oldVersion}). Restart it to use ${VERSION}? This ends your terminal session: your shell and anything running in it stop, and a new shell starts.`,
     buttons: ['Restart session', 'Later'],
     defaultId: 0,
   });
@@ -364,6 +362,9 @@ async function syncHotkey(): Promise<void> {
 
 // ---------------------------------------------------------------- menu
 
+/** How long Quit and End Session waits for the daemon to take the end. */
+const END_SESSION_MS = 5_000;
+
 function buildMenu(): void {
   const act = (id: string) => () => sendToRenderer('jaffer:menu', id);
   const template: MenuItemConstructorOptions[] = [
@@ -385,13 +386,11 @@ function buildMenu(): void {
           label: 'Quit and End Session',
           accelerator: 'Alt+Cmd+Q',
           click: async () => {
-            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This closes your shell and anything running in it. No Resume Claude button will offer this conversation; your conversations stay on disk.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
+            const r = await dialog.showMessageBox({ type: 'warning', message: 'End your session?', detail: 'This ends your terminal session: your shell and anything running in it stop.', buttons: ['End Session', 'Cancel'], defaultId: 1, cancelId: 1 });
             if (r.response === 0) {
               quitting = true;
-              // ending the session on purpose: the next start does not offer the Claude Code conversation again (also with a
-              // daemon from before 0.5, which ignores forgetConversation: see endSessionCalls). 5 s each, and a hung one is let go of.
-              const c = client;
-              if (c) await endSessionCalls((m, p, timeoutMs) => c.call(m, p, timeoutMs));
+              // a daemon that does not answer is let go of after 5 s: it does not hold the quit up for the RPC's usual 30 s
+              await client?.call('app.shutdown', {}, END_SESSION_MS).catch(() => undefined);
               app.quit();
             }
           },
@@ -515,20 +514,6 @@ ipcMain.handle('jaffer:reset', async (e) => {
   app.relaunch();
   app.exit(0);
   return { cancelled: false };
-});
-// Restart Claude Code, to use an update: it ends whatever runs in the shell, so the person is always asked (and told whether Claude is
-// working, and whether a conversation comes back). The daemon decides what comes back; this only asks and relays the answer.
-ipcMain.handle('jaffer:restart-claude', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  if (!client || !client.connected) throw new Error('The session daemon is not connected.');
-  const plan = (await client.call('claude.restart.plan', {})) as { resumable?: boolean; busy?: boolean };
-  const text = restartClaudeText({ resumable: plan.resumable === true, busy: plan.busy === true });
-  const ask = { type: 'warning' as const, message: text.message, detail: text.detail, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1 };
-  const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
-  if (r.response !== 0) return { cancelled: true };
-  // asked again: the world may have moved while the dialog was up, and the daemon says what it did
-  const done = (await client.call('claude.restart', {})) as { resumable?: boolean };
-  return { cancelled: false, resumable: done.resumable === true };
 });
 // Settings → Keep my session running, switched off: every switch-off comes here. When launchd runs the session, taking the agent away
 // ends it (the shell and whatever runs in it), so the person is asked first; the daemon is asked how it stands now, as the window's view

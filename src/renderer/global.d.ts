@@ -14,8 +14,6 @@ export interface JafferBridge {
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */
   reset(): Promise<{ cancelled: boolean }>;
-  /** Restart the shell in the same folder and take the Claude Code conversation up again (the app asks first; `resumable`: one comes back). */
-  restartClaude(): Promise<{ cancelled: boolean; resumable?: boolean }>;
   /**
    * Turn "Keep my session running in the background" off: every switch-off goes through this. The app asks the daemon how it stands now;
    * when launchd runs the session, turning it off ends it, so the app asks first (`cancelled`: the person said no and nothing changed);

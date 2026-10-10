@@ -400,102 +400,6 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
-  it('Restart Claude Code: in the palette and in Settings → Claude Code, both only ask the app, which asks the person first', async () => {
-    // the question is the app's own native dialog (its text is covered by restart-claude.test.ts); here the app is stood in for
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__restartAsked = 0;
-      w.__restartAnswer = { cancelled: true };
-      w.__origRestart = w.jaffer.restartClaude;
-      w.jaffer.restartClaude = async () => {
-        w.__restartAsked++;
-        return w.__restartAnswer;
-      };
-    });
-    const asked = () => page.evaluate(() => (window as any).__restartAsked as number);
-    try {
-      // the palette lists it by what it is for
-      await page.keyboard.press('Meta+p');
-      await page.waitForSelector('.palette input');
-      await page.keyboard.type('new version');
-      const found = (await page.textContent('.palette-list')) ?? '';
-      expect(found).toContain('Restart Claude Code, to use an update');
-      expect(found).toContain('Terminal');
-      await page.fill('.palette input', 'update claude code');
-      expect(await page.locator('.pal-row', { hasText: 'Restart Claude Code, to use an update' }).count()).toBe(1);
-      await page.keyboard.press('Enter');
-      await until(async () => (await asked()) === 1, 5_000, 'the palette action to ask the app');
-      await sleep(300);
-      expect(await page.locator('.toast', { hasText: /restarted/i }).count()).toBe(0); // the person said no: nothing is announced
-      // the button in Settings → Claude Code
-      await page.keyboard.press('Meta+,');
-      await page.waitForSelector('.settings');
-      await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
-      const btn = page.locator('.settings button', { hasText: 'Restart Claude Code' });
-      expect(await btn.count()).toBe(1);
-      await btn.click();
-      await until(async () => (await asked()) === 2, 5_000, 'the Settings button to ask the app');
-      await sleep(300);
-      expect(await page.locator('.toast', { hasText: /restarted/i }).count()).toBe(0);
-      // a yes, with a conversation to bring back, is said plainly (the notice with Cancel is the daemon's own)
-      await page.evaluate(() => ((window as any).__restartAnswer = { cancelled: false, resumable: true }));
-      await btn.click();
-      await until(async () => (await asked()) === 3, 5_000, 'the third ask');
-      const toast = page.locator('.toast', { hasText: 'Shell restarted' });
-      await toast.waitFor();
-      expect(await toast.textContent()).toMatch(/same conversation/);
-      // with none, only the shell
-      await page.evaluate(() => ((window as any).__restartAnswer = { cancelled: false, resumable: false }));
-      await btn.click();
-      await until(async () => (await asked()) === 4, 5_000, 'the fourth ask');
-      await until(async () => (await page.locator('.toast', { hasText: 'Shell restarted' }).allTextContents()).some((t) => !/conversation/.test(t)), 5_000, 'the plain toast');
-      // an error from the app is shown, not swallowed
-      await page.evaluate(() => {
-        (window as any).jaffer.restartClaude = async () => {
-          throw new Error('The session daemon is not connected.');
-        };
-      });
-      await btn.click();
-      await page.locator('.toast', { hasText: 'The session daemon is not connected.' }).waitFor();
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.settings', { state: 'detached' });
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.restartClaude = w.__origRestart;
-      });
-      // (a failure above must not leave a dialog over the next test; and with none open, Escape would go to the shell)
-      for (let i = 0; i < 2 && (await page.locator('.settings, .palette').count()) > 0; i++) await page.keyboard.press('Escape');
-    }
-  }, 40_000);
-
-  // A session daemon from before 0.5 (the app was updated, the session not yet restarted) does not know Restart Claude Code: the toast says
-  // what Settings says for the same reason, not "unknown method" (as the app hands it on: "Error invoking remote method …").
-  it('Restart Claude Code against a session daemon from before 0.5: the toast says "Restart your session to use this"', async () => {
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__origRestart = w.jaffer.restartClaude;
-      w.jaffer.restartClaude = async () => {
-        throw new Error("Error invoking remote method 'jaffer:restart-claude': Error: unknown method: claude.restart.plan");
-      };
-    });
-    try {
-      await page.keyboard.press('Meta+p');
-      await page.waitForSelector('.palette input');
-      await page.fill('.palette input', 'update claude code');
-      await page.keyboard.press('Enter');
-      const toast = page.locator('.toast', { hasText: 'Restart your session to use this' });
-      await toast.waitFor({ timeout: 5_000 });
-      expect(await page.locator('.toast', { hasText: /unknown method/ }).count()).toBe(0);
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.restartClaude = w.__origRestart;
-      });
-      for (let i = 0; i < 2 && (await page.locator('.settings, .palette').count()) > 0; i++) await page.keyboard.press('Escape');
-    }
-  }, 30_000);
-
   it('the pet: asleep when nothing runs, digging while something does, up when Claude needs you, cheering after a turn, gone when switched off', async () => {
     const pet = '.pet-corner .pet';
     const mood = () => page.getAttribute(pet, 'data-mood');
@@ -1198,396 +1102,24 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.evaluate(() => (window as any).__clip.written as string[])).includes('copied by a script'), 8_000, 'the text to reach the clipboard');
   }, 60_000);
 
-  it('resume: a quiet button when Claude Code can be taken up again, that types only `claude --resume <id>` after a click, hides while the shell is busy, and can be dismissed', async () => {
-    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
-    const offer = (id: string) => page.evaluate((o) => (window as any).__event('claude.resume', o), { id, cwd: '/tmp', at: Date.now() });
-    const chip = '.resume';
-    expect(await page.locator(chip).count()).toBe(0); // nothing to resume: nothing shown
-    await offer(ID);
-    await page.waitForSelector(chip);
-    expect(await page.textContent('.resume-go')).toContain('Resume Claude');
-    expect(await page.getAttribute('.resume-go', 'title')).toMatch(/claude --resume/);
-    await shot('14k-resume');
-    // it fits the title bar, in a narrow window too (the words go, the name stays)
-    for (const w of [1360, 660]) {
-      await page.setViewportSize({ width: w, height: 860 });
-      await sleep(250);
-      const pill = (await page.locator('.session-pill').boundingBox())!;
-      const right = (await page.locator('.tb-right').boundingBox())!;
-      expect(pill.x + pill.width, `pill clear of the right side at ${w}px`).toBeLessThanOrEqual(right.x + 1);
-      expect(right.x + right.width, `right side inside the window at ${w}px`).toBeLessThanOrEqual(w);
-    }
-    expect(await page.locator('.resume-label').isVisible()).toBe(false); // 660 px: icon only
-    expect(await page.getAttribute('.resume-go', 'aria-label')).toBe('Resume Claude Code');
-    await page.setViewportSize({ width: 1360, height: 860 });
-    await sleep(250);
-    // hidden while something runs in the shell, back when it ends
-    await page.click('.term');
-    await page.keyboard.type('sleep 30');
-    await page.keyboard.press('Enter');
-    await until(async () => (await page.locator(chip).count()) === 0, 8_000, 'the button to hide while the shell is busy');
-    await page.keyboard.press('Control+c');
-    await page.waitForSelector(chip, { timeout: 10_000 });
-    // the palette knows it too
-    await page.keyboard.press('Meta+p');
-    await page.waitForSelector('.palette input');
-    await page.keyboard.type('resume');
-    await page.waitForSelector('.palette >> text=Resume the Claude Code conversation');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.palette input', { state: 'detached' });
-    // a click types the command for that id and nothing else, and the button goes at once. (A shell function stands in for claude,
-    // and says which arguments it was given.)
-    await page.click('.term');
-    await page.keyboard.type('claude() { echo "stand-in claude got: $*"; }');
-    await page.keyboard.press('Enter');
-    await sleep(300);
-    // (the click asks the daemon again first, and types only if the same conversation comes back: the next test. The offer here is stood
-    // in for, so is the daemon's answer to that ask: the same conversation)
-    await page.evaluate((o) => {
-      const w = window as any;
-      w.__callBeforeAsk = w.jaffer.call;
-      w.jaffer.call = (m: string, p: any) => (m === 'claude.resume' && p?.fresh === true ? Promise.resolve(o) : w.__callBeforeAsk(m, p));
-    }, { id: ID, cwd: '/tmp', at: Date.now() });
-    try {
-      await page.click('.resume-go');
-      await until(async () => (await termText()).includes(`stand-in claude got: --resume ${ID}`), 8_000, 'the command to be typed and run');
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__callBeforeAsk;
-      });
-    }
-    await sleep(300);
-    expect((await termText()).split(`claude --resume ${ID}`).length - 1).toBe(1); // typed once
-    expect(await page.locator(chip).count()).toBe(0);
-    // an id that is not an id is never typed
-    await offer('abc; echo INJECTED-BY-OFFER');
-    await page.waitForSelector(chip);
-    await page.click('.resume-go');
-    await sleep(600);
-    expect(await termText()).not.toContain('INJECTED-BY-OFFER');
-    // not now: dismissed, and the daemon is told
-    await page.click('.resume-x');
-    await until(async () => (await page.locator(chip).count()) === 0, 5_000, 'the dismissed button to go');
-    expect(await page.evaluate(() => !!document.activeElement?.closest('.term'))).toBe(true); // focus goes back to the terminal, not to nowhere
-    // (the stand-in `claude` stays for the next test, which takes it away)
-    // the setting
-    await page.keyboard.press('Meta+,');
-    await page.waitForSelector('.settings');
-    await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
-    const sw = page.locator('label.field', { hasText: 'Offer to resume Claude Code' });
-    const on = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).session.resumeClaude;
-    expect(await sw.locator('input').isChecked()).toBe(true);
-    await sw.locator('.switch').click();
-    await until(async () => (await on()) === false, 5_000, 'the resume offer to be switched off');
-    await sw.locator('.switch').click();
-    await until(async () => (await on()) === true, 5_000, 'and on again');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.settings', { state: 'detached' });
-  }, 90_000);
-
-  // A shell that prints no prompt marks (`SHELL=/bin/sh`, any shell besides zsh, bash and fish, one that `exec`s into tmux) never tells
-  // the window that a program took the terminal: the button it shows can be from before vim started. So a click asks the daemon again
-  // (`claude.resume` with `fresh: true`) and types only when the same conversation comes back (typed once: the test before). The
-  // daemon's answer is stood in for here. The shell function the test before left stands in for `claude`, should anything be typed.
-  it('resume: a click asks the daemon again first and types nothing unless the same conversation comes back (none: the button goes and says why; another: it offers that one; no answer: it stays)', async () => {
-    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a21';
-    const OTHER = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a22';
-    const offer = (id: string) => page.evaluate((o) => (window as any).__event('claude.resume', o), { id, cwd: '/tmp', at: Date.now() });
-    const answer = (a: unknown) => page.evaluate((x) => ((window as any).__answer = x), a);
-    const asks = async () => (await page.evaluate(() => (window as any).__asks)) as number;
-    const typed = async (id: string) => (await termText()).includes(`--resume ${id}`);
-    const why = page.locator('.toast', { hasText: 'A program has the terminal, so Claude Code was not resumed.' });
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__callBeforeAsk = w.jaffer.call;
-      w.__asks = 0;
-      w.jaffer.call = (m: string, p: any) => {
-        if (m !== 'claude.resume' || p?.fresh !== true) return w.__callBeforeAsk(m, p);
-        w.__asks++;
-        return w.__answer === 'fail' ? Promise.reject(new Error('The session daemon is not connected.')) : Promise.resolve(w.__answer);
-      };
-    });
-    try {
-      // a program has the terminal: the daemon offers nothing. Nothing is typed, the button goes, and the window says why
-      await answer(null);
-      await offer(ID);
-      await page.waitForSelector(`.resume[data-resume="${ID}"]`);
-      await page.click('.resume-go');
-      await sleep(800);
-      expect(await typed(ID)).toBe(false);
-      expect(await asks()).toBe(1);
-      expect(await page.locator('.resume').count()).toBe(0);
-      await why.waitFor({ timeout: 5_000 });
-      // another conversation now: nothing is typed, and the button offers that one (nothing more is said)
-      const said = await why.count();
-      await answer({ id: OTHER, cwd: '/tmp', at: Date.now() });
-      await offer(ID);
-      await page.waitForSelector(`.resume[data-resume="${ID}"]`);
-      await page.click('.resume-go');
-      await page.waitForSelector(`.resume[data-resume="${OTHER}"]`, { timeout: 5_000 });
-      await sleep(800);
-      expect(await typed(ID)).toBe(false);
-      expect(await typed(OTHER)).toBe(false);
-      expect(await asks()).toBe(2);
-      expect(await why.count()).toBeLessThanOrEqual(said);
-      // the ask fails: nothing is typed, and the button stays for the daemon's next word
-      await answer('fail');
-      await page.click('.resume-go');
-      await sleep(800);
-      expect(await asks()).toBe(3);
-      expect(await typed(OTHER)).toBe(false);
-      expect(await page.locator(`.resume[data-resume="${OTHER}"]`).count()).toBe(1);
-      // the palette runs the same click: it asks too, and types nothing when nothing comes back
-      await answer(null);
-      await page.keyboard.press('Meta+p');
-      await page.waitForSelector('.palette input');
-      await page.keyboard.type('resume the claude code conversation');
-      await page.keyboard.press('Enter');
-      await until(async () => (await asks()) === 4, 5_000, 'the palette to ask the daemon');
-      await until(async () => (await page.locator('.resume').count()) === 0, 5_000, 'the button to go');
-      await sleep(800);
-      expect(await typed(OTHER)).toBe(false);
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__callBeforeAsk;
-        document.querySelectorAll<HTMLButtonElement>('.toast [aria-label="Dismiss"]').forEach((b) => b.click()); // what it said goes with it
-      });
-      await page.click('.term');
-      await page.keyboard.type('unset -f claude'); // (the stand-in the test before left)
-      await page.keyboard.press('Enter');
-      await sleep(300);
-    }
-  }, 60_000);
-
-  it('Settings → Claude Code: Offer to resume, Restart Claude Code and the cost switch, and no switch for resuming by itself', async () => {
+  it('Settings → Claude Code: the cost switch, and nothing about resuming or restarting Claude Code', async () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     try {
       await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
-      await page.waitForSelector('.settings label.field >> text=Offer to resume Claude Code');
-      expect(await page.locator('.settings .field', { hasText: 'Resume Claude automatically' }).count()).toBe(0);
+      await page.waitForSelector('.settings label.field >> text=Show what each answer cost');
       const fields = await page.evaluate(() => [...document.querySelectorAll('.settings .field')].map((f) => f.textContent ?? ''));
-      expect(fields.filter((t) => /automatically|by itself/i.test(t))).toEqual([]);
-      const offer = page.locator('label.field', { hasText: 'Offer to resume Claude Code' });
-      expect(await offer.locator('input').isChecked()).toBe(true);
-      expect(await page.locator('.settings button', { hasText: 'Restart Claude Code' }).count()).toBe(1);
+      // 0.6.0: no Resume button, so no switch for offering it, and no Restart Claude Code
+      expect(fields.filter((t) => /resum|automatically|by itself|Restart Claude Code/i.test(t))).toEqual([]);
+      expect(await page.locator('.settings button', { hasText: 'Restart Claude Code' }).count()).toBe(0);
       expect(await page.locator('label.field', { hasText: 'Show what each answer cost' }).count()).toBe(1);
-      // in that order: the offer, then Restart Claude Code, then the cost
+      // the notification switch, then the cost
       const at = (s: string) => fields.findIndex((t) => t.includes(s));
-      expect(at('Offer to resume Claude Code')).toBeGreaterThanOrEqual(0);
-      expect(at('Restart Claude Code')).toBe(at('Offer to resume Claude Code') + 1);
-      expect(at('Show what each answer cost')).toBe(at('Restart Claude Code') + 1);
+      expect(at('Tell me when Claude finishes')).toBeGreaterThanOrEqual(0);
+      expect(at('Show what each answer cost')).toBe(at('Tell me when Claude finishes') + 1);
     } finally {
       await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
-    }
-  }, 30_000);
-
-  it('the notice before Restart Claude types: Cancel reaches the daemon, it stays as long as it says, and goes once typed or dropped (never "in 0 s")', async () => {
-    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
-    const send = (e: object) => page.evaluate((x) => (window as any).__event('claude.autoresume', x), e);
-    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
-    const asked = async () => (await page.evaluate(() => (window as any).__asked)) as [string, unknown][];
-    // what the window asks the daemon, and what the daemon answers
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__origCall = w.jaffer.call;
-      w.__asked = [];
-      w.jaffer.call = async (m: string, p: unknown) => {
-        const r = await w.__origCall(m, p);
-        w.__asked.push([m, r]);
-        return r;
-      };
-    });
-    try {
-      expect(await notice.count()).toBe(0);
-      await send({ state: 'pending', id: ID, typesAt: Date.now() + 3000 });
-      await notice.waitFor();
-      expect(await notice.textContent()).toContain('Resuming Claude in 3 s');
-      await notice.locator('button', { hasText: 'Cancel' }).click();
-      await until(async () => (await asked()).some(([m]) => m === 'claude.autoresume.cancel'), 5_000, 'Cancel to reach the daemon');
-      expect((await asked()).find(([m]) => m === 'claude.autoresume.cancel')![1]).toBe(true);
-      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
-      // a notice that says it types later stays up as long as that, not the few seconds of an ordinary toast
-      await send({ state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
-      await notice.waitFor();
-      expect(await notice.textContent()).toContain('Resuming Claude in 20 s');
-      await sleep(6_500);
-      expect(await notice.count()).toBe(1);
-      await send({ state: 'typed', id: ID });
-      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go once it was typed');
-      // the daemon ending the notice by itself (the shell got busy, the offer went) takes it away too
-      await send({ state: 'pending', id: ID, typesAt: Date.now() + 3000 });
-      await notice.waitFor();
-      await send({ state: 'cancelled', id: ID });
-      await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go when the daemon drops it');
-      expect(await page.locator('.toast').count()).toBe(0);
-      // a notice that is due already (it reached a window late) never says "in 0 s"
-      await send({ state: 'pending', id: ID, typesAt: Date.now() - 500 });
-      await notice.waitFor();
-      expect(await notice.textContent()).toContain('Resuming Claude in 1 s');
-      await send({ state: 'typed', id: ID });
-      await until(async () => (await notice.count()) === 0, 5_000, 'the late notice to go once it was typed');
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__origCall;
-      });
-    }
-  }, 60_000);
-
-  it('a "gave-up" from a daemon older than 0.5.1 only takes the notice away: there is no give-up any more, so nothing else is shown', async () => {
-    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
-    const send = (e: object) => page.evaluate((x) => (window as any).__event('claude.autoresume', x), e);
-    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
-    expect(await page.locator('.toast').count()).toBe(0);
-    await send({ state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
-    await notice.waitFor();
-    await send({ state: 'gave-up', id: ID });
-    await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
-    await sleep(500);
-    expect(await page.locator('.toast').count()).toBe(0);
-  }, 30_000);
-
-  it('auto-resume: a window that opens while the notice runs asks the daemon, and shows it with Cancel all the same', async () => {
-    const ID = '0b6f1c52-3a3e-4d0e-9f4a-6f0f8c2f6a11';
-    // The window opens after the daemon announced (a reboot, the app reconnecting after an update): no event reaches it, so it
-    // asks `claude.autoresume.state` when it starts. Here the daemon's answer is stood in for, once, on the next page load.
-    await page.addInitScript(() => {
-      const raw = sessionStorage.getItem('jaffer.test.autoresumeState');
-      if (!raw) return;
-      sessionStorage.removeItem('jaffer.test.autoresumeState');
-      let bridge: any;
-      Object.defineProperty(window, 'jaffer', {
-        configurable: true,
-        get: () => bridge,
-        set: (v: any) => {
-          const call = v.call;
-          let once = true;
-          v.call = (m: string, p: unknown) => {
-            if (m === 'claude.autoresume.state' && once) {
-              once = false;
-              return Promise.resolve(JSON.parse(raw));
-            }
-            return call(m, p);
-          };
-          bridge = v;
-        },
-      });
-    });
-    await page.evaluate((st) => sessionStorage.setItem('jaffer.test.autoresumeState', JSON.stringify(st)), { state: 'pending', id: ID, typesAt: Date.now() + 20_000 });
-    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-    await page.waitForSelector('.term .xterm');
-    const notice = page.locator('.toast', { hasText: 'Resuming Claude' });
-    await notice.waitFor({ timeout: 10_000 });
-    const secs = Number(/Resuming Claude in (\d+) s/.exec((await notice.textContent()) ?? '')?.[1]);
-    expect(secs).toBeGreaterThanOrEqual(10); // the time the daemon announced, less the moment the page took to open
-    expect(secs).toBeLessThanOrEqual(20);
-    await notice.locator('button', { hasText: 'Cancel' }).click();
-    await until(async () => (await notice.count()) === 0, 5_000, 'the notice to go');
-  }, 40_000);
-
-  it('one Claude: a second conversation running gets one notice per set of conversations, and nothing is ended', async () => {
-    const TEXT = 'Two Claude conversations are running. After a restart the Resume Claude button offers the most recently active conversation.';
-    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
-    const push = (sessions: { id: string; state: string }[]) =>
-      page.evaluate((list) => {
-        const now = Date.now();
-        (window as any).__event('claude.state', { sessions: list.map((s) => ({ ...s, since: now - 5_000, subagents: [] })) });
-      }, sessions);
-    // what the window asks the daemon: the notice is only words, so no `claude.*` call comes out of it
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__origCall2 = w.jaffer.call;
-      w.__asked2 = [];
-      w.jaffer.call = (m: string, p: unknown) => (w.__asked2.push(m), w.__origCall2(m, p));
-    });
-    try {
-      await sleep(600); // the daemon's own trailing pushes must not land on top of what is injected below
-      expect(await notice.count()).toBe(0);
-      // one conversation: nothing to say
-      await push([{ id: 'one-a', state: 'working' }]);
-      await sleep(300);
-      expect(await notice.count()).toBe(0);
-      // a second one becomes active while the first is: said once, in plain words
-      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }]);
-      await notice.waitFor();
-      expect(await notice.count()).toBe(1);
-      expect((await notice.textContent())?.trim()).toBe(TEXT);
-      expect(await notice.locator('button.linkish').count()).toBe(0); // only words: no action to take, nothing is ended (the X only closes the notice)
-      await shot('14m-one-claude');
-      // the same two again, in the other order and with another state: not said again
-      await push([{ id: 'one-b', state: 'needs-you' }, { id: 'one-a', state: 'working' }]);
-      await push([{ id: 'one-a', state: 'idle' }, { id: 'one-b', state: 'idle' }]);
-      await sleep(400);
-      expect(await notice.count()).toBe(1);
-      // one leaves (ended does not count), and the same pair comes back: it was told already
-      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'ended' }]);
-      await sleep(300);
-      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }]);
-      await sleep(400);
-      expect(await notice.count()).toBe(1);
-      // an ended conversation next to a running one is not two
-      await push([{ id: 'one-a', state: 'working' }, { id: 'one-z', state: 'ended' }]);
-      await sleep(400);
-      expect(await notice.count()).toBe(1);
-      // another set (a third conversation) is told again
-      await push([{ id: 'one-a', state: 'working' }, { id: 'one-b', state: 'idle' }, { id: 'one-c', state: 'idle' }]);
-      await until(async () => (await notice.count()) === 2, 5_000, 'a new set to be told');
-      // nothing was ended, stopped or asked of the daemon, and the window still follows the conversation that works
-      expect(((await page.evaluate(() => (window as any).__asked2)) as string[]).filter((m) => m.startsWith('claude.'))).toEqual([]);
-      expect(await page.getAttribute('.pet-corner .pet', 'data-mood')).toBe('dig');
-    } finally {
-      await page.evaluate(() => {
-        const w = window as any;
-        w.jaffer.call = w.__origCall2;
-        w.__event('claude.state', { sessions: [] });
-      });
-    }
-    await until(async () => (await page.locator('.toast', { hasText: 'Two Claude conversations' }).count()) === 0, 10_000, 'the notices to go by themselves');
-  }, 60_000);
-
-  it('one Claude: a window that opens while two conversations run tells it once, from what the daemon says', async () => {
-    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
-    const ids = ['boot-a', 'boot-b'];
-    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
-    try {
-      for (const id of ids) await sendHook('SessionStart', { session_id: id });
-      // (the daemon pushes this to the open window too, which tells it: the next window must hear it again, being new)
-      await until(async () => (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.filter((s: { state: string }) => s.state !== 'ended').length === 2, 5_000, 'two conversations on the daemon');
-      await until(async () => (await notice.count()) === 1, 5_000, 'the open window to tell it');
-      await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
-      await page.waitForSelector('.term .xterm');
-      await notice.waitFor({ timeout: 10_000 });
-      await sleep(600); // a second answer from the daemon (the window asks once at the start) would show a second one
-      expect(await notice.count()).toBe(1);
-      expect((await notice.textContent())?.trim()).toBe('Two Claude conversations are running. After a restart the Resume Claude button offers the most recently active conversation.');
-      // nothing was ended by it
-      expect((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.filter((s: { state: string }) => s.state !== 'ended').map((s: { id: string }) => s.id).sort()).toEqual(ids);
-    } finally {
-      for (const id of ids) await sendHook('SessionEnd', { session_id: id });
-    }
-  }, 60_000);
-
-  it('one Claude: /clear (the new conversation starts a moment before the old one has ended) is not two conversations, and says nothing', async () => {
-    const notice = page.locator('.toast', { hasText: 'Two Claude conversations are running' });
-    const push = (sessions: { id: string; state: string }[]) =>
-      page.evaluate((list) => {
-        const now = Date.now();
-        (window as any).__event('claude.state', { sessions: list.map((s) => ({ ...s, since: now - 5_000, subagents: [] })) });
-      }, sessions);
-    try {
-      await until(async () => (await notice.count()) === 0, 10_000, 'earlier notices to go');
-      await push([{ id: 'clear-old', state: 'working' }]);
-      await push([{ id: 'clear-new', state: 'idle' }, { id: 'clear-old', state: 'working' }]); // the new one's SessionStart came first
-      await sleep(400);
-      await push([{ id: 'clear-new', state: 'idle' }, { id: 'clear-old', state: 'ended' }]); // then the old one's SessionEnd
-      await sleep(2_500);
-      expect(await notice.count()).toBe(0);
-    } finally {
-      await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
     }
   }, 30_000);
 
@@ -1600,6 +1132,7 @@ describe('Jaffer UI end to end', () => {
     const found = (await page.textContent('.palette-list')) ?? '';
     expect(found).toContain('Run Claude Code in the terminal');
     expect(found).not.toMatch(/Ask Claude|compact the conversation/i);
+    expect(found).not.toMatch(/Resume|Restart Claude Code/i); // (0.6.0: the person runs `claude --resume` themselves)
     expect(await page.locator('.pal-row.ask').count()).toBe(0);
     await page.fill('.palette input', '');
     await page.keyboard.type('tokyo');
@@ -1664,6 +1197,27 @@ describe('Jaffer UI end to end', () => {
     const after = await page.evaluate(() => window.jaffer.call('pane.list'));
     expect(after.map((p: any) => p.pid)).toEqual(before.map((p: any) => p.pid));
     await shot('10-restored');
+  }, 40_000);
+
+  // A shell that exits is replaced by a fresh one, and the window starts over with it. The fresh shell's output counts from 1 again: a
+  // window that kept the old shell's count (this one re-attached after a lot of output, just above) would drop it and keep the old screen.
+  it('after `exit` the window shows the fresh shell: the old screen is gone, and what the new shell prints shows', async () => {
+    // (typed as the window types, straight to the shell: a key pressed just after the page loaded can miss the terminal; Ctrl+U first
+    // clears whatever an earlier test may have left on the line)
+    const type = (text: string) => page.evaluate((data) => window.jaffer.call('pty.write', { data }), `\x15${text}\r`);
+    await type('echo before-the-exit-71');
+    await until(async () => /^before-the-exit-71/m.test(await termText()), 10_000, 'the marker');
+    const before = (await page.evaluate(() => window.jaffer.call('pane.list')))[0].pid;
+    await type('exit');
+    await until(async () => {
+      const p = (await page.evaluate(() => window.jaffer.call('pane.list')))[0];
+      return p?.alive && p.pid !== before;
+    }, 10_000, 'a fresh shell');
+    await until(async () => !(await termText()).includes('before-the-exit-71'), 10_000, 'the old screen to go');
+    await sleep(800);
+    await type('echo after-the-exit-72');
+    await until(async () => /^after-the-exit-72/m.test(await termText()), 10_000, 'the fresh shell to answer on the screen');
+    expect(await termText()).not.toContain('before-the-exit-71');
   }, 40_000);
 
   it('the layout lines up at any window size: the pill is centred in the title bar and on the window, the card has even margins, the mole sits inside, nothing overflows', async () => {

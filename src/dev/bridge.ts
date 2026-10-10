@@ -39,8 +39,6 @@ const SHIM = `(() => {
     appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false, openAtLogin: !!window.__loginItem }),
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
     reset: async () => { window.__resetCalled = (window.__resetCalled || 0) + 1; return { cancelled: true }; }, // the real app asks first; this stand-in is a person saying no
-    // tests only: no dialog here, so it restarts at once (the UI tests put their own answer in its place)
-    restartClaude: async () => { const r = await window.jaffer.call('claude.restart', {}); return { cancelled: false, resumable: !!(r && r.resumable) }; },
     // tests only: what the app does (turnKeepRunningOff): the daemon's status now, and the question only when launchd runs the session.
     // No dialog here: the person's answer is window.__keepRunningOffAsk (a UI test puts it there), yes when there is none.
     keepRunningOff: async () => {

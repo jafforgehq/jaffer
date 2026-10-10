@@ -3,7 +3,7 @@ import type { VNode } from 'preact';
 import { activePane, appVersion, cfg, overlay, patchConfig, toast, updateState, type ClaudeAuthState } from '../state';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
-import { actions, restartClaude, runClaude, type Action } from '../actions';
+import { actions, runClaude, type Action } from '../actions';
 import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
@@ -411,21 +411,6 @@ export function Settings(): VNode {
               </Field>
               <Field label="Tell me when Claude finishes" hint="a notification when a turn that took half a minute or more ends while Jaffer is in the background">
                 <Switch checked={c.notifications?.claudeFinished !== false} onChange={(v) => set({ notifications: { claudeFinished: v } })} />
-              </Field>
-              <Field label="Offer to resume Claude Code" hint="after a restart (a reboot, an update, a crash), a button to take up the Claude Code conversation that was running in this folder; off forgets it">
-                <Switch checked={c.session?.resumeClaude !== false} onChange={(v) => set({ session: { resumeClaude: v } })} />
-              </Field>
-              <Field buttons label="After a Claude Code update" hint="restarts your shell in the same folder and takes up the same conversation on the new version; asks first">
-                <button
-                  class="btn"
-                  disabled={busy === 'rcc'}
-                  onClick={() => {
-                    setBusy('rcc');
-                    void restartClaude().finally(() => setBusy(''));
-                  }}
-                >
-                  Restart Claude Code
-                </button>
               </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />

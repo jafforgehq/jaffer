@@ -46,11 +46,6 @@ export const IconClock = ({ size, class: c }: P): VNode => (
     <path d="M12 7v5l3 2" />
   </svg>
 );
-export const IconPlay = ({ size, class: c }: P): VNode => (
-  <svg {...base(size)} class={c}>
-    <path d="M7 5l12 7-12 7V5z" fill="currentColor" />
-  </svg>
-);
 export const IconDownload = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <path d="M12 4v11" />

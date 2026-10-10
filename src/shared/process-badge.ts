@@ -2,8 +2,8 @@ import type { ClaudeState } from '../core/claude/watcher';
 
 /**
  * How much of a command line is read. The line comes from the terminal (the shell's marks, which any output can forge), so it can be
- * any length; the options that matter are at its start. Every helper that reads a command line (`endsConversation`, `isPrintMode`,
- * `isClaudeCommand`, `isInteractiveCommand`) cuts its input to this head itself, whoever calls it.
+ * any length; the options that matter are at its start. Every helper that reads a command line (`isClaudeCommand`,
+ * `isInteractiveCommand`) cuts its input to this head itself, whoever calls it.
  */
 export const COMMAND_HEAD = 4096;
 

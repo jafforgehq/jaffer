@@ -23,7 +23,6 @@ contextBridge.exposeInMainWorld('jaffer', {
   appInfo: () => ipcRenderer.invoke('jaffer:app-info'),
   setLoginItem: (on: boolean) => ipcRenderer.invoke('jaffer:set-login-item', on),
   reset: () => ipcRenderer.invoke('jaffer:reset'),
-  restartClaude: () => ipcRenderer.invoke('jaffer:restart-claude'),
   keepRunningOff: () => ipcRenderer.invoke('jaffer:keep-running-off'),
   updates: {
     state: () => ipcRenderer.invoke('jaffer:update-state'),

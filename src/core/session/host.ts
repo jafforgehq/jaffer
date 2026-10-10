@@ -70,7 +70,7 @@ export class SessionHost {
     const shell = cfg.shell.path && fs.existsSync(cfg.shell.path) ? cfg.shell.path : defaultShell();
     const spawn = buildShellSpawn({ shell, extraArgs: cfg.shell.args, paths: this.paths, baseEnv: process.env, version: this.version });
     const cwd = o.cwd && fs.existsSync(o.cwd) ? o.cwd : os.homedir();
-    const session = new PtySession({ file: spawn.file, args: spawn.args, cwd, env: spawn.env, cols: o.cols ?? 120, rows: o.rows ?? 32, scrollback: 10_000, shellKind: spawn.kind });
+    const session = new PtySession({ file: spawn.file, args: spawn.args, cwd, env: spawn.env, cols: o.cols ?? 120, rows: o.rows ?? 32, scrollback: 10_000 });
     this.panes.set(id, session);
     this.spawnedAt = Date.now();
     session.events.on((event) => {

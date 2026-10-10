@@ -66,3 +66,55 @@ describe('isClaudeCommand on a forged line (the terminal can say any command lin
     expect(isClaudeCommand(' '.repeat(5000) + 'claude')).toBe(false);
   });
 });
+
+// Moved here from the tests of the resume helpers (gone in 0.6.0): `isClaudeCommand` is the one of them that stays.
+describe('reading a `claude` command line that came from the terminal (untrusted text, on the daemon thread)', () => {
+  // Output shown in the terminal can forge the shell's marks (OSC 133/633), and with them a "command line" of any length.
+  const MB = 1_000_000;
+  const hostile = {
+    'escaped quotes and no closing one': 'claude ' + '\\"'.repeat(MB / 2),
+    'unclosed single quotes after a word': 'claude ' + "a='".repeat(MB / 3),
+    'a run of backslashes': 'claude ' + '\\'.repeat(MB),
+    'an unclosed double quote': 'claude -c "' + 'x '.repeat(MB / 2),
+    'many short words': 'claude ' + 'a '.repeat(MB / 2) + '-p',
+    'variables and no claude': 'A=1 '.repeat(MB / 4),
+    'a path of slashes and no claude': '/'.repeat(MB),
+    'spaces and no claude': ' '.repeat(MB),
+  };
+  for (const [what, line] of Object.entries(hostile)) {
+    it(`stays fast on ${what} (1 MB)`, () => {
+      const t0 = performance.now();
+      isClaudeCommand(line);
+      processBadge(line, 'working');
+      expect(performance.now() - t0, what).toBeLessThan(200); // well under that in practice; generous for CI
+    });
+  }
+
+  // The same lines at 1 MB and 8 MB (a forged mark can carry 10 MB). Unbounded regexes over such lines are slow, and past a few MB they
+  // throw RangeError (V8's backtrack stack): so the helper cuts its input to the head itself.
+  const crafted: Record<string, (bytes: number) => string> = {
+    'variables and no claude (a=b )': (n) => 'a=b '.repeat(n / 4),
+    'a run of `command ` words': (n) => 'command '.repeat(n / 8),
+    'variables, then claude (A=1 ... claude)': (n) => 'A=1 '.repeat(n / 4) + 'claude',
+    'variables that end in a newline and a tab (a=\\n\\t)': (n) => 'a=\n\t'.repeat(n / 4),
+  };
+  for (const size of [1, 8]) {
+    for (const [what, make] of Object.entries(crafted)) {
+      it(`never throws and stays fast on ${what} (${size} MB)`, () => {
+        const line = make(size * MB);
+        const t0 = performance.now();
+        expect(() => isClaudeCommand(line), what).not.toThrow();
+        expect(performance.now() - t0, what).toBeLessThan(500); // microseconds in practice once cut; generous for CI
+      });
+    }
+  }
+
+  it('cutting the input to the head changes nothing for a normal line, and reads a long one by its head', () => {
+    // what is in the head decides, whatever follows it
+    const tail = ' x'.repeat(MB);
+    expect(isClaudeCommand('claude' + tail)).toBe(true);
+    expect(isClaudeCommand('claude --version' + tail)).toBe(true);
+    // and a `claude` that only begins after the head is not read as one
+    expect(isClaudeCommand(' '.repeat(5000) + 'claude')).toBe(false);
+  });
+});

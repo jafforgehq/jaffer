@@ -1,10 +1,9 @@
 import type { VNode } from 'preact';
-import { cfg, currentClaude, resumeOffer, daemonUp, dismissToast, info, safeCommand, tildePath, toasts } from '../state';
+import { cfg, currentClaude, daemonUp, dismissToast, info, safeCommand, tildePath, toasts } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
 import type { ClaudeCost } from '../../core/claude/watcher';
-import { IconBranch, IconInfo, IconPlay, IconX } from './icons';
-import { dismissResume, resumeClaude } from '../actions';
+import { IconBranch, IconInfo, IconX } from './icons';
 
 function shortPath(p: string): string {
   if (!p) return '';
@@ -61,16 +60,6 @@ export function TitleBar(): VNode {
         </span>
       </div>
       <div class="tb-right">
-        {resumeOffer.value && !running && (
-          <span class="resume" data-resume={resumeOffer.value.id}>
-            <button class="resume-go" onClick={resumeClaude} aria-label="Resume Claude Code" title={`Claude Code was running in ${tildePath(resumeOffer.value.cwd)} when Jaffer stopped.\nResume that conversation (claude --resume).`}>
-              <IconPlay size={11} /> <span class="resume-label">Resume Claude</span>
-            </button>
-            <button class="resume-x" onClick={dismissResume} aria-label="Not now" title="Not now: forget it">
-              <IconX size={10} />
-            </button>
-          </span>
-        )}
         {cost && <CostChip cost={cost} />}
       </div>
     </div>

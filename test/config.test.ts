@@ -80,10 +80,10 @@ describe('session.restoreScreen, gone in 0.6.0', () => {
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { restoreScreen: false, stayAwake: false } }));
     const store = new ConfigStore(env.paths);
     expect(store.get().onboarded).toBe(true);
-    expect(store.get().session).toMatchObject({ resumeClaude: true, keepRunning: false, stayAwake: false });
+    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: false });
     store.patch({ appearance: { fontSize: 15 } });
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.session).toEqual({ restoreScreen: false, resumeClaude: true, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
+    expect(saved.session).toEqual({ restoreScreen: false, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
     expect(new ConfigStore(env.paths).get().appearance.fontSize).toBe(15);
   });
 });
@@ -99,11 +99,18 @@ describe('notifications.claudeFinished', () => {
   });
 });
 
-describe('session.resumeClaude', () => {
-  it('is on by default, also for a config file saved before the setting existed (and the setting beside it is untouched)', () => {
-    expect(DEFAULT_CONFIG.session).toEqual({ resumeClaude: true, keepRunning: false, stayAwake: true });
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { stayAwake: false } }));
-    expect(new ConfigStore(env.paths).get().session).toEqual({ resumeClaude: true, keepRunning: false, stayAwake: false });
+describe('session.resumeClaude, gone in 0.6.0', () => {
+  it('is not a setting and not a default; an old file that has it loads, changes nothing, and keeps the key as it was after a patch of another key', () => {
+    expect(DEFAULT_CONFIG.session).toEqual({ keepRunning: false, stayAwake: true });
+    // @ts-expect-error there is no Resume button any more: no code can read the switch from the config's type
+    void DEFAULT_CONFIG.session.resumeClaude;
+    // what 0.5.x left behind: the offer switched off, and another choice beside it
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, session: { resumeClaude: false, stayAwake: false } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().session).toMatchObject({ keepRunning: false, stayAwake: false });
+    store.patch({ appearance: { fontSize: 15 } });
+    const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
+    expect(saved.session).toEqual({ resumeClaude: false, keepRunning: false, stayAwake: false }); // kept as it was, like any key a config does not know
   });
 });
 

@@ -1,8 +1,6 @@
-import type { ResumeOffer } from '../shared/claude-resume';
 import { batch, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
-import { TWO_RUNNING_NOTICE, TwoRunningNotice } from '../shared/one-claude';
 import type { UpdateState } from '../shared/update-policy';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
@@ -76,44 +74,9 @@ export interface ClaudeAuthState {
 const claudeLive = signal<ClaudeSession[]>([]);
 /** The Claude session the mole and the title bar follow: the most recently changed one that has not ended. */
 export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
-/**
- * Two Claude conversations running: each set is told once while this window lives, and only when it is still running a moment later
- * (`/clear` looks like two for an instant). Only words: nothing is ended, the person decides what to do with the second one.
- */
-const twoRunningNotice = new TwoRunningNotice({
-  tell: () => void toast({ kind: 'info', text: TWO_RUNNING_NOTICE }),
-  setTimer: (fn, ms) => setTimeout(fn, ms),
-  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
-});
-/** Every way the window learns what Claude is doing (a pushed event, the answer when the window starts or the daemon comes back) comes through here. */
-function applyClaudeState(sessions: ClaudeSession[]): void {
-  claudeLive.value = sessions;
-  twoRunningNotice.update(sessions);
-}
-/** Claude Code was running in this folder when Jaffer last stopped, and can be resumed (the daemon decides; null when there is nothing to offer). */
-export const resumeOffer = signal<ResumeOffer | null>(null);
-/** The notice before Restart Claude Code types `claude --resume` (the person confirmed it): one at a time, with Cancel, until it types or drops it. */
-let autoResumeToast: number | null = null;
-/** Counts what the daemon said about it, so an answer to `claude.autoresume.state` that a newer event overtook is not shown. */
-let autoResumeSeen = 0;
-function onAutoResume(e: { state?: string; typesAt?: number } | null): void {
-  autoResumeSeen++;
-  if (autoResumeToast !== null) dismissToast(autoResumeToast);
-  autoResumeToast = null;
-  if (e?.state !== 'pending' || typeof e.typesAt !== 'number') return;
-  const left = Math.max(0, e.typesAt - Date.now());
-  const s = Math.max(1, Math.ceil(left / 1000)); // a notice that reached the window late is still "in 1 s", never "in 0 s"
-  // up for as long as it says, a little past it: the daemon's next word (typed, or dropped) takes it away
-  autoResumeToast = toast({ kind: 'info', text: `Resuming Claude in ${s} s`, action: { label: 'Cancel', run: () => void jaffer().call('claude.autoresume.cancel', {}).catch(() => undefined) } }, Math.max(6000, left + 2000));
-}
 async function loadClaudeState(): Promise<void> {
   try {
-    applyClaudeState((await jaffer().call('claude.state', {})).sessions);
-    resumeOffer.value = (await jaffer().call('claude.resume', {})) ?? null;
-    // a notice announced before this window was listening (it opened after a reboot, or reconnected after an update)
-    const seen = autoResumeSeen;
-    const notice = await jaffer().call('claude.autoresume.state', {});
-    if (notice && seen === autoResumeSeen) onAutoResume(notice);
+    claudeLive.value = (await jaffer().call('claude.state', {})).sessions;
   } catch {
     /* the daemon is not there yet; its next push fills this in */
   }
@@ -152,16 +115,12 @@ export async function bootstrap(): Promise<void> {
         info.value = { ...info.value, cwd: data.cwd };
         void refreshInfoSoon();
       }
-    } else if (event === 'claude.state') applyClaudeState(data.sessions);
-    else if (event === 'claude.resume') resumeOffer.value = data ?? null;
-    else if (event === 'claude.autoresume') onAutoResume(data);
+    } else if (event === 'claude.state') claudeLive.value = data.sessions;
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
-    else if (event === 'daemon.down') {
-      daemonUp.value = false;
-      onAutoResume(null); // a daemon that is gone types nothing
-    } else if (event === 'daemon.up') {
+    else if (event === 'daemon.down') daemonUp.value = false;
+    else if (event === 'daemon.up') {
       daemonUp.value = true;
       void refreshInfo();
       void loadClaudeState();

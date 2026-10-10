@@ -90,12 +90,6 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 /* the pill is centred on the window itself (not on what is left between the traffic lights and the buttons on the right); both sides reserve the same room */
 .titlebar { position: relative; }
 .tb-right { margin-left: auto; position: relative; z-index: 1; }
-.resume { display: inline-flex; align-items: center; height: 24px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); -webkit-app-region: no-drag; }
-.resume button { display: inline-flex; align-items: center; gap: 5px; height: 100%; border: 0; background: transparent; color: var(--accent); font: 600 11px var(--font-ui, sans-serif); cursor: pointer; }
-.resume-go { padding: 0 6px 0 9px; border-radius: 999px 0 0 999px; }
-.resume-x { padding: 0 8px 0 4px; border-radius: 0 999px 999px 0; color: var(--muted) !important; }
-.resume button:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-@media (max-width: 760px) { .resume-label { display: none; } } /* the narrow title bar has no room for the words: the icon and its name stay */
 .cost-chip { font: 500 11px var(--font-ui, sans-serif); font-variant-numeric: tabular-nums; color: var(--muted); padding: 2px 7px; border-radius: 999px; white-space: nowrap; cursor: default; -webkit-app-region: no-drag; }
 :root:not([data-motion='off']) .cost-chip { animation: cost-flash 1.6s ease-out; }
 @keyframes cost-flash { 0% { color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { color: var(--muted); background: transparent; } }

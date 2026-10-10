@@ -15,15 +15,11 @@ import { caffeinateHold, isDefaultHome } from '../core/session/caffeinate';
 import { agentFiles, execLaunchctl, LaunchAgent, planAgent, REFUSED_OTHER_HOME, type AgentPlan, type PlanInput } from '../core/service/launch-agent';
 import { KeepRunning } from './keep-running';
 import { isTerminalReport } from '../shared/terminal-reports';
-import { COMMAND_HEAD, isClaudeCommand } from '../shared/process-badge';
-import { endsConversation, isPrintMode, isSessionId, type ResumeOffer } from '../shared/claude-resume';
-import { ResumeStore } from '../core/claude/resume';
-import { AutoResumer, shellChecks, type AutoResumeEvent, type AutoResumeTiming } from '../core/claude/auto-resume';
-import { AUTO_RESUME, AUTO_RESUME_TEST, RESTART_HOLD_MS, RESTART_HOLD_TEST_MS } from '../shared/keep-running';
+import { isClaudeCommand } from '../shared/process-badge';
 import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { PROTOCOL, VERSION } from '../core/version';
-import type { PtyEvent, PtySession } from '../core/session/terminal';
+import type { PtyEvent } from '../core/session/terminal';
 
 export interface ServiceOptions {
   paths?: JafferPaths;
@@ -45,13 +41,6 @@ const MAX_BACKLOG = 8 * 1024 * 1024;
 /** While a command runs, the daemon looks at it this often, so that it holds the Mac awake soon after half a minute. */
 const STAY_AWAKE_TICK_MS = 5000;
 
-/** A Claude killed with its shell may say SessionEnd (an async hook) a moment after the shell's exit was seen: that is not the person quitting. */
-const SHELL_EXIT_GRACE_MS = 5000;
-
-/** How often, and how many times, a prompt whose shell does not have the terminal yet is looked at again (see `settleAfterPrompt`). */
-const FOREGROUND_SETTLE_MS = 200;
-const FOREGROUND_SETTLE_TRIES = 10;
-
 export class JafferService {
   readonly paths: JafferPaths;
   readonly config: ConfigStore;
@@ -65,9 +54,6 @@ export class JafferService {
   private timers: NodeJS.Timeout[] = [];
   /** What the Claude in the terminal is doing, from its hook events. Lives here so it survives quitting the app. */
   private claudeWatcher = new ClaudeWatcher();
-  /** The Claude Code conversation to offer back after a restart (ids and a folder only; see ResumeStore). */
-  private resume: ResumeStore;
-  private lastOffer = 'null';
   private rejectionWatches = new Map<string, () => void>();
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
@@ -75,30 +61,6 @@ export class JafferService {
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
-  /** When the main shell last exited (0: never in this daemon's life); a SessionEnd right after it is the dying Claude's. */
-  private lastShellExitAt = 0;
-  /** Types `claude --resume <id>` for a Restart Claude Code the person asked for, after its notice (cancellable). Nothing is resumed by itself. */
-  private autoResume: AutoResumer;
-  /** When the person last typed (the quiet moment Restart Claude Code waits for before it types). */
-  private lastInputAt = 0;
-  /**
-   * Keystrokes written to the main shell so far (the person's, and what Restart Claude Code typed): counted, so that two in the same millisecond
-   * still differ. `lineEmptyAt` is that count when the shell's line was last known to be empty: it was just spawned, or a command began
-   * (the keys before that were the command itself). Any keystroke after it sits in the shell's line, as bash and zsh keep what was typed
-   * during startup or while a command ran and show it at the next prompt: nothing is ever added to such a line.
-   */
-  private inputSeq = 0;
-  private lineEmptyAt = 0;
-  /** The notice that is running, if one is: a window that connects after it was announced is told when it asks. */
-  private autoNotice: Extract<AutoResumeEvent, { state: 'pending' }> | null = null;
-  /**
-   * A Restart Claude Code the person asked for, waiting for the new shell's prompt. `id`: the conversation it was asked for (no other
-   * is resumed for it). `from`: the shell it was asked in, whose own prompts and death are not the new shell's. `armed`: the new shell's
-   * prompt has made the request (so what the notice then says is about it).
-   */
-  private restartHold: { id: string; from: PtySession | undefined; armed: boolean; timer: NodeJS.Timeout } | null = null;
-  /** A prompt whose shell did not have the terminal yet, looked at again (see `settleAfterPrompt`). */
-  private foregroundTimer: NodeJS.Timeout | null = null;
   /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
   private stayAwake: StayAwake;
   /** Looks at a running command every few seconds, so that it counts once it has run half a minute; only while one runs. */
@@ -115,53 +77,9 @@ export class JafferService {
     this.userHome = opts.userHome ?? os.homedir();
     this.version = opts.version ?? VERSION;
     this.log = opts.log ?? (() => undefined);
-    this.resume = new ResumeStore(path.join(this.paths.sessionDir, 'claude.json'));
     ensureDir(this.paths.home);
     ensureDir(this.paths.runDir);
     this.config = new ConfigStore(this.paths);
-    this.autoResume = new AutoResumer(
-      {
-        now: () => Date.now(),
-        offer: () => this.resumeOffer(),
-        // `promptReady`: at its prompt with an empty line (what we type must never be added to a line the person, or this, has started),
-        // and the shell itself has the terminal (the marks are output any program can print: a remote shell over ssh). `mayType`: asked
-        // again at the moment of typing, of the system itself, never an answer of a moment ago.
-        ...shellChecks(
-          () => this.host?.mainPane,
-          () => this.inputSeq === this.lineEmptyAt,
-        ),
-        busy: () => {
-          const pane = this.host?.mainPane;
-          return !!pane && pane.runningCommand !== null; // (a command the marks gave no line for runs all the same)
-        },
-        lastInputAt: () => this.lastInputAt,
-        // (nothing is resumed by itself: only a request the person made, Restart Claude Code's (`restartPrompt`), starts anything. An old
-        // config's `session.autoResume` is kept in the file and read by nothing.)
-        stopping: () => this.stopping,
-        // straight to the shell: this is not the person typing (no `lastInputAt`) and not an answer to Claude (no `userAnswered`); until
-        // the shell runs it, its line is not empty
-        type: (text) => {
-          try {
-            this.inputSeq++;
-            this.host?.mainPane?.write(text);
-          } catch (e) {
-            this.log(`auto-resume: could not type: ${errMsg(e)}`);
-          }
-        },
-        emit: (e) => {
-          this.autoNotice = e.state === 'pending' ? e : null; // typed or cancelled: no notice runs any more
-          if (e.state !== 'pending' && this.restartHold?.armed) this.releaseRestartHold(); // the request has had its answer
-          this.rpc.broadcast('claude.autoresume', e);
-        },
-        setTimer: (fn, ms) => {
-          const t = setTimeout(fn, ms);
-          t.unref?.();
-          return t;
-        },
-        clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
-      },
-      autoResumeTiming(),
-    );
     this.keepRunning = new KeepRunning({
       agent: new LaunchAgent({ launchctl: execLaunchctl(), uid: process.getuid?.() ?? -1, fs }),
       plan: () => this.agentPlan(),
@@ -211,11 +129,9 @@ export class JafferService {
     this.registerMethods();
     await this.host.start();
     await this.rpc.listen(this.paths.socket);
-    this.lastOffer = JSON.stringify(this.resumeOffer()); // the baseline for what changes after this
     // a turn that ended with no signal at all (Esc, an API error, a crash) must not stay "Working" for ever
     this.timers.push(setInterval(() => this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000)), 30_000));
     this.timers[this.timers.length - 1]!.unref?.();
-    // after a restart the conversation that was running is offered back (the Resume button): nothing is typed by itself
     this.log(`jafferd ${this.version} listening on ${this.paths.socket}`);
     // The login agent agrees with the switch (files refreshed after an update or a move; taken away when it is off). Only now that the
     // socket listens: launchd's instance must find this daemon there, and taking the agent away from a daemon launchd runs ends it.
@@ -229,17 +145,12 @@ export class JafferService {
     if (this.stopping) return;
     this.stopping = true;
     this.stopStayAwake(); // first: nothing below may keep the Mac awake
-    this.releaseRestartHold();
-    if (this.foregroundTimer) clearTimeout(this.foregroundTimer);
-    this.foregroundTimer = null;
-    this.autoResume.endNotice(); // nothing is typed while stopping: a notice that is running ends now, and the window is told
     for (const t of this.timers) clearInterval(t);
     for (const stop of this.rejectionWatches.values()) stop();
     this.rejectionWatches.clear();
     for (const t of this.costTimers) clearTimeout(t);
     this.costTimers.clear();
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
-    this.resume.flush();
     this.host?.dispose();
     await this.rpc.close();
     try {
@@ -347,66 +258,46 @@ export class JafferService {
     c.send({ event: 'pty.reset', data: { pane, snapshot } });
   }
 
+  /**
+   * A fresh shell replaced the one that exited (`exit`, Restart shell): its output counts from 1 again, so a window still showing the old
+   * screen would drop it as already seen. Every attached window starts over from the new shell's blank screen, as after falling behind
+   * (one that is behind gets its own snapshot of the new shell once it drains).
+   */
+  private async resyncAttached(pane: string): Promise<void> {
+    const p = this.host.get(pane);
+    if (!p) return;
+    const snapshot = await p.consistentSnapshot();
+    if (this.stopping || this.host.get(pane) !== p) return; // (replaced again meanwhile: that shell's own reset follows)
+    for (const c of this.rpc.conns) {
+      if (this.attached(c) && !c.meta.stale && c.alive) c.send({ event: 'pty.reset', data: { pane, snapshot } });
+    }
+  }
+
   private wireEvents(): void {
     this.host.events.on((e) => {
       if ('lifecycle' in e) {
-        if (e.lifecycle === 'spawned') this.lineEmptyAt = this.inputSeq; // a new shell: its line is empty, whatever was typed before it
         this.rpc.broadcast('session.lifecycle', e, this.attached);
+        if (e.lifecycle === 'restarted') void this.resyncAttached(e.pane);
         this.refreshStayAwake(); // (a new shell runs nothing)
         return;
       }
       this.sendPty(e.pane, e.event);
-      if (e.event.type === 'start') this.lineEmptyAt = this.inputSeq; // a command began: the keys so far were the command itself
       // a command began or ended, or the shell is gone: a long one holds the Mac awake, and none holds nothing
       if (e.event.type === 'start' || e.event.type === 'command' || e.event.type === 'exit') this.refreshStayAwake();
-      // A command line comes from the shell's marks, which any output in the terminal can forge, at any length: only its start is
-      // read to tell what it was
-      const head = e.event.type === 'command' ? e.event.cmd.slice(0, COMMAND_HEAD) : '';
-      // where the shell is, and whether it is busy, decide whether a conversation can be offered back
-      if (e.event.type === 'cwd' || e.event.type === 'start' || e.event.type === 'command') this.pushResume();
-      // The shell is gone and took its Claude with it: no conversation is running any more. The resume point stays (a dying shell is
-      // not the person ending the conversation), and a daemon that is stopping leaves everything as it is.
-      if (e.event.type === 'exit' && !this.stopping) {
-        this.lastShellExitAt = Date.now();
-        // a notice that is running (Restart Claude Code's) was for the shell that is gone: it ends here, and only a request the person
-        // made goes ahead in the new shell (nothing is resumed by itself)
-        this.autoResume.endNotice();
-        this.claudeWatcher.endAll();
-        this.pushResume();
-      }
-      // at its prompt again (a new shell, a command finished): the moment a Restart Claude Code the person asked for goes ahead (and
-      // nothing else: see `restartPrompt`). What can be offered also depends on the shell having the terminal, which no mark tells (see
-      // `resumeOffer`): the window is told here too.
-      if (e.event.type === 'prompt') {
-        this.restartPrompt();
-        this.pushResume();
-        this.settleAfterPrompt();
-      }
-      if (e.event.type === 'command') {
-        const ev = e.event;
-        // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only
-        // stopped (Ctrl+Z reports 128 + a stop signal): it comes back with `fg`.
-        if (!stoppedExit(ev.exit) && isClaudeCommand(head)) {
-          this.claudeWatcher.endAll();
-          // quit on purpose (exit 0, or Ctrl+C): nothing to offer afterwards. A crash or a kill leaves the offer, and a daemon that is
-          // stopping must not take it away (the shell dying with it is not the person ending the conversation). `claude -p` answered
-          // once and is gone, however it ended: a failing one must not leave an offer that starts an interactive Claude by itself.
-          const quit = (ev.exit === 0 || ev.exit === 130) && endsConversation(head);
-          if (!this.stopping && (quit || isPrintMode(head))) this.resume.forget();
-          this.pushResume();
-        }
-      }
+      // The shell is gone and took its Claude with it: no conversation is running any more (a daemon that is stopping leaves it as it is).
+      if (e.event.type === 'exit' && !this.stopping) this.claudeWatcher.endAll();
+      // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only stopped (Ctrl+Z
+      // reports 128 + a stop signal): it comes back with `fg`. (The command line comes from the shell's marks, which any output can forge
+      // at any length: `isClaudeCommand` reads only its start.)
+      if (e.event.type === 'command' && !stoppedExit(e.event.exit) && isClaudeCommand(e.event.cmd)) this.claudeWatcher.endAll();
     });
     this.claudeWatcher.changes.on((sessions) => {
       this.refreshStayAwake();
       this.pushClaudeState();
       this.watchForRejections(sessions);
-      this.pushResume();
     });
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
-      if (!c.session.resumeClaude) this.resume.forget(); // off forgets it, as Settings says: nothing of the conversation stays on disk
-      this.pushResume(); // (and a notice that is running ends with the offer)
       this.refreshStayAwake(); // (the switch for staying awake)
       // Keep my session running: the agent follows the switch however it changed (Settings, `jaffer service`, `jaffer config set`), with
       // every guard of install and remove (a refused home is not touched; in the daemon launchd runs, the bootout comes after the reply).
@@ -515,167 +406,6 @@ export class JafferService {
     }
   }
 
-  /** The hooks tell which conversation is alive and where; SessionEnd says the person ended it. */
-  private trackResume(p: unknown): void {
-    if (!p || typeof p !== 'object' || this.stopping) return;
-    const o = p as Record<string, unknown>;
-    const id = typeof o.session_id === 'string' ? o.session_id : '';
-    if (!isSessionId(id)) return;
-    if (o.hook_event_name === 'SessionEnd') {
-      // a Claude that died with its shell did not end the conversation on purpose: its resume point stays. Nor did one whose reason is
-      // `other`: Claude Code was stopped from outside (a logout or a shutdown that reached it before this daemon), and it should be
-      // offered again after the reboot. `prompt_input_exit` (/exit, Ctrl+D), `clear`, `logout` and a SessionEnd with no reason (an older Claude) forget it.
-      const fromOutside = o.reason === 'other';
-      if (!fromOutside && Date.now() - this.lastShellExitAt > SHELL_EXIT_GRACE_MS) this.resume.forget(id);
-    } else if (this.config.get().session.resumeClaude && !this.printRunning()) {
-      this.resume.note({ id, cwd: typeof o.cwd === 'string' ? o.cwd : undefined, transcriptPath: typeof o.transcript_path === 'string' ? o.transcript_path : undefined, starts: o.hook_event_name === 'SessionStart' });
-    }
-    this.pushResume();
-  }
-
-  /**
-   * A `claude -p` runs in the shell. Its hooks fire like any Claude's, but it answers once and is gone, never a conversation to resume
-   * (one that ends is forgotten, R11): what they say is not kept, so a shell or a daemon that goes while it runs leaves nothing that
-   * would start an interactive Claude by itself afterwards. (Only the start of the command line is read: see `COMMAND_HEAD`.)
-   */
-  private printRunning(): boolean {
-    const head = this.host?.mainPane?.runningCommand?.slice(0, COMMAND_HEAD) ?? '';
-    return head !== '' && isClaudeCommand(head) && isPrintMode(head);
-  }
-
-  /**
-   * The conversation that can be resumed now (the Resume button, and what Restart Claude Code types): the saved one, with nothing running in the
-   * shell. "Nothing running" is what the marks say and what the terminal's foreground says: a program (ssh into a server whose shell
-   * prints marks of its own) can make the marks say "a prompt, nothing running". A shell that is gone is not asked (a new one comes).
-   * Whatever the shell is called (`/bin/sh` runs bash): its pid leading the terminal's foreground is the test. (A decision: the answer
-   * of up to 250 ms ago will do, unless the terminal printed something since. `fresh` asks the system again: a click about to type.)
-   */
-  private resumeOffer(opts: { fresh?: boolean } = {}): ResumeOffer | null {
-    const offer = this.savedOffer();
-    const pane = this.host?.mainPane;
-    return offer && pane?.alive && !pane.foregroundIsShell({ fresh: opts.fresh === true }) ? null : offer;
-  }
-
-  /** The same, by the marks alone. */
-  private savedOffer(): ResumeOffer | null {
-    const pane = this.host?.mainPane;
-    return this.resume.offer({
-      shellCwd: pane?.cwd,
-      active: this.claudeWatcher.sessions().some((s) => s.state !== 'ended'),
-      busy: !!pane && pane.runningCommand !== null,
-      enabled: this.config.get().session.resumeClaude,
-    });
-  }
-
-  /** Tells the window when what can be resumed changes (and only then). */
-  private pushResume(): void {
-    const offer = this.resumeOffer();
-    const key = JSON.stringify(offer);
-    if (key === this.lastOffer) return;
-    this.lastOffer = key;
-    this.rpc.broadcast('claude.resume', offer);
-    // Restart Claude Code's notice, if one runs: an offer that went or is another conversation now (a command began, "Not now", the
-    // offer switched off) ends it. The same conversation seen again (a later time) leaves it running. Nothing else is asked: an offer
-    // that comes is the Resume button, never typed by itself.
-    if (this.autoNotice && offer?.id !== this.autoNotice.id) this.autoResume.endNotice();
-  }
-
-  /**
-   * The person typed. That holds Restart Claude Code's typing off for a quiet moment, and the key may now sit in the shell's line (see
-   * `inputSeq`), unless a running interactive `claude` takes it: its own prompt reads what is typed into it. `claude update`,
-   * `claude --version`, `claude mcp ...` and `claude -p` read nothing from the terminal: what is typed while they run waits in the
-   * shell's line like behind any other command.
-   */
-  private noteKeystroke(): void {
-    this.lastInputAt = Date.now();
-    const head = this.host?.mainPane?.runningCommand?.slice(0, COMMAND_HEAD) ?? '';
-    if (head && isClaudeCommand(head) && endsConversation(head) && !isPrintMode(head)) return;
-    this.inputSeq++;
-  }
-
-  /**
-   * A prompt of the main shell: the resumer is asked only for a Restart Claude Code the person asked for (`restartCheck`). Nothing
-   * else ever makes it type: a prompt with a conversation to offer shows the Resume button, and a click on it is the person typing.
-   */
-  private restartPrompt(): void {
-    if (this.restartCheck().explicit) this.autoResume.check({ explicit: true });
-  }
-
-  /**
-   * What Restart Claude Code left to do: the person asked, so the first prompt of the new shell is the conversation's cue. The request
-   * is repeated at each prompt of that shell until it is typed or cancelled (or it is stale): the resumer itself forgets the request
-   * the first time it has to wait for a prompt. A prompt of the shell it was asked in is not the cue.
-   */
-  private restartCheck(): { explicit?: boolean } {
-    const hold = this.restartHold;
-    const pane = this.host?.mainPane;
-    if (!hold || !pane || pane === hold.from) return {};
-    // the conversation it was asked for, and no other: with that one gone, or another offered since, there is nothing the person asked for
-    if (this.savedOffer()?.id !== hold.id) {
-      this.releaseRestartHold();
-      return {};
-    }
-    // a prompt a program printed (ssh, typed ahead into the new shell) is not the new shell's: the request waits for the shell's own
-    if (!pane.foregroundIsShell()) return {};
-    hold.armed = true;
-    return { explicit: true };
-  }
-
-  /**
-   * The prompt mark comes a moment before the shell has finished its prompt: bash runs the person's own PROMPT_COMMAND after it, which may
-   * run a program in the foreground for a moment. While there is something to resume and the marks say "a prompt" but the shell does not
-   * have the terminal (yet), it is looked at again a few times, and the prompt's checks are made once it has. (A program that prints
-   * marks of its own keeps it looking for about two seconds, nothing more.)
-   */
-  private settleAfterPrompt(tries = FOREGROUND_SETTLE_TRIES): void {
-    if (this.foregroundTimer) clearTimeout(this.foregroundTimer);
-    this.foregroundTimer = null;
-    const pane = this.host?.mainPane;
-    if (this.stopping || tries <= 0 || !pane?.alive || !pane.promptReady) return;
-    if ((!this.restartHold && !this.savedOffer()) || pane.foregroundIsShell()) return;
-    this.foregroundTimer = setTimeout(() => {
-      this.foregroundTimer = null;
-      if (this.stopping || this.host?.mainPane !== pane || !pane.alive || !pane.promptReady) return;
-      // looking again is the point: the system is asked, not the answer of the last look (200 ms ago, within the 250 ms it is kept)
-      if (!pane.foregroundIsShell({ fresh: true })) return this.settleAfterPrompt(tries - 1);
-      this.restartPrompt();
-      this.pushResume();
-    }, FOREGROUND_SETTLE_MS);
-    this.foregroundTimer.unref?.();
-  }
-
-  /** The request is over (answered, stale, replaced or the daemon is stopping): no later prompt makes it again. */
-  private releaseRestartHold(): void {
-    if (!this.restartHold) return;
-    clearTimeout(this.restartHold.timer);
-    this.restartHold = null;
-  }
-
-  /** Waits for the next shell's prompt on behalf of a Restart Claude Code. A request before it is replaced by this one. */
-  private holdRestart(id: string, from: PtySession | undefined): void {
-    this.releaseRestartHold();
-    const timer = setTimeout(() => {
-      if (this.restartHold?.timer === timer) this.restartHold = null; // (a notice that already began finishes on its own)
-    }, restartHoldMs());
-    timer.unref?.();
-    this.restartHold = { id, from, armed: false, timer };
-  }
-
-  /**
-   * What a Restart Claude Code would do now: would a conversation come back in the new shell (the one that would be offered once
-   * nothing runs: an open Claude that has a saved point counts, and nothing does when the offer is off), and is Claude working or
-   * waiting for the person. Read before the shell is restarted: its exit ends the watcher's sessions. A shell that prints none of
-   * Jaffer's marks (any shell besides zsh, bash and fish) never says that the new shell's prompt is there, which is when the conversation
-   * is typed: nothing would come back by itself, so it is a plain shell restart, said so, and the Resume button offers the conversation.
-   */
-  private restartPlan(): { resumable: boolean; busy: boolean; id?: string } {
-    const pane = this.host.mainPane;
-    const marks = pane?.shellKind !== 'other';
-    const offer = marks ? this.resume.offer({ shellCwd: pane?.cwd, active: false, busy: false, enabled: this.config.get().session.resumeClaude }) : null;
-    const busy = this.claudeWatcher.sessions().some((s) => s.state === 'working' || s.state === 'needs-you');
-    return { resumable: offer !== null, busy, ...(offer ? { id: offer.id } : {}) };
-  }
-
   private later(ms: number, fn: () => void): void {
     const t = setTimeout(() => {
       this.costTimers.delete(t);
@@ -734,12 +464,8 @@ export class JafferService {
     r.handle('session.snapshot', async (p: { pane?: string }) => pane(p).consistentSnapshot());
     r.handle('pty.write', (p: { pane?: string; data: string }) => {
       pane(p).write(String(p.data));
-      // typing while Claude waits for them means they are answering; the terminal's own replies and focus reports do not. Typing also
-      // holds off Restart Claude Code's typing for a moment (see `noteKeystroke`).
-      if (!isTerminalReport(String(p.data))) {
-        this.claudeWatcher.userAnswered();
-        this.noteKeystroke();
-      }
+      // typing while Claude waits for them means they are answering; the terminal's own replies and focus reports do not
+      if (!isTerminalReport(String(p.data))) this.claudeWatcher.userAnswered();
       return true;
     });
     r.handle('pty.resize', (p: { pane?: string; cols: number; rows: number }) => {
@@ -751,50 +477,15 @@ export class JafferService {
       await this.host.restartMain();
       return true;
     });
-    // Restart Claude Code (to use an update): `plan` is what the window's question is about; `claude.restart` restarts the shell, in the
-    // same folder, and the new shell's first prompt takes the same conversation up (see `restartCheck`). With no conversation it is a
-    // plain shell restart.
-    r.handle('claude.restart.plan', () => {
-      const { resumable, busy } = this.restartPlan();
-      return { resumable, busy };
-    });
-    r.handle('claude.restart', async () => {
-      const { resumable, id } = this.restartPlan(); // before the shell goes: its exit ends the watcher's sessions
-      if (id !== undefined) this.holdRestart(id, this.host.mainPane);
-      else this.releaseRestartHold();
-      await this.host.restartMain();
-      return { resumable };
-    });
     r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version }));
 
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {
       this.claudeWatcher.handle(p);
       this.trackCost(p);
-      this.trackResume(p);
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
-    r.handle('claude.resume', (p?: { fresh?: boolean }) => {
-      // What a window has just been told is what the next change is measured against. A click on the Resume button asks with `fresh`
-      // and types only if this answer is the conversation it showed (`resumeClaude`): in a shell that prints no marks nothing pushes the
-      // offer again when a program starts, so the button can be from before it. The foreground is then read now, not reused.
-      const offer = this.resumeOffer({ fresh: p?.fresh === true });
-      this.lastOffer = JSON.stringify(offer);
-      return offer;
-    });
-    r.handle('claude.resume.dismiss', () => {
-      this.resume.forget();
-      this.pushResume();
-      return true;
-    });
-    // the window's Cancel on the "Resuming Claude" notice: nothing is typed, and the Resume button is left
-    r.handle('claude.autoresume.cancel', () => {
-      this.autoResume.cancel();
-      return true;
-    });
-    // the notice that is running ({ state: 'pending', id, typesAt }) or null: for a window that connected after it was announced
-    r.handle('claude.autoresume.state', () => this.autoNotice);
 
     // ---- keep running in the background (the login agent; refused, and nothing touched, in any home but the person's own ~/.jaffer)
     r.handle('service.status', () => this.keepRunning.status());
@@ -854,13 +545,8 @@ export class JafferService {
       return { link, onPath, hint: onPath ? undefined : 'Add ~/.local/bin to your PATH (e.g. export PATH="$HOME/.local/bin:$PATH" in ~/.zshrc).' };
     });
 
-    // `forgetConversation`: the person ends the session (Quit and End Session), so the Claude Code conversation is not offered at
-    // the next start. An update, Restart session or `jaffer daemon stop` shut down plainly: the Resume button offers it again (Reset removes the file it is in).
-    r.handle('app.shutdown', (p: { forgetConversation?: boolean } | undefined) => {
-      if (p?.forgetConversation === true) {
-        this.resume.forget();
-        this.pushResume(); // (and a notice that is running ends with it)
-      }
+    // the session ends (Quit and End Session, an update, Restart session, `jaffer daemon stop`, Reset)
+    r.handle('app.shutdown', () => {
       this.onShutdown.fn(); // (the daemon's main claims the end now and begins the stop once this reply has gone out)
       return true;
     });
@@ -898,16 +584,6 @@ export class JafferService {
 /** A command that was stopped, not ended (Ctrl+Z: the shell reports 128 + a stop signal, 145 to 150 on macOS and Linux). */
 function stoppedExit(exit: number | null): boolean {
   return exit != null && exit >= 145 && exit <= 150;
-}
-
-/** The notice and the quiet moment of Restart Claude Code: the real ones, or (tests only, `JAFFER_TEST_AUTORESUME_FAST=1`) the same in milliseconds. */
-function autoResumeTiming(): AutoResumeTiming {
-  return process.env.JAFFER_TEST_AUTORESUME_FAST === '1' ? AUTO_RESUME_TEST : AUTO_RESUME;
-}
-
-/** How long a Restart Claude Code waits for the new shell's prompt: 30 s, or (tests only) a few seconds. */
-function restartHoldMs(): number {
-  return process.env.JAFFER_TEST_AUTORESUME_FAST === '1' ? RESTART_HOLD_TEST_MS : RESTART_HOLD_MS;
 }
 
 function shq(s: string): string {

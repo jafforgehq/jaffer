@@ -1,7 +1,5 @@
-import { activePane, cfg, info, openOverlay, patchConfig, resumeOffer, safeCommand, toast } from './state';
+import { activePane, cfg, info, openOverlay, patchConfig, safeCommand, toast } from './state';
 import { isClaudeCommand } from '../shared/process-badge';
-import { isSessionId, resumeCommand, type ResumeOffer } from '../shared/claude-resume';
-import { errorText } from '../shared/keep-running';
 import { terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
@@ -41,56 +39,6 @@ export async function runClaude(): Promise<void> {
   t.focus();
 }
 
-/** A click's question to the daemon is on its way: another click (or the palette) meanwhile adds nothing. */
-let resumeAsking = false;
-
-/**
- * Take the Claude Code conversation that was running when Jaffer stopped back up: types `claude --resume <id>`, after the person's click.
- * The daemon is asked again first, with a fresh look at the terminal (`claude.resume`, `fresh: true`): in a shell that prints no prompt
- * marks (`/bin/sh`, any shell besides zsh, bash and fish) nothing tells the window that a program took the
- * terminal, so the button can be from before vim started. Only the same conversation coming back is typed; nothing is typed on an error.
- */
-export async function resumeClaude(): Promise<void> {
-  const offer = resumeOffer.value;
-  const t = term();
-  if (!offer || !t) {
-    toast({ kind: 'info', text: 'There is no Claude Code conversation to resume here.' });
-    return;
-  }
-  if (!isSessionId(offer.id)) return; // checked again here: this is typed into a shell
-  if (info.value.busy) {
-    toast({ kind: 'info', text: `The terminal is busy running ${safeCommand(info.value.busy)}.` });
-    return;
-  }
-  if (resumeAsking) return;
-  resumeAsking = true;
-  let now: ResumeOffer | null;
-  try {
-    now = (await call<ResumeOffer | null>('claude.resume', { fresh: true })) ?? null;
-  } catch (e) {
-    toast({ kind: 'error', text: errorText(e) }); // the button stays for the daemon's next word
-    return;
-  } finally {
-    resumeAsking = false;
-  }
-  if (!now || now.id !== offer.id || !isSessionId(now.id)) {
-    // what the daemon offers now: nothing (the button goes), or another conversation (the button shows that one)
-    resumeOffer.value = now;
-    if (!now) toast({ kind: 'info', text: 'A program has the terminal, so Claude Code was not resumed.' });
-    return;
-  }
-  t.type(`${resumeCommand(now.id)}\r`);
-  t.focus();
-  resumeOffer.value = null; // gone at once; the daemon's own word follows when Claude Code starts
-}
-
-/** "Not now": forget that conversation. */
-export function dismissResume(): void {
-  resumeOffer.value = null;
-  term()?.focus(); // the button that had the focus is gone: it goes back to the terminal, not to nowhere
-  void window.jaffer.call('claude.resume.dismiss', {}).catch(() => undefined);
-}
-
 async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
   try {
     await fn();
@@ -100,28 +48,12 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
   }
 }
 
-/**
- * "Restart Claude Code, to use an update": the app asks the person first (a native dialog that says what stops and what comes back),
- * then restarts the shell in the same folder; the daemon takes the same conversation up in the new shell, with the usual notice and Cancel.
- */
-export async function restartClaude(): Promise<void> {
-  try {
-    const r = await window.jaffer.restartClaude();
-    if (r.cancelled) return;
-    toast({ kind: 'info', text: r.resumable ? 'Shell restarted in the same folder. Claude Code comes back in the same conversation.' : 'Shell restarted in the same folder.' });
-  } catch (e) {
-    toast({ kind: 'error', text: errorText(e) }); // (a session daemon from before 0.5 does not know it: "Restart your session to use this")
-  }
-}
-
 export const actions: Action[] = [
-  { id: 'resume-claude', title: 'Resume the Claude Code conversation that was running here', section: 'Terminal', keywords: 'claude code continue restart', run: resumeClaude },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window (the session keeps running)', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
   { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => openOverlay('find') },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
-  { id: 'restart-claude', title: 'Restart Claude Code, to use an update', section: 'Terminal', keywords: 'update claude code new version', run: restartClaude },
   { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },
   { id: 'zoom-out', title: 'Smaller text', section: 'View', keys: '⌘-', run: () => zoom(-1) },
