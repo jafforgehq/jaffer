@@ -1,7 +1,5 @@
 # Signing, notarizing and releasing
 
-> A step-by-step version to follow on a Mac (certificate, notarization login, signing and checking the result) is in [SIGN-ON-MAC.md](SIGN-ON-MAC.md).
-
 A Mac app that is not signed with an Apple **Developer ID** and **notarized** is blocked by Gatekeeper on other people's
 Macs ("Jaffer can't be opened because Apple cannot check it for malicious software"). There are two ways to produce a
 signed release. Pick one; both use the same electron-builder configuration (`electron-builder.yml` plus the
