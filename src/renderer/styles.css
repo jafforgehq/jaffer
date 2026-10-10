@@ -31,8 +31,8 @@
   --accent-soft: rgba(255, 138, 76, 0.15);
   --accent-line: rgba(255, 138, 76, 0.45);
   --accent-ink: #0b0c0f;
-  --memory: #5eead4;
-  --memory-soft: rgba(94, 234, 212, 0.14);
+  --branch: #5eead4;
+  --branch-soft: rgba(94, 234, 212, 0.14);
   --info: #6aa8ff;
   --info-soft: rgba(106, 168, 255, 0.15);
   --violet: #c792ea;
@@ -86,13 +86,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .titlebar { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 var(--gap) 0 14px; -webkit-app-region: drag; }
 body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the window has no sidebar to sit beside them */
 .titlebar button, .titlebar input, .titlebar .seg { -webkit-app-region: no-drag; }
-/* where a slip costs more: a thin edge under the bar, and the part of the pill that says why. Static, so it needs no motion setting. */
-.titlebar[data-danger] { box-shadow: inset 0 -2px 0 var(--danger-edge); }
-.titlebar[data-danger='branch'] { --danger-edge: color-mix(in srgb, var(--warn) 75%, transparent); }
-.titlebar[data-danger='ssh'] { --danger-edge: color-mix(in srgb, var(--danger) 85%, transparent); }
-.titlebar[data-danger='branch'] .session-pill .branch { color: var(--warn); }
-.titlebar[data-danger='ssh'] .session-pill { border-color: color-mix(in srgb, var(--danger) 60%, var(--line)); }
-.titlebar[data-danger='ssh'] .session-pill .running { color: var(--danger); }
 .tb-left, .tb-right { display: flex; align-items: center; gap: 4px; flex: none; }
 /* the pill is centred on the window itself (not on what is left between the traffic lights and the Memory button); both sides reserve the same room */
 .titlebar { position: relative; }
@@ -113,7 +106,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
   background: var(--hover); border: 1px solid var(--line); color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
 }
 .session-pill .cwd { overflow: hidden; text-overflow: ellipsis; color: var(--text); font-family: var(--font-mono); font-size: 11.5px; }
-.session-pill .branch { display: inline-flex; align-items: center; gap: 4px; color: var(--memory); font-family: var(--font-mono); font-size: 11px; }
+.session-pill .branch { display: inline-flex; align-items: center; gap: 4px; color: var(--branch); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .running { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .sep { width: 1px; height: 12px; background: var(--line-strong); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); flex: none; }
@@ -135,9 +128,9 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .seg-btn:hover { color: var(--text); }
 .seg-btn.on { background: var(--raised-2); color: var(--text); box-shadow: 0 0 0 1px var(--line), var(--shadow-sm); }
 .seg-btn.on svg { color: var(--accent); }
-.seg-btn.seg-mem.on svg { color: var(--memory); }
+.seg-btn.seg-mem.on svg { color: var(--branch); }
 .pulse { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; }
-.pulse { background: var(--memory); animation: ping 1.2s ease-out 1; opacity: 0; }
+.pulse { background: var(--branch); animation: ping 1.2s ease-out 1; opacity: 0; }
 @keyframes ping { 0% { transform: scale(0.6); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 @keyframes blink { 50% { opacity: 0.3; } }
 
@@ -171,7 +164,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 /* the blinking dots that already existed are decoration too: the switch stops them, they stay visible */
 .panel-head .title { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
 .title-ico { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-.title-ico.is-mem { background: var(--memory-soft); color: var(--memory); }
+.title-ico.is-mem { background: var(--branch-soft); color: var(--branch); }
 
 /* ============================================================== session rail */
 
@@ -235,13 +228,13 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .empty-title { color: var(--text); font-weight: 650; font-size: 15px; margin: 12px 0 6px; letter-spacing: -0.01em; }
 .empty p { margin: 0 0 14px; font-size: 12.5px; line-height: 1.5; }
 .empty-mark { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-.empty-mark.is-mem { background: var(--memory-soft); color: var(--memory); }
+.empty-mark.is-mem { background: var(--branch-soft); color: var(--branch); }
 
 
 /* ============================================================== memory */
 .stat-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 12px 4px; }
 .tile { padding: 9px 11px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); }
-.tile b { display: block; font-size: 20px; line-height: 1.1; font-weight: 700; letter-spacing: -0.02em; color: var(--memory); font-variant-numeric: tabular-nums; }
+.tile b { display: block; font-size: 20px; line-height: 1.1; font-weight: 700; letter-spacing: -0.02em; color: var(--branch); font-variant-numeric: tabular-nums; }
 .tile.skills b { color: var(--accent); }
 .tile.events b { color: var(--info); }
 .tile span { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
@@ -267,14 +260,14 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .k-lesson, .k-lesson + * { color: var(--warn); }
 .mem[data-kind='lesson'] .mem-ico { background: var(--warn-soft); color: var(--warn); }
 .mem[data-kind='convention'] .mem-ico { background: var(--accent-soft); color: var(--accent); }
-.mem[data-kind='preference'] .mem-ico { background: var(--memory-soft); color: var(--memory); }
+.mem[data-kind='preference'] .mem-ico { background: var(--branch-soft); color: var(--branch); }
 .mem[data-kind='workflow'] .mem-ico { background: var(--ok-soft); color: var(--ok); }
 .mem[data-kind='environment'] .mem-ico { background: var(--info-soft); color: var(--info); }
 .mem[data-kind='project'] .mem-ico, .mem[data-kind='fact'] .mem-ico { background: var(--violet-soft); color: var(--violet); }
-.mem[data-kind='lesson'] .kind { color: var(--warn); } .mem[data-kind='convention'] .kind { color: var(--accent); } .mem[data-kind='preference'] .kind { color: var(--memory); }
+.mem[data-kind='lesson'] .kind { color: var(--warn); } .mem[data-kind='convention'] .kind { color: var(--accent); } .mem[data-kind='preference'] .kind { color: var(--branch); }
 .mem[data-kind='workflow'] .kind { color: var(--ok); } .mem[data-kind='environment'] .kind { color: var(--info); } .mem[data-kind='project'] .kind, .mem[data-kind='fact'] .kind { color: var(--violet); }
 .conf { width: 28px; height: 4px; border-radius: 2px; background: var(--active); overflow: hidden; display: inline-block; }
-.conf-fill { display: block; height: 100%; background: var(--memory); border-radius: 2px; }
+.conf-fill { display: block; height: 100%; background: var(--branch); border-radius: 2px; }
 .mem-actions { display: flex; flex: none; opacity: 0; transition: opacity 0.12s; }
 .mem:hover .mem-actions, .mem.pinned .mem-actions, .mem-actions:focus-within { opacity: 1; } /* reachable from the keyboard too */
 .mem.pinned .mem-actions .icon-btn:not(.on) { opacity: 0; }
@@ -289,7 +282,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .run { position: relative; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--raised); margin-bottom: 8px; font-size: 12px; }
 .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .src { padding: 0 7px; height: 18px; display: inline-flex; align-items: center; border-radius: 999px; font-size: 10.5px; font-weight: 650; background: var(--hover); }
-.s-reflector, .s-heuristic { color: var(--memory); background: var(--memory-soft); } .s-consolidator { color: var(--warn); background: var(--warn-soft); } .s-user { color: var(--accent); background: var(--accent-soft); } .s-agent { color: var(--ok); background: var(--ok-soft); }
+.s-reflector, .s-heuristic { color: var(--branch); background: var(--branch-soft); } .s-consolidator { color: var(--warn); background: var(--warn-soft); } .s-user { color: var(--accent); background: var(--accent-soft); } .s-agent { color: var(--ok); background: var(--ok-soft); }
 .op { display: flex; gap: 8px; color: var(--muted); padding: 1px 0; }
 .opname { flex: none; width: 58px; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); }
 .op-add .opname, .op-skill-add .opname { color: var(--ok); } .op-archive .opname, .op-delete .opname { color: var(--danger); } .op-merge .opname { color: var(--warn); }
@@ -301,7 +294,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 50; width: max-content; max-width: min(460px, 90vw); pointer-events: none; }
 .toast { pointer-events: auto; position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 12px; background: var(--raised-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow); font-size: 12.5px; animation: rise 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2); overflow: hidden; }
 .toast-ico { flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--hover); color: var(--muted); }
-.toast.learn .toast-ico { background: var(--memory-soft); color: var(--memory); }
+.toast.learn .toast-ico { background: var(--branch-soft); color: var(--branch); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong)); } .toast.error .toast-ico { background: var(--danger-soft); color: var(--danger); }
 .toast-text { flex: 1; min-width: 0; user-select: text; -webkit-user-select: text; }
 .toast .linkish { font-weight: 600; padding: 0 4px; }
@@ -384,7 +377,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .features { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0; }
 .feature { padding: 13px 13px 14px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.5; }
 .feature .f-ico { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; margin-bottom: 9px; background: var(--accent-soft); color: var(--accent); }
-.feature:nth-child(2) .f-ico { background: var(--memory-soft); color: var(--memory); }
+.feature:nth-child(2) .f-ico { background: var(--branch-soft); color: var(--branch); }
 .feature:nth-child(3) .f-ico { background: var(--violet-soft); color: var(--violet); }
 .feature b { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; letter-spacing: -0.01em; }
 .feature code { color: var(--accent); }

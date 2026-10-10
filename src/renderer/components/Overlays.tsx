@@ -8,7 +8,6 @@ import { terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
-import { DEFAULT_PROTECTED_BRANCHES } from '../../shared/danger-zone';
 import { agentStatusText, errorText, isOldDaemonError, OLD_DAEMON_TEXT, type AgentStatus } from '../../shared/keep-running';
 import { IconAgent, IconBrain, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconClock, IconDownload, IconReset } from './icons';
 
@@ -388,17 +387,6 @@ export function Settings(): VNode {
               <KeepRunningField flag={c.session?.keepRunning === true} />
               <Field label="Keep my Mac awake while Claude works" hint="While Claude or a long command works, your Mac does not go to sleep on its own (the screen still can). A laptop with its lid closed still sleeps unless it is plugged in with an external display and a keyboard or mouse (macOS’s closed-display mode).">
                 <Switch checked={c.session?.stayAwake !== false} onChange={(v) => set({ session: { stayAwake: v } })} />
-              </Field>
-              <Field label="Mark risky places" hint="tints the title bar on a protected branch (amber) and while an ssh session runs (red), so a command goes where you meant">
-                <Switch checked={c.safety?.dangerTint !== false} onChange={(v) => set({ safety: { dangerTint: v } })} />
-              </Field>
-              <Field label="Protected branches" hint="comma separated; * matches anything, as in release/*">
-                <input
-                  type="text"
-                  disabled={c.safety?.dangerTint === false}
-                  value={(c.safety?.protectedBranches ?? DEFAULT_PROTECTED_BRANCHES).join(', ')}
-                  onChange={(e) => set({ safety: { protectedBranches: (e.target as HTMLInputElement).value.split(',').map((x) => x.trim()).filter(Boolean) } })}
-                />
               </Field>
               <Field label="Open at login" hint="so your session is always one keystroke away">
                 <Switch

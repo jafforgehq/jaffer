@@ -1,3 +1,5 @@
+import { COMMAND_HEAD } from './process-badge';
+
 /** What Jaffer may type to take a Claude Code conversation back up. The id is typed into a shell, so it is checked before it is kept and again before it is typed. */
 export function isSessionId(s: unknown): s is string {
   return typeof s === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/.test(s);
@@ -10,13 +12,6 @@ export function resumeCommand(id: string): string {
 /** `claude` subcommands (and flags) that only ask or manage: running one is not a conversation, and its ending is not the end of one. */
 const ASKS = new Set(['mcp', 'update', 'upgrade', 'doctor', 'config', 'install', 'setup-token', 'auth', 'plugin', 'plugins', 'agents', 'migrate-installer']);
 const ASK_FLAGS = new Set(['--version', '-v', '--help', '-h']);
-
-/**
- * How much of a command line is read. The line comes from the terminal (the shell's marks, which any output can forge), so it can be
- * any length; the options that matter are at its start. Every helper that reads a command line (`endsConversation`, `isPrintMode`,
- * `isClaudeCommand`, `isInteractiveCommand`) cuts its input to this head itself, whoever calls it.
- */
-export const COMMAND_HEAD = 4096;
 
 /** A command line that runs `claude` (after variables, `command` or a path), and what follows it. */
 const CLAUDE_LINE = /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s+([\s\S]*))?$/;

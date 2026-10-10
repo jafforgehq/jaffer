@@ -2,7 +2,6 @@ import type { VNode } from 'preact';
 import { cfg, currentClaude, resumeOffer, daemonUp, dismissToast, info, memPulse, safeCommand, side, tildePath, toasts, toggleSide } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
-import { dangerZone, DEFAULT_PROTECTED_BRANCHES } from '../../shared/danger-zone';
 import type { ClaudeCost } from '../../core/claude/watcher';
 import { IconBrain, IconBranch, IconInfo, IconPlay, IconX } from './icons';
 import { dismissResume, resumeClaude } from '../actions';
@@ -36,16 +35,11 @@ export function TitleBar(): VNode {
   const claude = currentClaude();
   const badge = processBadge(running, claude?.state);
   const cost = cfg.value?.claude?.showCost === false ? undefined : claude?.cost;
-  // a quiet tint where a slip costs more: a protected branch, or the wrong machine over ssh
-  const safety = cfg.value?.safety;
-  const danger = safety?.dangerTint === false ? null : dangerZone({ branch: i.branch, running, patterns: safety?.protectedBranches ?? DEFAULT_PROTECTED_BRANCHES });
-  const why = danger ? (danger.kind === 'ssh' ? `Connected over ssh to ${danger.what}: commands run there` : `On the protected branch ${danger.what}`) : undefined;
   return (
-    <div class="titlebar" data-danger={danger?.kind} data-danger-what={danger?.what}>
+    <div class="titlebar">
       <div class="tb-left" />
       <div class="tb-center">
-        <span class="session-pill" title={why ? `${why}\n${i.cwd}` : i.cwd}>
-          {why && <span class="sr-only">{why}. </span>}
+        <span class="session-pill" title={i.cwd}>
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
           <span class="cwd">{shortPath(i.cwd) || 'Jaffer'}</span>
           {i.branch && (

@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { caffeinateHold, isDefaultHome, spawnHold } from '../src/core/session/caffeinate';
-import { isInteractiveCommand, StayAwake, type Work } from '../src/core/session/stay-awake';
-import { STAY_AWAKE } from '../src/shared/keep-running';
+import { isInteractiveCommand, optionWords, StayAwake, WRAPPER_LONG_OPTIONS, WRAPPER_OPTIONS, type Work } from '../src/core/session/stay-awake';
+import { STAY_AWAKE } from '../src/shared/stay-awake-config';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 /** A fake clock and fake timers, as in finished-notifier.test.ts: nothing here waits for real time. */
@@ -471,7 +471,7 @@ describe('isInteractiveCommand', () => {
     }
   });
 
-  it('skips the options of sudo, env, nice, time and nohup and their values (the tables sshHost uses) before it looks at the program', () => {
+  it('skips the options of sudo, env, nice, time and nohup and their values before it looks at the program', () => {
     for (const cmd of ['sudo -u deploy vim', 'nice -n 10 top', 'env -u FOO ssh host', 'sudo -iu deploy ssh h', 'time -p vim', 'sudo -u deploy -- vim x', 'env -i PATH=/bin less x', 'sudo -g staff env FOO=1 nice -n 5 htop', 'nohup nice -n 19 tmux', 'sudo -Hu deploy -E vim x', 'sudo --user=deploy vim']) {
       expect(isInteractiveCommand(cmd), cmd).toBe(true);
     }
@@ -560,6 +560,43 @@ describe('isInteractiveCommand', () => {
   it('reads only the start of a line: a program after 4096 characters is not looked for', () => {
     expect(isInteractiveCommand(`${'a'.repeat(5000)} | vim`)).toBe(false);
     expect(isInteractiveCommand(`vim ${'a'.repeat(5000)}`)).toBe(true);
+  });
+});
+
+describe('optionWords and the wrapper tables (what isInteractiveCommand skips to find the program)', () => {
+  const sudo = WRAPPER_OPTIONS.sudo!;
+  const nice = WRAPPER_OPTIONS.nice!;
+
+  it('counts the words of a cluster of short options: the value attached, or the next word when the option that takes it comes last', () => {
+    expect(optionWords('-u', sudo)).toBe(2); // sudo -u deploy
+    expect(optionWords('-iu', sudo)).toBe(2); // sudo -iu deploy
+    expect(optionWords('-Hu', sudo)).toBe(2);
+    expect(optionWords('-udeploy', sudo)).toBe(1); // the value is attached
+    expect(optionWords('-iudeploy', sudo)).toBe(1);
+    expect(optionWords('-E', sudo)).toBe(1); // takes no value
+    expect(optionWords('-HE', sudo)).toBe(1);
+    expect(optionWords('-n', nice)).toBe(2); // nice -n 5
+    expect(optionWords('-n5', nice)).toBe(1);
+    expect(optionWords('-', sudo)).toBe(1);
+    expect(optionWords('-u', '')).toBe(1); // a wrapper whose options take nothing (command, exec, time, nohup)
+  });
+
+  it('counts a long option as two words only when the table lists it: `--user=deploy` and the ones with no value are one word', () => {
+    expect(optionWords('--user', sudo, WRAPPER_LONG_OPTIONS.sudo)).toBe(2);
+    expect(optionWords('--adjustment', nice, WRAPPER_LONG_OPTIONS.nice)).toBe(2);
+    expect(optionWords('--unset', WRAPPER_OPTIONS.env!, WRAPPER_LONG_OPTIONS.env)).toBe(2);
+    expect(optionWords('--user=deploy', sudo, WRAPPER_LONG_OPTIONS.sudo)).toBe(1);
+    expect(optionWords('--preserve-env', sudo, WRAPPER_LONG_OPTIONS.sudo)).toBe(1);
+    expect(optionWords('--user', sudo)).toBe(1); // no long table given: nothing is listed
+  });
+
+  it('lists command, exec, time, nohup, sudo, env and nice, and a long table only for the wrappers that have long options that take a value', () => {
+    expect(Object.keys(WRAPPER_OPTIONS).sort()).toEqual(['command', 'env', 'exec', 'nice', 'nohup', 'sudo', 'time']);
+    expect(Object.keys(WRAPPER_LONG_OPTIONS).sort()).toEqual(['env', 'nice', 'sudo']);
+    for (const [wrapper, options] of Object.entries(WRAPPER_LONG_OPTIONS)) {
+      expect(Object.hasOwn(WRAPPER_OPTIONS, wrapper), wrapper).toBe(true);
+      for (const o of options) expect(o.startsWith('--'), o).toBe(true);
+    }
   });
 });
 

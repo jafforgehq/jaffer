@@ -101,31 +101,6 @@ describe('session.restoreScreen', () => {
   });
 });
 
-describe('safety', () => {
-  it('marks risky places by default (main, master, production, prod, release/*), also for a config file saved before the setting existed', () => {
-    expect(DEFAULT_CONFIG.safety).toEqual({ dangerTint: true, protectedBranches: ['main', 'master', 'production', 'prod', 'release/*'] });
-    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
-    expect(new ConfigStore(env.paths).get().safety.dangerTint).toBe(true);
-    expect(new ConfigStore(env.paths).get().safety.protectedBranches).toContain('production');
-  });
-
-  it('keeps the list a person set, whole (it replaces the default, it is not added to it), and the switch independently', () => {
-    const store = new ConfigStore(env.paths);
-    store.patch({ safety: { protectedBranches: ['staging'] } });
-    store.patch({ safety: { dangerTint: false } });
-    const again = new ConfigStore(env.paths).get().safety;
-    expect(again).toEqual({ dangerTint: false, protectedBranches: ['staging'] });
-    store.patch({ safety: { protectedBranches: [] } });
-    expect(new ConfigStore(env.paths).get().safety.protectedBranches).toEqual([]);
-  });
-
-  it('never shares the default list: changing one config does not change another', () => {
-    const a = new ConfigStore(env.paths).get().safety.protectedBranches;
-    a.push('mutated');
-    expect(DEFAULT_CONFIG.safety.protectedBranches).not.toContain('mutated');
-  });
-});
-
 describe('notifications.claudeFinished', () => {
   it('is on by default, also for a config file saved before the setting existed, and can be switched off and stays off', () => {
     expect(DEFAULT_CONFIG.notifications.claudeFinished).toBe(true);
@@ -196,38 +171,51 @@ describe('a config file or patch with values of the wrong kind', () => {
   };
 
   it('loads, with the default for what does not fit: a section that is not an object, a switch that is not a boolean, a list that is not a list of text', () => {
-    const cfg = load({ session: null, safety: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
+    const cfg = load({ session: null, updates: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
     expect(cfg.session).toEqual(DEFAULT_CONFIG.session);
-    expect(cfg.safety).toEqual(DEFAULT_CONFIG.safety);
+    expect(cfg.updates).toEqual(DEFAULT_CONFIG.updates);
     expect(cfg.notifications).toEqual({ claudeFinished: true });
     expect(cfg.appearance.pet).toBe(true);
     expect(cfg.appearance.fontSize).toBe(13);
     expect(cfg.shell.args).toEqual([]);
   });
 
-  it('keeps the default branch list when the saved one is a string ("main,prod" is what `jaffer config set` stores) or has anything but text in it', () => {
-    expect(load({ safety: { protectedBranches: 'main,prod' } }).get().safety.protectedBranches).toEqual(DEFAULT_CONFIG.safety.protectedBranches);
-    expect(load({ safety: { protectedBranches: ['wip', 3, null] } }).get().safety.protectedBranches).toEqual(DEFAULT_CONFIG.safety.protectedBranches);
-    expect(load({ safety: { protectedBranches: ['wip', 'dev/*'] } }).get().safety.protectedBranches).toEqual(['wip', 'dev/*']);
+  it('keeps the default list when the saved one is a string ("-l,-i" is what `jaffer config set` stores) or has anything but text in it', () => {
+    expect(load({ shell: { args: '-l,-i' } }).get().shell.args).toEqual(DEFAULT_CONFIG.shell.args);
+    expect(load({ shell: { args: ['-l', 3, null] } }).get().shell.args).toEqual(DEFAULT_CONFIG.shell.args);
+    expect(load({ shell: { args: ['-l', '-i'] } }).get().shell.args).toEqual(['-l', '-i']);
   });
 
   it('refuses a patch of the wrong kind and keeps what was there, on disk too', () => {
     const store = load({});
-    store.patch({ safety: { protectedBranches: ['wip'] } });
-    store.patch({ safety: { protectedBranches: 'main,prod' as never }, session: { restoreScreen: 'off' as never } });
-    expect(store.get().safety.protectedBranches).toEqual(['wip']);
-    expect(store.get().session.restoreScreen).toBe(true);
+    store.patch({ shell: { args: ['-l'] } });
+    store.patch({ shell: { args: '-l,-i' as never }, session: { stayAwake: 'off' as never } });
+    expect(store.get().shell.args).toEqual(['-l']);
+    expect(store.get().session.stayAwake).toBe(true);
     const saved = JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
-    expect(saved.safety.protectedBranches).toEqual(['wip']);
-    expect(saved.session.restoreScreen).toBe(true);
-    store.patch({ session: { restoreScreen: false } }); // a value of the right kind still goes through
-    expect(store.get().session.restoreScreen).toBe(false);
+    expect(saved.shell.args).toEqual(['-l']);
+    expect(saved.session.stayAwake).toBe(true);
+    store.patch({ session: { stayAwake: false } }); // a value of the right kind still goes through
+    expect(store.get().session.stayAwake).toBe(false);
   });
 
-  it('keeps keys it does not know (a newer version wrote them) and bounds the branch list', () => {
-    const store = load({ future: { x: 1 }, safety: { protectedBranches: Array.from({ length: 500 }, (_, i) => `b${i}`.padEnd(400, 'x')) } });
+  it('keeps keys it does not know (a newer version wrote them)', () => {
+    const store = load({ future: { x: 1 } });
     expect((store.get() as any).future).toEqual({ x: 1 });
-    expect(store.get().safety.protectedBranches).toHaveLength(100);
-    expect(store.get().safety.protectedBranches.every((b) => b.length <= 200)).toBe(true);
+    store.patch({ session: { stayAwake: false } });
+    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).future).toEqual({ x: 1 });
+  });
+
+  it('an old config with a safety section (0.5.x: the title-bar tint and its branch list) loads: the key is kept as it was, nothing reads it any more', () => {
+    expect('safety' in DEFAULT_CONFIG).toBe(false);
+    // @ts-expect-error the title bar is not tinted any more: no code can read a safety section from the config's type
+    void DEFAULT_CONFIG.safety;
+    const old = { dangerTint: false, protectedBranches: ['staging', 'release/*'] };
+    const store = load({ onboarded: true, safety: old });
+    expect(store.get().onboarded).toBe(true);
+    expect((store.get() as any).safety).toEqual(old);
+    expect(load({ safety: 'oops' }).get().session).toEqual(DEFAULT_CONFIG.session); // even a section of the wrong kind does not stop it loading
+    store.patch({ session: { stayAwake: false } });
+    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).safety).toEqual(old); // left as it was by a patch of another key
   });
 });

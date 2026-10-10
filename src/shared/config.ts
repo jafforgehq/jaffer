@@ -1,4 +1,3 @@
-import { DEFAULT_PROTECTED_BRANCHES } from './danger-zone';
 import { DEFAULT_COMPANION, type Companion } from './companions';
 import type { JafferPaths } from './paths';
 import { Emitter, readJson, writeJson } from './util';
@@ -51,8 +50,6 @@ export interface JafferConfig {
     /** "Claude finished" when a turn that took half a minute or more ends. */
     claudeFinished: boolean;
   };
-  /** Where a slip costs more than usual: the title bar tints on a protected branch and while an ssh session runs. */
-  safety: { dangerTint: boolean; protectedBranches: string[] };
   session: {
     /** Save the screen and scrollback so they come back after a reboot or an update. Off: nothing of the screen is kept on disk (the folder is still restored). */
     restoreScreen: boolean;
@@ -98,7 +95,6 @@ export const DEFAULT_CONFIG: JafferConfig = {
   claude: { skipped: false, showCost: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
-  safety: { dangerTint: true, protectedBranches: [...DEFAULT_PROTECTED_BRANCHES] },
   session: { restoreScreen: true, resumeClaude: true, keepRunning: false, stayAwake: true },
   hotkey: 'Control+`',
 };
@@ -122,8 +118,8 @@ const isTextList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x
 /**
  * `value` with every key the reference knows brought to the reference's kind: a section stays an object, a switch a boolean, a
  * list a list of text. What does not fit becomes the reference's own value. Keys the reference does not know (a newer version
- * wrote them) pass through. A hand-edited file, or `jaffer config set safety.protectedBranches main,prod` (stored as the string
- * "main,prod"), must not be able to crash the window or stop the daemon starting, nor quietly keep a privacy setting from working.
+ * wrote them) pass through. A hand-edited file, or `jaffer config set shell.args -l,-i` (stored as the string
+ * "-l,-i"), must not be able to crash the window or stop the daemon starting, nor quietly keep a privacy setting from working.
  */
 function conform(value: unknown, ref: unknown): unknown {
   if (isRecord(ref)) {
@@ -136,16 +132,11 @@ function conform(value: unknown, ref: unknown): unknown {
   return typeof value === typeof ref ? value : ref;
 }
 
-/** The most branch patterns, and the longest one, that are kept: every one is run against the branch name on each title-bar update. */
-const MAX_BRANCH_PATTERNS = 100;
-const MAX_BRANCH_PATTERN_LENGTH = 200;
-
 /** Jaffer is for Claude Code only. Targets saved by earlier builds for other agents are dropped when a config is loaded. */
 function supported(cfg: JafferConfig): JafferConfig {
   return {
     ...cfg,
     export: { ...cfg.export, targets: cfg.export.targets.filter((t) => t === 'claude-code') },
-    safety: { ...cfg.safety, protectedBranches: cfg.safety.protectedBranches.slice(0, MAX_BRANCH_PATTERNS).map((b) => b.slice(0, MAX_BRANCH_PATTERN_LENGTH)) },
   };
 }
 

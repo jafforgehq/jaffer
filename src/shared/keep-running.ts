@@ -1,6 +1,6 @@
 /**
- * The numbers behind keeping the one session and Claude Code running: the notice before Restart Claude Code resumes the conversation,
- * and the hold that keeps the Mac from idle sleep while Claude works. One place, so the daemon, the window and the tests agree.
+ * The numbers behind keeping the one session and Claude Code running: the notice before Restart Claude Code resumes the conversation.
+ * One place, so the daemon, the window and the tests agree.
  */
 
 /** Restart Claude Code resuming the conversation in the new shell (the person confirmed it; nothing is resumed by itself). */
@@ -28,27 +28,8 @@ export const AUTO_RESUME_TEST = {
 export const RESTART_HOLD_MS = 30_000;
 export const RESTART_HOLD_TEST_MS = 5_000;
 
-/** Keeping the Mac awake (an idle-sleep assertion, no admin rights) while Claude works. */
-export const STAY_AWAKE = {
-  /** A command running this long in the shell holds the Mac awake too. */
-  commandAfterMs: 30_000,
-  /** The hold is let go this long after the work stops, so a short pause does not flap it. */
-  releaseDelayMs: 15_000,
-  /** A command alone never holds the Mac awake longer than this (six hours). */
-  commandCapMs: 21_600_000,
-  /** A hold that ended by itself (`caffeinate` killed or crashed) while the work goes on is taken up again after this wait... */
-  holdAgainFirstMs: 1_000,
-  /** ...which doubles each time it ends again, up to this... */
-  holdAgainMaxMs: 30_000,
-  /** ...and starts over after a clean minute. */
-  holdCleanMs: 60_000,
-} as const;
-
 /** The launchd label of the daemon's login agent. */
 export const AGENT_LABEL = 'com.jafforge.jaffer.daemon';
-
-/** The app's bundle identifier (`appId` in electron-builder.yml): the agent names it as its app, for Login Items. */
-export const APP_BUNDLE_ID = 'com.jafforge.jaffer';
 
 /**
  * How the login agent that keeps the session running stands, as the daemon tells it (`service.status`, `service.install`,

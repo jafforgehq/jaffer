@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { AGENT_LABEL, APP_BUNDLE_ID, type AgentStatus } from '../../shared/keep-running';
+import { AGENT_LABEL, type AgentStatus } from '../../shared/keep-running';
+import { APP_BUNDLE_ID } from '../../shared/stay-awake-config';
 
 export type { AgentStatus };
 

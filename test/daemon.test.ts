@@ -153,17 +153,18 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
 
   it('`jaffer config set` says so when a value is not of the right kind, instead of storing it and printing ok', async () => {
     const cli = (...a: string[]) => spawnSync(process.execPath, [launcher.cliScript!, ...a], { env: { ...process.env, ...launcher.env, JAFFER_HOME: env.home }, encoding: 'utf8', cwd: env.userHome });
-    const bad = cli('config', 'set', 'safety.protectedBranches', 'main,prod'); // the string "main,prod", not a list
+    const bad = cli('config', 'set', 'session.stayAwake', 'off'); // the string "off", not a boolean
     expect(bad.status).not.toBe(0);
-    expect(bad.stderr).toMatch(/safety\.protectedBranches/);
+    expect(bad.stderr).toMatch(/session\.stayAwake/);
     expect(bad.stdout).not.toContain('ok');
     const off = cli('config', 'set', 'session.restoreScreen', 'off'); // not a boolean: it must not look as if the screen were no longer kept
     expect(off.status).not.toBe(0);
     expect(JSON.parse(cli('config', 'get', 'session.restoreScreen').stdout)).toBe(true);
-    expect(JSON.parse(cli('config', 'get', 'safety.protectedBranches').stdout)).toContain('main');
-    const good = cli('config', 'set', 'safety.protectedBranches', '["wip","release/*"]');
+    expect(JSON.parse(cli('config', 'get', 'session.stayAwake').stdout)).toBe(true);
+    const good = cli('config', 'set', 'session.stayAwake', 'false');
     expect(good.status, good.stderr).toBe(0);
-    expect(JSON.parse(cli('config', 'get', 'safety.protectedBranches').stdout)).toEqual(['wip', 'release/*']);
+    expect(JSON.parse(cli('config', 'get', 'session.stayAwake').stdout)).toBe(false);
+    expect(cli('config', 'set', 'session.stayAwake', 'true').status).toBe(0);
     expect(cli('config', 'set', 'session.restoreScreen', 'true').status).toBe(0);
   });
 

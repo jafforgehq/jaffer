@@ -1,6 +1,5 @@
-import { COMMAND_HEAD } from '../../shared/claude-resume';
-import { optionWords, WRAPPER_LONG_OPTIONS, WRAPPER_OPTIONS } from '../../shared/danger-zone';
-import { STAY_AWAKE } from '../../shared/keep-running';
+import { COMMAND_HEAD } from '../../shared/process-badge';
+import { STAY_AWAKE } from '../../shared/stay-awake-config';
 
 /**
  * Keeping the Mac from idle sleep while something works: Claude working or running a background agent, or a plain command that has
@@ -11,8 +10,34 @@ import { STAY_AWAKE } from '../../shared/keep-running';
 /** Programs a person sits in: they run for hours without anything working, so they do not count as a command that works. `claude` is covered by its own state. */
 const INTERACTIVE = new Set(['ssh', 'mosh', 'vim', 'nvim', 'vi', 'less', 'man', 'top', 'htop', 'tmux', 'screen', 'watch', 'claude']);
 /**
+ * Programs that run the next command: with the short options that take the next word as their value (`sudo -u deploy`, `nice -n 5`).
+ * `isInteractiveCommand` reads a command line through this table.
+ */
+export const WRAPPER_OPTIONS: Readonly<Record<string, string>> = { command: '', exec: '', time: '', nohup: '', sudo: 'ugCDhpRrtTU', env: 'uSC', nice: 'n' };
+/**
+ * The long options of those programs that take the next word as their value (`sudo --user deploy`, `nice --adjustment 5`). The
+ * `--user=deploy` form is one word and is not listed; neither are the long options that take no value (`--preserve-env`).
+ */
+export const WRAPPER_LONG_OPTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  sudo: new Set(['--user', '--group', '--host', '--prompt', '--chdir', '--role', '--type', '--other-user', '--close-from', '--command-timeout']),
+  env: new Set(['--unset', '--chdir']),
+  nice: new Set(['--adjustment']),
+};
+
+/**
+ * Where `-vp 2222` or `-iu deploy` ends: a cluster of short options, of which the first that takes a value either has it attached
+ * (`-p2222`) or, when it is the last one, takes the next word. A long option (`--user deploy`) takes the next word when `longValue`
+ * lists it (`--user=deploy` and the ones that take no value are one word). Returns how many words the option uses.
+ */
+export function optionWords(w: string, takesValue: string, longValue?: ReadonlySet<string>): number {
+  if (w.startsWith('--')) return longValue?.has(w) ? 2 : 1;
+  for (let k = 1; k < w.length; k++) if (takesValue.includes(w[k]!)) return k === w.length - 1 ? 2 : 1;
+  return 1;
+}
+
+/**
  * Words that run another program (`sudo -u deploy vim`, `env -u FOO ssh`, `nice -n 10 top`): skipped, with their options and the
- * values those take, to find the program. The table `sshHost` uses (danger-zone), and `builtin`, which takes none.
+ * values those take, to find the program. The table above, and `builtin`, which takes none.
  */
 const wrapperOptions = (w: string): string | undefined => (Object.hasOwn(WRAPPER_OPTIONS, w) ? WRAPPER_OPTIONS[w] : w === 'builtin' ? '' : undefined);
 const wrapperLongOptions = (w: string): ReadonlySet<string> | undefined => (Object.hasOwn(WRAPPER_LONG_OPTIONS, w) ? WRAPPER_LONG_OPTIONS[w] : undefined);

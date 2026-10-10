@@ -6,7 +6,7 @@ import { applyBlock, removeClaudeSkills, targetDefs } from './memory/exports';
 import { agentPaths, bootoutNote, execLaunchctl, LaunchAgent, REFUSED_NOT_MAC, REFUSED_OTHER_HOME, type AgentStatus, type Launchctl } from './service/launch-agent';
 import { isDefaultHome } from './session/caffeinate';
 import { ConfigStore } from '../shared/config';
-import { APP_BUNDLE_ID } from '../shared/keep-running';
+import { APP_BUNDLE_ID } from '../shared/stay-awake-config';
 import { makePaths } from '../shared/paths';
 
 export interface ResetOptions {
