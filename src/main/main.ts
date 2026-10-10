@@ -15,7 +15,7 @@ import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
-import { childExitAction, childExitText, LEGACY_DIALOG, legacyDaemonAction, QUIT_BUTTONS, quitNeedsConfirm, type QuitAsk } from '../shared/quit-policy';
+import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, type QuitAsk } from '../shared/quit-policy';
 import { isClaudeCommand } from '../shared/process-badge';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
@@ -60,11 +60,14 @@ let hotkey = '';
 const windowFile = path.join(paths.home, 'window.json');
 
 app.setName('Jaffer');
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-}
-
-app.on('second-instance', () => showWindow());
+/**
+ * Only the first instance runs. Another one (Jaffer opened from the disk image while the installed copy runs, `open -n`, the binary run by
+ * hand) hands over to it and exits at once: nothing of the start below ever runs in it (it would find the first instance's own terminal
+ * answering on the socket and offer to end it). `app.exit`, not `app.quit`: no quit sequence, no event of this file.
+ */
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.exit(0);
+else app.on('second-instance', () => showWindow());
 
 // ---------------------------------------------------------------- the terminal (the app's child)
 
@@ -99,6 +102,7 @@ async function startTerminal(): Promise<void> {
   owned = o;
   client = o.client;
   runningCommand = null;
+  prevClaude = []; // a fresh terminal has no Claude yet: nothing of the old one's may count (the quit question, "needs you")
   wireClient(o.client, o);
   void o.exited.then((how) => onChildExit(o, how));
   await syncHotkey();
@@ -165,18 +169,23 @@ async function onConnectionLost(o: OwnedDaemon): Promise<void> {
 
 /**
  * An older Jaffer kept its session running in the background, and it may still hold the socket (a new version installed over a running
- * one). The person is asked once; then it is asked to end (`app.shutdown`, which every older version knows) and the start waits for the
- * socket to go. False: the person chose Quit, or it did not end.
+ * one). The person is asked once (Return and Esc mean Quit); then it is asked to end (`app.shutdown`, which every older version knows)
+ * and the start waits for the socket to go. False: the person chose Quit, it did not end, or this is not the first instance.
  */
 async function endOlderSession(): Promise<boolean> {
+  if (!gotLock) return false; // (never reached in a second instance; and never its call to make)
   const c = await tryConnect(paths);
   const hello = c ? await c.call<{ pid?: unknown }>('hello', { client: 'app', protocol: 1 }, 3_000).catch(() => null) : null;
-  const action = legacyDaemonAction({ answers: !!c, pid: typeof hello?.pid === 'number' ? hello.pid : null, ownPid: owned?.pid ?? null });
+  const action = legacyDaemonAction({ answers: !!c, pid: typeof hello?.pid === 'number' ? hello.pid : null, ownPid: owned?.pid ?? null, firstInstance: gotLock });
+  if (action === 'leave') {
+    c?.close();
+    return false;
+  }
   if (action !== 'ask') {
     c?.close();
     return true;
   }
-  const r = await dialog.showMessageBox({ type: 'warning', message: LEGACY_DIALOG.message, detail: LEGACY_DIALOG.detail, buttons: [...LEGACY_DIALOG.buttons], defaultId: 0, cancelId: 1 });
+  const r = await dialog.showMessageBox({ type: 'warning', message: LEGACY_DIALOG.message, detail: LEGACY_DIALOG.detail, buttons: [...LEGACY_DIALOG.buttons], defaultId: LEGACY_DIALOG.defaultId, cancelId: LEGACY_DIALOG.cancelId });
   if (r.response !== 0) {
     c?.close();
     return false;
@@ -190,7 +199,7 @@ async function endOlderSession(): Promise<boolean> {
     still.close();
     await sleep(200);
   }
-  await dialog.showMessageBox({ type: 'error', message: 'The older Jaffer session did not end', detail: 'It is still running after 10 seconds. End it with `jaffer daemon stop` in Terminal, or restart the Mac, then open Jaffer again.' });
+  await dialog.showMessageBox({ type: 'error', message: LEGACY_NOT_ENDED.message, detail: LEGACY_NOT_ENDED.detail });
   return false;
 }
 
@@ -601,6 +610,7 @@ ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
 // ---------------------------------------------------------------- lifecycle
 
 app.whenReady().then(async () => {
+  if (!gotLock) return; // a second instance is on its way out (app.exit above): no menu, no start, no window, no smoke test
   buildMenu();
   // The start, in this order: an older Jaffer's background session ended (the person is asked first), Jaffer's home prepared, then the
   // app's own terminal started and connected.
@@ -690,7 +700,7 @@ async function confirmQuit(ask: QuitAsk): Promise<void> {
   if (askingToQuit) return;
   askingToQuit = true;
   try {
-    const opts = { type: 'warning' as const, message: ask.message, detail: ask.detail, buttons: [...QUIT_BUTTONS], defaultId: 0, cancelId: 1 };
+    const opts = { type: 'warning' as const, message: ask.message, detail: ask.detail, buttons: [...QUIT_BUTTONS], defaultId: QUIT_DEFAULT_ID, cancelId: QUIT_CANCEL_ID };
     const r = win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
     if (r.response !== 0) return;
     quitConfirmed = true;

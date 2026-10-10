@@ -14,15 +14,27 @@ import { sleep } from '../src/shared/util';
  * never writes), and the end of that pipe, however it comes (the app quits, crashes or is killed), ends the daemon, its shell with it.
  * Without the flag nothing changes: the tests and `ensureDaemon` start the daemon with `stdio: 'ignore'`.
  *
- * Real processes against the daemon as the build bundles it. The bundle is built here, next to the shipped one under a name of its own:
- * the other test files rebuild `dist/daemon/jafferd.cjs` while theirs run, and a daemon started while the file is being rewritten could
- * read half of it.
+ * Real processes against the daemon as the build bundles it. The bundle is built here under a name of its own: the other test files
+ * rebuild `dist/daemon/jafferd.cjs` while theirs run, and a daemon started while the file is being rewritten could read half of it. It is
+ * written beside `dist/daemon`, not in it: `dist/daemon/**` is what the app packages (electron-builder.yml), and nothing of a test may end
+ * up there. From `dist/owned-daemon-test/` the bundle finds `../cli/jaffer.cjs` and `node_modules` exactly as the shipped one does.
  */
 const root = path.resolve(__dirname, '..');
-const bundle = path.join(root, 'dist', 'daemon', `jafferd-owned-test-${process.pid}.cjs`);
+const bundleDir = path.join(root, 'dist', 'owned-daemon-test');
+const bundle = path.join(bundleDir, `jafferd-owned-test-${process.pid}.cjs`);
 const envs: TestEnv[] = [];
-/** Every process a test here starts (daemons, shells, stand-in parents): whatever a failing test left is killed at the end. */
+/**
+ * Every process a test here starts (daemons, shells, stand-in parents): whatever a failing test left is killed at the end. A pid is
+ * dropped as soon as it is seen to have ended, so a number the system has since given to another process is never killed.
+ */
 const started = new Set<number>();
+
+/** Track a process this file spawned itself: dropped when it exits. */
+function trackChild(child: ChildProcess): void {
+  const pid = child.pid!;
+  started.add(pid);
+  child.once('exit', () => started.delete(pid));
+}
 
 beforeAll(async () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -41,10 +53,15 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  for (const pid of started) if (alive(pid)) process.kill(pid, 'SIGKILL');
+  for (const pid of [...started]) if (alive(pid)) process.kill(pid, 'SIGKILL'); // (only what was never seen to end)
   await sleep(200);
   for (const e of envs) e.cleanup();
   fs.rmSync(bundle, { force: true });
+  try {
+    fs.rmdirSync(bundleDir); // (only when empty: another run's bundle may still be in use)
+  } catch {
+    /* not empty, or gone */
+  }
 });
 
 function env(): TestEnv {
@@ -57,12 +74,14 @@ function launcherFor(e: TestEnv): Launcher {
   return { execPath: process.execPath, daemonScript: bundle, env: { HOME: e.userHome, SHELL: '/bin/bash', PS1: '$ ' } };
 }
 
+/** Whether `pid` still runs as one of ours; one seen to have ended (or to be another user's by now) is dropped from `started`. */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  } catch {
+    started.delete(pid); // ESRCH: ended; EPERM: the number belongs to someone else's process now
+    return false;
   }
 }
 
@@ -101,7 +120,7 @@ describe('the app owns its terminal host (bundled daemon, real processes)', () =
     const e = env();
     const s = ownedSpawnArgs(e.paths, launcherFor(e));
     const child = spawn(s.command, s.args, s.options);
-    started.add(child.pid!);
+    trackChild(child);
     const exited = exitOf(child);
     const { shellPid, close, call } = await shellOf(e);
     // the flag is the app's word to this one daemon: the shell (and a test or a daemon started from it) never sees it
@@ -121,7 +140,7 @@ describe('the app owns its terminal host (bundled daemon, real processes)', () =
       env: { ...process.env, ...launcherFor(e).env, JAFFER_HOME: e.home, JAFFER_OWNED: undefined },
       stdio: ['pipe', 'ignore', 'ignore'],
     });
-    started.add(child.pid!);
+    trackChild(child);
     const exited = exitOf(child);
     const { shellPid, close, call } = await shellOf(e);
     child.stdin!.end();
@@ -152,7 +171,7 @@ setInterval(() => {}, 1000);
 `,
     );
     const app = spawn(process.execPath, [script, spec], { stdio: ['ignore', 'pipe', 'ignore'] });
-    started.add(app.pid!);
+    trackChild(app);
     const daemonPid = await new Promise<number>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('the stand-in never said its child')), 15_000);
       app.stdout!.on('data', (d) => (clearTimeout(t), resolve(Number(String(d).trim()))));
@@ -171,6 +190,7 @@ setInterval(() => {}, 1000);
     const e = env();
     const owned = await startOwnedDaemon(e.paths, launcherFor(e));
     started.add(owned.pid);
+    void owned.exited.then(() => started.delete(owned.pid));
     expect((await owned.client.call('hello', {})).pid).toBe(owned.pid);
     const { shellPid, close } = await shellOf(e);
     close();
@@ -186,6 +206,7 @@ setInterval(() => {}, 1000);
     const e = env();
     const owned = await startOwnedDaemon(e.paths, launcherFor(e));
     started.add(owned.pid);
+    void owned.exited.then(() => started.delete(owned.pid));
     const other = (await tryConnect(e.paths))!;
     await other.call('app.shutdown', {});
     other.close();
