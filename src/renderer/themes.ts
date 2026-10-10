@@ -136,7 +136,6 @@ export function cssVars(theme: JafferTheme, opacity: number): Record<string, str
     '--accent-line': withAlpha(accent, 0.45),
     '--accent-ink': dark ? '#0b0c0f' : '#ffffff',
     '--branch': theme.term.cyan ?? '#5eead4',
-    '--branch-soft': withAlpha(theme.term.cyan ?? '#5eead4', dark ? 0.14 : 0.12),
     '--info': theme.term.blue ?? '#6aa8ff',
     '--info-soft': withAlpha(theme.term.blue ?? '#6aa8ff', dark ? 0.15 : 0.12),
     '--violet': theme.term.magenta ?? '#c792ea',

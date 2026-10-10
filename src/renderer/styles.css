@@ -32,7 +32,6 @@
   --accent-line: rgba(255, 138, 76, 0.45);
   --accent-ink: #0b0c0f;
   --branch: #5eead4;
-  --branch-soft: rgba(94, 234, 212, 0.14);
   --info: #6aa8ff;
   --info-soft: rgba(106, 168, 255, 0.15);
   --violet: #c792ea;
@@ -164,8 +163,6 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .btn.big { height: 38px; padding: 0 24px; font-size: 14px; border-radius: 10px; }
 .btn kbd { margin-left: 2px; }
 .btn.primary kbd { background: rgba(0, 0, 0, 0.14); border-color: rgba(0, 0, 0, 0.12); color: var(--accent-ink); }
-.linkish { border: 0; background: none; color: var(--accent); padding: 0; font: inherit; }
-.linkish:hover { text-decoration: underline; }
 input[type='text'], input[type='password'], input[type='number'], input:not([type]), select, textarea {
   background: var(--hover); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 0 10px; height: 30px; outline: none; user-select: text; -webkit-user-select: text; transition: border-color 0.12s, box-shadow 0.12s;
 }
@@ -201,7 +198,6 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .toast-ico { flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--hover); color: var(--muted); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong)); } .toast.error .toast-ico { background: var(--danger-soft); color: var(--danger); }
 .toast-text { flex: 1; min-width: 0; user-select: text; -webkit-user-select: text; }
-.toast .linkish { font-weight: 600; padding: 0 4px; }
 @keyframes rise { from { transform: translateY(10px) scale(0.98); opacity: 0; } }
 
 /* ============================================================== overlays */
@@ -305,14 +301,14 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .ob-actions { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .ob-error { margin: 0; font-size: 12.5px; color: var(--danger); line-height: 1.45; }
 .ob-note { margin: 2px 0 0; font-size: 12px; line-height: 1.5; text-align: center; }
-/* An ordinary laptop window is under 900px high: the three feature cards are the part to give up, so that all four choices and the button fit. */
+/* An ordinary laptop window is under 900px high: the feature cards are the part to give up, so that the choices and the button fit. */
 @media (max-height: 900px) { .onboard .features { display: none; } .modal:has(.onboard) { max-height: 92vh; } }
 /* sticky: however short the window, the way forward stays in view while the choices scroll behind it */
 .onboard-foot { display: flex; align-items: center; gap: 14px; margin: 18px -34px -24px; padding: 14px 34px 24px; position: sticky; bottom: 0; z-index: 1; background: linear-gradient(to bottom, transparent, var(--surface) 18px); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
 
-/* The pet: a mole in the sidebar. Every pose is a [data-mood] state (so it is right with Animations off too); the motion is only
+/* The pet: a mole in a corner of the terminal card. Every pose is a [data-mood] state (so it is right with Animations off too); the motion is only
    added under :root:not([data-motion='off']), and macOS Reduce motion stops it through the global rule below. */
 .pet-corner { position: absolute; right: 22px; bottom: 10px; z-index: 3; pointer-events: none; opacity: 0.94; display: flex; flex-direction: row-reverse; align-items: flex-end; }
 /* helpers: one smaller mole per running background agent, standing to the left of the main one */
@@ -635,6 +631,3 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .comp-mole { display: flex; flex-direction: row-reverse; align-items: flex-end; transform: scale(0.82); transform-origin: center bottom; padding-bottom: 6px; }
 .comp-name { font-size: 12px; font-weight: 600; margin-top: 3px; }
 .comp-blurb { font-size: 10.5px; line-height: 1.35; color: var(--faint); }
-
-/* text for a screen reader that the eye does not need (the tint and the tooltip say it already) */
-.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

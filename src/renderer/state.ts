@@ -47,7 +47,6 @@ export interface Toast {
   id: number;
   kind: 'info' | 'error';
   text: string;
-  action?: { label: string; run: () => void };
 }
 export const toasts = signal<Toast[]>([]);
 let toastId = 1;

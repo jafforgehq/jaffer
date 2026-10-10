@@ -903,6 +903,7 @@ describe('Jaffer UI end to end', () => {
 
   // A shell that exits is replaced by a fresh one, and the window starts over with it. The fresh shell's output counts from 1 again: a
   // window that kept the old shell's count (this one re-attached after a lot of output, just above) would drop it and keep the old screen.
+  // (Here it depends on running after the reload test above; the daemon test of the `pty.reset` after a replaced shell, in test/daemon.test.ts, is the reliable guard.)
   it('after `exit` the window shows the fresh shell: the old screen is gone, and what the new shell prints shows', async () => {
     // (typed as the window types, straight to the shell: a key pressed just after the page loaded can miss the terminal; Ctrl+U first
     // clears whatever an earlier test may have left on the line)

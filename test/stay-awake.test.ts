@@ -557,6 +557,38 @@ describe('isInteractiveCommand', () => {
     }
   });
 
+  // The same lines, at 8 MB (a forged mark can carry 10 MB: CLAUDE.md asks for 1 MB and 8 MB timing tests of every command-line helper).
+  it('reads the same crafted lines at 8 MB in a blink too (only the start of it is read)', () => {
+    const MB = 1_000_000;
+    const lines = [
+      'sudo -u ' + 'a'.repeat(8 * MB),
+      'nice ' + '-n 5 '.repeat(1_600_000) + 'top',
+      'env ' + '-uX '.repeat(2_000_000) + 'vim',
+      'sudo ' + '-'.repeat(8 * MB),
+      'time ' + '-p '.repeat(2_640_000) + 'vim',
+      'env ' + 'A=1 -u B '.repeat(880_000),
+      'sudo ' + '--user a '.repeat(880_000) + 'vim',
+      'env ' + '--unset a '.repeat(800_000) + 'ssh h',
+      'nice ' + '--adjustment 5 '.repeat(560_000) + 'top',
+      'sudo ' + '--user '.repeat(1_200_000),
+      'a '.repeat(4 * MB),
+      ' '.repeat(8 * MB) + 'ssh host',
+      '|'.repeat(8 * MB),
+      'FOO=1 '.repeat(1_360_000),
+      'sudo '.repeat(1_600_000) + 'vim',
+      'tail ' + '-n '.repeat(2_640_000) + '-f',
+      ('x'.repeat(100) + ' ').repeat(80_000),
+      '\\'.repeat(8 * MB),
+      '"'.repeat(8 * MB),
+    ];
+    for (const line of lines) {
+      expect(line.length, line.slice(0, 20)).toBeGreaterThanOrEqual(7.9 * MB); // (about 8 MB each)
+      const t0 = performance.now();
+      expect(() => isInteractiveCommand(line), line.slice(0, 20)).not.toThrow();
+      expect(performance.now() - t0, line.slice(0, 20)).toBeLessThan(100);
+    }
+  });
+
   it('reads only the start of a line: a program after 4096 characters is not looked for', () => {
     expect(isInteractiveCommand(`${'a'.repeat(5000)} | vim`)).toBe(false);
     expect(isInteractiveCommand(`vim ${'a'.repeat(5000)}`)).toBe(true);

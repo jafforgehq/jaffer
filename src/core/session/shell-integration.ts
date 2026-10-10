@@ -16,10 +16,9 @@ export interface ShellSpawn {
   file: string;
   args: string[];
   env: Record<string, string>;
-  kind: 'zsh' | 'bash' | 'fish' | 'other';
 }
 
-export function shellKind(shellPath: string): ShellSpawn['kind'] {
+export function shellKind(shellPath: string): 'zsh' | 'bash' | 'fish' | 'other' {
   const base = path.basename(shellPath);
   if (base === 'zsh') return 'zsh';
   if (base === 'bash') return 'bash';
@@ -80,16 +79,16 @@ export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
     if (env.ZDOTDIR) env.JAFFER_USER_ZDOTDIR = env.ZDOTDIR;
     env.JAFFER_ZSH_DIR = path.join(o.paths.shellDir, 'zsh');
     env.ZDOTDIR = env.JAFFER_ZSH_DIR;
-    return { file: o.shell, args: [...(login ? ['-l'] : []), '-i', ...extra], env, kind };
+    return { file: o.shell, args: [...(login ? ['-l'] : []), '-i', ...extra], env };
   }
   if (kind === 'bash') {
     env.JAFFER_LOGIN = login ? '1' : '0';
-    return { file: o.shell, args: ['--init-file', path.join(o.paths.shellDir, 'jaffer-bash-init.sh'), '-i', ...extra], env, kind };
+    return { file: o.shell, args: ['--init-file', path.join(o.paths.shellDir, 'jaffer-bash-init.sh'), '-i', ...extra], env };
   }
   if (kind === 'fish') {
-    return { file: o.shell, args: [...(login ? ['-l'] : []), '-i', '-C', `source ${JSON.stringify(path.join(o.paths.shellDir, 'jaffer-integration.fish'))}`, ...extra], env, kind };
+    return { file: o.shell, args: [...(login ? ['-l'] : []), '-i', '-C', `source ${JSON.stringify(path.join(o.paths.shellDir, 'jaffer-integration.fish'))}`, ...extra], env };
   }
-  return { file: o.shell, args: [...(login ? ['-l'] : []), ...extra], env, kind: 'other' };
+  return { file: o.shell, args: [...(login ? ['-l'] : []), ...extra], env };
 }
 
 export function defaultShell(env: NodeJS.ProcessEnv = process.env): string {

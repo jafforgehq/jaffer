@@ -73,17 +73,6 @@ export function Toasts(): VNode {
         <div key={t.id} class={`toast ${t.kind}`}>
           <span class="toast-ico">{t.kind === 'error' ? <IconX size={13} /> : <IconInfo size={13} />}</span>
           <span class="toast-text">{t.text}</span>
-          {t.action && (
-            <button
-              class="linkish"
-              onClick={() => {
-                t.action!.run();
-                dismissToast(t.id);
-              }}
-            >
-              {t.action.label}
-            </button>
-          )}
           <button class="icon-btn sm" onClick={() => dismissToast(t.id)} aria-label="Dismiss">
             <IconX size={12} />
           </button>
