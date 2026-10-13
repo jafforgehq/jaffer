@@ -1,0 +1,17 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/work/app/README.md",
+    "content": "# app\n"
+  },
+  "tool_use_id": "toolu_w1"
+}

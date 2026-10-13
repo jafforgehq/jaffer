@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { commandNotification, needsYouNotification } from '../src/shared/notify-policy';
 import type { ClaudeSession, ClaudeState } from '../src/core/claude/watcher';
 
-const s = (state: ClaudeState, notice?: string, id = 's1'): ClaudeSession => ({ id, state, since: 1, subagents: [], notice });
+const s = (state: ClaudeState, notice?: string, id = 's1'): ClaudeSession => ({ id, state, since: 1, startedAt: 1, turns: 0, calls: [], counts: {}, files: [], subagents: [], notice });
 const away = { windowFocused: false, lastTerminalNotifyAt: 0, now: 100_000 };
 
 describe('needsYouNotification', () => {

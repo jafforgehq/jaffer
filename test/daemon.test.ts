@@ -496,7 +496,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   it('starts with no session, and an install from before gets the new events without touching the user\'s own hook', async () => {
     expect(await states()).toEqual([]);
     const s = JSON.parse(fs.readFileSync(settings(), 'utf8'));
-    for (const e of ['SessionStart', 'Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Notification', 'SessionEnd']) {
+    for (const e of ['SessionStart', 'Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Notification', 'SessionEnd', 'PreCompact']) {
       const ours = (s.hooks[e] as any[]).flatMap((x) => x.hooks).filter((h: any) => String(h.command).includes('# jaffer-managed'));
       expect(ours, e).toHaveLength(1);
       // the old SessionStart and Stop (which fed the memory, and ran for every Claude on the Mac) are now async and guarded like the rest
@@ -525,6 +525,21 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await hookCli('user-prompt-submit', ev('UserPromptSubmit', { session_id: 'elsewhere', prompt: 'from another terminal' }), false);
     await sleep(300);
     expect(JSON.stringify(await states())).toBe(before);
+  });
+
+  it('claude.hooks says when each of the eleven hook events was last heard since the daemon started, and PreCompact marks the session compacting', async () => {
+    const before = Date.now();
+    await hookCli('pre-compact', ev('PreCompact', { trigger: 'manual', custom_instructions: '' }));
+    const { events } = await c.call('claude.hooks', {});
+    expect(Object.keys(events).sort()).toEqual(['Notification', 'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']);
+    expect(events.PreCompact).toBeGreaterThanOrEqual(before);
+    expect(events.Stop).toBeLessThan(before); // heard in the test before this one
+    expect(events.UserPromptSubmit).toBeLessThan(before);
+    expect(events.PostToolUseFailure).toBeNull(); // nothing sent it yet
+    expect((await states()).find((s) => s.id === 'sess-1')).toMatchObject({ compacting: true });
+    await c.call('claude.event', ev('SessionStart', { source: 'compact' }));
+    expect((await states()).find((s) => s.id === 'sess-1')?.compacting).toBeUndefined();
+    expect((await c.call('claude.hooks', {})).events.SessionStart).toBeGreaterThanOrEqual(before);
   });
 
   it('a permission request is retracted when the transcript records that the user rejected it in the terminal', async () => {

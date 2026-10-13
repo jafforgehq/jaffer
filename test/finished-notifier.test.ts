@@ -53,7 +53,7 @@ beforeEach(() => {
 });
 
 const turn = (usd: number | undefined): TurnCost => ({ usd, input: 1, output: 2, cacheRead: 0, cacheWrite: 0, messages: 1 });
-const session = (state: ClaudeSession['state'], over: Partial<ClaudeSession> = {}): ClaudeSession => ({ id: 's1', state, since: now, subagents: [], ...over });
+const session = (state: ClaudeSession['state'], over: Partial<ClaudeSession> = {}): ClaudeSession => ({ id: 's1', state, since: now, startedAt: now, turns: 0, calls: [], counts: {}, files: [], subagents: [], ...over });
 const withCost = (usd: number | undefined, answers: number): ClaudeSession['cost'] => ({ last: turn(usd), totalUsd: usd ?? 0, answers, partial: usd === undefined, at: now });
 
 /** A turn that began `ms` ago, working now. */

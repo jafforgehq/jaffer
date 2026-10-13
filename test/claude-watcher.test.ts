@@ -24,7 +24,7 @@ const only = (): TrackedSession => {
 describe('ClaudeWatcher', () => {
   it('SessionStart creates an idle session that knows where its transcript is', () => {
     w.handle(fx('SessionStart'));
-    expect(only()).toEqual({ id: 'sess-1', state: 'idle', since: 1_000, subagents: [], transcriptPath: expect.stringContaining('sess-1.jsonl') });
+    expect(only()).toEqual({ id: 'sess-1', state: 'idle', since: 1_000, startedAt: 1_000, turns: 0, calls: [], counts: {}, files: [], subagents: [], transcriptPath: expect.stringContaining('sess-1.jsonl') });
   });
 
   it('an event for a session it has not seen creates it (hooks installed mid-session)', () => {
@@ -327,19 +327,35 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions().map((s) => s.state)).toEqual(['ended', 'ended']);
   });
 
-  it('keeps nothing the person wrote or Claude answered: no prompt, command, file name, reply or folder, and only a name and an id of the tool', () => {
+  // Changed on purpose for 1.0.0 (the spec narrows the rule): the paths of the files Claude edits or writes are now kept, in memory,
+  // redacted and never a sensitive one, with the names, counts, timings and failures of its tool calls. Nothing else of a payload is.
+  it('keeps nothing the person wrote or Claude answered: no prompt, command, reply, folder or tool argument; only tool names, counts, timings, failures and the paths it edits (never a sensitive one)', () => {
     const home = '/home/me/secret-project';
-    const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist'];
+    const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', '.ssh', 'id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist', 'heist-description', 'OLD-TEXT', 'NEW-TEXT', 'FILE-CONTENT', 'read-only.ts', 'ERROR-TEXT'];
     w.handle(fx('SessionStart', { cwd: home, model: 'claude-opus-5-5' }));
     w.handle(fx('UserPromptSubmit', { prompt: `PROMPT-SECRET-WORDS ${TOKEN}`, cwd: home }));
     w.handle(fx('PreToolUse', bash('cat /home/me/.ssh/id_rsa')));
-    w.handle(fx('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: `${home}/a.ts`, old_string: 'plan-the-heist' }, tool_use_id: 'toolu_e' }));
+    w.handle(fx('PostToolUseFailure', { ...bash('cat /home/me/.ssh/id_rsa'), error: 'ERROR-TEXT' }));
+    const read = { tool_name: 'Read', tool_input: { file_path: '/work/app/src/read-only.ts' }, tool_use_id: 'toolu_r' };
+    w.handle(fx('PreToolUse', read));
+    w.handle(fx('PostToolUse', { ...read, tool_response: { file: { content: 'FILE-CONTENT' } } }));
+    const edit = { tool_name: 'Edit', tool_input: { file_path: '/work/app/src/a.ts', old_string: 'OLD-TEXT', new_string: 'NEW-TEXT' }, tool_use_id: 'toolu_e' };
+    w.handle(fx('PreToolUse', edit));
+    w.handle(fx('PostToolUse', { ...edit, tool_response: { filePath: '/work/app/src/a.ts', originalFile: 'FILE-CONTENT' } }));
+    const key = { tool_name: 'Write', tool_input: { file_path: '/home/me/.ssh/authorized_keys', content: 'FILE-CONTENT' }, tool_use_id: 'toolu_k' };
+    w.handle(fx('PreToolUse', key));
+    expect(only().file).toBeUndefined(); // a sensitive path is not even shown while it is written
+    w.handle(fx('PostToolUse', key));
+    w.handle(fx('PreToolUse', { tool_name: 'Agent', tool_input: { description: 'heist-description', prompt: 'plan-the-heist', subagent_type: 'plan-the-heist' }, tool_use_id: 'toolu_g' }));
     w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'plan-the-heist' }));
-    w.handle(fx('PostToolUse', { ...bash('cat /home/me/.ssh/id_rsa'), tool_response: { stdout: 'PROMPT-SECRET-WORDS' } }));
     w.handle(fx('Stop', { last_assistant_message: `REPLY-SECRET-WORDS ${TOKEN}` }));
     const state = JSON.stringify(w.sessions());
     for (const word of words) expect(state, word).not.toContain(word);
-    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['id', 'since', 'state', 'subagents', 'transcriptPath', 'turnStartedAt']); // what is set at all (JSON drops the undefined)
+    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['calls', 'counts', 'files', 'id', 'since', 'startedAt', 'state', 'subagents', 'transcriptPath', 'turnStartedAt', 'turns']); // what is set at all (JSON drops the undefined)
+    for (const call of JSON.parse(state)[0].calls) for (const k of Object.keys(call)) expect(['name', 'category', 'startedAt', 'endedAt', 'failed', 'agentId', 'id']).toContain(k);
+    expect(only().files).toEqual(['/work/app/src/a.ts']); // the one path it keeps: a file Claude edited, not one it read, not a key
+    expect(only().calls.map((c) => [c.name, c.failed ?? false])).toEqual([['Bash', true], ['Read', false], ['Edit', false], ['Write', false], ['Agent', false]]);
+    expect(only().counts).toEqual({ shell: 1, read: 1, write: 2, agent: 1 });
     expect(only().subagents).toEqual([{ id: 'bg-1', status: 'running', startedAt: 1_000 }]);
   });
 
@@ -348,7 +364,7 @@ describe('ClaudeWatcher', () => {
     expect(w.sessions()[0]!.transcriptPath).toContain('sess-1.jsonl');
     const out = w.view();
     expect(out).toHaveLength(1);
-    expect(out[0]).toEqual({ id: 'sess-1', state: 'working', since: 1_000, turnStartedAt: 1_000, tool: { name: 'Bash', id: 'toolu_2' }, subagents: [] });
+    expect(out[0]).toEqual({ id: 'sess-1', state: 'working', since: 1_000, turnStartedAt: 1_000, tool: { name: 'Bash', id: 'toolu_2' }, subagents: [], startedAt: 1_000, turns: 0, calls: [{ name: 'Bash', category: 'shell', startedAt: 1_000 }], counts: { shell: 1 }, files: [] });
     expect(JSON.stringify(out)).not.toContain('.jsonl');
   });
 
@@ -490,5 +506,250 @@ describe('ClaudeWatcher: a turn that did not end on its own', () => {
     w.handle(fx('UserPromptSubmit', { prompt: 'SECRET prompt' }));
     w.interrupted('sess-1');
     expect(w.view()[0]!.cutShort).toBe(true);
+  });
+});
+
+describe('ClaudeWatcher: the tool calls of a turn (names, kinds, timings, failures)', () => {
+  it('records each call with its name, its kind and when it ran, and whether it failed; the ids stay in the daemon', () => {
+    w.handle(fx('UserPromptSubmit'));
+    t = 2_000;
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+    t = 2_500;
+    w.handle(fx('PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/app/a.ts' }, tool_use_id: 'toolu_b' }));
+    t = 3_000;
+    w.handle(fx('PostToolUse', { tool_name: 'Read', tool_use_id: 'toolu_b' }));
+    t = 4_000;
+    w.handle(fx('PostToolUseFailure', { ...bash('npm test', 'toolu_a'), error: 'exit 1' }));
+    const out = w.view()[0]!;
+    expect(out.calls).toEqual([
+      { name: 'Bash', category: 'shell', startedAt: 2_000, endedAt: 4_000, failed: true },
+      { name: 'Read', category: 'read', startedAt: 2_500, endedAt: 3_000 },
+    ]);
+    expect(out.counts).toEqual({ shell: 1, read: 1 });
+    expect(JSON.stringify(w.view())).not.toContain('toolu_');
+  });
+
+  it('a result without a call id (an older Claude Code) ends the latest open call; one for a call it never saw ends nothing', () => {
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+    t = 2_000;
+    w.handle(fx('PreToolUse', { tool_name: 'Grep', tool_use_id: 'toolu_b' }));
+    t = 3_000;
+    w.handle(fx('PostToolUse', { tool_name: 'Grep', tool_use_id: 'toolu_zzz' }));
+    expect(only().calls.map((c) => c.endedAt)).toEqual([undefined, undefined]);
+    w.handle(fx('PostToolUse', { tool_name: 'Grep', tool_use_id: undefined }));
+    expect(only().calls.map((c) => c.endedAt)).toEqual([undefined, 3_000]);
+  });
+
+  it('counts every call of the turn, and keeps the last 200 of them', () => {
+    w.handle(fx('UserPromptSubmit'));
+    for (let i = 0; i < 250; i++) {
+      t += 1;
+      w.handle(fx('PreToolUse', bash('x', `toolu_${i}`)));
+      w.handle(fx('PostToolUse', bash('x', `toolu_${i}`)));
+    }
+    expect(only().counts).toEqual({ shell: 250 });
+    expect(only().calls).toHaveLength(200);
+    expect(only().calls[0]!.startedAt).toBe(1_000 + 51); // the 51st call: the first fifty went
+  });
+
+  it('a turn that ends closes the calls still open (Esc, a lost result), so none runs on for ever', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+    t = 5_000;
+    w.interrupted('sess-1');
+    expect(only().calls[0]).toMatchObject({ endedAt: 5_000 });
+    expect(only().calls[0]!.failed).toBeUndefined();
+    w.handle(fx('PostToolUseFailure', bash('npm test', 'toolu_a'))); // the result, late: the call already ended
+    expect(only().calls[0]).toMatchObject({ endedAt: 5_000 });
+    expect(only().calls[0]!.failed).toBeUndefined();
+    for (const end of ['Stop', 'SessionEnd']) {
+      w = new ClaudeWatcher({ now: () => t });
+      w.handle(fx('PreToolUse', bash('npm test', 'toolu_a')));
+      t += 10;
+      w.handle(fx(end));
+      expect(only().calls[0]!.endedAt, end).toBe(t);
+    }
+  });
+
+  it('the turn starts over at the next prompt (not at a task notification): calls, counts and edited files; they stay readable after Stop', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse', bash('npm test')));
+    w.handle(fx('PostToolUse', bash('npm test')));
+    w.handle(fx('PreToolUse-Edit'));
+    w.handle(fx('PostToolUse-Edit'));
+    w.handle(fx('Stop'));
+    const done = { calls: [expect.objectContaining({ name: 'Bash' }), expect.objectContaining({ name: 'Edit' })], counts: { shell: 1, write: 1 }, files: ['/work/app/src/main.ts'] };
+    expect(only()).toMatchObject(done);
+    w.handle(fx('UserPromptSubmit', { prompt: '<task-notification>agent done</task-notification>' }));
+    expect(only()).toMatchObject(done);
+    w.handle(fx('UserPromptSubmit'));
+    expect(only()).toMatchObject({ calls: [], counts: {}, files: [] });
+  });
+});
+
+describe('ClaudeWatcher: the files Claude edits or writes (paths only, redacted, never a sensitive one)', () => {
+  it('shows the path while the edit runs, and lists it for the turn once it succeeded (a failed write is not listed)', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse-Edit'));
+    expect(only()).toMatchObject({ file: '/work/app/src/main.ts', files: [] });
+    w.handle(fx('PostToolUse-Edit'));
+    expect(only().file).toBeUndefined();
+    expect(only().files).toEqual(['/work/app/src/main.ts']);
+    w.handle(fx('PreToolUse-Write'));
+    expect(only().file).toBe('/work/app/README.md');
+    w.handle(fx('PostToolUseFailure', { tool_name: 'Write', tool_input: { file_path: '/work/app/README.md' }, tool_use_id: 'toolu_w1' }));
+    expect(only().file).toBeUndefined();
+    expect(only().files).toEqual(['/work/app/src/main.ts']);
+  });
+
+  it('all four writing tools count (NotebookEdit by its notebook_path), each path once', () => {
+    const done = (tool_name: string, tool_input: object, id: string) => {
+      w.handle(fx('PreToolUse', { tool_name, tool_input, tool_use_id: id }));
+      w.handle(fx('PostToolUse', { tool_name, tool_input, tool_use_id: id }));
+    };
+    done('Edit', { file_path: '/work/app/a.ts' }, 't1');
+    done('Write', { file_path: '/work/app/b.ts' }, 't2');
+    done('MultiEdit', { file_path: '/work/app/c.ts', edits: [] }, 't3');
+    done('NotebookEdit', { notebook_path: '/work/app/d.ipynb', new_source: 'x' }, 't4');
+    done('Edit', { file_path: '/work/app/a.ts' }, 't5');
+    expect(only().files).toEqual(['/work/app/a.ts', '/work/app/b.ts', '/work/app/c.ts', '/work/app/d.ipynb']);
+  });
+
+  it('never keeps the path of a read, a search, a command or a sensitive file; redacts the rest; drops one too long to be a path', () => {
+    const done = (tool_name: string, tool_input: object, id: string) => {
+      w.handle(fx('PreToolUse', { tool_name, tool_input, tool_use_id: id }));
+      expect(only().file, `${tool_name} ${JSON.stringify(tool_input).slice(0, 60)}`).toBeUndefined();
+      w.handle(fx('PostToolUse', { tool_name, tool_input, tool_use_id: id }));
+    };
+    done('Read', { file_path: '/work/app/a.ts' }, 't1');
+    done('Grep', { pattern: 'x', path: '/work/app' }, 't2');
+    done('Bash', { command: 'touch /work/app/a.ts', file_path: '/work/app/a.ts' }, 't3');
+    done('Edit', { file_path: '/Users/me/.ssh/config' }, 't4');
+    done('Write', { file_path: '/work/app/.env.local' }, 't5');
+    done('Edit', { file_path: `/work/app/${'a/'.repeat(3_000)}x.ts` }, 't6');
+    done('Edit', { file_path: 42 }, 't7');
+    expect(only().files).toEqual([]);
+    w.handle(fx('PreToolUse', { tool_name: 'Write', tool_input: { file_path: `/work/app/${TOKEN}.txt` }, tool_use_id: 't8' }));
+    expect(only().file).toMatch(/^\/work\/app\//);
+    expect(only().file).not.toContain('sk-ant-api03');
+  });
+
+  it('lists at most 50 files a turn', () => {
+    for (let i = 0; i < 60; i++) {
+      w.handle(fx('PreToolUse', { tool_name: 'Write', tool_input: { file_path: `/work/app/f${i}.ts` }, tool_use_id: `t${i}` }));
+      w.handle(fx('PostToolUse', { tool_name: 'Write', tool_input: { file_path: `/work/app/f${i}.ts` }, tool_use_id: `t${i}` }));
+    }
+    expect(only().files).toHaveLength(50);
+    expect(only().files[49]).toBe('/work/app/f49.ts');
+  });
+
+  it('the path goes with the call: Stop, an interruption, the end of the session and the sweep clear it', () => {
+    const editing = () => {
+      w = new ClaudeWatcher({ now: () => t });
+      w.handle(fx('UserPromptSubmit'));
+      w.handle(fx('PreToolUse-Edit'));
+      expect(only().file).toBe('/work/app/src/main.ts');
+    };
+    editing();
+    w.handle(fx('Stop'));
+    expect(only().file).toBeUndefined();
+    editing();
+    w.interrupted('sess-1');
+    expect(only().file).toBeUndefined();
+    editing();
+    w.handle(fx('SessionEnd'));
+    expect(only().file).toBeUndefined();
+    editing();
+    t += 31 * 60_000;
+    w.sweep(() => false);
+    expect(only().file).toBeUndefined();
+  });
+});
+
+describe('ClaudeWatcher: background agents and their tools', () => {
+  it('a call made inside a background agent (agent_id) is that agent\'s: its last tool, and the call says whose it is', () => {
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'Explore' }));
+    w.handle(fx('PreToolUse', { tool_name: 'Grep', tool_input: { pattern: 'x' }, tool_use_id: 'toolu_g', agent_id: 'bg-1', agent_type: 'Explore' }));
+    expect(only().subagents[0]).toEqual({ id: 'bg-1', status: 'running', startedAt: 1_000, tool: 'Grep' });
+    expect(only().calls[0]).toMatchObject({ name: 'Grep', category: 'read', agentId: 'bg-1' });
+    w.handle(fx('PreToolUse', bash('npm test', 'toolu_main'))); // Claude's own call: no agent's
+    expect(only().subagents[0]!.tool).toBe('Grep');
+    expect(only().calls[1]!.agentId).toBeUndefined();
+    w.handle(fx('PreToolUse', { tool_name: 'Read', tool_use_id: 'toolu_x', agent_id: 'bg-unknown' })); // an agent it never heard start
+    expect(only().subagents).toHaveLength(1);
+    expect(only().calls[2]!.agentId).toBe('bg-unknown');
+  });
+});
+
+describe('ClaudeWatcher: compacting', () => {
+  it('PreCompact (an eleventh event) marks the session compacting, without changing what it does', () => {
+    w.handle(fx('SessionStart'));
+    w.handle(fx('PreCompact', { trigger: 'manual' }));
+    expect(only()).toMatchObject({ state: 'idle', compacting: true });
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreCompact'));
+    expect(only()).toMatchObject({ state: 'working', compacting: true });
+    w.handle(fx('SessionStart', { source: 'compact' })); // the compacted session starts again: still the same turn
+    expect(only()).toMatchObject({ state: 'working' });
+    expect(only().compacting).toBeUndefined();
+  });
+
+  it('ends at SessionStart (compact), a prompt, a tool call, Stop or SessionEnd; another SessionStart does not end it', () => {
+    const cases: [string, Record<string, unknown>][] = [
+      ['SessionStart', { source: 'compact' }],
+      ['UserPromptSubmit', {}],
+      ['PreToolUse', bash('npm test')],
+      ['Stop', {}],
+      ['SessionEnd', {}],
+    ];
+    for (const [ev, over] of cases) {
+      w = new ClaudeWatcher({ now: () => t });
+      w.handle(fx('PreCompact'));
+      expect(only().compacting, ev).toBe(true);
+      w.handle(fx(ev, over));
+      expect(only().compacting, ev).toBeUndefined();
+    }
+    w = new ClaudeWatcher({ now: () => t });
+    w.handle(fx('PreCompact'));
+    w.handle(fx('SessionStart', { source: 'startup' }));
+    expect(only().compacting).toBe(true);
+  });
+
+  it('a PreCompact after the session ended changes nothing, and a compaction that went quiet for minutes is over', () => {
+    w.handle(fx('SessionEnd'));
+    w.handle(fx('PreCompact'));
+    expect(only().compacting).toBeUndefined();
+    w = new ClaudeWatcher({ now: () => t });
+    w.handle(fx('PreCompact', { trigger: 'manual' }));
+    t += 4 * 60_000;
+    w.sweep(() => false);
+    expect(only().compacting).toBe(true);
+    t += 2 * 60_000;
+    w.sweep(() => true); // the transcript is still being written
+    expect(only().compacting).toBe(true);
+    w.sweep(() => false);
+    expect(only().compacting).toBeUndefined();
+  });
+});
+
+describe('ClaudeWatcher: the session clock', () => {
+  it('knows when the session was first heard of and how many prompts it had (not counting task notifications)', () => {
+    w.handle(fx('SessionStart'));
+    t = 5_000;
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('Stop'));
+    w.handle(fx('UserPromptSubmit', { prompt: '<task-notification>agent done</task-notification>' }));
+    t = 9_000;
+    w.handle(fx('UserPromptSubmit'));
+    expect(w.view()[0]).toMatchObject({ startedAt: 1_000, turns: 2 });
+    w.handle(fx('PreToolUse', bash('x', 'toolu_x'))); // a call is not a prompt
+    expect(only().turns).toBe(2);
+  });
+
+  it('a session first heard through a tool call (hooks installed mid-session) starts its clock then, with no prompt counted', () => {
+    t = 7_000;
+    w.handle(fx('PreToolUse', bash('npm test')));
+    expect(only()).toMatchObject({ startedAt: 7_000, turns: 0 });
   });
 });

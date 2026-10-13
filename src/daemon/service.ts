@@ -7,7 +7,7 @@ import { ensureDir, errMsg, nowIso, writeFileAtomic } from '../shared/util';
 import { RpcError, RpcServer, type ServerConn } from '../core/rpc';
 import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
-import { claudeStatus, findClaude, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
+import { claudeStatus, findClaude, HOOK_EVENTS, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { StayAwake, type Work } from '../core/session/stay-awake';
@@ -48,6 +48,8 @@ export class JafferService {
   private timers: NodeJS.Timeout[] = [];
   /** What the Claude in the terminal is doing, from its hook events. Lives here, with the shell, where the hooks report. */
   private claudeWatcher = new ClaudeWatcher();
+  /** When each of Jaffer's hook events was last heard (Settings shows whether the hooks work). In memory, since this daemon started. */
+  private hookSeen = new Map<string, number>();
   private rejectionWatches = new Map<string, () => void>();
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
@@ -412,11 +414,14 @@ export class JafferService {
 
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {
+      const ev = (p as { hook_event_name?: unknown } | null)?.hook_event_name;
+      if (typeof ev === 'string' && HOOK_EVENTS.includes(ev)) this.hookSeen.set(ev, Date.now());
       this.claudeWatcher.handle(p);
       this.trackCost(p);
       return { ok: true };
     });
     r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
+    r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
 
     // ---- config
     r.handle('config.get', () => this.config.get());

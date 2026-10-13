@@ -1,5 +1,7 @@
 import { Emitter } from '../../shared/emitter';
 import { redactText } from '../../shared/redact';
+import { isSensitivePath } from '../../shared/sensitive-path';
+import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import type { TurnCost } from '../../shared/claude-cost';
 
 /**
@@ -9,7 +11,10 @@ import type { TurnCost } from '../../shared/claude-cost';
  */
 
 export type ClaudeState = 'idle' | 'working' | 'needs-you' | 'ended';
-export interface ClaudeSubagent { id: string; status: 'running' | 'done'; startedAt: number }
+/** `tool`: the name of the last tool the agent called (a hook from inside it carries its `agent_id`). */
+export interface ClaudeSubagent { id: string; status: 'running' | 'done'; startedAt: number; tool?: string }
+/** One tool call of the turn: its name and kind, when it ran, whether it failed, and the background agent that made it. Never its arguments. */
+export interface ToolCall { name: string; category: ToolCategory; startedAt: number; endedAt?: number; failed?: boolean; agentId?: string }
 /** What the answers of one session cost, estimated from their token counts (see shared/claude-cost). */
 export interface ClaudeCost {
   last: TurnCost;
@@ -21,14 +26,29 @@ export interface ClaudeCost {
   at: number;
 }
 /**
- * What the rest of Jaffer may know about a Claude Code session: whether it works, waits or is done, its background agents and
- * what its answers cost. Nothing the person wrote or Claude answered is kept, not even redacted (no prompts, replies, commands
- * or file names): nothing shows it, so nothing holds it.
+ * What the rest of Jaffer may know about a Claude Code session: whether it works, waits or is done, its background agents, the
+ * names, kinds, timings and failures of its tool calls, the paths of the files it edits or writes (redacted, never a sensitive one,
+ * in memory only) and what its answers cost. Nothing else the person wrote or Claude answered is kept, not even redacted (no prompts,
+ * replies, commands, folders or other tool arguments): nothing shows it, so nothing holds it.
  */
 export interface ClaudeSession {
   id: string;
   state: ClaudeState;
   since: number;
+  /** When the session was first heard of. */
+  startedAt: number;
+  /** How many prompts the person sent (Claude Code's own task notifications are not prompts). */
+  turns: number;
+  /** Claude Code is compacting its context (PreCompact), until the session starts again, a prompt, a tool call, Stop or SessionEnd. */
+  compacting?: boolean;
+  /** The tool calls since the last prompt (the last 200); they stay after Stop until the next prompt. */
+  calls: ToolCall[];
+  /** How many calls of each kind since the last prompt (all of them, also those `calls` let go). */
+  counts: Record<string, number>;
+  /** The file the running Edit, Write, MultiEdit or NotebookEdit writes, redacted, never a sensitive one. */
+  file?: string;
+  /** The files those tools changed since the last prompt (the same rules, each once, at most 50). */
+  files: string[];
   /** When the current turn began: a session leaving idle for working. Going to needs-you and back is the same turn. */
   turnStartedAt?: number;
   /** The turn went idle without finishing: the person stopped it (Esc, a declined prompt), or it went quiet for minutes (an API error, a crash). */
@@ -40,12 +60,19 @@ export interface ClaudeSession {
   subagents: ClaudeSubagent[];
   cost?: ClaudeCost;
 }
-/** The daemon's own view: where the transcript lives is for the daemon only and never goes out with the state. */
+/** The daemon's own view: where the transcript lives, and the ids that pair a call with its result, are for the daemon only and never go out with the state. */
 export interface TrackedSession extends ClaudeSession {
   transcriptPath?: string;
+  calls: (ToolCall & { id?: string })[];
 }
 
 const MAX_SUBAGENTS = 20;
+const MAX_CALLS = 200;
+const MAX_FILES = 50;
+/** Longer is no path on a Mac (PATH_MAX is 1024): dropped, not cut, since a cut path names another file. */
+const MAX_PATH = 1024;
+/** The tools whose `tool_input.file_path` (NotebookEdit: `notebook_path`) is kept: the ones that write a file. */
+const WRITES = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const MAX_SESSIONS = 5;
 const ENDED_TTL_MS = 5 * 60_000;
 /** A turn that is `working` but has gone this quiet (no hook, transcript not growing) is over: Esc and API errors fire no Stop hook. */
@@ -60,7 +87,7 @@ const MAX_NOTICE = 200;
 const LATE_START_MS = 3_000;
 /** SessionStart sources that continue a session that just ended: resumed (`--resume`, `--continue`), cleared, compacted. */
 const CONTINUES = new Set(['resume', 'clear', 'compact']);
-const KNOWN = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd']);
+const KNOWN = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'SessionEnd', 'PreCompact']);
 
 /** Redact first (on a bounded slice, so a huge field stays cheap), then collapse whitespace and cut. */
 function clip(v: unknown, max: number): string {
@@ -69,6 +96,14 @@ function clip(v: unknown, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** The file a writing tool call writes, as it may be kept: redacted, never a sensitive one, never cut. Any other call: none. */
+function writtenPath(o: Record<string, unknown>): string | undefined {
+  if (!WRITES.has(str(o.tool_name)) || !o.tool_input || typeof o.tool_input !== 'object') return undefined;
+  const input = o.tool_input as Record<string, unknown>;
+  const p = str(input.file_path) || str(input.notebook_path);
+  return p && p.length <= MAX_PATH && !isSensitivePath(p) ? redactText(p) : undefined;
+}
 
 interface Entry { s: TrackedSession; touched: number }
 
@@ -123,6 +158,9 @@ export class ClaudeWatcher {
     e.s.cutShort = true;
     e.s.notice = undefined;
     e.s.tool = undefined;
+    e.s.file = undefined;
+    e.s.compacting = undefined;
+    this.closeCalls(e.s);
     this.changes.emit(this.sessions());
   }
 
@@ -141,6 +179,14 @@ export class ClaudeWatcher {
         this.setState(s, 'idle');
         s.cutShort = true;
         s.tool = undefined;
+        s.file = undefined;
+        s.compacting = undefined;
+        this.closeCalls(s);
+        changed = true;
+      }
+      // a compaction that failed says nothing either (a `/compact` while idle: no SessionStart follows)
+      if (s.compacting && quiet >= STALE_MS && !alive({ ...s })) {
+        s.compacting = undefined;
         changed = true;
       }
       // a background agent outlives the turn that started it, so only long silence (no hook, transcript not growing) ends it
@@ -168,15 +214,20 @@ export class ClaudeWatcher {
     return this.snapshot();
   }
 
-  /** What may leave the daemon (to the window, over RPC): the same sessions without anything about files. */
+  /** What may leave the daemon (to the window, over RPC): the same sessions without the transcript's path and the calls' ids. */
   view(): ClaudeSession[] {
-    return this.sessions().map(({ transcriptPath: _file, ...rest }) => rest);
+    return this.sessions().map(({ transcriptPath: _file, calls, ...rest }) => ({ ...rest, calls: calls.map(({ id: _id, ...c }) => c) }));
   }
 
   private snapshot(): TrackedSession[] {
     return [...this.map.values()]
       .sort((a, b) => b.touched - a.touched)
-      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, subagents: s.subagents.map((a) => ({ ...a })) }));
+      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, subagents: s.subagents.map((a) => ({ ...a })), calls: s.calls.map((c) => ({ ...c })), counts: { ...s.counts }, files: [...s.files] }));
+  }
+
+  /** The turn is over: a call with no result yet (Esc, a result that never came) ends now. */
+  private closeCalls(s: ClaudeSession): void {
+    for (const c of s.calls) c.endedAt ??= this.now();
   }
 
   private setState(s: ClaudeSession, state: ClaudeState): void {
@@ -194,7 +245,10 @@ export class ClaudeWatcher {
     for (const a of s.subagents) a.status = 'done';
     this.setState(s, 'ended');
     s.tool = undefined;
+    s.file = undefined;
     s.notice = undefined;
+    s.compacting = undefined;
+    this.closeCalls(s);
   }
 
   private session(id: string): TrackedSession {
@@ -207,7 +261,7 @@ export class ClaudeWatcher {
       const victim = [...this.map.entries()].sort((a, b) => Number(b[1].s.state === 'ended') - Number(a[1].s.state === 'ended') || a[1].touched - b[1].touched)[0];
       if (victim) this.map.delete(victim[0]);
     }
-    const s: TrackedSession = { id, state: 'idle', since: this.now(), subagents: [] };
+    const s: TrackedSession = { id, state: 'idle', since: this.now(), startedAt: this.now(), turns: 0, calls: [], counts: {}, files: [], subagents: [] };
     this.map.set(id, { s, touched: this.now() });
     return s;
   }
@@ -228,35 +282,67 @@ export class ClaudeWatcher {
     if (ev === 'SessionStart' && prior?.state === 'ended' && this.now() - prior.since < LATE_START_MS && !CONTINUES.has(str(o.source))) return;
     const stayEnded = prior?.state === 'ended' && ev !== 'SessionStart';
     const endedSince = prior?.since ?? 0;
-    if (stayEnded && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Notification')) return; // things that start something cannot be late
+    if (stayEnded && (ev === 'UserPromptSubmit' || ev === 'PreToolUse' || ev === 'Notification' || ev === 'PreCompact')) return; // things that start something cannot be late
 
     const s = this.session(id);
     if (str(o.transcript_path)) s.transcriptPath = str(o.transcript_path).slice(0, 400);
 
     switch (ev) {
       case 'SessionStart':
+        if (str(o.source) === 'compact') s.compacting = undefined; // the compacted session starts again (also in the middle of a turn)
         // A new or resumed session is idle. But `claude "<prompt>"` and `claude -p` fire SessionStart and UserPromptSubmit a moment
         // apart, both async: a SessionStart that lands after the prompt must not take a working (or waiting) session back to idle.
         if (s.state === 'working' || s.state === 'needs-you') break;
         this.setState(s, 'idle');
         s.tool = undefined;
+        s.file = undefined;
         s.notice = undefined;
         break;
       case 'UserPromptSubmit':
         this.setState(s, 'working');
         s.notice = undefined;
+        s.compacting = undefined;
         s.subagents = s.subagents.filter((a) => a.status === 'running');
+        // a new turn: its calls and files start over (those of the last one stayed readable until now)
+        s.turns++;
+        s.calls = [];
+        s.counts = {};
+        s.files = [];
         break;
-      case 'PreToolUse':
+      case 'PreToolUse': {
         this.setState(s, 'working');
         s.notice = undefined;
-        s.tool = { name: clip(o.tool_name, 60), id: str(o.tool_use_id).slice(0, 80) };
+        s.compacting = undefined;
+        const name = clip(o.tool_name, 60);
+        const callId = str(o.tool_use_id).slice(0, 80);
+        // a call made inside a background agent carries its id: the call is that agent's, and so is its last tool
+        const agentId = clip(o.agent_id, 60) || undefined;
+        s.tool = { name, id: callId };
+        s.file = writtenPath(o);
+        const category = toolCategory(name);
+        s.calls.push({ name, category, startedAt: this.now(), id: callId || undefined, agentId });
+        if (s.calls.length > MAX_CALLS) s.calls.splice(0, s.calls.length - MAX_CALLS);
+        s.counts[category] = (s.counts[category] ?? 0) + 1;
+        const agent = agentId && s.subagents.find((a) => a.id === agentId);
+        if (agent) agent.tool = name;
         break;
+      }
       case 'PostToolUse':
       case 'PostToolUseFailure': {
         // calls can overlap: a late result of an earlier call must not clear the tool of a later one (without ids, it does)
         const finished = str(o.tool_use_id).slice(0, 80);
-        if (s.tool && (!finished || !s.tool.id || s.tool.id === finished)) s.tool = undefined;
+        if (s.tool && (!finished || !s.tool.id || s.tool.id === finished)) {
+          s.tool = undefined;
+          s.file = undefined;
+        }
+        // the call it ends: the one with its id, or (an older Claude Code sends none) the latest still open; one already ended stays as it was
+        const call = finished ? s.calls.findLast((c) => c.id === finished) : s.calls.findLast((c) => c.endedAt === undefined);
+        if (call && call.endedAt === undefined) {
+          call.endedAt = this.now();
+          if (ev === 'PostToolUseFailure') call.failed = true;
+        }
+        const written = ev === 'PostToolUse' ? writtenPath(o) : undefined;
+        if (written && !s.files.includes(written) && s.files.length < MAX_FILES) s.files.push(written);
         s.notice = undefined;
         if (s.state === 'needs-you') this.setState(s, 'working'); // answered; never idle → working (see the note on ordering above)
         break;
@@ -289,16 +375,23 @@ export class ClaudeWatcher {
       case 'Stop':
         this.setState(s, 'idle');
         s.tool = undefined;
+        s.file = undefined;
         s.notice = undefined;
+        s.compacting = undefined;
+        this.closeCalls(s);
         break;
       case 'SessionEnd':
         this.end(s);
+        break;
+      case 'PreCompact':
+        s.compacting = true;
         break;
     }
     if (stayEnded) {
       s.state = 'ended';
       s.since = endedSince;
       s.tool = undefined;
+      s.file = undefined;
       s.notice = undefined;
     }
   }

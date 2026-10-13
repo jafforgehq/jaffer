@@ -1,0 +1,29 @@
+{
+  "session_id": "sess-1",
+  "transcript_path": "/home/user/.claude/projects/-work-app/sess-1.jsonl",
+  "cwd": "/work/app",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/work/app/src/main.ts",
+    "old_string": "const a = 1;",
+    "new_string": "const a = 2;",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/work/app/src/main.ts",
+    "oldString": "const a = 1;",
+    "newString": "const a = 2;",
+    "originalFile": "const a = 1;\n",
+    "structuredPatch": [],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu_e1",
+  "duration_ms": 12
+}

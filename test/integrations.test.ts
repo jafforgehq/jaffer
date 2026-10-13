@@ -46,6 +46,7 @@ describe('Claude Code hooks', () => {
     ['SubagentStop', 'subagent-stop'],
     ['Notification', 'notification'],
     ['SessionEnd', 'session-end'],
+    ['PreCompact', 'pre-compact'],
   ];
   const settingsFile = () => path.join(env.userHome, '.claude', 'settings.json');
   const readSettings = () => JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
@@ -108,6 +109,18 @@ describe('Claude Code hooks', () => {
       expect(ours[0].hooks[0], event).toMatchObject({ async: true, timeout: 5 });
       expect(ours[0].hooks[0].command, event).toMatch(/^\[ "\$JAFFER_SESSION" = 1 \] \|\| exit 0; /);
     }
+  });
+
+  it('PreCompact is the eleventh event: an install of the ten from before is not complete until it is installed again', () => {
+    installHooks('/x/jaffer', env.userHome);
+    const s = readSettings();
+    delete s.hooks.PreCompact;
+    fs.writeFileSync(settingsFile(), JSON.stringify(s));
+    expect(hooksInstalled(env.userHome)).toBe(false);
+    expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(true); // so a daemon start of this home installs it again
+    expect(installHooks('/x/jaffer', env.userHome).changed).toBe(true);
+    expect(hooksInstalled(env.userHome)).toBe(true);
+    expect(Object.keys(readSettings().hooks)).toHaveLength(11);
   });
 
   it('hooksPointAt: true only when every Jaffer hook already runs this wrapper (another Jaffer home\'s hooks are not ours to rewrite)', () => {

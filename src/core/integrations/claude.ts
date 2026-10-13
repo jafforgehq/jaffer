@@ -41,7 +41,11 @@ const EVENTS: { event: string; arg: string }[] = [
   { event: 'SubagentStop', arg: 'hook subagent-stop' },
   { event: 'Notification', arg: 'hook notification' },
   { event: 'SessionEnd', arg: 'hook session-end' },
+  { event: 'PreCompact', arg: 'hook pre-compact' },
 ];
+
+/** The events Jaffer's hooks report (Settings → Claude Code shows when each was last heard). */
+export const HOOK_EVENTS: readonly string[] = EVENTS.map((e) => e.event);
 
 /** How long Claude Code lets one of them run (it does not wait for them: they are `async`). */
 const HOOK_TIMEOUT = 5;
