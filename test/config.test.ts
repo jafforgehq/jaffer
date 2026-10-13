@@ -60,14 +60,32 @@ describe('claude.showCost', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.claude.showCost).toBe(true);
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { skipped: true } }));
-    expect(new ConfigStore(env.paths).get().claude).toEqual({ skipped: true, showCost: true });
+    expect(new ConfigStore(env.paths).get().claude).toEqual({ ...DEFAULT_CONFIG.claude, skipped: true, showCost: true });
   });
 
   it('can be switched off and stays off, without touching the rest of claude', () => {
     const store = new ConfigStore(env.paths);
     store.patch({ claude: { skipped: true } });
     store.patch({ claude: { showCost: false } });
-    expect(new ConfigStore(env.paths).get().claude).toEqual({ skipped: true, showCost: false });
+    expect(new ConfigStore(env.paths).get().claude).toEqual({ ...DEFAULT_CONFIG.claude, skipped: true, showCost: false });
+  });
+});
+
+describe('claude.liveCost, claude.dailyBudgetUsd and claude.typicalTurnMs', () => {
+  it('have their defaults (live cost on, no budget, no typical turn yet), also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.claude).toMatchObject({ liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { skipped: false, showCost: true } }));
+    expect(new ConfigStore(env.paths).get().claude).toMatchObject({ liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 });
+  });
+
+  it('a choice is kept, and a value of the wrong kind leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ claude: { liveCost: false, dailyBudgetUsd: 5, typicalTurnMs: 42_000 } });
+    expect(new ConfigStore(env.paths).get().claude).toMatchObject({ liveCost: false, dailyBudgetUsd: 5, typicalTurnMs: 42_000 });
+    store.patch({ claude: { liveCost: 'yes', dailyBudgetUsd: '5', typicalTurnMs: null } as never });
+    expect(new ConfigStore(env.paths).get().claude).toMatchObject({ liveCost: false, dailyBudgetUsd: 5, typicalTurnMs: 42_000 });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ claude: { liveCost: 1, dailyBudgetUsd: 'ten', typicalTurnMs: [] } }));
+    expect(new ConfigStore(env.paths).get().claude).toMatchObject({ liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 });
   });
 });
 

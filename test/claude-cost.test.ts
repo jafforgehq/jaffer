@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTokens, formatUsd, priceOf, responseCost, summarizeLines } from '../src/shared/claude-cost';
+import { dayTotal, formatTokens, formatUsd, priceOf, responseCost, summarizeLines } from '../src/shared/claude-cost';
 
 const line = (id: string, model: string, usage: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ type: 'assistant', requestId: `req_${id}`, message: { id, model, role: 'assistant', content: [{ type: 'text', text: 'hi' }], usage }, ...extra });
@@ -119,5 +119,23 @@ describe('formatting', () => {
     expect(formatTokens(12_345)).toBe('12k');
     expect(formatTokens(10_000)).toBe('10k');
     expect(formatTokens(1_200_000)).toBe('1.2M');
+  });
+});
+
+describe('dayTotal: what the answers finished today cost (the daily budget is measured against it)', () => {
+  const at = (h: number, m: number, s = 0, day = 13) => new Date(2026, 9, day, h, m, s).getTime(); // local time, as the person's clock
+
+  it('adds up the answers of the local day, and starts again at local midnight', () => {
+    let today = dayTotal(undefined, at(9, 0));
+    expect(today).toEqual({ usd: 0, date: '2026-10-13' });
+    today = dayTotal(today, at(9, 5), 0.25);
+    today = dayTotal(today, at(23, 59, 59), 0.5);
+    expect(today).toEqual({ usd: 0.75, date: '2026-10-13' });
+    expect(dayTotal(today, at(0, 0, 1, 14))).toEqual({ usd: 0, date: '2026-10-14' }); // a new day, before any answer of it
+    expect(dayTotal(today, at(0, 0, 1, 14), 0.1)).toEqual({ usd: 0.1, date: '2026-10-14' });
+  });
+
+  it('pads the date, so the first of a month reads as the person expects', () => {
+    expect(dayTotal(undefined, new Date(2027, 0, 1, 12, 0).getTime()).date).toBe('2027-01-01');
   });
 });

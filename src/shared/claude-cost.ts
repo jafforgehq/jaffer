@@ -158,6 +158,19 @@ export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
   return out;
 }
 
+/** What the answers finished on one local day (`YYYY-MM-DD`) cost, in estimated dollars. */
+export interface DayTotal {
+  usd: number;
+  date: string;
+}
+
+/** `prev` with `usd` more at the time `now`: a new local day starts again from nothing. */
+export function dayTotal(prev: DayTotal | undefined, now: number, usd = 0): DayTotal {
+  const d = new Date(now);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { usd: (prev?.date === date ? prev.usd : 0) + usd, date };
+}
+
 /** `$0.04`, `$1.84`, `<$0.01`, `$120`. */
 export function formatUsd(usd: number): string {
   if (usd > 0 && usd < 0.005) return '<$0.01';

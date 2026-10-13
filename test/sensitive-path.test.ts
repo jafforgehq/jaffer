@@ -26,6 +26,15 @@ describe('isSensitivePath: a file whose name alone is not to be kept', () => {
       '.env',
       'secrets/prod.KEY',
       '/Users/me/.SSH/known_hosts',
+      '/Users/me/.git-credentials',
+      '/backup/id_ecdsa',
+      '/backup/id_ecdsa.pub',
+      '/backup/id_dsa',
+      '/Users/me/.kube/config',
+      '/Users/me/.docker/config.json',
+      '/work/app/certs/client.p12',
+      '/work/app/certs/client.PFX',
+      '/work/app/certs/server.key.bak',
     ]) expect(isSensitivePath(p), p).toBe(true);
   });
 
@@ -40,12 +49,16 @@ describe('isSensitivePath: a file whose name alone is not to be kept', () => {
       '/work/app/src/pem-format.ts',
       '/work/app/.npmrc.md',
       '/work/app/src/my.env.ts',
+      '/work/app/docker/config.json',
+      '/work/app/src/kube/config.ts',
+      '/work/app/src/monkey.ts',
+      '/work/app/src/p12.ts',
       '',
     ]) expect(isSensitivePath(p), p).toBe(false);
   });
 
   it('reads only the first 4096 characters (it runs on the daemon thread over a hook payload)', () => {
-    expect(isSensitivePath('/a'.repeat(3000) + '/.ssh/config')).toBe(false); // past the head: not looked at
+    expect(isSensitivePath('/a'.repeat(3000) + '/.ssh/config')).toBe(true); // too long to read through: it fails closed, as if it were one
     expect(isSensitivePath('/.ssh/' + 'a'.repeat(10_000))).toBe(true);
   });
 

@@ -59,6 +59,12 @@ export interface ClaudeSession {
   notice?: string;
   subagents: ClaudeSubagent[];
   cost?: ClaudeCost;
+  /**
+   * While the session works: what the answer has cost so far, read by the daemon from the transcript (`input` is every token read in,
+   * new and cached; `usd` only for a model with a known price) and when it last changed. Kept while Claude waits for the person; gone at
+   * Stop and at the next prompt.
+   */
+  live?: { input: number; output: number; usd?: number; at: number };
 }
 /** The daemon's own view: where the transcript lives, and the ids that pair a call with its result, are for the daemon only and never go out with the state. */
 export interface TrackedSession extends ClaudeSession {
@@ -109,6 +115,8 @@ interface Entry { s: TrackedSession; touched: number }
 
 export class ClaudeWatcher {
   readonly changes = new Emitter<TrackedSession[]>();
+  /** A turn Claude finished itself (Stop; not one cut short): how long it took, in ms. */
+  readonly finished = new Emitter<number>();
   private map = new Map<string, Entry>();
   private now: () => number;
 
@@ -160,6 +168,7 @@ export class ClaudeWatcher {
     e.s.tool = undefined;
     e.s.file = undefined;
     e.s.compacting = undefined;
+    e.s.live = undefined;
     this.closeCalls(e.s);
     this.changes.emit(this.sessions());
   }
@@ -181,6 +190,7 @@ export class ClaudeWatcher {
         s.tool = undefined;
         s.file = undefined;
         s.compacting = undefined;
+        s.live = undefined;
         this.closeCalls(s);
         changed = true;
       }
@@ -207,6 +217,15 @@ export class ClaudeWatcher {
     this.changes.emit(this.sessions());
   }
 
+  /** The daemon read what the answer being written has cost so far. Only for a session that works, and said only when it changed. */
+  setLive(sessionId: string, so: { input: number; output: number; usd?: number }): void {
+    const s = this.map.get(sessionId)?.s;
+    if (!s || s.state !== 'working') return;
+    if (s.live && s.live.input === so.input && s.live.output === so.output && s.live.usd === so.usd) return;
+    s.live = { input: so.input, output: so.output, ...(so.usd !== undefined ? { usd: so.usd } : {}), at: this.now() };
+    this.changes.emit(this.sessions());
+  }
+
   /** Newest change first; ended sessions older than five minutes are dropped. For the daemon itself: the transcript path is in it. */
   sessions(): TrackedSession[] {
     const t = this.now();
@@ -222,7 +241,7 @@ export class ClaudeWatcher {
   private snapshot(): TrackedSession[] {
     return [...this.map.values()]
       .sort((a, b) => b.touched - a.touched)
-      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, subagents: s.subagents.map((a) => ({ ...a })), calls: s.calls.map((c) => ({ ...c })), counts: { ...s.counts }, files: [...s.files] }));
+      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, live: s.live && { ...s.live }, subagents: s.subagents.map((a) => ({ ...a })), calls: s.calls.map((c) => ({ ...c })), counts: { ...s.counts }, files: [...s.files] }));
   }
 
   /** The turn is over: a call with no result yet (Esc, a result that never came) ends now. */
@@ -248,6 +267,7 @@ export class ClaudeWatcher {
     s.file = undefined;
     s.notice = undefined;
     s.compacting = undefined;
+    s.live = undefined;
     this.closeCalls(s);
   }
 
@@ -302,6 +322,7 @@ export class ClaudeWatcher {
         this.setState(s, 'working');
         s.notice = undefined;
         s.compacting = undefined;
+        s.live = undefined; // a new answer: it is measured from this prompt
         s.subagents = s.subagents.filter((a) => a.status === 'running');
         // a new turn: its calls and files start over (those of the last one stayed readable until now)
         s.turns++;
@@ -373,11 +394,13 @@ export class ClaudeWatcher {
         break;
       }
       case 'Stop':
+        if ((s.state === 'working' || s.state === 'needs-you') && s.turnStartedAt !== undefined) this.finished.emit(this.now() - s.turnStartedAt);
         this.setState(s, 'idle');
         s.tool = undefined;
         s.file = undefined;
         s.notice = undefined;
         s.compacting = undefined;
+        s.live = undefined;
         this.closeCalls(s);
         break;
       case 'SessionEnd':

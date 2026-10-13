@@ -15,6 +15,9 @@ import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
+import { dayTotal, type DayTotal } from '../shared/claude-cost';
+import { nextTypicalTurnMs } from '../shared/turn-median';
+import { readGitStatus, type GitStatus } from '../core/session/git-status';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
 import { PROTOCOL, VERSION } from '../core/version';
 import type { PtyEvent } from '../core/session/terminal';
@@ -35,6 +38,12 @@ const MAX_BACKLOG = 8 * 1024 * 1024;
 /** While a command runs, the daemon looks at it this often, so that it holds the Mac awake soon after half a minute. */
 const STAY_AWAKE_TICK_MS = 5000;
 
+/** While Claude works, what its answer has cost so far is read this often. */
+const LIVE_COST_MS = 2000;
+
+/** The shell can draw its prompt more than once in a row: the repository is looked at once it settles. */
+const GIT_DEBOUNCE_MS = 300;
+
 export class JafferService {
   readonly paths: JafferPaths;
   readonly config: ConfigStore;
@@ -54,6 +63,19 @@ export class JafferService {
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
   private costTimers = new Set<NodeJS.Timeout>();
+  /** Where the answer whose cost was counted last began, per session: a Stop heard twice is still one answer. */
+  private counted = new Map<string, number>();
+  /** What the answers finished today cost, in memory only: it starts again at local midnight and when the app quits. */
+  private today: DayTotal = dayTotal(undefined, Date.now());
+  /** Reads the answers being written every 2 s while a session works; the transcript's size at the last read, so an unchanged one is not read again. */
+  private liveTimer: NodeJS.Timeout | null = null;
+  private liveSize = new Map<string, number>();
+  /** The lengths of the last turns Claude finished (at most 15): their median is `claude.typicalTurnMs`. */
+  private recentTurns: number[] = [];
+  /** The repository of the shell's folder as `git status` saw it at the last prompt (for the folder pill). */
+  private git: { root: string; status: GitStatus } | undefined;
+  private gitTimer: NodeJS.Timeout | null = null;
+  private gitSeq = 0;
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
@@ -109,7 +131,17 @@ export class JafferService {
     await this.host.start();
     await this.rpc.listen(this.paths.socket);
     // a turn that ended with no signal at all (Esc, an API error, a crash) must not stay "Working" for ever
-    this.timers.push(setInterval(() => this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000)), 30_000));
+    this.timers.push(
+      setInterval(() => {
+        this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000));
+        // past midnight today's total starts again, and the window hears it also when nothing else happens
+        const today = dayTotal(this.today, Date.now());
+        if (today.date !== this.today.date) {
+          this.today = today;
+          this.pushClaudeState();
+        }
+      }, 30_000),
+    );
     this.timers[this.timers.length - 1]!.unref?.();
     this.log(`jafferd ${this.version} listening on ${this.paths.socket}`);
   }
@@ -123,6 +155,8 @@ export class JafferService {
     this.rejectionWatches.clear();
     for (const t of this.costTimers) clearTimeout(t);
     this.costTimers.clear();
+    if (this.liveTimer) clearInterval(this.liveTimer);
+    if (this.gitTimer) clearTimeout(this.gitTimer);
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
     this.host?.dispose();
     await this.rpc.close();
@@ -165,7 +199,26 @@ export class JafferService {
     const pane = this.host.mainPane;
     const cwd = pane?.cwd ?? this.userHome;
     const proj = resolveProject(cwd, this.userHome);
-    return { cwd, project: proj.root, branch: proj.branch, busy: pane?.runningCommand ?? null, busySince: pane?.runningSince ?? null };
+    const git = proj.root && this.git?.root === proj.root ? this.git.status : undefined;
+    return { cwd, project: proj.root, branch: proj.branch, git, busy: pane?.runningCommand ?? null, busySince: pane?.runningSince ?? null };
+  }
+
+  /**
+   * The shell is back at its prompt: what changed in its folder's repository since (staged, changed, untracked, ahead, behind), for the
+   * folder pill. `session.info` carries it; outside a repository, or when git is missing or slow, there is none.
+   */
+  private refreshGit(): void {
+    if (this.gitTimer) clearTimeout(this.gitTimer);
+    this.gitTimer = setTimeout(() => {
+      this.gitTimer = null;
+      const seq = ++this.gitSeq;
+      const root = resolveProject(this.host.mainPane?.cwd ?? this.userHome, this.userHome).root;
+      if (!root) return void (this.git = undefined);
+      void readGitStatus(root).then((status) => {
+        if (seq === this.gitSeq) this.git = status && { root, status }; // (an answer overtaken by a newer prompt's is dropped)
+      });
+    }, GIT_DEBOUNCE_MS);
+    this.gitTimer.unref?.();
   }
 
   // ------------------------------------------------------------------ events
@@ -225,6 +278,7 @@ export class JafferService {
       this.sendPty(e.pane, e.event);
       // a command began or ended, or the shell is gone: a long one holds the Mac awake, and none holds nothing
       if (e.event.type === 'start' || e.event.type === 'command' || e.event.type === 'exit') this.refreshStayAwake();
+      if (e.event.type === 'prompt' && e.pane === 'main') this.refreshGit();
       // The shell is gone and took its Claude with it: no conversation is running any more (a daemon that is stopping leaves it as it is).
       if (e.event.type === 'exit' && !this.stopping) this.claudeWatcher.endAll();
       // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only stopped (Ctrl+Z
@@ -236,10 +290,18 @@ export class JafferService {
       this.refreshStayAwake();
       this.pushClaudeState();
       this.watchForRejections(sessions);
+      this.refreshLive();
+    });
+    // a turn Claude finished: how long a turn typically takes (the ring's progress), kept across starts
+    this.claudeWatcher.finished.on((ms) => {
+      const prev = this.config.get().claude.typicalTurnMs;
+      const typical = nextTypicalTurnMs(prev, ms, this.recentTurns);
+      if (typical !== prev) this.config.patch({ claude: { typicalTurnMs: typical } });
     });
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
       this.refreshStayAwake(); // (the switch for staying awake)
+      this.refreshLive(); // (the switches for the cost)
     });
   }
 
@@ -289,7 +351,7 @@ export class JafferService {
       this.claudePushPending = true;
       return;
     }
-    this.rpc.broadcast('claude.state', { sessions: this.claudeWatcher.view() });
+    this.rpc.broadcast('claude.state', this.claudeState());
     this.claudePushTimer = setTimeout(() => {
       this.claudePushTimer = null;
       if (this.claudePushPending) {
@@ -298,6 +360,40 @@ export class JafferService {
       }
     }, 100);
     this.claudePushTimer.unref?.();
+  }
+
+  /** What the window may know about the terminal's Claude: its sessions, and what the answers finished today cost. */
+  private claudeState() {
+    return { sessions: this.claudeWatcher.view(), today: dayTotal(this.today, Date.now()) };
+  }
+
+  /**
+   * While a session works, and the cost figure with its live part is on: what the answer has cost so far, read every 2 s from where its
+   * prompt began (the same bounded read as at Stop). Not while Claude waits for the person: the last figure stays until it works again.
+   */
+  private refreshLive(): void {
+    const c = this.config.get().claude;
+    const on = !this.stopping && c.showCost && c.liveCost && this.claudeWatcher.sessions().some((s) => s.state === 'working');
+    if (on && !this.liveTimer) {
+      this.liveTimer = setInterval(() => this.readLive(), LIVE_COST_MS);
+      this.liveTimer.unref?.();
+    } else if (!on && this.liveTimer) {
+      clearInterval(this.liveTimer);
+      this.liveTimer = null;
+      this.liveSize.clear();
+    }
+  }
+
+  private readLive(): void {
+    for (const s of this.claudeWatcher.sessions()) {
+      const start = this.turnStart.get(s.id);
+      if (s.state !== 'working' || start === undefined || !s.transcriptPath) continue;
+      const size = transcriptSize(s.transcriptPath);
+      if (size === this.liveSize.get(s.id)) continue; // nothing new was written
+      this.liveSize.set(s.id, size);
+      const turn = readTurnCost(s.transcriptPath, start, size);
+      if (turn) this.claudeWatcher.setLive(s.id, { input: turn.input + turn.cacheRead + turn.cacheWrite, output: turn.output, usd: turn.usd });
+    }
   }
 
   /**
@@ -328,10 +424,14 @@ export class JafferService {
       }
       // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended
       const read = (retry: boolean): void => {
+        if (this.counted.get(id) === start) return; // its Stop came twice: the answer was counted already
         const end = transcriptSize(file);
         const turn = readTurnCost(file, start, end);
         if (turn) {
+          this.counted.set(id, start);
+          if (this.counted.size > 20) this.counted.delete(this.counted.keys().next().value!);
           if (this.turnStart.has(id)) this.turnStart.set(id, end); // (a session forgotten since, after its end, is not brought back)
+          this.today = dayTotal(this.today, Date.now(), turn.usd ?? 0);
           this.claudeWatcher.setCost(id, turn);
         } else if (retry) this.later(1500, () => read(false));
       };
@@ -420,7 +520,7 @@ export class JafferService {
       this.trackCost(p);
       return { ok: true };
     });
-    r.handle('claude.state', () => ({ sessions: this.claudeWatcher.view() }));
+    r.handle('claude.state', () => this.claudeState());
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
 
     // ---- config

@@ -30,6 +30,12 @@ export interface JafferConfig {
     skipped: boolean;
     /** After every answer, say what it cost (an estimate from the token counts at API list prices; a subscription is not billed per token). */
     showCost: boolean;
+    /** While Claude works, also what the answer has cost so far (read from the transcript every 2 s; only with `showCost`). */
+    liveCost: boolean;
+    /** Dollars a day the cost figure is measured against (an estimate, see `showCost`); 0 is no budget. */
+    dailyBudgetUsd: number;
+    /** How long a turn of Claude typically takes (ms; the median of the last finished ones of 3 s or more), for the ring's progress. Kept by the daemon, not a setting; 0 is not known yet. */
+    typicalTurnMs: number;
   };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
@@ -68,7 +74,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     companion: DEFAULT_COMPANION,
   },
   shell: { path: '', args: [] },
-  claude: { skipped: false, showCost: true },
+  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 },
   updates: { auto: true },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },

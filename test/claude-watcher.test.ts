@@ -753,3 +753,97 @@ describe('ClaudeWatcher: the session clock', () => {
     expect(only()).toMatchObject({ startedAt: 7_000, turns: 0 });
   });
 });
+
+describe('ClaudeWatcher: the answer so far, while Claude works (live tokens)', () => {
+  const so = (output: number, usd?: number) => ({ input: 100, output, usd });
+
+  it('keeps the counts the daemon read, with when they changed, and tells the listeners only when they changed', () => {
+    w.handle(fx('UserPromptSubmit'));
+    const seen: ClaudeSession[][] = [];
+    w.changes.on((s) => seen.push(s));
+    t = 3_000;
+    w.setLive('sess-1', so(500, 0.01));
+    expect(only().live).toEqual({ input: 100, output: 500, usd: 0.01, at: 3_000 });
+    t = 5_000;
+    w.setLive('sess-1', so(500, 0.01)); // nothing new was written
+    expect(seen).toHaveLength(1);
+    expect(only().live!.at).toBe(3_000);
+    w.setLive('sess-1', so(900)); // a model with no known price: tokens, no dollars
+    expect(seen).toHaveLength(2);
+    expect(w.view()[0]!.live).toEqual({ input: 100, output: 900, at: 5_000 });
+    w.setLive('nobody', so(1));
+    expect(seen).toHaveLength(2);
+  });
+
+  it('only while the session works: waiting for the person keeps the last figure, and Stop, an interruption, the sweep, the end and the next prompt clear it', () => {
+    w.setLive('sess-1', so(1)); // a session it does not know
+    w.handle(fx('SessionStart'));
+    w.setLive('sess-1', so(1)); // idle: no answer is being written
+    expect(only().live).toBeUndefined();
+
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse', bash('npm test')));
+    w.setLive('sess-1', so(10));
+    w.handle(fx('Notification'));
+    expect(only()).toMatchObject({ state: 'needs-you', live: { output: 10 } });
+    w.setLive('sess-1', so(20)); // (the daemon pauses meanwhile)
+    expect(only().live!.output).toBe(10);
+    w.handle(fx('PostToolUse', bash('npm test')));
+    w.setLive('sess-1', so(20));
+    w.handle(fx('Stop'));
+    expect(only().live).toBeUndefined();
+
+    w.handle(fx('UserPromptSubmit'));
+    w.setLive('sess-1', so(30));
+    w.handle(fx('UserPromptSubmit')); // a new prompt: a new answer
+    expect(only().live).toBeUndefined();
+    w.setLive('sess-1', so(30));
+    w.interrupted('sess-1');
+    expect(only().live).toBeUndefined();
+
+    w.handle(fx('UserPromptSubmit'));
+    w.setLive('sess-1', so(40));
+    t += 6 * 60_000;
+    w.sweep(() => false);
+    expect(only().live).toBeUndefined();
+
+    w.handle(fx('UserPromptSubmit'));
+    w.setLive('sess-1', so(50));
+    w.handle(fx('SessionEnd'));
+    expect(only().live).toBeUndefined();
+  });
+});
+
+describe('ClaudeWatcher: a turn Claude finished, and how long it took (the typical turn)', () => {
+  it('tells the length of a turn that ended with Stop, also one that waited for the person', () => {
+    const lengths: number[] = [];
+    w.finished.on((ms) => lengths.push(ms));
+    w.handle(fx('UserPromptSubmit'));
+    t = 31_000;
+    w.handle(fx('Stop'));
+    w.handle(fx('Stop')); // heard twice: one turn
+    t = 40_000;
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('PreToolUse', bash('npm test')));
+    w.handle(fx('Notification'));
+    t = 100_000;
+    w.handle(fx('Stop'));
+    expect(lengths).toEqual([30_000, 60_000]);
+  });
+
+  it('says nothing of a turn that was cut short (Esc, a declined prompt, a silence) or of a session that ended', () => {
+    const lengths: number[] = [];
+    w.finished.on((ms) => lengths.push(ms));
+    w.handle(fx('UserPromptSubmit'));
+    t = 20_000;
+    w.interrupted('sess-1');
+    w.handle(fx('Stop')); // a late Stop of the turn the person stopped
+    w.handle(fx('UserPromptSubmit'));
+    t += 6 * 60_000;
+    w.sweep(() => false);
+    w.handle(fx('UserPromptSubmit'));
+    w.handle(fx('SessionEnd'));
+    w.handle(fx('Stop')); // (async: after the end)
+    expect(lengths).toEqual([]);
+  });
+});

@@ -357,6 +357,39 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(notices).toEqual([]);
     expect(fs.existsSync(path.join(env.paths.sessionDir, 'claude.json'))).toBe(false);
   }, 40_000);
+
+  it('after each prompt, says what changed in the folder\'s repository (git status, counted), and nothing outside one', async () => {
+    const c = await connect();
+    const repo = path.join(env.root, 'git-repo');
+    fs.mkdirSync(repo);
+    // real git, in a temporary repository only (and none of the person's own git settings)
+    const gitEnv = { ...process.env, HOME: env.userHome, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, env: gitEnv, stdio: 'ignore' });
+    git('init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(repo, 'kept.txt'), 'one\n');
+    git('add', 'kept.txt');
+    git('commit', '-q', '-m', 'one');
+    fs.writeFileSync(path.join(repo, 'kept.txt'), 'two\n');
+    fs.writeFileSync(path.join(repo, 'staged.txt'), 's\n');
+    git('add', 'staged.txt');
+    fs.writeFileSync(path.join(repo, 'new.txt'), 'n\n');
+    const info = async () => c.call('session.info', {});
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await c.call('pty.write', { data: `cd '${repo}'\r` });
+    await waitUntil(async () => (await info()).git !== undefined, 8000);
+    expect(await info()).toMatchObject({ project: repo, git: { staged: 1, changed: 1, untracked: 1, ahead: 0, behind: 0 } });
+    // the next prompt sees what changed since
+    git('add', 'kept.txt');
+    await c.call('pty.write', { data: 'true\r' });
+    await waitUntil(async () => (await info()).git?.staged === 2, 8000);
+    expect((await info()).git).toEqual({ staged: 2, changed: 0, untracked: 1, ahead: 0, behind: 0 });
+    // outside a repository there is nothing to say
+    await c.call('pty.write', { data: 'cd /\r' });
+    await waitUntil(async () => (await info()).cwd === '/', 8000);
+    await sleep(800);
+    expect((await info()).git).toBeUndefined();
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
@@ -682,6 +715,78 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await c.call('claude.event', ev('Stop', base));
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-nocost')?.cost?.answers === 1, 5_000);
   });
+
+  it('while Claude works, says what the answer has cost so far (read every 2 s from where the prompt began), pauses while it waits for the person, and Stop clears it', async () => {
+    const transcript = path.join(env3.root, 'sess-live.jsonl');
+    const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET words' }], usage: { input_tokens: 100, output_tokens: output } } })}\n`;
+    fs.writeFileSync(transcript, reply('before', 1_000_000)); // an earlier answer in the same file is not this one
+    const base = { session_id: 'sess-live', transcript_path: transcript };
+    const live = async () => (await states()).find((s) => s.id === 'sess-live')?.live;
+    const pushed = collect(c, 'claude.state');
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'go' }));
+    fs.appendFileSync(transcript, reply('m1', 1000));
+    await waitUntil(async () => (await live())?.output === 1000, 5_000);
+    expect(await live()).toMatchObject({ input: 100, output: 1000 });
+    expect((await live())!.usd).toBeCloseTo((100 * 2 + 1000 * 10) / 1e6, 9);
+    fs.appendFileSync(transcript, reply('m2', 500)); // the transcript grows mid-turn
+    await waitUntil(async () => (await live())?.output === 1500, 5_000);
+    // waiting for the person: nothing is read meanwhile, the last figure stays
+    await c.call('claude.event', ev('PreToolUse', { ...base, tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'toolu_l1' }));
+    await c.call('claude.event', ev('Notification', { ...base, message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }));
+    fs.appendFileSync(transcript, reply('m3', 500));
+    await sleep(2_500);
+    expect((await live())!.output).toBe(1500);
+    await c.call('claude.event', ev('PostToolUse', { ...base, tool_name: 'Bash', tool_use_id: 'toolu_l1' }));
+    await waitUntil(async () => (await live())?.output === 2000, 5_000);
+    // at most one change of the figure every 2 s, and numbers only
+    const ats = [...new Set(pushed.map((p) => p.sessions.find((s: ClaudeSession) => s.id === 'sess-live')?.live?.at).filter(Boolean))] as number[];
+    expect(ats.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < ats.length; i++) expect(ats[i]! - ats[i - 1]!).toBeGreaterThanOrEqual(1_900);
+    expect(JSON.stringify(pushed)).not.toContain('SECRET');
+    await c.call('claude.event', ev('Stop', base));
+    expect(await live()).toBeUndefined();
+    // the turn finished on its own and took longer than 3 s: it counts for the typical turn
+    await waitUntil(async () => (await c.call('config.get', {})).claude.typicalTurnMs >= 3_000, 5_000);
+    // and what the whole answer cost comes as after every answer
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-live')?.cost?.last.output === 2000, 5_000);
+  }, 30_000);
+
+  it('adds every finished answer to today\'s total once (a Stop heard twice is one answer), on the claude.state payload beside the sessions', async () => {
+    const transcript = path.join(env3.root, 'sess-today.jsonl');
+    const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 0, output_tokens: 10_000 } } })}\n`;
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-today', transcript_path: transcript };
+    const before = (await c.call('claude.state', {})).today;
+    expect(before.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'once' }));
+    fs.appendFileSync(transcript, reply('t1'));
+    const pushed = collect(c, 'claude.state');
+    await c.call('claude.event', ev('Stop', base));
+    await c.call('claude.event', ev('Stop', base));
+    await sleep(2_500); // past the read (300 ms) and its one retry (1.5 s later)
+    expect((await states()).find((s) => s.id === 'sess-today')?.cost?.answers).toBe(1);
+    const after = (await c.call('claude.state', {})).today;
+    expect(after.date).toBe(before.date);
+    expect(after.usd - before.usd).toBeCloseTo(0.1, 9); // 10 000 output tokens at $10 a million, once
+    expect(pushed[pushed.length - 1].today).toEqual(after);
+  });
+
+  it('the live figure follows the switches: nothing is read with the cost or its live part off', async () => {
+    const transcript = path.join(env3.root, 'sess-nolive.jsonl');
+    const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 1, output_tokens: 10 } } })}\n`;
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-nolive', transcript_path: transcript };
+    const live = async () => (await states()).find((s) => s.id === 'sess-nolive')?.live;
+    for (const off of [{ liveCost: false }, { showCost: false }]) {
+      await c.call('config.patch', { claude: off });
+      await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'quiet' }));
+      fs.appendFileSync(transcript, reply(`n${JSON.stringify(off)}`));
+      await sleep(2_500);
+      expect(await live(), JSON.stringify(off)).toBeUndefined();
+      await c.call('claude.event', ev('Stop', base));
+      await c.call('config.patch', { claude: { liveCost: true, showCost: true } });
+    }
+  }, 20_000);
 
   it('a stopped claude (Ctrl+Z: the shell reports exit 148) does not end the session', async () => {
     await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-susp', prompt: 'a long task' }));
