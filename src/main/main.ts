@@ -330,7 +330,7 @@ function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
   const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
   prevClaude = sessions;
   claudeToday = today;
-  if (wasBusy && !claudeBusy()) void refreshPastConversations(); // (a finished turn changes the list)
+  if (tray && wasBusy && !claudeBusy()) void refreshPastConversations(); // (a finished turn changes the list)
   syncTrayState();
   if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
@@ -552,6 +552,7 @@ function showWindow(): void {
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
+    if (dockHidden) app.focus({ steal: true }); // (an app without a Dock icon is not brought to the front by show() alone)
   }
   if (!dockHidden) app.dock?.show(); // (Settings → Only in the menu bar keeps the Dock icon away)
 }

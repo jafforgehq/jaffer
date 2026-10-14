@@ -367,7 +367,7 @@ export function PastConversations(): VNode {
           {items === null && <div class="pal-group">Loading…</div>}
           {items !== null && rows.length === 0 && <div class="pal-group">{items.length ? 'No match' : 'No Claude Code conversations found.'}</div>}
           {rows.map((r, i) => (
-            <button key={r.c.id} class={`pal-row ${i === sel ? 'sel' : ''}`} data-id={r.c.id} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
+            <button key={`${i}-${r.c.id}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-id={r.c.id} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
               <span class="hist-ago">{fmtAgo(r.c.endedAt)}</span>
               <span class="pal-title hist-dir">{highlight(r.dir || '(folder unknown)', q)}</span>
               <span class="hist-dur">{typeof r.c.durMs === 'number' ? fmtDuration(r.c.durMs) : '–'}</span>
