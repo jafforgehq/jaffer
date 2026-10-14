@@ -44,11 +44,11 @@ function gitUsable(): Promise<boolean> {
 
 /**
  * `git status` of the repository at `root`, counted. Undefined when git is missing, `root` is no repository, or git takes more than a
- * second or says more than a megabyte. It takes no lock (`GIT_OPTIONAL_LOCKS=0`): the person's own git commands never wait for it.
+ * second or says more than a megabyte. It takes no lock (`GIT_OPTIONAL_LOCKS=0`): the person's own git commands never wait for it. `core.fsmonitor` is off: a repository's own config must not start a program on every prompt.
  */
 export async function readGitStatus(root: string): Promise<GitStatus | undefined> {
   if (!(await gitUsable())) return undefined;
   return new Promise((resolve) => {
-    execFile('git', ['status', '--porcelain=v2', '--branch'], { cwd: root, timeout: 1000, killSignal: 'SIGKILL', maxBuffer: MAX_TEXT, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (err, stdout) => resolve(err ? undefined : parseGitStatus(stdout)));
+    execFile('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v2', '--branch'], { cwd: root, timeout: 1000, killSignal: 'SIGKILL', maxBuffer: MAX_TEXT, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (err, stdout) => resolve(err ? undefined : parseGitStatus(stdout)));
   });
 }
