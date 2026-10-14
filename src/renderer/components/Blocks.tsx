@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
-import { BlockModel, blockOutputText, fenceText, type Block, type MarkKind } from '../blocks';
+import { BlockModel, blockOutputText, fenceText, saveName, type Block, type MarkKind } from '../blocks';
 import { cfg, safeCommand, toast } from '../state';
 import { isSensitiveCommand } from '../../shared/redact';
 import { took } from '../../shared/notify-policy';
@@ -45,7 +45,7 @@ interface MenuItem {
 }
 
 const sticky = signal<Sticky | null>(null);
-const ctxMenu = signal<{ x: number; y: number; items: MenuItem[]; done(): void } | null>(null);
+const ctxMenu = signal<{ x: number; y: number; block: number; items: MenuItem[]; done(): void } | null>(null);
 let live: BlocksHandle | null = null;
 
 /** The blocks of the terminal (for later features: paths relative to a block's folder, recent output). */
@@ -76,11 +76,6 @@ function times(b: Block): string {
 /** The command as the window may show it; a sensitive one is not named. */
 const shownCommand = (b: Block): string | undefined => (b.cmd && !isSensitiveCommand(b.cmd) ? safeCommand(b.cmd) : undefined);
 
-function saveName(b: Block): string {
-  const first = b.cmd && !isSensitiveCommand(b.cmd) ? (b.cmd.trim().split(/\s+/)[0] ?? '').split('/').pop() : '';
-  return first ? `${first}-output.txt` : 'output.txt';
-}
-
 function copy(text: string, said: string): void {
   void navigator.clipboard.writeText(text).then(
     () => toast({ kind: 'info', text: said }, 2500),
@@ -95,6 +90,7 @@ export function attachBlocks(term: Terminal): BlocksHandle {
     const t = tracked.get(id);
     tracked.delete(id);
     labels.delete(id);
+    if (ctxMenu.value?.block === id) ctxMenu.value = null; // its menu goes with it
     if (!t) return;
     t.gutter?.dispose();
     t.prompt.dispose();
@@ -179,10 +175,26 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         el.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          ctxMenu.value = { x: e.clientX, y: e.clientY, items: menuFor(b), done: () => term.focus() };
+          ctxMenu.value = { x: e.clientX, y: e.clientY, block: b.id, items: menuFor(b), done: () => term.focus() };
         });
       }
       style(el, b);
+    });
+  };
+
+  /** A prompt's marker: when its line leaves the scrollback the block goes, except the prompt still waiting for a command (Ctrl-L or ⌘K
+   * erased its line, and xterm drops the markers of an erased line): that one keeps its block and anchors again when its command starts. */
+  const anchor = (b: Block, prompt: IMarker) => {
+    tracked.set(b.id, { prompt });
+    prompt.onDispose(() => {
+      if (tracked.get(b.id)?.prompt !== prompt) return;
+      if (b.outputStart === undefined && model.blocks().at(-1) === b) {
+        tracked.delete(b.id);
+        return;
+      }
+      free(b.id);
+      model.remove(b.id);
+      queueSticky();
     });
   };
 
@@ -226,17 +238,14 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         model.remove(b.id);
         return false;
       }
-      tracked.set(b.id, { prompt });
-      prompt.onDispose(() => {
-        // its line left the scrollback (or the screen was cleared): the block goes with it
-        if (!tracked.has(b.id)) return;
-        free(b.id);
-        model.remove(b.id);
-        queueSticky();
-      });
+      anchor(b, prompt);
     } else if (kind === 'C') {
-      const t = tracked.get(b.id);
-      if (!t) return false;
+      if (!tracked.has(b.id)) {
+        const prompt = term.registerMarker(-1); // its prompt was erased while it waited: the line above the output stands in
+        if (!prompt) return false;
+        anchor(b, prompt);
+      }
+      const t = tracked.get(b.id)!;
       t.start = term.registerMarker(0);
       addGutter(b, t);
     } else if (kind === 'D') {
@@ -265,6 +274,8 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         return kind === 'A' || kind === 'C' || kind === 'D' ? mark(kind, semi < 0 ? '' : data.slice(semi + 1)) : false;
       }),
       term.parser.registerOscHandler(633, (data) => (data.startsWith('E;') ? mark('E', data.slice(2)) : false)),
+      // ESC c (a full reset, as `reset` or `printf '\ec'` send) clears the screen and the scrollback but leaves xterm's markers: drop the blocks first
+      term.parser.registerEscHandler({ final: 'c' }, () => (clear(), false)),
     ];
   };
   const disable = () => {
@@ -295,7 +306,7 @@ export function attachBlocks(term: Terminal): BlocksHandle {
       if (!on || term.buffer.active.type !== 'normal') return;
       sync();
       const top = term.buffer.active.viewportY;
-      const lines = model.blocks().map((b) => b.promptLine).filter((l) => l >= 0);
+      const lines = model.blocks().filter((b) => tracked.has(b.id)).map((b) => b.promptLine).filter((l) => l >= 0);
       const target = dir < 0 ? lines.filter((l) => l < top).at(-1) : lines.find((l) => l > top);
       if (target !== undefined) term.scrollToLine(target);
       else if (dir > 0) term.scrollToBottom();
@@ -339,7 +350,8 @@ function Menu({ x, y, items, done }: { x: number; y: number; items: MenuItem[]; 
     ctxMenu.value = null;
     done();
   };
-  useEffect(() => {
+  // (a layout effect: a click right after the menu opened must already find these listeners)
+  useLayoutEffect(() => {
     ref.current?.querySelector('button')?.focus();
     const key = (e: KeyboardEvent) => e.key === 'Escape' && (e.preventDefault(), close());
     const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && close();

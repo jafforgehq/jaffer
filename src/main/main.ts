@@ -630,11 +630,11 @@ ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
 ipcMain.handle('jaffer:save-text', async (e, text: unknown, name: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   if (typeof text !== 'string') throw new Error('Nothing to save.');
-  if (text.length > SAVE_TEXT_MAX) throw new Error('That output is more than 32 MB: too much to save.');
+  if (Buffer.byteLength(text) > SAVE_TEXT_MAX) throw new Error('That output is more than 32 MB: too much to save.');
   const ask = { defaultPath: path.join(app.getPath('downloads'), safeFileName(name)) };
   const r = win && !win.isDestroyed() ? await dialog.showSaveDialog(win, ask) : await dialog.showSaveDialog(ask);
   if (r.canceled || !r.filePath) return { saved: false };
-  await fs.promises.writeFile(r.filePath, text, { mode: 0o600 });
+  await fs.promises.writeFile(r.filePath, text, { mode: 0o600 }); // (the mode applies to a new file; a file the person chose to replace keeps its own)
   return { saved: true };
 });
 

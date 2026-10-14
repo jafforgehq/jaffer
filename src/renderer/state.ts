@@ -4,6 +4,7 @@ import type { ClaudeSession } from '../core/claude/watcher';
 import type { UpdateState } from '../shared/update-policy';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
+import { COMMAND_HEAD } from '../shared/process-badge';
 
 const jaffer = () => window.jaffer;
 
@@ -153,9 +154,10 @@ export async function patchConfig(p: object): Promise<void> {
 
 // ------------------------------------------------------------------ small display helpers
 
-/** A command as it may be shown in the UI: secrets redacted, sensitive commands hidden. */
+/** A command as it may be shown in the UI: secrets redacted, sensitive commands hidden. Only its head is read (a command line is forgeable at any length). */
 export function safeCommand(cmd: string): string {
-  return isSensitiveCommand(cmd) ? '(hidden)' : redactText(cmd);
+  const head = cmd.slice(0, 4 * COMMAND_HEAD);
+  return isSensitiveCommand(head) ? '(hidden)' : redactText(head);
 }
 
 function homeDir(): string {

@@ -1,5 +1,7 @@
 import { unescapeOsc } from '../shared/osc';
-import { SAVE_TEXT_MAX } from '../shared/save-text';
+import { SAVE_TEXT_MAX, utf8Bytes } from '../shared/save-text';
+import { COMMAND_HEAD } from '../shared/process-badge';
+import { isSensitiveCommand } from '../shared/redact';
 
 /**
  * Command blocks, from the shell marks the integration scripts send (no xterm here: the terminal view feeds the marks and keeps the
@@ -45,13 +47,14 @@ export class BlockModel {
     if (!last || last.endedAt !== undefined) return undefined;
     if (kind === 'E') {
       if (last.cmd !== undefined) return undefined;
-      last.cmd = unescapeOsc(payload);
+      last.cmd = unescapeOsc(payload.slice(0, 4 * COMMAND_HEAD)); // a mark is forgeable at any length: only its head is kept
     } else if (kind === 'C') {
       if (last.outputStart !== undefined) return undefined;
       Object.assign(last, { outputStart: line, startedAt: now });
     } else {
       if (last.outputStart === undefined) return undefined;
-      const exit = /^-?\d+$/.test(payload) ? Number.parseInt(payload, 10) : null;
+      const n = /^-?\d{1,16}$/.test(payload) ? Number.parseInt(payload, 10) : Number.NaN;
+      const exit = Number.isSafeInteger(n) ? n : null;
       Object.assign(last, { outputEnd: line, exit, endedAt: now });
     }
     return last;
@@ -108,9 +111,35 @@ interface BufferLike {
   getLine(y: number): { readonly isWrapped: boolean; translateToString(trimRight?: boolean): string } | undefined;
 }
 
+/** The file name "Save output…" suggests: the command's first word (after any `NAME=value`), never a word with `=` in it; else `output.txt`. */
+export function saveName(b: Block): string {
+  if (!b.cmd || isSensitiveCommand(b.cmd)) return 'output.txt';
+  const words = b.cmd.slice(0, COMMAND_HEAD).trim().split(/\s+/);
+  let i = 0;
+  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++; // environment assignments: `PGPASSWORD=… psql`
+  const first = words[i] ?? '';
+  if (!first || first.includes('=')) return 'output.txt';
+  const base = (first.split('/').pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '');
+  return base ? `${base}-output.txt` : 'output.txt';
+}
+
 const CUT_NOTE = '\n[cut at 32 MB]';
 
-/** A block's output as plain text (a wrapped line joined back into one, trailing empty lines left out), at most `SAVE_TEXT_MAX` characters. */
+/** The longest head of `s` within `bytes` UTF-8 bytes, never half of a surrogate pair. */
+function headBytes(s: string, bytes: number): string {
+  let n = 0;
+  let i = 0;
+  while (i < s.length) {
+    const pair = (s.charCodeAt(i) & 0xfc00) === 0xd800 && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00;
+    const step = utf8Bytes(s.slice(i, i + (pair ? 2 : 1)));
+    if (n + step > bytes) break;
+    n += step;
+    i += pair ? 2 : 1;
+  }
+  return s.slice(0, i);
+}
+
+/** A block's output as plain text (a wrapped line joined back into one, trailing empty lines left out), at most `SAVE_TEXT_MAX` UTF-8 bytes. */
 export function blockOutputText(buffer: BufferLike, block: Block): string {
   if (block.outputStart === undefined) return '';
   const last = Math.min(block.outputEnd ?? buffer.length - 1, buffer.length - 1);
@@ -121,12 +150,13 @@ export function blockOutputText(buffer: BufferLike, block: Block): string {
     if (!line) continue;
     const joined = buffer.getLine(y + 1)?.isWrapped && y < last; // the next line continues this one: keep its full width, no newline
     const text = line.translateToString(!joined) + (joined || y === last ? '' : '\n');
-    if (size + text.length > SAVE_TEXT_MAX - CUT_NOTE.length) {
-      parts.push(text.slice(0, SAVE_TEXT_MAX - CUT_NOTE.length - size), CUT_NOTE);
+    const bytes = utf8Bytes(text);
+    if (size + bytes > SAVE_TEXT_MAX - CUT_NOTE.length) {
+      parts.push(headBytes(text, SAVE_TEXT_MAX - CUT_NOTE.length - size), CUT_NOTE);
       return parts.join('');
     }
     parts.push(text);
-    size += text.length;
+    size += bytes;
   }
   const out = parts.join('');
   let end = out.length;

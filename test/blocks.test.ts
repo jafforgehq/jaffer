@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { BlockModel, MAX_BLOCKS, blockOutputText, fenceText, type Block } from '../src/renderer/blocks';
-import { SAVE_TEXT_MAX } from '../src/shared/save-text';
+import { BlockModel, MAX_BLOCKS, blockOutputText, fenceText, saveName, type Block } from '../src/renderer/blocks';
+import { SAVE_TEXT_MAX, utf8Bytes } from '../src/shared/save-text';
+import { COMMAND_HEAD } from '../src/shared/process-badge';
 
 /** Feeds marks the way the shell scripts send them: A at the prompt, E and C when a command starts, D;<exit> when it ends. */
 function run(m: BlockModel, at: { prompt: number; start: number; end: number }, cmd: string, exit: string, t0 = 1_000, t1 = 3_000): void {
@@ -77,6 +78,22 @@ describe('BlockModel: a block per command, from the shell marks', () => {
     expect(m.blocks()[0]!.exit).toBeNull();
   });
 
+  it('a forged command of 10 MB is kept clipped (its head, before unescaping), quickly', () => {
+    const m = new BlockModel();
+    m.onMark('A', '', 0, 1);
+    const t0 = performance.now();
+    m.onMark('E', 'x'.repeat(10 * 1024 * 1024), 1, 2);
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(m.blocks()[0]!.cmd).toHaveLength(4 * COMMAND_HEAD);
+  });
+
+  it('an exit of more digits than a safe integer holds is not known (null), not Infinity', () => {
+    const m = new BlockModel();
+    run(m, { prompt: 0, start: 1, end: 1 }, 'x', '9'.repeat(400));
+    run(m, { prompt: 2, start: 3, end: 3 }, 'y', '99999999999999999');
+    expect(m.blocks().map((b) => b.exit)).toEqual([null, null]);
+  });
+
   it('keeps the newest 500 blocks: the oldest go, and the view hears which', () => {
     const dropped: number[] = [];
     const m = new BlockModel((b) => dropped.push(b.id));
@@ -115,6 +132,27 @@ describe('BlockModel: a block per command, from the shell marks', () => {
   });
 });
 
+describe('saveName: the file name "Save output…" suggests', () => {
+  const b = (cmd?: string): Block => ({ id: 1, promptLine: 0, cmd });
+  it('the command\'s first word (its last path part), then -output.txt', () => {
+    expect(saveName(b('make -j8 test'))).toBe('make-output.txt');
+    expect(saveName(b('/usr/bin/git log'))).toBe('git-output.txt');
+  });
+
+  it('leading NAME=value words are skipped: a password in the environment never reaches the name', () => {
+    expect(saveName(b('PGPASSWORD=hunter2 psql -h db'))).toBe('psql-output.txt');
+    expect(saveName(b('A=1 B=two   npm run build'))).toBe('npm-output.txt');
+    expect(saveName(b('TOKEN=abc'))).toBe('output.txt');
+    expect(saveName(b('./x=y run'))).toBe('output.txt'); // a word with = in it is never used
+  });
+
+  it('nothing to go by, or a sensitive command: output.txt', () => {
+    expect(saveName(b())).toBe('output.txt');
+    expect(saveName(b('   '))).toBe('output.txt');
+    expect(saveName(b('cat ~/.ssh/id_rsa'))).toBe('output.txt');
+  });
+});
+
 describe('fenceText: copy as Markdown', () => {
   it('fences the text, with the command as the first line when there is one', () => {
     expect(fenceText('hi\n')).toBe('```\nhi\n```');
@@ -150,6 +188,16 @@ describe('blockOutputText: a block\'s output from the buffer', () => {
     const t = await term('$ tail\r\none\r\ntwo');
     expect(blockOutputText(t.buffer.active, block(1))).toBe('one\ntwo');
     expect(blockOutputText(t.buffer.active, block(1, 0))).toBe('');
+  });
+
+  it('counts bytes, not characters: 32 MB of UTF-8 at most', () => {
+    const line = { isWrapped: false, translateToString: () => 'é€😀'.repeat(100_000) };
+    const buf = { length: 200, getLine: () => line };
+    const out = blockOutputText(buf, block(0, 199));
+    expect(utf8Bytes(out)).toBeLessThanOrEqual(SAVE_TEXT_MAX);
+    expect(utf8Bytes(out)).toBeGreaterThan(SAVE_TEXT_MAX - 16);
+    expect(out).toMatch(/\n\[cut at 32 MB\]$/);
+    expect(out).not.toMatch(/[\uD800-\uDBFF]\n\[cut/); // no half of a pair left at the cut
   });
 
   it('stops at 32 MB and says so', () => {

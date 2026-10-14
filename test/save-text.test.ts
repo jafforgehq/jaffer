@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SAVE_TEXT_MAX, safeFileName } from '../src/shared/save-text';
+import { SAVE_TEXT_MAX, safeFileName, utf8Bytes } from '../src/shared/save-text';
 
 describe('safeFileName: the name the save dialog suggests', () => {
   it('keeps a plain name', () => {
@@ -21,5 +21,10 @@ describe('safeFileName: the name the save dialog suggests', () => {
 
   it('32 MB is the most a save takes', () => {
     expect(SAVE_TEXT_MAX).toBe(32 * 1024 * 1024);
+  });
+
+  it('measured in UTF-8 bytes, as the file will be (the same count as Buffer.byteLength)', () => {
+    for (const s of ['', 'abc', 'é', '€', '😀', 'a\u0301b€😀x', '\uD800 lone', 'end \uDC00']) expect(utf8Bytes(s), s).toBe(Buffer.byteLength(s));
+    expect(utf8Bytes('é'.repeat(SAVE_TEXT_MAX / 2 + 1))).toBeGreaterThan(SAVE_TEXT_MAX); // fewer characters than the limit, more bytes
   });
 });

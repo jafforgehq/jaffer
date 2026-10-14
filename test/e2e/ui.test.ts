@@ -960,8 +960,15 @@ describe('Jaffer UI end to end', () => {
     await menu('prompt-prev');
     expect(await viewTop()).toBe(top);
 
-    await page.evaluate(() => window.jaffer.call('config.patch', { terminal: { blocks: true } }));
-    await sleep(300);
+    // on again from Settings: the switch shows on once the window has the setting, and by then the mark handlers are live
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Terminal' }).click();
+    await field.locator('.switch').click();
+    await until(async () => field.locator('input').isChecked(), 5_000, 'the switch to show on');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await page.click('.term');
     await enter(''); // blocks start at the next prompt: the one already on the screen was printed while they were off
     await enter('echo blocks-on-82');
     expect(await (await markOf('echo blocks-on-82')).getAttribute('data-state')).toBe('ok');
@@ -1137,6 +1144,33 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toMatch(/cat <<EOF\n.*\$ /);
     await page.keyboard.press('Control+c');
   });
+
+  // (last: ESC c wipes the scrollback, which the reload test above reads)
+  it('Clear and a full reset (ESC c) take the blocks along: an open gutter menu closes, no stale marks, no stale prompt to jump to', async () => {
+    await page.click('.term');
+    await enter('echo before-clear-91');
+    await (await markOf('echo before-clear-91')).click({ button: 'right' });
+    await page.waitForSelector('.ctx-menu');
+    await menu('clear'); // ⌘K: the lines above the prompt leave the scrollback, their blocks with them, and the menu of one
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    await until(async () => !(await blocks()).some((b) => b.cmd === 'echo before-clear-91'), 5_000, 'the cleared block to go');
+    await page.click('.term');
+    await enter('echo before-reset-92'); // the prompt that waited through ⌘K still makes a block of its command
+    expect(await (await markOf('echo before-reset-92')).getAttribute('data-state')).toBe('ok');
+    await page.keyboard.press('Control+l'); // and through Ctrl-L (the shell erases the screen and draws the prompt again)
+    await enter('echo after-ctrl-l-94');
+    expect(await (await markOf('echo after-ctrl-l-94')).getAttribute('data-state')).toBe('ok');
+    expect(await shownMarks()).toBeGreaterThanOrEqual(1);
+    await enter("printf '\\033c'");
+    await until(async () => (await page.locator('.xterm-decoration.gutter-mark').count()) === 0, 5_000, 'every mark gone with the reset');
+    expect((await blocks()).filter((b) => b.cmd !== undefined)).toEqual([]);
+    const top = await viewTop();
+    await menu('prompt-prev');
+    await menu('prompt-next');
+    expect(await viewTop()).toBe(top);
+    await enter('echo after-reset-93');
+    expect(await (await markOf('echo after-reset-93')).getAttribute('data-state')).toBe('ok'); // and blocks go on from there
+  }, 40_000);
 
 });
 
