@@ -6,7 +6,7 @@ import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
 import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
-import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
+import { FindBar, Onboarding, Palette, PasteBar, Pins, RecentCommands, Settings } from './components/Overlays';
 import { BlockMenu, StickyHeader } from './components/Blocks';
 import { cssVars, themeById } from './themes';
 
@@ -52,9 +52,11 @@ export function App(): VNode | null {
         <DaemonBanner />
         <div class="workspace">
           <div class="terminal-area">
+            <Pins />
             <PaneTree />
             <StickyHeader />
             <Pet />
+            <PasteBar />
             {overlay.value === 'find' && <FindBar />}
           </div>
         </div>
@@ -62,6 +64,7 @@ export function App(): VNode | null {
       <BlockMenu />
       <Toasts />
       {overlay.value === 'palette' && <Palette />}
+      {overlay.value === 'recent' && <RecentCommands />}
       {overlay.value === 'settings' && <Settings />}
       {overlay.value === 'onboarding' && <Onboarding />}
     </div>

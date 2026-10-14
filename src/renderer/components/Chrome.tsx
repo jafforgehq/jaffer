@@ -1,5 +1,5 @@
 import type { VNode } from 'preact';
-import { cfg, currentClaude, daemonUp, dismissToast, info, safeCommand, tildePath, toasts } from '../state';
+import { cfg, currentClaude, daemonUp, dismissToast, info, port, safeCommand, tildePath, toasts } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
 import type { ClaudeCost } from '../../core/claude/watcher';
@@ -55,6 +55,11 @@ export function TitleBar(): VNode {
               <span class="running" data-kind={badge.kind}>
                 <span class={badge.spin ? 'spinner' : 'run-dot'} /> {safeCommand(running).slice(0, 28)}
               </span>
+              {port.value && cfg.value?.terminal?.portLinks !== false && (
+                <button class="port-chip" title={`Open http://localhost:${port.value} in your browser`} onClick={() => void window.jaffer.openExternal(`http://localhost:${port.value}`)}>
+                  :{port.value} ↗
+                </button>
+              )}
             </>
           )}
         </span>

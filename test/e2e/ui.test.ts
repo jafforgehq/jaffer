@@ -170,9 +170,10 @@ describe('Jaffer UI end to end', () => {
     for (const k of ['Meta+b', 'Meta+j', 'Meta+Shift+M']) await page.keyboard.press(k); // the sidebar, the Claude panel and the memory drawer are gone
     await sleep(300);
     expect(await page.locator('.rail, .statusbar, .agent, .panel-head, .side').count()).toBe(0);
-    // 1.0.0 allows command blocks inside the card (gutter marks, the sticky command header, the gutter menu); still no sidebar, drawer, panel or tab
+    // 1.0.0 allows command blocks inside the card (gutter marks, the sticky command header, the gutter menu), up to three pinned lines and
+    // the paste question; still no sidebar, drawer, panel or tab
     expect(await page.locator('.sidebar, .drawer, .panel, .tabs, .tab').count()).toBe(0);
-    expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar)\b/.test(c)))).toEqual([]);
+    expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar|pins|paste-bar)\b/.test(c)))).toEqual([]);
     expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // no buttons in the title bar: the folder, the branch, the ring, the cost
     expect(await page.locator('.titlebar', { hasText: /memory/i }).count()).toBe(0);
     const term = (await page.locator('.terminal-area').boundingBox())!;
@@ -973,6 +974,314 @@ describe('Jaffer UI end to end', () => {
     await enter('echo blocks-on-82');
     expect(await (await markOf('echo blocks-on-82')).getAttribute('data-state')).toBe('ok');
   }, 60_000);
+
+  // Terminal power (spec features 9, 10, 11, 12, 21, 23, 25, 37, 39).
+  const clipStub = () =>
+    page.evaluate(() => {
+      const clip = { written: [] as string[] };
+      (window as any).__powerClip = clip;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => '', writeText: async (t: string) => void clip.written.push(t) } });
+    });
+  const pasteText = (text: string) =>
+    page.evaluate((t) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', t);
+      document.querySelector('.term .xterm-helper-textarea')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, text);
+  const patch = (p: object) => page.evaluate((x) => window.jaffer.call('config.patch', x), p);
+
+  it('pasting several lines asks first: Esc pastes nothing, Enter pastes them; one line pastes at once; Settings switches it off', async () => {
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await pasteText('echo paste-a-41\necho paste-b-42\n');
+    await page.waitForSelector('.paste-bar');
+    expect(await page.textContent('.paste-bar b')).toBe('Paste 2 lines?');
+    expect(await page.textContent('.paste-bar .paste-first')).toBe('echo paste-a-41');
+    await shot('19-paste-guard');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    await sleep(400);
+    expect(await termText()).not.toContain('paste-a-41');
+    // the first line shown is clipped and redacted
+    await pasteText(`export KEY=sk-ant-api03-${'q'.repeat(40)}${'x'.repeat(120)}\nls\n`);
+    await page.waitForSelector('.paste-bar');
+    const first = (await page.textContent('.paste-bar .paste-first')) ?? '';
+    expect(first).not.toContain('sk-ant-api03-qqqq');
+    expect(first.length).toBeLessThanOrEqual(80);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    await pasteText('echo paste-a-41\necho paste-b-42\n');
+    await page.waitForSelector('.paste-bar');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    await page.keyboard.press('Enter'); // (a shell with bracketed paste holds pasted lines until Enter; an older one has run them already)
+    await until(async () => /^paste-b-42/m.test(await termText()), 8_000, 'both lines pasted and run');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true); // the terminal has the keys again
+    // one line goes straight in (and is not run)
+    await pasteText('echo single-paste-43');
+    await until(async () => /echo single-paste-43/.test(await termText()), 5_000, 'the line pasted');
+    expect(await page.locator('.paste-bar').count()).toBe(0);
+    await page.keyboard.press('Control+c');
+    // Settings → Terminal → Ask before pasting several lines, off: several lines go straight in
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Terminal' }).click();
+    const field = page.locator('label.field', { hasText: 'Ask before pasting several lines' });
+    expect(await field.locator('input').isChecked()).toBe(true);
+    await field.locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).terminal.pasteGuard === false, 5_000, 'the switch to be saved');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await page.click('.term');
+    await pasteText('echo unguarded-44\necho unguarded-45\n');
+    await page.keyboard.press('Enter');
+    await until(async () => /^unguarded-45/m.test(await termText()), 8_000, 'the lines pasted without a question');
+    expect(await page.locator('.paste-bar').count()).toBe(0);
+    await patch({ terminal: { pasteGuard: true } });
+  }, 60_000);
+
+  it('⌘-click on a printed path opens it (absolute, relative to the folder, with its line and column); a plain click does not', async () => {
+    const dir = path.join(env.userHome, 'links-91');
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'app.ts'), '');
+    await page.evaluate(() => ((window as any).__openedPath = []));
+    await page.click('.term');
+    await enter(`cd ${dir}`); // (no clearing the screen: the reload test below reads this session's earlier output)
+    await until(async () => (await page.textContent('.session-pill .cwd'))?.includes('links-91'), 8_000, 'the folder in the title bar');
+    await enter(`printf 'at %s:12:3 and src/app%s:7\\n' "$PWD/src/app.ts" .ts`);
+    const where = await until(
+      () =>
+        page.evaluate(() => {
+          const t = (window as any).__jaffer.terminals.get('main').term;
+          const b = t.buffer.active;
+          for (let y = b.length - 1; y >= 0; y--) if (b.getLine(y)!.translateToString(true).startsWith('at /')) return { row: y - b.viewportY, text: b.getLine(y)!.translateToString(true) };
+          return null;
+        }),
+      8_000,
+      'the printed paths',
+    );
+    const cell = async (col: number) => {
+      const box = (await page.locator('.term .xterm-screen').boundingBox())!;
+      const dims = await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term._core._renderService.dimensions.css.cell);
+      return { x: box.x + (col + 0.5) * dims.width, y: box.y + (where.row + 0.5) * dims.height };
+    };
+    const metaClick = async (col: number, meta = true) => {
+      const p = await cell(col);
+      await page.mouse.move(p.x, p.y);
+      await sleep(250); // the link is found on hover
+      if (meta) await page.keyboard.down('Meta');
+      await page.mouse.down();
+      await page.mouse.up();
+      if (meta) await page.keyboard.up('Meta');
+    };
+    await metaClick(5, false);
+    await sleep(200);
+    expect(await page.evaluate(() => (window as any).__openedPath)).toEqual([]);
+    await metaClick(5);
+    await until(async () => (await page.evaluate(() => (window as any).__openedPath.length)) === 1, 3_000, 'the absolute path opened');
+    expect(await page.evaluate(() => (window as any).__openedPath[0])).toEqual({ path: path.join(dir, 'src', 'app.ts'), line: 12, col: 3 });
+    await metaClick(where.text.indexOf('src/app.ts:7') + 2);
+    await until(async () => (await page.evaluate(() => (window as any).__openedPath.length)) === 2, 3_000, 'the relative path opened');
+    expect(await page.evaluate(() => (window as any).__openedPath[1])).toEqual({ path: path.join(dir, 'src', 'app.ts'), line: 7 });
+  }, 40_000);
+
+  it('the find bar counts matches ("2 of 3"), marks them on the overview ruler, and ⌘G / ⇧⌘G go on with the bar closed', async () => {
+    await page.click('.term');
+    await enter("printf 'needle%s\\n' 77 77 77");
+    await until(async () => (await termText()).split('\n').filter((l) => l === 'needle77').length === 3, 8_000, 'the matches');
+    await page.keyboard.press('Meta+f');
+    await page.waitForSelector('.findbar input');
+    await page.keyboard.type('needle77');
+    await until(async () => /^\d of 3$/.test((await page.textContent('.findbar .find-count')) ?? ''), 5_000, 'the counter');
+    const firstCount = await page.textContent('.findbar .find-count');
+    await menu('find-next');
+    await until(async () => (await page.textContent('.findbar .find-count')) !== firstCount, 3_000, 'the next match');
+    expect(await page.textContent('.findbar .find-count')).toMatch(/^\d of 3$/);
+    expect(await page.locator('.term .xterm-decoration-overview-ruler').count()).toBe(1);
+    await shot('20-find-count');
+    await page.keyboard.type('zzz-nothing');
+    await until(async () => (await page.textContent('.findbar .find-count')) === 'No results', 3_000, 'no results');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.findbar', { state: 'detached' });
+    const selection = () => page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.getSelection());
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await menu('find-next'); // the bar is closed: the last search goes on (the last thing typed was a search with no results)
+    expect(await selection()).toBe('');
+    await page.keyboard.press('Meta+f');
+    await page.waitForSelector('.findbar input');
+    await page.keyboard.type('needle77');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.findbar', { state: 'detached' });
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await menu('find-next');
+    await until(async () => (await selection()) === 'needle77', 3_000, 'the next match selected');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await menu('find-prev');
+    await until(async () => (await selection()) === 'needle77', 3_000, 'the previous match selected');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+  }, 40_000);
+
+  it('⌘R lists this session’s commands (never a sensitive one); Enter copies one to the clipboard and types nothing', async () => {
+    await clipStub();
+    await page.click('.term');
+    await enter('echo recent-one-55');
+    await ended('echo recent-one-55');
+    await enter('echo $NO_SUCH_TOKEN');
+    await ended('echo $NO_SUCH_TOKEN');
+    await menu('recent-commands');
+    await page.waitForSelector('.recent-list input');
+    const rows = await page.$$eval('.recent-list .recent-cmd', (r) => r.map((x) => x.textContent ?? ''));
+    expect(rows[0]).toBe('echo recent-one-55'); // newest first
+    expect(rows.some((r) => /NO_SUCH_TOKEN/.test(r))).toBe(false);
+    await page.keyboard.type('recent-one');
+    await until(async () => (await page.locator('.recent-list .recent-cmd').count()) === 1, 3_000, 'the filter');
+    await shot('21-recent-commands');
+    const before = await termText();
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.recent-list', { state: 'detached' });
+    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === 'echo recent-one-55', 3_000, 'the command on the clipboard');
+    await toastSaid('Copied. Paste it in the terminal.');
+    await sleep(500);
+    expect(await termText()).toBe(before); // nothing typed
+    // the palette has the new actions
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('re');
+    const list = (await page.textContent('.palette-list')) ?? '';
+    expect(list).toContain('Recent commands');
+    await page.fill('.palette input', 'pin');
+    expect(await page.textContent('.palette-list')).toContain('Pin selection');
+    await page.fill('.palette input', 'find');
+    expect(await page.textContent('.palette-list')).toMatch(/Find next[\s\S]*Find previous|Find previous[\s\S]*Find next/);
+    await page.keyboard.press('Escape');
+  }, 40_000);
+
+  it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
+    const errors: string[] = [];
+    const onErr = (e: Error) => errors.push(e.message);
+    page.on('pageerror', onErr);
+    const expected = () =>
+      page.evaluate(() => {
+        const t = (window as any).__jaffer.terminals.get('main').term;
+        const term = document.querySelector('.term')!.getBoundingClientRect();
+        const screen = document.querySelector('.term .xterm-screen')!.getBoundingClientRect();
+        const ruler = document.querySelector('.term .col-ruler') as HTMLElement;
+        return { want: screen.left - term.left + t._core._renderService.dimensions.css.cell.width * 80, got: ruler.getBoundingClientRect().left - term.left, hidden: ruler.hidden };
+      });
+    expect((await expected()).hidden).toBe(true); // off by default
+    await patch({ terminal: { ruler: 80 } });
+    await until(async () => !(await expected()).hidden, 5_000, 'the ruler');
+    let r = await expected();
+    expect(Math.abs(r.got - r.want)).toBeLessThan(1);
+    await shot('22-ruler');
+    await patch({ appearance: { fontSize: 16 } });
+    await until(async () => ((r = await expected()), Math.abs(r.got - r.want) < 1 && r.want > 0), 5_000, 'the ruler to follow the text size');
+    await patch({ appearance: { fontSize: 13 } });
+    await patch({ terminal: { ruler: 0 } });
+    await until(async () => (await expected()).hidden, 5_000, 'the ruler to go');
+
+    await patch({ terminal: { images: false } });
+    await sleep(300);
+    await patch({ terminal: { images: true } });
+    await sleep(300);
+    await page.click('.term');
+    await enter('echo images-ok-57');
+    await until(async () => /^images-ok-57/m.test(await termText()), 8_000, 'the terminal still working');
+    page.off('pageerror', onErr);
+    expect(errors).toEqual([]);
+  }, 40_000);
+
+  it('a local server the running command prints gets a chip in the title bar that opens it, gone when the command ends', async () => {
+    await page.evaluate(() => ((window as any).__opened = undefined));
+    await page.click('.term');
+    await enter(`sh -c "printf 'listening on http://local%s:5173/\\n' host; sleep 3"`);
+    await page.waitForSelector('.session-pill .port-chip', { timeout: 8_000 });
+    expect(await page.textContent('.session-pill .port-chip')).toBe(':5173 ↗');
+    await shot('23-port-chip');
+    await page.click('.session-pill .port-chip');
+    expect(await page.evaluate(() => (window as any).__opened)).toBe('http://localhost:5173');
+    await page.waitForSelector('.session-pill .port-chip', { state: 'detached', timeout: 8_000 });
+    // Settings → Terminal → Links to local servers, off: no chip
+    await patch({ terminal: { portLinks: false } });
+    await page.click('.term');
+    await enter(`sh -c "printf 'on http://127.0.0.%s:8080\\n' 1; sleep 2"`);
+    await until(async () => /^on http:\/\/127\.0\.0\.1:8080/m.test(await termText()), 8_000, 'the output');
+    await sleep(300);
+    expect(await page.locator('.session-pill .port-chip').count()).toBe(0);
+    await until(async () => !(await page.evaluate(() => window.jaffer.call('session.info'))).busy, 8_000, 'the command to end');
+    await patch({ terminal: { portLinks: true } });
+  }, 40_000);
+
+  it('⇧⌘L pins the selected line (redacted) under the title bar, at most three, each with its ×', async () => {
+    const selectOutput = async (text: string) => {
+      await until(
+        () =>
+          page.evaluate((s) => {
+            const t = (window as any).__jaffer.terminals.get('main').term;
+            const b = t.buffer.active;
+            for (let y = b.length - 1; y >= 0; y--)
+              if (b.getLine(y)!.translateToString(true) === s) {
+                t.selectLines(y, y);
+                return true;
+              }
+            return false;
+          }, text),
+        8_000,
+        `the line ${text}`,
+      );
+    };
+    await page.click('.term');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await menu('pin-selection');
+    await toastSaid('Select something first');
+    for (const n of [1, 2, 3, 4]) {
+      await enter(`echo pin-me-6${n}`);
+      await ended(`echo pin-me-6${n}`); // (typed ahead, the next command would be echoed into this one's output)
+    }
+    for (const n of [1, 2, 3, 4]) {
+      await selectOutput(`pin-me-6${n}`);
+      await menu('pin-selection');
+      await until(async () => (await page.$$eval('.pins .pin-text', (p) => p.map((x) => x.textContent))).includes(`pin-me-6${n}`), 3_000, `pin ${n}`);
+      await sleep(200); // the strip grew: the terminal fits itself to the room left (which drops a selection)
+    }
+    await until(async () => (await page.locator('.pins .pin').count()) === 3, 3_000, 'three pins');
+    expect(await page.$$eval('.pins .pin-text', (p) => p.map((x) => x.textContent))).toEqual(['pin-me-62', 'pin-me-63', 'pin-me-64']);
+    // the strip sits at the top of the card, above the terminal (the card itself never scrolls)
+    const area = (await page.locator('.terminal-area').boundingBox())!;
+    const strip = (await page.locator('.pins').boundingBox())!;
+    expect(Math.abs(strip.y - area.y)).toBeLessThan(2);
+    expect((await page.locator('.term').boundingBox())!.y).toBeGreaterThanOrEqual(strip.y + strip.height - 0.5);
+    await shot('24-pins');
+    await page.locator('.pins .pin', { hasText: 'pin-me-63' }).locator('button').click();
+    expect(await page.$$eval('.pins .pin-text', (p) => p.map((x) => x.textContent))).toEqual(['pin-me-62', 'pin-me-64']);
+    await page.click('.term');
+    await enter(`echo sk-ant-api03-${'p'.repeat(40)}`);
+    await sleep(200);
+    await selectOutput(`sk-ant-api03-${'p'.repeat(40)}`);
+    await menu('pin-selection');
+    await until(async () => (await page.locator('.pins .pin').count()) === 3, 3_000, 'the third pin');
+    expect(await page.textContent('.pins')).not.toContain('pppppppppp');
+    for (let i = 0; i < 3; i++) await page.locator('.pins .pin button').first().click();
+    await page.waitForSelector('.pins', { state: 'detached' });
+  }, 40_000);
+
+  it('back at the window, a toast says which long command finished while you were away', async () => {
+    const cmd = (c: object) => page.evaluate((d) => (window as any).__event('pty.command', { pane: 'main', cwd: '/tmp', ...d }), c);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    // focused: no toast
+    await cmd({ cmd: 'make focused-71', exit: 0, durMs: 60_000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await cmd({ cmd: 'make build', exit: 0, durMs: 252_000 });
+    await cmd({ cmd: 'echo quick', exit: 0, durMs: 1_000 });
+    await cmd({ cmd: 'npm test', exit: 1, durMs: 40_000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await toastSaid('npm test finished in 40s (exit 1) and 1 more');
+    expect(await page.locator('.toast-text', { hasText: 'focused-71' }).count()).toBe(0);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await sleep(200);
+    expect(await page.locator('.toast-text', { hasText: 'npm test finished' }).count()).toBe(1); // once
+  }, 20_000);
 
   it('Settings → Claude Code: the cost switch, and nothing about resuming or restarting Claude Code', async () => {
     await page.keyboard.press('Meta+,');

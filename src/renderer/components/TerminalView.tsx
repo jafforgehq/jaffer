@@ -10,7 +10,11 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, cfg, overlay, ptyBus, windowFocused, daemonUp } from '../state';
+import { activePane, cfg, homeDir, info, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { findPaths, type FoundPath } from '../../shared/find-paths';
+import { findPorts } from '../../shared/find-ports';
+import { redactText } from '../../shared/redact';
+import { COMMAND_HEAD } from '../../shared/process-badge';
 import { themeById, xtermTheme } from '../themes';
 import { attachBlocks, type BlocksHandle } from './Blocks';
 
@@ -27,7 +31,44 @@ export interface TermHandle {
 }
 export const terminals = new Map<string, TermHandle>();
 
+/** Search highlights; their colours also mark the matches on the overview ruler. */
+export const FIND_OPTS = { decorations: { matchBackground: '#ffcc0055', matchOverviewRuler: '#ffcc00', activeMatchBackground: '#ff8a4c88', activeMatchColorOverviewRuler: '#ff8a4c' } };
+
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
+
+/** `base` joined with a relative path, `.` and `..` resolved (no file system: the app checks that the result exists). */
+function joinPath(base: string, rel: string): string {
+  const parts: string[] = [];
+  for (const p of `${base}/${rel}`.split('/')) {
+    if (p === '..') parts.pop();
+    else if (p && p !== '.') parts.push(p);
+  }
+  return '/' + parts.join('/');
+}
+
+/** Feature 11: a printed path, absolute (relative ones against the session's folder, `~` against home). */
+function resolvePath(p: string): string | null {
+  if (p.startsWith('/')) return joinPath('/', p);
+  const home = homeDir();
+  if (p.startsWith('~/')) return home ? joinPath(home, p.slice(2)) : null;
+  return info.value.cwd ? joinPath(info.value.cwd, p) : null;
+}
+
+function openFound(f: FoundPath): void {
+  const abs = resolvePath(f.path);
+  if (!abs) return;
+  void window.jaffer.openPath({ path: abs, line: f.line, col: f.col }).then(
+    (r) => r.opened || toast({ kind: 'info', text: 'No file there.' }, 2500),
+    () => undefined,
+  );
+}
+
+/** How many lines a paste has (a trailing newline does not start one). */
+function lineCount(text: string): number {
+  let n = 1;
+  for (let i = text.indexOf('\n'); i >= 0 && i < text.length - 1; i = text.indexOf('\n', i + 1)) n++;
+  return n;
+}
 
 function shellQuote(p: string): string {
   return /^[A-Za-z0-9_./~@%+=:,-]+$/.test(p) ? p : p.replace(/([^A-Za-z0-9_./~@%+=:,-])/g, '\\$1');
@@ -55,6 +96,7 @@ export function TerminalView({ pane }: { pane: string }) {
       minimumContrastRatio: 1,
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
+      overviewRuler: { width: 10 }, // search matches are marked there
       theme: xtermTheme(theme, a.opacity),
     });
     const fit = new FitAddon();
@@ -70,12 +112,74 @@ export function TerminalView({ pane }: { pane: string }) {
     );
     // OSC 52: a program (ssh, a script) may put text on the clipboard but never read back what you copied
     term.loadAddon(new ClipboardAddon(undefined, osc52Provider((text) => navigator.clipboard.writeText(text))));
-    try {
-      term.loadAddon(new ImageAddon());
-    } catch {
-      /* images are optional */
-    }
+    // Pictures programs print (sixel, iTerm's inline images): Settings → Terminal → Inline images, live
+    let images: ImageAddon | null = null;
+    const syncImages = () => {
+      const want = cfg.value?.terminal?.images !== false;
+      if (want && !images) {
+        try {
+          images = new ImageAddon();
+          term.loadAddon(images);
+        } catch {
+          images = null; /* images are optional */
+        }
+      } else if (!want && images) {
+        images.dispose();
+        images = null;
+      }
+    };
+    syncImages();
     term.open(el);
+
+    // ⌘-click on a printed file path (one buffer line at a time; the finder reads a bounded head): an editor or Finder, never run
+    term.registerLinkProvider({
+      provideLinks(y, done) {
+        const line = term.buffer.active.getLine(y - 1);
+        const text = line?.translateToString(true) ?? '';
+        const found = findPaths(text);
+        if (!line || !found.length) return done(undefined);
+        const cellOf: number[] = []; // the cell of each character of `text` (a wide character takes two cells)
+        for (let x = 0, cell = line.getCell(0); x < line.length; x++) {
+          cell = line.getCell(x, cell);
+          if (!cell || cell.getWidth() === 0) continue;
+          for (let i = 0; i < (cell.getChars() || ' ').length; i++) cellOf.push(x);
+        }
+        done(
+          found.map((f) => ({
+            range: { start: { x: (cellOf[f.start] ?? f.start) + 1, y }, end: { x: (cellOf[f.end - 1] ?? f.end - 1) + 1, y } },
+            text: text.slice(f.start, f.end),
+            activate: (ev: MouseEvent) => ev.metaKey && openFound(f),
+          })),
+        );
+      },
+    });
+
+    // Pasting several lines asks first (Settings → Terminal); a dropped file is not a paste and is unchanged
+    const onPaste = (e: ClipboardEvent) => {
+      if (cfg.value?.terminal?.pasteGuard === false) return;
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      const lines = lineCount(text);
+      if (lines < 2) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const first = text.slice(0, 4 * COMMAND_HEAD).split(/\r?\n/)[0]!;
+      pasteAsk.value = { text, lines, first: redactText(first).slice(0, 80) };
+    };
+    el.addEventListener('paste', onPaste, true);
+
+    // Feature 25: a faint line at a column
+    const ruler = document.createElement('div');
+    ruler.className = 'col-ruler';
+    el.appendChild(ruler);
+    const placeRuler = () => {
+      const at = cfg.value?.terminal?.ruler ?? 0;
+      const screen = el.querySelector('.xterm-screen');
+      ruler.hidden = ![80, 100, 120].includes(at) || !screen || at > term.cols;
+      if (ruler.hidden || !screen) return;
+      const s = screen.getBoundingClientRect();
+      ruler.style.left = `${s.left - el.getBoundingClientRect().left + (s.width / term.cols) * at}px`;
+    };
+    term.onResize(() => requestAnimationFrame(placeRuler));
 
     let webgl: WebglAddon | null = null;
     const forced = new URLSearchParams(location.search).get('renderer');
@@ -139,6 +243,11 @@ export function TerminalView({ pane }: { pane: string }) {
       if (event === 'pty.data') {
         if (!attached) pending.push({ seq: data.seq, data: data.data });
         else if (data.seq > snapshotSeq) apply(data.seq, data.data);
+        // Feature 37: a local server the running command prints (not inside a full-screen program); the finder reads a bounded head
+        if (info.value.busy && cfg.value?.terminal?.portLinks !== false && term.buffer.active.type !== 'alternate') {
+          const found = findPorts(data.data);
+          if (found.length) port.value = found.at(-1)!;
+        }
       } else if (event === 'pty.reset') {
         blocks.reset();
         term.reset();
@@ -161,6 +270,7 @@ export function TerminalView({ pane }: { pane: string }) {
       if (el.clientWidth > 20 && el.clientHeight > 20) {
         try {
           fit.fit();
+          placeRuler();
         } catch {
           /* detached */
         }
@@ -234,9 +344,11 @@ export function TerminalView({ pane }: { pane: string }) {
       term.options.cursorBlink = ap.cursorBlink;
       term.options.macOptionIsMeta = ap.optionAsMeta;
       term.options.scrollback = ap.scrollback;
+      syncImages();
       requestAnimationFrame(() => {
         try {
           fit.fit();
+          placeRuler();
         } catch {
           /* not visible */
         }
@@ -256,6 +368,7 @@ export function TerminalView({ pane }: { pane: string }) {
       ro.disconnect();
       el.removeEventListener('drop', onDrop);
       el.removeEventListener('dragover', onDragOver);
+      el.removeEventListener('paste', onPaste, true);
       terminals.delete(pane);
       blocks.dispose();
       void call('session.detach', {}).catch(() => undefined);

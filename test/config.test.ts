@@ -91,16 +91,28 @@ describe('claude.liveCost, claude.dailyBudgetUsd and claude.typicalTurnMs', () =
 
 describe('terminal.blocks', () => {
   it('is on by default, also for a config file saved before the terminal section existed; a choice is kept, a value of the wrong kind is not', () => {
-    expect(DEFAULT_CONFIG.terminal).toEqual({ blocks: true });
+    expect(DEFAULT_CONFIG.terminal).toEqual(TERMINAL_DEFAULTS);
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
-    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual(TERMINAL_DEFAULTS);
     const store = new ConfigStore(env.paths);
     store.patch({ terminal: { blocks: false } });
     expect(new ConfigStore(env.paths).get().terminal.blocks).toBe(false);
     store.patch({ terminal: { blocks: 'on' } as never });
     expect(new ConfigStore(env.paths).get().terminal.blocks).toBe(false);
     fs.writeFileSync(env.paths.config, JSON.stringify({ terminal: 'blocks' }));
-    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual(TERMINAL_DEFAULTS);
+  });
+});
+
+const TERMINAL_DEFAULTS = { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true };
+
+describe('terminal: paste guard, ruler, editor links, images, port links', () => {
+  it('have their defaults, keep a choice, and refuse a value of the wrong kind', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ terminal: { pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false } });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false });
+    store.patch({ terminal: { pasteGuard: 'yes', ruler: '80', editorUrl: 7, images: 1, portLinks: null } as never });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false });
   });
 });
 

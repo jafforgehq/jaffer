@@ -1,6 +1,8 @@
-import { activePane, cfg, info, openOverlay, patchConfig, safeCommand, toast } from './state';
+import { activePane, addPin, cfg, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, toast } from './state';
+import { redactText } from '../shared/redact';
+import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
-import { terminals } from './components/TerminalView';
+import { FIND_OPTS, terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -39,6 +41,23 @@ export async function runClaude(): Promise<void> {
   t.focus();
 }
 
+/** ⌘G / ⇧⌘G: the last search again, also with the find bar closed (then without highlights: the match is selected). */
+function findAgain(dir: 1 | -1): void {
+  const t = term();
+  const q = lastFind.value;
+  if (!t || !q) return void openOverlay('find');
+  const opts = overlay.value === 'find' ? FIND_OPTS : {};
+  if (dir > 0) t.search.findNext(q, opts);
+  else t.search.findPrevious(q, opts);
+}
+
+/** ⇧⌘L: the selection's first line (redacted, at most 200 characters) pinned under the title bar; memory only. */
+function pinSelection(): void {
+  const first = (term()?.term.getSelection() ?? '').slice(0, 4 * COMMAND_HEAD).split(/\r?\n/).find((l) => l.trim()) ?? '';
+  if (!first.trim()) return void toast({ kind: 'info', text: 'Select something first' }, 2500);
+  addPin(redactText(first.trim()).slice(0, 200));
+}
+
 async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
   try {
     await fn();
@@ -53,6 +72,10 @@ export const actions: Action[] = [
   { id: 'hide-window', title: 'Hide the window', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },
   { id: 'find', title: 'Find in terminal', section: 'Terminal', keys: '⌘F', run: () => openOverlay('find') },
+  { id: 'find-next', title: 'Find next', section: 'Terminal', keys: '⌘G', keywords: 'search again match', run: () => findAgain(1) },
+  { id: 'find-prev', title: 'Find previous', section: 'Terminal', keys: '⇧⌘G', keywords: 'search again match', run: () => findAgain(-1) },
+  { id: 'recent-commands', title: 'Recent commands', section: 'Terminal', keys: '⌘R', keywords: 'history copy clipboard', run: () => openOverlay('recent') },
+  { id: 'pin-selection', title: 'Pin selection', section: 'Terminal', keys: '⇧⌘L', keywords: 'pin line keep', run: pinSelection },
   { id: 'prompt-prev', title: 'Previous prompt', section: 'Terminal', keys: '⌘↑', keywords: 'jump command block scroll up', run: () => term()?.blocks.jump(-1) },
   { id: 'prompt-next', title: 'Next prompt', section: 'Terminal', keys: '⌘↓', keywords: 'jump command block scroll down', run: () => term()?.blocks.jump(1) },
   { id: 'copy-markdown', title: 'Copy as Markdown', section: 'Terminal', keys: '⌥⌘C', keywords: 'selection fenced code block clipboard', run: () => term()?.blocks.copyMarkdown() },

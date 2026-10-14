@@ -22,6 +22,7 @@ import { updaterLog } from './updater-log';
 import { prepareHome } from './prepare-home';
 import { resetJaffer } from '../core/reset';
 import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
+import { editorUrl } from '../shared/editor-url';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications, global hotkey), and it starts the terminal
@@ -218,7 +219,7 @@ async function prepareHomeBounded(): Promise<void> {
 let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
 /** The settings the main process acts on itself (kept current from the daemon's config.changed). */
-let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean } } = {};
+let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string } } = {};
 
 /** "Claude finished", after a long turn, while you are looking elsewhere. */
 const finished = new FinishedNotifier({
@@ -511,10 +512,14 @@ function buildMenu(): void {
         { type: 'separator' },
         { label: 'Clear Screen', accelerator: 'Cmd+K', click: act('clear') },
         { label: 'Find…', accelerator: 'Cmd+F', click: act('find') },
+        { label: 'Find Next', accelerator: 'Cmd+G', click: act('find-next') },
+        { label: 'Find Previous', accelerator: 'Shift+Cmd+G', click: act('find-prev') },
         { label: 'Copy as Markdown', accelerator: 'Alt+Cmd+C', click: act('copy-markdown') },
         { type: 'separator' },
         { label: 'Previous Prompt', accelerator: 'Cmd+Up', click: act('prompt-prev') },
         { label: 'Next Prompt', accelerator: 'Cmd+Down', click: act('prompt-next') },
+        { label: 'Recent Commands…', accelerator: 'Cmd+R', click: act('recent-commands') },
+        { label: 'Pin Selection', accelerator: 'Shift+Cmd+L', click: act('pin-selection') },
         { type: 'separator' },
         { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C', click: act('run-claude') },
         { label: 'Restart Shell', click: act('restart-shell') },
@@ -636,6 +641,29 @@ ipcMain.handle('jaffer:save-text', async (e, text: unknown, name: unknown) => {
   if (r.canceled || !r.filePath) return { saved: false };
   await fs.promises.writeFile(r.filePath, text, { mode: 0o600 }); // (the mode applies to a new file; a file the person chose to replace keeps its own)
   return { saved: true };
+});
+
+/** A path the page names, as an absolute path that exists (a printed path is untrusted: it is only ever revealed, or handed to an editor). */
+function existingPath(p: unknown): string | null {
+  return typeof p === 'string' && p.length <= 4096 && path.isAbsolute(p) && fs.existsSync(p) ? p : null;
+}
+// ⌘-click on a printed path: the editor link from Settings (editor schemes only), else Finder. Never `shell.openPath`: a printed path to a script must not run.
+ipcMain.handle('jaffer:open-path', (e, p: unknown) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  const { path: file, line, col } = (p ?? {}) as { path?: unknown; line?: unknown; col?: unknown };
+  const abs = existingPath(file);
+  if (!abs) return { opened: false };
+  const url = editorUrl(appCfg.terminal?.editorUrl ?? '', abs, typeof line === 'number' ? line : undefined, typeof col === 'number' ? col : undefined);
+  if (url) void shell.openExternal(url);
+  else shell.showItemInFolder(abs);
+  return { opened: true };
+});
+// Shows a file the window names in Finder: selects it there, never opens or runs it.
+ipcMain.handle('jaffer:reveal-path', (e, p: unknown) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  const abs = existingPath(p);
+  if (abs) shell.showItemInFolder(abs);
+  return { revealed: !!abs };
 });
 
 // ---------------------------------------------------------------- lifecycle

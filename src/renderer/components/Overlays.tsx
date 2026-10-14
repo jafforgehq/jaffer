@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, overlay, patchConfig, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
+import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
-import { terminals } from './TerminalView';
+import { FIND_OPTS, terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
@@ -175,14 +176,20 @@ export function Palette(): VNode {
 export function FindBar(): VNode {
   const input = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState('');
+  const [hits, setHits] = useState<{ resultIndex: number; resultCount: number } | null>(null);
   useLayoutEffect(() => input.current?.focus(), []);
   const h = () => terminals.get(activePane.value);
+  useEffect(() => {
+    const sub = h()?.search.onDidChangeResults(setHits);
+    return () => sub?.dispose();
+  }, []);
   const close = () => {
     h()?.search.clearDecorations();
     overlay.value = null;
     h()?.focus();
   };
-  const opts = { decorations: { matchBackground: '#ffcc0055', matchOverviewRuler: '#ffcc00', activeMatchBackground: '#ff8a4c88', activeMatchColorOverviewRuler: '#ff8a4c' } };
+  const opts = FIND_OPTS;
+  const count = !q || !hits ? '' : hits.resultCount === 0 ? 'No results' : hits.resultIndex >= 0 ? `${hits.resultIndex + 1} of ${hits.resultCount}` : `${hits.resultCount}+`;
   return (
     <div class="findbar">
       <input
@@ -192,6 +199,7 @@ export function FindBar(): VNode {
         onInput={(e) => {
           const v = (e.target as HTMLInputElement).value;
           setQ(v);
+          if (v) lastFind.value = v;
           h()?.search.findNext(v, { ...opts, incremental: true });
         }}
         onKeyDown={(e) => {
@@ -199,6 +207,9 @@ export function FindBar(): VNode {
           else if (e.key === 'Escape') close();
         }}
       />
+      <span class="find-count" aria-live="polite">
+        {count}
+      </span>
       <button class="icon-btn" onClick={() => h()?.search.findPrevious(q, opts)} title="Previous (⇧↵)" aria-label="Previous match">
         ↑
       </button>
@@ -208,6 +219,126 @@ export function FindBar(): VNode {
       <button class="icon-btn" onClick={close} aria-label="Close search">
         <IconX size={14} />
       </button>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ recent commands, the paste question, pins
+
+/** ⌘R: this session's commands (sensitive ones were never kept). Enter copies the chosen one to the clipboard; nothing is typed. */
+export function RecentCommands(): VNode {
+  const [q, setQ] = useState('');
+  const [sel, setSel] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => input.current?.focus(), []);
+  const rows = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return commands.value.map((c) => ({ c, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
+  }, [q]);
+  useEffect(() => setSel(0), [q]);
+  useEffect(() => {
+    list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [sel]);
+  const close = () => (overlay.value = null);
+  const pick = (i: number) => {
+    const r = rows[i];
+    close();
+    if (!r) return;
+    void navigator.clipboard.writeText(r.c.cmd).then(
+      () => toast({ kind: 'info', text: 'Copied. Paste it in the terminal.' }, 3500),
+      () => toast({ kind: 'error', text: 'Could not copy to the clipboard.' }),
+    );
+  };
+  return (
+    <Modal onClose={close}>
+      <div class="palette recent-list">
+        <div class="pal-input">
+          <IconSearch size={17} />
+          <input
+            ref={input}
+            placeholder="Recent commands…"
+            value={q}
+            onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              const n = Math.max(1, rows.length);
+              if (e.key === 'ArrowDown') (e.preventDefault(), setSel((sel + 1) % n));
+              else if (e.key === 'ArrowUp') (e.preventDefault(), setSel((sel - 1 + n) % n));
+              else if (e.key === 'Enter') (e.preventDefault(), pick(sel));
+            }}
+          />
+        </div>
+        <div class="palette-list" ref={list}>
+          {rows.length === 0 && <div class="pal-group">{commands.value.length ? 'No match' : 'No commands yet in this session'}</div>}
+          {rows.slice(0, 200).map((r, i) => (
+            <button key={`${r.c.at}-${i}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-exit={r.c.exit ?? ''} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
+              <span class="pal-title recent-cmd">{highlight(r.shown.slice(0, 200), q)}</span>
+              <span class="recent-ago">{fmtAgo(r.c.at)}</span>
+            </button>
+          ))}
+        </div>
+        <div class="pal-foot">
+          <span>
+            <kbd>↵</kbd> copy to the clipboard
+          </span>
+          <span>
+            <kbd>esc</kbd> close
+          </span>
+          <span>Nothing is typed; this list is not saved.</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Feature 10: "Paste 14 lines?" over the bottom of the terminal; Enter pastes, Esc does not. */
+export function PasteBar(): VNode | null {
+  const ask = pasteAsk.value;
+  const done = (paste: boolean) => {
+    const t = terminals.get(activePane.value);
+    pasteAsk.value = null;
+    if (paste && ask) t?.paste(ask.text);
+    t?.focus();
+  };
+  useLayoutEffect(() => {
+    if (!ask) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      done(e.key === 'Enter');
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [ask]);
+  if (!ask) return null;
+  return (
+    <div class="paste-bar" role="alertdialog" aria-label={`Paste ${ask.lines} lines?`}>
+      <b>Paste {ask.lines} lines?</b>
+      <code class="paste-first">{ask.first}</code>
+      <button class="btn primary" onClick={() => done(true)}>
+        Paste <kbd>↵</kbd>
+      </button>
+      <button class="btn" onClick={() => done(false)}>
+        Cancel <kbd>esc</kbd>
+      </button>
+    </div>
+  );
+}
+
+/** Feature 39: up to three pinned lines under the title bar; memory only. */
+export function Pins(): VNode | null {
+  if (!pins.value.length) return null;
+  return (
+    <div class="pins">
+      {pins.value.map((p) => (
+        <div key={p.id} class="pin" title={p.text}>
+          <span class="pin-text">{p.text}</span>
+          <button class="icon-btn sm" aria-label="Unpin" onClick={() => (pins.value = pins.value.filter((x) => x.id !== p.id))}>
+            <IconX size={11} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -392,6 +523,29 @@ export function Settings(): VNode {
               <p class="lede">What the terminal adds around your commands. Nothing of a command or its output is kept.</p>
               <Field label="Command blocks" hint="a mark beside every command (green when it worked, red when it failed; hover for its times, click to select its output, right-click to copy or save it), ⌘↑ / ⌘↓ between prompts, and the command pinned on top while you read its output">
                 <Switch checked={c.terminal?.blocks !== false} onChange={(v) => set({ terminal: { blocks: v } })} />
+              </Field>
+              <Field label="Ask before pasting several lines" hint="a paste of two or more lines waits for Paste (↵) or Cancel (esc), so a stray newline does not run anything">
+                <Switch checked={c.terminal?.pasteGuard !== false} onChange={(v) => set({ terminal: { pasteGuard: v } })} />
+              </Field>
+              <Field label="Column ruler" hint="a faint line at that column">
+                <select value={String(c.terminal?.ruler ?? 0)} onChange={(e) => set({ terminal: { ruler: Number((e.target as HTMLSelectElement).value) } })}>
+                  <option value="0">Off</option>
+                  <option value="80">80</option>
+                  <option value="100">100</option>
+                  <option value="120">120</option>
+                </select>
+              </Field>
+              <Field
+                label="Open file links in"
+                hint={`⌘-click a file path the terminal printed. Empty: it is shown in Finder. Or an editor link with {path}, {line} and {col}; allowed: ${EDITOR_SCHEMES.join(', ')}.${c.terminal?.editorUrl && !editorUrl(c.terminal.editorUrl, '/') ? ' This one is not allowed, so files are shown in Finder.' : ''}`}
+              >
+                <input type="text" placeholder="vscode://file/{path}:{line}:{col}" value={c.terminal?.editorUrl ?? ''} onChange={(e) => set({ terminal: { editorUrl: (e.target as HTMLInputElement).value.trim() } })} />
+              </Field>
+              <Field label="Inline images" hint="pictures programs print in the terminal (sixel, iTerm inline images)">
+                <Switch checked={c.terminal?.images !== false} onChange={(v) => set({ terminal: { images: v } })} />
+              </Field>
+              <Field label="Links to local servers" hint="when a running command prints localhost:5173, a chip in the title bar opens it in your browser">
+                <Switch checked={c.terminal?.portLinks !== false} onChange={(v) => set({ terminal: { portLinks: v } })} />
               </Field>
             </>
           )}

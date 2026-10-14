@@ -100,6 +100,9 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .session-pill .branch { display: inline-flex; align-items: center; gap: 4px; color: var(--branch); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .running { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .sep { width: 1px; height: 12px; background: var(--line-strong); }
+/* a local server the running command printed: a click opens it in the browser */
+.session-pill .port-chip { border: 0; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: 500 11px var(--font-mono); cursor: pointer; }
+.session-pill .port-chip:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); flex: none; }
 .live.off { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
@@ -117,10 +120,12 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 
 /* ---------- the terminal card ---------- */
 .terminal-area {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; position: relative;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: clip; position: relative;
   box-shadow: 0 0 0 0.5px var(--ring), var(--shadow-sm);
 }
-.terminal-area { flex: 1; min-width: 0; display: flex; }
+/* (clip, not hidden: a hidden overflow can still be scrolled, and the browser scrolls it to keep the terminal's focused textarea in view
+   while the terminal refits under a new pin strip, leaving the strip above the card) */
+.terminal-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
@@ -128,7 +133,10 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .term { flex: 1; min-width: 0; min-height: 0; padding: 10px 6px 6px 18px; user-select: text; -webkit-user-select: text; }
 .term.bell { animation: bell 0.16s; }
 @keyframes bell { 50% { background: var(--accent-soft); } }
+.term { position: relative; }
 .term .xterm { height: 100%; }
+/* Settings → Terminal → Column ruler: a faint line at a column (placed by the view from the screen's width and columns) */
+.term .col-ruler { position: absolute; top: 10px; bottom: 6px; width: 1px; background: var(--line-strong); pointer-events: none; z-index: 1; }
 .term .xterm-viewport { background: transparent !important; }
 .term .xterm-viewport::-webkit-scrollbar { width: 10px; }
 /* Command blocks. The 18 px left padding of .term is the gutter: a mark beside each command's prompt (green: it worked, red: it
@@ -250,6 +258,22 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pal-foot span { display: inline-flex; align-items: center; gap: 5px; }
 .findbar { position: absolute; top: 10px; right: 14px; z-index: 10; display: flex; gap: 4px; align-items: center; padding: 5px; border-radius: 12px; background: var(--raised-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
 .findbar input { width: 200px; height: 26px; }
+.findbar .find-count { min-width: 58px; padding: 0 4px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+/* ⌘R: this session's commands, in the palette's look */
+.recent-list .recent-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
+.recent-list .recent-ago { flex: none; font-size: 11px; color: var(--faint); }
+/* "Paste 14 lines?" over the bottom of the terminal card */
+.paste-bar {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 40px);
+  padding: 6px 6px 6px 12px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); font-size: 12.5px; white-space: nowrap;
+}
+.paste-bar .paste-first { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font: 11.5px var(--font-mono); }
+.paste-bar .btn { height: 26px; }
+.paste-bar kbd { margin-left: 4px; }
+/* ⇧⌘L: pinned lines at the top of the card, each with its × */
+.pins { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px 4px 18px; border-bottom: 1px solid var(--line); }
+.pins .pin { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font: 11.5px/1.5 var(--font-mono); }
+.pins .pin-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; }
 
 /* settings */
 .settings { display: flex; min-height: 0; height: min(620px, 72vh); }

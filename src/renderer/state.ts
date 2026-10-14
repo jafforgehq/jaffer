@@ -21,7 +21,7 @@ export interface SessionInfo {
   startedAt?: string;
 }
 
-export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find';
+export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent';
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
@@ -41,6 +41,53 @@ export const windowFocused = signal(true);
 export const appVersion = signal('');
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
 export const updateState = signal<UpdateState | null>(null);
+
+// ------------------------------------------------------------------ terminal power (memory only: nothing here is written anywhere)
+
+export interface RecentCommand {
+  cmd: string;
+  exit: number | null;
+  at: number;
+  durMs: number;
+}
+/** This session's commands for ⌘R (newest first, at most 200). A sensitive command is never kept, and one longer than a command's head is left out. */
+export const commands = signal<RecentCommand[]>([]);
+/** The last thing searched for, so ⌘G / ⇧⌘G work with the find bar closed. */
+export const lastFind = signal('');
+/** Lines pinned under the title bar (⇧⌘L), at most 3, already redacted. */
+export const pins = signal<{ id: number; text: string }[]>([]);
+/** The latest local server port the running command printed; gone when it ends. */
+export const port = signal<number | null>(null);
+/** A paste of several lines, waiting for Paste or Cancel. */
+export const pasteAsk = signal<{ text: string; lines: number; first: string } | null>(null);
+
+let pinId = 1;
+export function addPin(text: string): void {
+  pins.value = [...pins.value.slice(-2), { id: pinId++, text }];
+}
+
+function remember(c: RecentCommand): void {
+  if (!c.cmd.trim() || c.cmd.length > 4 * COMMAND_HEAD || isSensitiveCommand(c.cmd)) return;
+  commands.value = [c, ...commands.value.filter((x) => x.cmd !== c.cmd)].slice(0, 200);
+}
+
+/** `4m 12s`, `45s`, `1h 3m`. */
+export function fmtDuration(ms: number): string {
+  const s = Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : 0;
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** Feature 9: the toast for long commands that finished while the window was away, the most recent first. */
+export function awayText(done: { cmd: string; exit: number | null; durMs: number }[]): string {
+  const c = done[0]!;
+  const shown = safeCommand(c.cmd);
+  const name = shown === '(hidden)' ? 'A command' : shown.replace(/\s+/g, ' ').trim().slice(0, 40);
+  return `${name} finished in ${fmtDuration(c.durMs)}${typeof c.exit === 'number' ? ` (exit ${c.exit})` : ''}${done.length > 1 ? ` and ${done.length - 1} more` : ''}`;
+}
+/** Commands of 30 s or more that finished while the window was not focused, newest first. */
+let away: { cmd: string; exit: number | null; durMs: number }[] = [];
 
 // ------------------------------------------------------------------ toasts
 
@@ -106,10 +153,18 @@ export async function bootstrap(): Promise<void> {
     if (event.startsWith('pty.')) {
       ptyBus.emit({ event, data });
       if (event === 'pty.start') {
-        if (data.pane === 'main') info.value = { ...info.value, busy: data.cmd || 'command', busySince: Date.now() };
+        if (data.pane === 'main') {
+          info.value = { ...info.value, busy: data.cmd || 'command', busySince: Date.now() };
+          port.value = null;
+        }
         void refreshInfoSoon();
       } else if (event === 'pty.command') {
         info.value = { ...info.value, busy: null, busySince: null };
+        if (data.pane === 'main') {
+          port.value = null;
+          remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0 });
+          if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
+        }
         void refreshInfoSoon();
       } else if (event === 'pty.cwd') {
         info.value = { ...info.value, cwd: data.cwd };
@@ -129,6 +184,10 @@ export async function bootstrap(): Promise<void> {
   });
   j.onFocus((f) => {
     windowFocused.value = f;
+    if (f && away.length) {
+      toast({ kind: 'info', text: awayText(away) }, 9000);
+      away = [];
+    }
   });
   const [config, app] = await Promise.all([j.call('config.get', {}), j.appInfo()]);
   batch(() => {
@@ -160,7 +219,7 @@ export function safeCommand(cmd: string): string {
   return isSensitiveCommand(head) ? '(hidden)' : redactText(head);
 }
 
-function homeDir(): string {
+export function homeDir(): string {
   return (window as unknown as { __home?: string }).__home ?? '';
 }
 

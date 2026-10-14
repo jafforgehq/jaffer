@@ -40,6 +40,16 @@ export interface JafferConfig {
   terminal: {
     /** Command blocks: a mark beside every command's prompt (its exit, its times), jumping between prompts, the sticky command header, copying and saving a command's output. */
     blocks: boolean;
+    /** Pasting two or more lines asks first ("Paste 14 lines?"). */
+    pasteGuard: boolean;
+    /** A faint line at this column: 0 (off), 80, 100 or 120. */
+    ruler: number;
+    /** ⌘-click on a printed file path opens this editor link (`vscode://file/{path}:{line}:{col}`; editor schemes only); empty reveals the file in Finder. */
+    editorUrl: string;
+    /** Pictures programs print (sixel, iTerm's inline images). */
+    images: boolean;
+    /** A chip in the title bar for a local server the running command mentions (`localhost:5173`); a click opens it in the browser. */
+    portLinks: boolean;
   };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
@@ -79,7 +89,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 },
-  terminal: { blocks: true },
+  terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
