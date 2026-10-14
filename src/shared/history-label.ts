@@ -24,15 +24,16 @@ export function fmtAgo(ts: number | string, now = Date.now()): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/** The menu bar's Past Conversations: the 5 newest with a valid id, `<folder> · <how long ago>` on one line. */
-export function historyMenuItems(items: Pick<Conversation, 'id' | 'cwd' | 'endedAt'>[], home: string, now: number): { id: string; label: string }[] {
+/** The menu bar's Past Conversations: the 5 newest with a valid id, `<title or folder> · <how long ago>` on one line (the title clipped to 40). */
+export function historyMenuItems(items: Pick<Conversation, 'id' | 'cwd' | 'endedAt' | 'title'>[], home: string, now: number): { id: string; label: string }[] {
   if (!Array.isArray(items)) return [];
   return items
     .filter((c) => c && isSessionId(c.id))
     .slice(0, 5)
     .map((c) => {
       const folder = c.cwd ? (tildeOf(c.cwd, home) === '~' ? '~' : c.cwd.split('/').filter(Boolean).pop() || '/') : 'Conversation';
-      return { id: c.id, label: clipLabel(`${folder} · ${fmtAgo(c.endedAt, now)}`) };
+      const name = typeof c.title === 'string' && c.title ? clipLabel(c.title, 40) : folder;
+      return { id: c.id, label: clipLabel(`${name} · ${fmtAgo(c.endedAt, now)}`) };
     });
 }
 
@@ -66,10 +67,11 @@ export function groupByDay<T extends Pick<Conversation, 'endedAt'>>(items: T[], 
   return groups;
 }
 
-/** The conversations whose folder (as shown, with ~) holds the text, in any case. */
-export function filterByFolder<T extends Pick<Conversation, 'cwd'>>(items: T[], q: string, home: string): T[] {
+/** The conversations whose title or folder (as shown, with ~) holds the text, in any case. */
+export function filterByFolder<T extends Pick<Conversation, 'cwd' | 'title'>>(items: T[], q: string, home: string): T[] {
   const t = q.trim().toLowerCase();
-  return t ? items.filter((c) => !!c.cwd && tildeOf(c.cwd, home).toLowerCase().includes(t)) : items;
+  const has = (s: unknown) => typeof s === 'string' && s.toLowerCase().includes(t);
+  return t ? items.filter((c) => has(c.title) || (!!c.cwd && has(tildeOf(c.cwd, home)))) : items;
 }
 
 /** One row of the list: the folder's name, its `~/…` path, the time of day it ended (HH:MM), how long it went, and the cost (null: not shown). */

@@ -221,17 +221,19 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; }
 .conv-note { padding: 8px 4px; color: var(--faint); }
 .conv-day-label { position: sticky; top: 0; z-index: 1; padding: 6px 4px 3px; background: var(--surface); color: var(--faint); font-size: 11px; font-weight: 550; }
+.conv-item { display: flex; align-items: center; border-radius: var(--r-sm); }
+.conv-item:hover { background: var(--hover); }
+.sp-convos:focus-within .conv-item:has(.conv-row[data-sel]) { background: var(--accent-soft); }
 .conv-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 1px; width: 100%; padding: 5px 6px; border: 0; border-radius: var(--r-sm);
+  flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 1px; padding: 5px 6px; border: 0; border-radius: var(--r-sm);
   background: none; color: var(--muted); text-align: left; font-size: 11px; cursor: pointer;
 }
-.conv-row:hover { background: var(--hover); }
-.sp-convos:focus-within .conv-row[data-sel] { background: var(--accent-soft); }
 .conv-row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-name { color: var(--text); font-size: 12px; font-weight: 600; }
+.conv-name { grid-column: 1 / -1; color: var(--text); font-size: 12px; font-weight: 600; }
 .conv-dir { font-family: var(--font-mono); color: var(--faint); }
-.conv-time, .conv-meta { text-align: right; font-variant-numeric: tabular-nums; }
-.conv-meta { color: var(--faint); }
+.conv-meta { text-align: right; font-variant-numeric: tabular-nums; color: var(--faint); }
+.conv-copy { flex: none; margin-right: 4px; color: var(--faint); opacity: 0; }
+.conv-item:hover .conv-copy, .conv-copy:focus-visible { opacity: 1; }
 
 .now-card { flex: none; margin: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
 .now-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 550; font-size: 12.5px; }

@@ -100,3 +100,9 @@ export const IconSidebar = ({ size, class: c }: P): VNode => (
     <path d="M15 4v16" />
   </svg>
 );
+export const IconCopy = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+  </svg>
+);

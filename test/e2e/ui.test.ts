@@ -1769,7 +1769,7 @@ describe('Jaffer UI end to end', () => {
   }, 40_000);
 
   // 1.1.0: replaces the 1.0.1 test of the ⇧⌘O overlay ("⇧⌘O lists past Claude conversations from the transcripts; …"), deliberately: the list moved into the side panel
-  it('past conversations in the side panel: planted transcripts by day, the folder search, a click or Enter copies `claude --resume <id>` (a bad id never), ↑/↓/Esc, ⇧⌘O opens a closed panel with the search focused, read on open, after a turn and on refresh (never while closed), nothing typed', async () => {
+  it('past conversations in the side panel: planted transcripts by day with their titles, the title and folder search, a click or Enter resumes (the line it types is caught here; a bad id never), ↑/↓/Esc, ⇧⌘O opens a closed panel with the search focused, read on open, after a turn and on refresh (never while closed), nothing else typed', async () => {
     await clipStub();
     const T = Date.now();
     const d0 = new Date(T);
@@ -1780,7 +1780,8 @@ describe('Jaffer UI end to end', () => {
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${sid(n)}.jsonl`);
       const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
-      fs.writeFileSync(file, [line('user', end - 90_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', end, { message: { id: `m${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
+      // the first message is the title; a later one never shows
+      fs.writeFileSync(file, [line('user', end - 90_000, { message: { role: 'user', content: `Title of ${proj.slice(1)}` } }), line('user', end - 60_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', end, { message: { id: `m${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
       fs.utimesSync(file, end / 1000, end / 1000);
     };
     const endA = Math.max(T - 60_000, midnight + 1000); // today
@@ -1789,13 +1790,17 @@ describe('Jaffer UI end to end', () => {
     plant(71, '-hist-a', endA, path.join(env.userHome, 'hist-proj-a'));
     plant(72, '-hist-b', endB, path.join(env.userHome, 'hist-proj-b'));
     plant(73, '-hist-c', endC, path.join(env.userHome, 'hist-proj-c'));
-    // every claude.history call is counted; a stub can stand in for the daemon's answer
+    // every claude.history call is counted; a stub can stand in for the daemon's answer; what a click types is caught (kept from the shell)
     await page.evaluate(() => {
       const w = window as any;
       w.__histReal = w.jaffer.call;
       w.__histCalls = 0;
       w.__histStub = null;
-      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.history' ? (w.__histCalls++, w.__histStub ? w.__histStub() : w.__histReal(m, p)) : w.__histReal(m, p));
+      w.__typed = [];
+      w.jaffer.call = (m: string, p: any) =>
+        m === 'claude.history' ? (w.__histCalls++, w.__histStub ? w.__histStub() : w.__histReal(m, p))
+        : m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__typed.push(p.data), Promise.resolve({}))
+        : w.__histReal(m, p);
     });
     const histCalls = () => page.evaluate(() => (window as any).__histCalls as number);
     const stub = (kind: 'bad' | 'empty' | 'fail' | 'slow' | null) =>
@@ -1811,12 +1816,15 @@ describe('Jaffer UI end to end', () => {
     const focused = () => page.evaluate(() => (document.activeElement?.matches('.conv-search input') ? 'search' : document.activeElement?.classList.contains('xterm-helper-textarea') ? 'terminal' : document.activeElement?.className ?? 'none'));
     const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1));
     const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
+    const typedLast = () => page.evaluate(() => (window as any).__typed.at(-1) as string | undefined);
+    const typedCount = () => page.evaluate(() => (window as any).__typed.length as number);
+    const resumes = (n: number) => `\x15cd '${path.join(env.userHome, `hist-proj-${'abc'[n - 71]}`)}' && claude --resume ${sid(n)}\r`; // (the shell is elsewhere: cd first)
     const mine = () => page.$$eval('.sp-convos .conv-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, sel: (x as HTMLElement).dataset.sel !== undefined, day: x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '', text: x.textContent ?? '' })));
     const turn = (state: string) => page.evaluate((st) => { const now = Date.now(); (window as any).__event('claude.state', { sessions: [{ id: 'hist-turn', state: st, since: now, turnStartedAt: now - 2000, startedAt: now - 60_000, calls: [], counts: {}, files: [], subagents: [], turns: 1 }] }); }, state);
 
     if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
     await page.waitForSelector('.side-panel .sp-convos .conv-search input');
-    expect(await page.getAttribute('.sp-convos .conv-search input', 'placeholder')).toBe('Search folders');
+    expect(await page.getAttribute('.sp-convos .conv-search input', 'placeholder')).toBe('Search titles and folders');
     await page.click('.term');
     const before = await termText();
     // the refresh button reads the list again: the three planted ones, newest first, by day
@@ -1829,6 +1837,7 @@ describe('Jaffer UI end to end', () => {
     expect(rows[2]!.day).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)( \d{4})?$/);
     const hhmm = (t: number) => `${String(new Date(t).getHours()).padStart(2, '0')}:${String(new Date(t).getMinutes()).padStart(2, '0')}`;
     expect(rows[0]!.text).toContain('hist-proj-a');
+    expect(await page.textContent(`.sp-convos .conv-row[data-id="${sid(71)}"] .conv-name`)).toBe('Title of hist-a');
     expect(rows[0]!.text).toMatch(/~\/(\S+\/)?hist-proj-a/); // (the bridge's home is a folder above the test's HOME)
     expect(rows[0]!.text).toContain(hhmm(endA));
     expect(rows[0]!.text).toMatch(/1m 30s · ≈ \$0\.0\d/);
@@ -1842,15 +1851,20 @@ describe('Jaffer UI end to end', () => {
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
     await page.click('.sp-convos .conv-refresh'); // (the daemon reads token costs only with the switch on)
     await until(async () => (await mine()).some((r) => r.text.includes('≈')), 5_000, 'the cost back');
-    // the search filters by folder; Enter copies the selected one and gives the keyboard back to the terminal
+    // the search filters by folder and by title; Enter resumes the selected one and gives the keyboard back to the terminal
     await page.click('.sp-convos .conv-search input');
+    await page.keyboard.type('TITLE OF HIST-C');
+    await until(async () => (await mine()).length === 1 && (await mine())[0]!.id === sid(73), 3_000, 'the title filter');
+    await page.fill('.sp-convos .conv-search input', '');
     await page.keyboard.type('proj-b');
     await until(async () => (await mine()).length === 1, 3_000, 'the filter');
     expect(await page.$$eval('.sp-convos .conv-row', (r) => r.length)).toBe(1);
+    const copiesBefore = await written();
     await page.keyboard.press('Enter');
-    await until(async () => (await clipLast()) === `claude --resume ${sid(72)}`, 3_000, 'the resume line on the clipboard');
-    await toastSaid('Copied. Paste it in the terminal.');
+    await until(async () => (await typedLast()) === resumes(72), 3_000, 'the resume line typed');
+    await toastSaid('Resuming…');
     expect(await focused()).toBe('terminal');
+    expect(await written()).toBe(copiesBefore); // (typed, not copied)
     // ↑/↓ move the selection, Enter copies it
     await page.fill('.sp-convos .conv-search input', 'hist-proj');
     await page.focus('.sp-convos .conv-search input');
@@ -1863,32 +1877,40 @@ describe('Jaffer UI end to end', () => {
     expect((await mine()).map((r) => r.sel)).toEqual([false, false, true]);
     expect(await focused()).toBe('search');
     await page.keyboard.press('Enter');
-    await until(async () => (await clipLast()) === `claude --resume ${sid(73)}`, 3_000, 'Enter on the selected row');
-    // a click copies too
+    await until(async () => (await typedLast()) === resumes(73), 3_000, 'Enter on the selected row');
+    // a click resumes too; the row's copy button copies the same line and types nothing
     await page.locator(`.sp-convos .conv-row[data-id="${sid(71)}"]`).click();
-    await until(async () => (await clipLast()) === `claude --resume ${sid(71)}`, 3_000, 'the click to copy');
+    await until(async () => (await typedLast()) === resumes(71), 3_000, 'the click to resume');
+    let typed = await typedCount();
+    await page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(72)}"]) .conv-copy`).click();
+    await until(async () => (await clipLast()) === resumes(72).slice(1, -1), 3_000, 'the copy button');
+    await toastSaid('Copied. Paste it in the terminal.');
+    expect(await typedCount()).toBe(typed);
     // Esc gives the keyboard back to the terminal
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
     expect(await focused()).toBe('terminal');
-    // Tab to a row: Enter copies THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and copies nothing
+    // Tab to a row (past the first row and its copy button): Enter resumes THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and types nothing
     await page.fill('.sp-convos .conv-search input', 'hist-proj');
     await until(async () => (await mine()).length === 3, 3_000, 'the three for Tab');
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-copy'))).toBe(true);
+    await page.keyboard.press('Tab');
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(72));
     expect((await mine()).map((r) => r.sel)).toEqual([false, true, false]);
     await page.keyboard.press('Enter');
-    await until(async () => (await clipLast()) === `claude --resume ${sid(72)}`, 3_000, 'Enter on the focused second row to copy it');
+    await until(async () => (await typedLast()) === resumes(72), 3_000, 'Enter on the focused second row to resume it');
     await page.focus(`.sp-convos .conv-row[data-id="${sid(71)}"]`);
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(73));
     expect((await mine()).map((r) => r.sel)).toEqual([false, false, true]);
     await page.keyboard.press('Enter');
-    await until(async () => (await clipLast()) === `claude --resume ${sid(73)}`, 3_000, 'Enter on the row the arrows reached');
+    await until(async () => (await typedLast()) === resumes(73), 3_000, 'Enter on the row the arrows reached');
     let copied = await written();
+    typed = await typedCount();
     let reads = await histCalls();
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Shift+Tab');
@@ -1897,12 +1919,14 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await histCalls()) === reads + 1, 3_000, 'Enter on the refresh button to read the list');
     await sleep(300);
     expect(await written()).toBe(copied);
-    // an Enter that commits an input method's text copies nothing
+    expect(await typedCount()).toBe(typed);
+    // an Enter that commits an input method's text resumes nothing
     await page.evaluate(() => document.querySelector('.sp-convos .conv-search input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
     await sleep(300);
     expect(await written()).toBe(copied);
+    expect(await typedCount()).toBe(typed);
     await page.fill('.sp-convos .conv-search input', '');
-    // a bad id from the daemon is refused: nothing copied, an error says so
+    // a bad id from the daemon is refused: nothing typed or copied, an error says so
     const copies = await written();
     await stub('bad');
     await page.click('.sp-convos .conv-refresh');
@@ -1913,6 +1937,10 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Enter');
     await sleep(300);
     expect(await written()).toBe(copies);
+    await page.locator('.sp-convos .conv-copy').first().click();
+    await sleep(300);
+    expect(await written()).toBe(copies);
+    expect(await typedCount()).toBe(typed);
     // empty, failing and slow
     await stub('empty');
     await page.click('.sp-convos .conv-refresh');
@@ -1982,6 +2010,107 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Escape');
     await sleep(500);
     expect(await termText()).toBe(before);
+  }, 60_000);
+
+  it('resume on a click (1.1.1), in a real bash: the exact line at an idle prompt (same folder; `cd` into a folder with a space and a quote), Ctrl-U clears a half-typed line, a running command or Claude gets nothing typed (copied, and why), the copy button, Enter, the title shown', async () => {
+    await clipStub();
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const here = path.join(env.userHome, 'resume-here');
+    const odd = path.join(env.userHome, "resume it's odd");
+    fs.mkdirSync(here, { recursive: true });
+    fs.mkdirSync(odd, { recursive: true });
+    const plant = (n: number, cwd: string, title: string) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', `-resume-${n}`);
+      fs.mkdirSync(dir, { recursive: true });
+      const at = Date.now() - 30_000 + n;
+      const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(t).toISOString(), ...extra });
+      fs.writeFileSync(path.join(dir, `${sid(n)}.jsonl`), [line('user', at - 5000, { message: { role: 'user', content: title } }), line('assistant', at, { message: { id: `r${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+    };
+    plant(81, here, 'Resume here please');
+    plant(82, odd, 'Resume the odd one');
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1));
+    const resumed = (dir: string, n: number) => `RESUMED:${dir}:--resume ${sid(n)}`;
+    // the screen's text with wrapped rows joined (a long folder wraps)
+    const flat = () => page.evaluate(() => { const b = (window as any).__jaffer.terminals.get('main').term.buffer.active; let out = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i)!; out += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return out; });
+    const count = async (text: string) => (await flat()).split(text).length - 1;
+    const lineFor = (n: number, dir?: string) => (dir ? `cd '${dir.replace(/'/g, `'\\''`)}' && ` : '') + `claude --resume ${sid(n)}`;
+    const running = (cmd: string) => until(async () => (await blocks()).find((b) => b.cmd === cmd && b.endedAt === undefined), 10_000, `${cmd} to run`);
+
+    // a `claude` that only says where it ran and with what (never the real one)
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await enter(`claude() { echo "RESUMED:$PWD:$*"; }`);
+    await enter(`cd '${here}'`);
+    await ended(`cd '${here}'`);
+    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await row(81).count()) === 1 && (await row(82).count()) === 1, 5_000, 'the two planted conversations');
+    // the title is the row's first line; the folder below it
+    expect(await row(81).locator('.conv-name').textContent()).toBe('Resume here please');
+    expect(await row(82).textContent()).toContain("resume it's odd");
+
+    // idle, same folder: exactly `claude --resume <id>` runs, the toast says so, the keyboard goes to the terminal
+    await row(81).click();
+    await ended(lineFor(81));
+    await until(async () => (await count(resumed(here, 81))) === 1, 5_000, 'claude to run in the same folder');
+    await toastSaid('Resuming…');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true);
+    // idle, another folder (a space and a quote in it): the shell really goes there first
+    await row(82).click();
+    await ended(lineFor(82, odd));
+    await until(async () => (await count(resumed(odd, 82))) === 1, 5_000, 'claude to run in the odd folder');
+    // a half-typed line is cleared first: what runs is exactly the resume line
+    await page.click('.term');
+    await page.keyboard.type('echo JUNK ', { delay: 4 });
+    await row(81).click();
+    await ended(lineFor(81, here));
+    await until(async () => (await count(resumed(here, 81))) === 2, 5_000, 'the resume after Ctrl-U');
+    expect(await flat()).not.toContain('JUNK cd');
+    // Enter on the selected row (the search filters by title) resumes too
+    await page.fill('.sp-convos .conv-search input', 'odd one');
+    await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 1, 3_000, 'the title filter');
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Enter');
+    await until(async () => (await count(resumed(odd, 82))) === 2, 5_000, 'Enter to resume');
+    await page.fill('.sp-convos .conv-search input', '');
+    // the copy button copies the same line (with the cd here, the shell being in the odd folder) and types nothing
+    let before = await termText();
+    await page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(81)}"]) .conv-copy`).click();
+    await until(async () => (await clipLast()) === lineFor(81, here), 3_000, 'the copy button');
+    await toastSaid('Copied. Paste it in the terminal.');
+    await sleep(300);
+    expect(await termText()).toBe(before);
+
+    // a command runs: nothing is typed, the line is copied and the toast names the command
+    await page.click('.term');
+    await enter('sleep 31');
+    await running('sleep 31');
+    before = await termText();
+    await row(81).click();
+    await until(async () => (await clipLast()) === lineFor(81, here), 3_000, 'the copy while busy');
+    await toastSaid('sleep 31 is running: command copied');
+    await sleep(400);
+    expect(await termText()).toBe(before);
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await ended('sleep 31');
+    // Claude runs: nothing is typed, the line is copied and the toast says to quit it first
+    await enter(`claude() { echo CLAUDE-UP; sleep 30; }`);
+    await enter('claude --stand-in');
+    await running('claude --stand-in');
+    await until(async () => (await count('CLAUDE-UP')) >= 1, 5_000, 'the stand-in claude');
+    before = await termText();
+    await row(82).click();
+    await until(async () => (await clipLast()) === lineFor(82), 3_000, 'the copy while Claude runs');
+    await toastSaid('Claude is already running here: quit it first (/exit)');
+    await sleep(400);
+    expect(await termText()).toBe(before);
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await ended('claude --stand-in');
+    await enter('unset -f claude');
   }, 60_000);
 
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {

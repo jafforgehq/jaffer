@@ -45,6 +45,21 @@ describe('past conversations: the pieces both the window and the menu bar use', 
     expect(historyMenuItems([], '/h', NOW)).toEqual([]);
     expect(historyMenuItems('nope' as never, '/h', NOW)).toEqual([]);
   });
+
+  it('historyMenuItems with titles (1.1.1): the title clipped to 40 instead of the folder; without one, the folder as before', () => {
+    const out = historyMenuItems(
+      [
+        { id: id(1), cwd: '/Users/maya', endedAt: NOW - 60_000, title: 'Fix the login bug' },
+        { id: id(2), cwd: '/Users/maya/code/api', endedAt: NOW - 60_000, title: `Refactor ${'the whole thing '.repeat(10)}` },
+        { id: id(3), cwd: '/Users/maya/code/api', endedAt: NOW - 60_000, title: '' },
+      ],
+      '/Users/maya',
+      NOW,
+    );
+    expect(out[0]!.label).toBe('Fix the login bug · 1m ago');
+    expect(out[1]!.label).toBe(`${'Refactor the whole thing the whole thing the whole thing'.slice(0, 39)}… · 1m ago`);
+    expect(out[2]!.label).toBe('api · 1m ago');
+  });
 });
 
 describe('past conversations in the side panel (1.1.0): days, the folder filter, the rows', () => {
@@ -78,6 +93,12 @@ describe('past conversations in the side panel (1.1.0): days, the folder filter,
     expect(filterByFolder(items, '  ~/code ', '/Users/maya').map((x) => x.id)).toEqual([id(1)]);
     expect(filterByFolder(items, '', '/Users/maya')).toHaveLength(4);
     expect(filterByFolder(items, 'zzz', '/Users/maya')).toEqual([]);
+  });
+
+  it('filterByFolder matches the title too (1.1.1), any case; a conversation without a folder is found by its title', () => {
+    const items = [{ ...c(1, NOW_L, '/Users/maya/notes'), title: 'Fix the LOGIN bug' }, { ...c(2, NOW_L), title: 'login page copy' }, c(3, NOW_L, '/srv/api')];
+    expect(filterByFolder(items, 'login', '/Users/maya').map((x) => x.id)).toEqual([id(1), id(2)]);
+    expect(filterByFolder(items, 'api', '/Users/maya').map((x) => x.id)).toEqual([id(3)]);
   });
 
   it('conversationRow: the folder name, its ~ path, the time of day, how long, and the cost only when shown', () => {
