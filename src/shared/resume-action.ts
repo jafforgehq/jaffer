@@ -22,8 +22,8 @@ export function resumeLine(info: Where, c: Past): string | null {
 }
 
 /**
- * What a click on a past conversation does (1.1.1). At an idle prompt (the shell's marks say nothing runs) it types Ctrl-U (a
- * half-typed line goes), the resume line and Enter. While any command runs, Claude included, or when the folder is not known,
+ * What a click on a past conversation does (1.1.1). At an idle prompt (the shell's marks say nothing runs) it types Ctrl-E Ctrl-U
+ * (a half-typed line goes, wherever the cursor is: bash's Ctrl-U kills only what is before it), the resume line and Enter. While any command runs, Claude included, or when the folder is not known,
  * nothing is typed: the command is copied and `why` says so. A bad id gives nothing at all.
  */
 export function resumeAction(info: Where, c: Past): { kind: 'type'; text: string } | { kind: 'copy'; text: string; why: string } | { kind: 'none'; why: string } {
@@ -31,7 +31,7 @@ export function resumeAction(info: Where, c: Past): { kind: 'type'; text: string
   if (!line) return { kind: 'none', why: 'That conversation has no valid id.' };
   const busy = typeof info.busy === 'string' ? info.busy.slice(0, 4 * COMMAND_HEAD) : ''; // (a command line is forgeable at any length)
   if (busy && isClaudeCommand(busy)) return { kind: 'copy', text: line, why: 'Claude is already running here: quit it first (/exit)' };
-  if (busy) return { kind: 'copy', text: line, why: `${isSensitiveCommand(busy) ? 'A command' : clipLabel(redactText(busy), 40)} is running: command copied` };
+  if (busy) return { kind: 'copy', text: line, why: `${isSensitiveCommand(busy) || busy === 'command' ? 'A command' : clipLabel(redactText(busy), 40)} is running: command copied` };
   if (!okFolder(c.cwd)) return { kind: 'copy', text: line, why: 'Folder unknown: command copied' };
-  return { kind: 'type', text: `\x15${line}\r` };
+  return { kind: 'type', text: `\x05\x15${line}\r` };
 }

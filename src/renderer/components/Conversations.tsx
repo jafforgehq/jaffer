@@ -11,6 +11,8 @@ import { IconCopy, IconReset, IconSearch } from './icons';
 let focusedFor = 0;
 /** Only the newest `claude.history` answer counts (a refresh while one is under way). */
 let asked = 0;
+/** When a click last typed a resume line: a double click or a repeated Enter must not type a second one before the shell starts the first (cleared by the next command's start, else after 2 s). */
+let typedAt = 0;
 
 /**
  * Past conversations, below the Now card: Claude Code's 50 newest (the daemon's `claude.history`: ids, folders, times, token costs and,
@@ -56,7 +58,8 @@ export function Conversations(): VNode {
       if (was === 'working' && s === 'idle') load();
       was = s;
     });
-    return () => (off(), void asked++); // (an answer that comes after the panel closed is dropped)
+    const offTyped = effect(() => void (info.value.busy && (typedAt = 0)));
+    return () => (off(), offTyped(), void asked++); // (an answer that comes after the panel closed is dropped)
   }, []);
   useEffect(() => {
     if (panelFocusSearch.value === focusedFor) return;
@@ -87,8 +90,9 @@ export function Conversations(): VNode {
     if (a.kind === 'none') return void toast({ kind: 'error', text: a.why });
     if (a.kind === 'copy') return copy(a.text, a.why);
     const t = terminals.get(activePane.value);
-    if (!t) return;
-    t.type(a.text); // (Ctrl-U, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
+    if (!t || Date.now() - typedAt < 2000) return;
+    typedAt = Date.now();
+    t.type(a.text); // (Ctrl-E Ctrl-U, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
     toast({ kind: 'info', text: 'Resuming…' }, 2500);
     t.focus();
   };
@@ -138,7 +142,7 @@ export function Conversations(): VNode {
               return (
                 <div key={`${n}-${c.id}`} class="conv-item">
                   <button class="conv-row" data-id={c.id} data-sel={n === sel ? '' : undefined} title={r.dir || undefined} onFocus={() => setSel(n)} onMouseEnter={() => setSel(n)} onClick={() => pick(n)}>
-                    <b class="conv-name">{c.title || 'Conversation'}</b>
+                    <b class="conv-name">{typeof c.title === 'string' && c.title ? c.title : 'Conversation'}</b>
                     <span class="conv-dir">{r.dir || r.name}</span>
                     <span class="conv-meta">{[r.time, r.dur, ...(r.cost === null ? [] : [r.cost])].join(' · ')}</span>
                   </button>

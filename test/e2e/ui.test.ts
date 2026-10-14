@@ -1799,7 +1799,7 @@ describe('Jaffer UI end to end', () => {
       w.__typed = [];
       w.jaffer.call = (m: string, p: any) =>
         m === 'claude.history' ? (w.__histCalls++, w.__histStub ? w.__histStub() : w.__histReal(m, p))
-        : m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__typed.push(p.data), Promise.resolve({}))
+        : m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__typed.push(p.data), queueMicrotask(() => (w.__event('pty.start', { pane: 'main', cmd: 'claude' }), w.__event('pty.command', { pane: 'main', cmd: 'claude', exit: 0, durMs: 1 }))), Promise.resolve({})) // (as if the shell ran it: the next click may type again)
         : w.__histReal(m, p);
     });
     const histCalls = () => page.evaluate(() => (window as any).__histCalls as number);
@@ -1818,7 +1818,7 @@ describe('Jaffer UI end to end', () => {
     const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
     const typedLast = () => page.evaluate(() => (window as any).__typed.at(-1) as string | undefined);
     const typedCount = () => page.evaluate(() => (window as any).__typed.length as number);
-    const resumes = (n: number) => `\x15cd '${path.join(env.userHome, `hist-proj-${'abc'[n - 71]}`)}' && claude --resume ${sid(n)}\r`; // (the shell is elsewhere: cd first)
+    const resumes = (n: number) => `\x05\x15cd '${path.join(env.userHome, `hist-proj-${'abc'[n - 71]}`)}' && claude --resume ${sid(n)}\r`; // (the shell is elsewhere: cd first)
     const mine = () => page.$$eval('.sp-convos .conv-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, sel: (x as HTMLElement).dataset.sel !== undefined, day: x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '', text: x.textContent ?? '' })));
     const turn = (state: string) => page.evaluate((st) => { const now = Date.now(); (window as any).__event('claude.state', { sessions: [{ id: 'hist-turn', state: st, since: now, turnStartedAt: now - 2000, startedAt: now - 60_000, calls: [], counts: {}, files: [], subagents: [], turns: 1 }] }); }, state);
 
@@ -1883,7 +1883,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await typedLast()) === resumes(71), 3_000, 'the click to resume');
     let typed = await typedCount();
     await page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(72)}"]) .conv-copy`).click();
-    await until(async () => (await clipLast()) === resumes(72).slice(1, -1), 3_000, 'the copy button');
+    await until(async () => (await clipLast()) === resumes(72).slice(2, -1), 3_000, 'the copy button');
     await toastSaid('Copied. Paste it in the terminal.');
     expect(await typedCount()).toBe(typed);
     // Esc gives the keyboard back to the terminal
@@ -2068,12 +2068,28 @@ describe('Jaffer UI end to end', () => {
     await ended(lineFor(81, here));
     await until(async () => (await count(resumed(here, 81))) === 2, 5_000, 'the resume after Ctrl-U');
     expect(await flat()).not.toContain('JUNK cd');
+    // the cursor at the start of a half-typed line: the whole line still goes (Ctrl-E first, then Ctrl-U)
+    await page.click('.term');
+    await page.keyboard.type('echo JUNK', { delay: 4 });
+    await page.keyboard.press('Control+a');
+    await row(82).click();
+    await ended(lineFor(82, odd));
+    await until(async () => (await count(resumed(odd, 82))) === 2, 5_000, 'the resume with the cursor at the start');
+    expect((await blocks()).some((b) => b.cmd?.includes('JUNK'))).toBe(false);
+    // a double click types once
+    const typedBlocks = async () => (await blocks()).filter((b) => b.cmd?.includes('--resume')).length;
+    const nBlocks = await typedBlocks();
+    await row(81).dblclick();
+    await until(async () => (await count(resumed(here, 81))) === 3, 5_000, 'the resume after a double click');
+    await sleep(1500);
+    expect(await count(resumed(here, 81))).toBe(3);
+    expect(await typedBlocks()).toBe(nBlocks + 1);
     // Enter on the selected row (the search filters by title) resumes too
     await page.fill('.sp-convos .conv-search input', 'odd one');
     await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 1, 3_000, 'the title filter');
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Enter');
-    await until(async () => (await count(resumed(odd, 82))) === 2, 5_000, 'Enter to resume');
+    await until(async () => (await count(resumed(odd, 82))) === 3, 5_000, 'Enter to resume');
     await page.fill('.sp-convos .conv-search input', '');
     // the copy button copies the same line (with the cd here, the shell being in the odd folder) and types nothing
     let before = await termText();
