@@ -226,7 +226,7 @@ export function TitleBar(): VNode {
         {c?.appearance?.systemStats === true && <SystemStats />}
         {claude && showCost && <CostChip s={claude} />}
         {/* (a click keeps the terminal's focus: the keys typed next go to the shell, not to this button) */}
-        <button class="icon-btn sm panel-toggle" aria-label="Side panel" aria-pressed={panelOpen()} title="Side panel (⌘B)" onMouseDown={(e) => e.preventDefault()} onClick={togglePanel}>
+        <button class="icon-btn sm panel-toggle" aria-label="Side panel" aria-pressed={panelOpen()} title="Side panel (⌘B)" onMouseDown={(e) => e.preventDefault()} onClick={() => togglePanel('button')}>
           <IconSidebar size={14} />
         </button>
       </div>

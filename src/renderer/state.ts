@@ -364,7 +364,14 @@ export function patchPanel(p: Partial<JafferConfig['panel']>): void {
   void patchConfig({ panel: p }).catch(() => undefined);
 }
 /** ⌘B, the title bar's button, the palette, Settings. */
-export const togglePanel = (): void => patchPanel({ open: !panelOpen() });
+let lastPanelToggle = { at: 0, via: '' };
+/** ⌘B reaches the window twice in the packaged app (the menu's accelerator and the key itself): a toggle from the other source within 250 ms is that same press. */
+export const togglePanel = (via = 'other'): void => {
+  const now = Date.now();
+  if (via !== lastPanelToggle.via && now - lastPanelToggle.at < 250 && (via === 'key' || lastPanelToggle.via === 'key')) return;
+  lastPanelToggle = { at: now, via };
+  patchPanel({ open: !panelOpen() });
+};
 /** True while the panel's edge is dragged: the terminal keeps its size and fits once when it is let go (not a resize per pixel). */
 export const layoutHold = signal(false);
 
