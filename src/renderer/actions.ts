@@ -1,4 +1,4 @@
-import { activePane, addPin, cfg, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, toast } from './state';
+import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, toast } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -79,6 +79,7 @@ export const actions: Action[] = [
   { id: 'prompt-prev', title: 'Previous prompt', section: 'Terminal', keys: '⌘↑', keywords: 'jump command block scroll up', run: () => term()?.blocks.jump(-1) },
   { id: 'prompt-next', title: 'Next prompt', section: 'Terminal', keys: '⌘↓', keywords: 'jump command block scroll down', run: () => term()?.blocks.jump(1) },
   { id: 'copy-markdown', title: 'Copy as Markdown', section: 'Terminal', keys: '⌥⌘C', keywords: 'selection fenced code block clipboard', run: () => term()?.blocks.copyMarkdown() },
+  { id: 'focus-mode', get title() { return focusMode.value ? 'Leave focus mode' : 'Focus mode'; }, section: 'App', keys: '⌥⌘F', keywords: 'quiet distraction notifications hold fade', run: () => setFocusMode(!focusMode.value) },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
   { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { baseName, budgetLevel, gitText, ordinal, progressFraction, sessionClockText, sparkPath, turnCounts, turnSummaryText } from '../src/renderer/claude-ui';
+import { baseName, budgetLevel, gitText, hookHealthWarning, ordinal, progressFraction, sessionClockText, sparkPath, turnCounts, turnSummaryText } from '../src/renderer/claude-ui';
 
 describe('the title bar’s Claude helpers (pure)', () => {
   it('progressFraction: elapsed against the typical turn, 0 without one, never past 1, nothing odd from odd input', () => {
@@ -73,5 +73,27 @@ describe('the title bar’s Claude helpers (pure)', () => {
     expect(sparkPath([2, 2], 40, 10)).toBe('M0 5 L40 5'); // flat: in the middle
     expect(sparkPath([5], 40, 10)).toBe('');
     expect(sparkPath([], 40, 10)).toBe('');
+  });
+});
+
+describe('hookHealthWarning (pure)', () => {
+  const H = 3_600_000;
+  const now = 100 * H;
+  const ev = (o: Record<string, number | null>) => ({ SessionStart: null, Stop: null, ...o });
+
+  it('warns when SessionStart was seen over an hour ago and Stop never came, or came before it, while nothing works', () => {
+    const text = 'Stop has not arrived for over an hour: the hooks may be broken. Try Reinstall.';
+    expect(hookHealthWarning(ev({ SessionStart: now - 2 * H }), now, false)).toBe(text);
+    expect(hookHealthWarning(ev({ SessionStart: now - 2 * H, Stop: now - 3 * H }), now, false)).toBe(text);
+  });
+
+  it('says nothing for a healthy or an unknown state', () => {
+    expect(hookHealthWarning(ev({}), now, false)).toBeNull(); // no SessionStart seen: nothing to judge
+    expect(hookHealthWarning(ev({ SessionStart: now - 2 * H, Stop: now - H }), now, false)).toBeNull(); // Stop after SessionStart
+    expect(hookHealthWarning(ev({ SessionStart: now - H }), now, false)).toBeNull(); // exactly an hour: not over
+    expect(hookHealthWarning(ev({ SessionStart: now - 10 * 60_000 }), now, false)).toBeNull();
+    expect(hookHealthWarning(ev({ SessionStart: now - 2 * H }), now, true)).toBeNull(); // a session is working: Stop is not due
+    expect(hookHealthWarning({}, now, false)).toBeNull();
+    expect(hookHealthWarning(ev({ SessionStart: Number.NaN }), now, false)).toBeNull();
   });
 });

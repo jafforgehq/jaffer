@@ -10,12 +10,12 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, cfg, firstLine, homeDir, info, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, activeTheme, cfg, firstLine, homeDir, info, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
 import { redactText } from '../../shared/redact';
 import { isClaudeCommand } from '../../shared/process-badge';
-import { themeById, xtermTheme } from '../themes';
+import { windowOpacity, xtermTheme } from '../themes';
 import { attachBlocks, type BlocksHandle } from './Blocks';
 
 /** Registry so menus, the palette and the find bar can reach a pane's terminal. */
@@ -74,7 +74,7 @@ export function TerminalView({ pane }: { pane: string }) {
     const el = host.current!;
     const c = cfg.value!;
     const a = c.appearance;
-    const theme = themeById(a.theme);
+    const theme = activeTheme();
     const term = new Terminal({
       fontFamily: a.fontFamily,
       fontSize: a.fontSize,
@@ -90,7 +90,7 @@ export function TerminalView({ pane }: { pane: string }) {
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
       overviewRuler: { width: 10 }, // search matches are marked there
-      theme: xtermTheme(theme, a.opacity),
+      theme: xtermTheme(theme, windowOpacity(a)),
     });
     const fit = new FitAddon();
     const search = new SearchAddon();
@@ -329,8 +329,7 @@ export function TerminalView({ pane }: { pane: string }) {
     const stop = effect(() => {
       const ap = cfg.value?.appearance;
       if (!ap) return;
-      const th = themeById(ap.theme);
-      term.options.theme = xtermTheme(th, ap.opacity);
+      term.options.theme = xtermTheme(activeTheme(), windowOpacity(ap));
       term.options.fontFamily = ap.fontFamily;
       term.options.fontSize = ap.fontSize;
       term.options.lineHeight = ap.lineHeight;

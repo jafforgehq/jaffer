@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
 import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { FIND_OPTS, terminals } from './TerminalView';
 import { THEMES } from '../themes';
+import { hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset } from './icons';
@@ -440,14 +441,27 @@ export function Settings(): VNode {
                   </button>
                 ))}
               </div>
+              <Field label="Follow macOS / time of day" hint="the theme above is the dark one; the light theme below takes over in macOS's light appearance, or from 07:00 to 19:00">
+                <select value={c.appearance.autoTheme ?? 'off'} onChange={(e) => set({ appearance: { autoTheme: (e.target as HTMLSelectElement).value } })}>
+                  <option value="off">Off</option>
+                  <option value="system">macOS appearance</option>
+                  <option value="time">Time of day</option>
+                </select>
+              </Field>
+              <Field label="Light theme">
+                <select value={c.appearance.lightTheme} onChange={(e) => set({ appearance: { lightTheme: (e.target as HTMLSelectElement).value } })}>
+                  {THEMES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Font size">
                 <input type="number" min={8} max={28} value={c.appearance.fontSize} onChange={(e) => set({ appearance: { fontSize: Math.min(28, Math.max(8, Math.round(Number((e.target as HTMLInputElement).value)) || c.appearance.fontSize)) } })} />
               </Field>
               <Field label="Font family">
                 <input type="text" value={c.appearance.fontFamily} onChange={(e) => set({ appearance: { fontFamily: (e.target as HTMLInputElement).value } })} />
-              </Field>
-              <Field label="Window opacity" hint="shows the desktop through the window">
-                <input type="range" min={0.6} max={1} step={0.02} value={c.appearance.opacity} onInput={(e) => set({ appearance: { opacity: Number((e.target as HTMLInputElement).value) } })} />
               </Field>
               <Field label="Cursor">
                 <select value={c.appearance.cursorStyle} onChange={(e) => set({ appearance: { cursorStyle: (e.target as HTMLSelectElement).value } })}>
@@ -458,6 +472,18 @@ export function Settings(): VNode {
               </Field>
               <Field label="Option key acts as Meta" hint="word movement and Claude Code shortcuts">
                 <Switch checked={c.appearance.optionAsMeta} onChange={(v) => set({ appearance: { optionAsMeta: v } })} />
+              </Field>
+              <Field label="Window opacity" hint="shows the desktop through the window (only while the blur below is on)">
+                <input type="range" min={0.6} max={1} step={0.02} value={c.appearance.opacity} onInput={(e) => set({ appearance: { opacity: Number((e.target as HTMLInputElement).value) } })} />
+              </Field>
+              <Field label="Blur behind the window" hint="frosted glass: what is behind the window is blurred. Off, the window is solid">
+                <Switch checked={c.appearance.blur !== false} onChange={(v) => set({ appearance: { blur: v } })} />
+              </Field>
+              <Field label="Window glow" hint="a soft light on the window's edge: a pulse while Claude needs you, steady while it works, a flash when it is done. Not with Animations off">
+                <Switch checked={c.appearance.glow !== false} onChange={(v) => set({ appearance: { glow: v } })} />
+              </Field>
+              <Field label="System stats in the title bar" hint="small bars for CPU, memory and battery, refreshed every 5 seconds while this is on">
+                <Switch checked={c.appearance.systemStats === true} onChange={(v) => set({ appearance: { systemStats: v } })} />
               </Field>
               <Field label="Animations" hint="a little life while Claude works. Also off when macOS Reduce motion is on">
                 <Switch checked={c.appearance.animations !== false} onChange={(v) => set({ appearance: { animations: v } })} />
@@ -504,12 +530,6 @@ export function Settings(): VNode {
                   );
                 })}
               </div>
-              <Field label="Window glow" hint="a soft light on the window's edge: a pulse while Claude needs you, steady while it works, a flash when it is done. Not with Animations off">
-                <Switch checked={c.appearance.glow !== false} onChange={(v) => set({ appearance: { glow: v } })} />
-              </Field>
-              <Field label="System stats in the title bar" hint="small bars for CPU, memory and battery, refreshed every 5 seconds while this is on">
-                <Switch checked={c.appearance.systemStats === true} onChange={(v) => set({ appearance: { systemStats: v } })} />
-              </Field>
               <Field label="GPU rendering" hint="turn off if text looks wrong (applies the next time you open Jaffer)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>
@@ -606,6 +626,7 @@ export function Settings(): VNode {
               <Field label="Turn summary" hint="when a turn of 10 seconds or more ends: how long it took, what Claude did and the files it edited (click one to show it in Finder)">
                 <Switch checked={c.claude?.turnSummary !== false} onChange={(v) => set({ claude: { turnSummary: v } })} />
               </Field>
+              <HookHealth />
             </>
           )}
 
@@ -614,6 +635,43 @@ export function Settings(): VNode {
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** Settings → Claude Code → Hook health: when each of the eleven hook events was last heard since the app started (asked now, and every 10 s while this is open). */
+function HookHealth(): VNode {
+  const [events, setEvents] = useState<Record<string, number | null> | null>(null);
+  useEffect(() => {
+    let open = true;
+    const load = () =>
+      void call<{ events: Record<string, number | null> }>('claude.hooks', {})
+        .then((r) => open && setEvents(r.events))
+        .catch(() => undefined);
+    load();
+    const t = setInterval(load, 10_000);
+    return () => {
+      open = false;
+      clearInterval(t);
+    };
+  }, []);
+  const now = Date.now();
+  const warning = events && hookHealthWarning(events, now, claudeLive.value.some((s) => s.state === 'working' || s.state === 'needs-you'));
+  return (
+    <div class="hook-health">
+      <span class="field-label">
+        Hook health
+        <small>when each of Claude Code's hook events was last heard (since Jaffer started)</small>
+      </span>
+      <ul>
+        {Object.entries(events ?? {}).map(([name, at]) => (
+          <li key={name} data-seen={at === null ? '0' : '1'}>
+            <span>{name}</span>
+            <span>{at === null ? 'not seen yet' : `last seen ${fmtAgo(at, now)}`}</span>
+          </li>
+        ))}
+      </ul>
+      {warning && <p class="hh-warn">{warning}</p>}
+    </div>
   );
 }
 

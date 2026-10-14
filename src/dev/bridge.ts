@@ -43,6 +43,7 @@ const SHIM = `(() => {
     // a build that can update itself: Check now answers "up to date"; tests push other states with window.__event
     reset: async () => { window.__resetCalled = (window.__resetCalled || 0) + 1; return { cancelled: true }; }, // the real app asks first; this stand-in is a person saying no
     updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
+    setFocusMode: async (on) => { (window.__focusCalls = window.__focusCalls || []).push(on); }, // the app holds its notifications
     setLoginItem: async (on) => { window.__loginItem = on; }, pathForFile: () => '', platform: 'darwin',
     saveText: async (text, name) => { (window.__saved = window.__saved || []).push({ text, name }); return { saved: true }; }, // the person picked a file
     openPath: async (p) => { (window.__openedPath = window.__openedPath || []).push(p); return window.__openPathAnswer || { opened: true }; }, // a test may answer otherwise

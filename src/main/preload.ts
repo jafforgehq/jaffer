@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('jaffer', {
   openExternal: (url: string) => ipcRenderer.invoke('jaffer:open-external', url),
   reveal: () => ipcRenderer.invoke('jaffer:reveal'),
   appInfo: () => ipcRenderer.invoke('jaffer:app-info'),
+  setFocusMode: (on: boolean) => ipcRenderer.invoke('jaffer:focus-mode', on),
   setLoginItem: (on: boolean) => ipcRenderer.invoke('jaffer:set-login-item', on),
   saveText: (text: string, name: string) => ipcRenderer.invoke('jaffer:save-text', text, name),
   openPath: (p: { path: string; line?: number; col?: number }) => ipcRenderer.invoke('jaffer:open-path', p),

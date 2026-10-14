@@ -31,3 +31,8 @@ export function osc52Provider(write: (text: string) => Promise<void>): Osc52Prov
     },
   };
 }
+
+/** The window's vibrancy for the config: macOS blurs what is behind it, unless Settings → Appearance → Blur is off. */
+export function vibrancyFor(cfg: { appearance?: { blur?: boolean } }): 'under-window' | null {
+  return cfg.appearance?.blur === false ? null : 'under-window';
+}

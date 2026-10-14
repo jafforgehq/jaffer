@@ -7,6 +7,10 @@ export interface JafferConfig {
   onboarded: boolean;
   appearance: {
     theme: string;
+    /** `off`: always `theme`; `system`: `theme` while macOS is dark, `lightTheme` while it is light; `time`: `lightTheme` from 07:00 to 19:00, `theme` otherwise. */
+    autoTheme: 'off' | 'system' | 'time';
+    /** The theme `autoTheme` switches to by day or in light mode. */
+    lightTheme: string;
     fontFamily: string;
     fontSize: number;
     lineHeight: number;
@@ -27,6 +31,8 @@ export interface JafferConfig {
     systemStats: boolean;
     /** A soft glow on the window's edge: while Claude needs you, while it works, and once when a turn ends. Off with Animations off too. */
     glow: boolean;
+    /** The window blurs what is behind it (macOS vibrancy). Off, the window is opaque whatever the opacity slider says. */
+    blur: boolean;
   };
   shell: { path: string; args: string[] };
   /** The person chose a plain terminal at first run. Claude stays on offer (Settings → Claude Code), nothing about it nags; connecting it clears this. */
@@ -82,6 +88,8 @@ export const DEFAULT_CONFIG: JafferConfig = {
   onboarded: false,
   appearance: {
     theme: 'jaffer-dark',
+    autoTheme: 'off',
+    lightTheme: 'jaffer-light',
     fontFamily: 'SF Mono, Menlo, Monaco, "JetBrains Mono", Consolas, monospace',
     fontSize: 13,
     lineHeight: 1.15,
@@ -96,6 +104,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     companion: DEFAULT_COMPANION,
     systemStats: false,
     glow: true,
+    blur: true,
   },
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true },

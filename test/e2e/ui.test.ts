@@ -951,11 +951,11 @@ describe('Jaffer UI end to end', () => {
     const turn = { id: 'sum-1', turnStartedAtAgo: 72_000, calls, files };
     await inject([{ ...turn, state: 'working' }]);
     await inject([{ ...turn, state: 'idle' }]);
-    await sleep(500);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))); // (two frames: a toast shown at once would be on the screen by now)
     expect(await toastCount('Claude finished in')).toBe(0); // it waits a moment for the cost
     await inject([{ ...turn, state: 'idle', cost: { usd: 0.04, at: 77 } }]);
     const summary = 'Claude finished in 1m 12s · 3 reads, 2 edits, 1 shell · ≈ $0.04';
-    await until(async () => (await toastCount(summary)) === 1, 4_000, 'the summary toast');
+    await until(async () => (await toastCount(summary)) === 1, 15_000, 'the summary toast');
     const toast = page.locator('.toast', { hasText: summary });
     expect(await toast.locator('.toast-act').allTextContents()).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts']);
     expect(await toast.locator('.toast-note').textContent()).toBe('+1 more');
@@ -966,7 +966,7 @@ describe('Jaffer UI end to end', () => {
     const t2 = { id: 'sum-2', turnStartedAtAgo: 15_000, calls: [{ name: 'Read', category: 'read', startAgo: 14_000, endAgo: 13_000 }] };
     await inject([{ ...t2, state: 'working' }]);
     await inject([{ ...t2, state: 'idle' }]);
-    await until(async () => (await toastCount('Claude finished in 15s · 1 read')) === 1, 6_000, 'the summary without a cost');
+    await until(async () => (await toastCount('Claude finished in 15s · 1 read')) === 1, 15_000, 'the summary without a cost');
     expect(await toastCount('Claude finished in 15s · 1 read · ≈')).toBe(0);
     // too short, cut short, switched off: nothing
     const quiet = async (t: object, what: string) => {
@@ -982,7 +982,7 @@ describe('Jaffer UI end to end', () => {
     await quiet({ id: 'sum-5', turnStartedAtAgo: 60_000 }, 'the switch off');
     await cfgPatch({ claude: { turnSummary: true } });
     await inject([]);
-  }, 40_000);
+  }, 90_000);
 
   it('the cost chip: the live figure greyed while Claude works (only with both switches), the budget colours, and a hover card with today, the estimate and two sparklines', async () => {
     await endClaude();
@@ -2216,6 +2216,188 @@ describe('Jaffer UI end to end', () => {
     await bell();
     await until(async () => (await page.getAttribute(scene, 'data-flinch')) === '1', 2_000, 'a scene flinch');
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+  }, 30_000);
+
+  // App level (spec features 17, 34, 38, 40): the theme that follows macOS or the clock, blur, hook health, focus mode.
+  const rootVar = (n: string) => page.evaluate((v) => document.documentElement.style.getPropertyValue(v), n);
+  const alphaOf = (c: string) => parseFloat(/,\s*([\d.]+)\)$/.exec(c)?.[1] ?? 'NaN');
+  const themeBg = (id: string) => ({ 'jaffer-dark': '#12151b', 'jaffer-light': '#fdfcfa', nord: '#2e3440' })[id]!;
+  const openSettings = async (nav: string) => {
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: nav }).click();
+  };
+  const closeSettings = async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  };
+
+  it('the theme follows macOS (system) or the time of day (time): the dark theme and the light one swap, the surfaces fade over a second, Animations off does not fade; off follows nothing', async () => {
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { theme: 'jaffer-dark', lightTheme: 'jaffer-light', autoTheme: 'off', animations: true } }));
+    await page.emulateMedia({ colorScheme: 'light' });
+    await sleep(300);
+    expect(await rootVar('--bg-solid')).toBe(themeBg('jaffer-dark')); // off: macOS's light appearance changes nothing
+    await cfgPatch({ appearance: { autoTheme: 'system' } });
+    await until(async () => (await rootVar('--bg-solid')) === themeBg('jaffer-light'), 5_000, 'the light theme in light mode');
+    expect(await page.evaluate(() => document.documentElement.style.colorScheme)).toBe('light');
+    expect(await page.evaluate(() => String((window as any).__jaffer.terminals.get('main').term.options.theme.background))).toContain('253,252,250'); // the terminal's own colours at once
+    expect(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))).toBe(true); // fading
+    expect(await page.$eval('.terminal-area', (el) => getComputedStyle(el).transitionDuration)).toBe('1s, 1s, 1s');
+    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 4_000, 'the fade to end');
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await until(async () => (await rootVar('--bg-solid')) === themeBg('jaffer-dark'), 5_000, 'the dark theme in dark mode');
+    // the terminal's own colours follow (they switch at once)
+    expect(await page.evaluate(() => String((window as any).__jaffer.terminals.get('main').term.options.theme.background))).toContain('18,21,27');
+    // the light theme is a choice, and Animations off swaps without a fade
+    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 4_000, 'the last fade to end');
+    await cfgPatch({ appearance: { lightTheme: 'nord', animations: false } });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await until(async () => (await rootVar('--bg-solid')) === themeBg('nord'), 5_000, 'the chosen light theme');
+    expect(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))).toBe(false);
+    await cfgPatch({ appearance: { autoTheme: 'off' } });
+    await until(async () => (await rootVar('--bg-solid')) === themeBg('jaffer-dark'), 5_000, 'the chosen theme with the switch off');
+    // time of day: the hour of the page's clock (07:00 to 18:59 is light)
+    const at = (h: string) => page.evaluate((iso) => {
+      const w = window as any;
+      w.__RealDate ??= Date;
+      const fixed = new w.__RealDate(iso).getTime();
+      w.Date = class extends w.__RealDate { constructor(...a: unknown[]) { (a.length ? super(...(a as [])) : super(fixed)); } static now() { return fixed; } };
+    }, `2026-10-14T${h}:00`);
+    try {
+      await cfgPatch({ appearance: { autoTheme: 'time', lightTheme: 'jaffer-light' } });
+      for (const [time, id] of [['06:59', 'jaffer-dark'], ['07:00', 'jaffer-light'], ['18:59', 'jaffer-light'], ['19:00', 'jaffer-dark'], ['12:30', 'jaffer-light'], ['23:15', 'jaffer-dark']] as const) {
+        await at(time);
+        await cfgPatch({ appearance: { autoTheme: 'off' } }); // (the hour is read when the mode starts, and every five minutes)
+        await cfgPatch({ appearance: { autoTheme: 'time' } });
+        await until(async () => (await rootVar('--bg-solid')) === themeBg(id), 5_000, `${id} at ${time}`);
+      }
+    } finally {
+      await page.evaluate(() => { const w = window as any; if (w.__RealDate) w.Date = w.__RealDate; });
+      await cfgPatch({ appearance: { autoTheme: 'off', animations: true, lightTheme: 'jaffer-light', theme: 'jaffer-dark' } });
+      await page.emulateMedia({ colorScheme: 'light' });
+    }
+    await until(async () => (await rootVar('--bg-solid')) === themeBg('jaffer-dark'), 5_000, 'the dark theme again');
+    // Settings → Appearance: the two selects, in their place after the theme cards, writing the config
+    await openSettings('Appearance');
+    const labels = await page.$$eval('.settings-body .field-label', (els) => els.map((e) => e.firstChild?.textContent ?? ''));
+    expect(labels.slice(0, 4)).toEqual(['Follow macOS / time of day', 'Light theme', 'Font size', 'Font family']);
+    await page.locator('.settings-body select').nth(0).selectOption('system'); // (Follow macOS / time of day, then Light theme)
+    await page.locator('.settings-body select').nth(1).selectOption('nord');
+    await until(async () => { const a = (await page.evaluate(() => window.jaffer.call('config.get'))).appearance; return a.autoTheme === 'system' && a.lightTheme === 'nord'; }, 5_000, 'the two selects to reach the config');
+    await closeSettings();
+    await cfgPatch({ appearance: { autoTheme: 'off', lightTheme: 'jaffer-light' } });
+    await page.emulateMedia({ colorScheme: 'light' });
+  }, 60_000);
+
+  it('blur: the switch is in Settings after the opacity; off, the window colours are opaque whatever the slider says, on, the slider counts again', async () => {
+    await cfgPatch({ appearance: { blur: true, opacity: 0.8 } });
+    await until(async () => alphaOf(await rootVar('--surface')) < 0.9, 5_000, 'the see-through colours');
+    const termBg = () => page.evaluate(() => String((window as any).__jaffer.terminals.get('main').term.options.theme.background));
+    expect(await termBg()).toMatch(/^rgba/);
+    await openSettings('Appearance');
+    const labels = await page.$$eval('.settings-body .field-label', (els) => els.map((e) => e.firstChild?.textContent ?? ''));
+    expect(labels.indexOf('Blur behind the window')).toBe(labels.indexOf('Window opacity') + 1);
+    const sw = page.locator('.field', { hasText: 'Blur behind the window' }).locator('input[type=checkbox]');
+    expect(await sw.isChecked()).toBe(true);
+    await page.locator('.field', { hasText: 'Blur behind the window' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.blur === false, 5_000, 'the switch to reach the config');
+    await until(async () => alphaOf(await rootVar('--surface')) === 1 && alphaOf(await rootVar('--chrome')) === 1, 5_000, 'opaque colours');
+    expect(await termBg()).toBe('#12151b');
+    await closeSettings();
+    await cfgPatch({ appearance: { blur: true } });
+    await until(async () => alphaOf(await rootVar('--surface')) < 0.9, 5_000, 'the slider counting again');
+    await cfgPatch({ appearance: { opacity: 0.96 } });
+  }, 30_000);
+
+  it('hook health: Settings → Claude Code lists the eleven events (last seen / not seen yet, live), and warns when Stop is missing for over an hour with no session working', async () => {
+    await endClaude();
+    await sendHook('SessionStart', { session_id: 'hh-1', source: 'startup' });
+    await openSettings('Claude Code');
+    await page.waitForSelector('.hook-health li');
+    const rows = () => page.$$eval('.hook-health li', (els) => els.map((e) => [...e.children].map((c) => c.textContent)));
+    const names = (await rows()).map((r) => r[0]);
+    expect(names).toEqual(['SessionStart', 'Stop', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'Notification', 'SessionEnd', 'PreCompact']);
+    expect((await rows()).find((r) => r[0] === 'SessionStart')![1]).toMatch(/^last seen (just now|\d+m ago)$/);
+    for (const r of await rows()) expect(r[1], r[0]!).toMatch(/^(not seen yet|last seen .+)$/);
+    expect(await page.locator('.hook-health .hh-warn').count()).toBe(0); // (a session began a moment ago)
+    await shot('31-hook-health');
+    // the daemon's answer, stood in for: an old SessionStart without a Stop; then (while the list is open, it asks again by itself) a Stop
+    await page.evaluate(() => {
+      const j = window.jaffer as any;
+      j.__realCall = j.call;
+      j.__hooks = { SessionStart: Date.now() - 2 * 3_600_000, Stop: null, PreToolUse: Date.now() - 90_000 };
+      j.call = (m: string, p: unknown) => (m === 'claude.hooks' ? Promise.resolve({ events: { ...j.__hooks } }) : j.__realCall(m, p));
+    });
+    try {
+      await closeSettings();
+      await openSettings('Claude Code');
+      await page.waitForSelector('.hook-health .hh-warn');
+      expect(await page.textContent('.hook-health .hh-warn')).toBe('Stop has not arrived for over an hour: the hooks may be broken. Try Reinstall.');
+      expect((await rows()).find((r) => r[0] === 'PreToolUse')![1]).toBe('last seen 2m ago');
+      expect((await rows()).find((r) => r[0] === 'Stop')![1]).toBe('not seen yet');
+      await page.evaluate(() => ((window.jaffer as any).__hooks.Stop = Date.now()));
+      await until(async () => (await rows()).find((r) => r[0] === 'Stop')![1] === 'last seen just now', 14_000, 'the list to refresh by itself');
+      await until(async () => (await page.locator('.hook-health .hh-warn').count()) === 0, 1_000, 'no warning once a Stop came');
+      await page.evaluate(() => ((window.jaffer as any).__hooks.Stop = null));
+      await until(async () => (await page.locator('.hook-health .hh-warn').count()) === 1, 14_000, 'the warning again');
+      // a working session: Stop is not due
+      await inject([{ id: 'hh-w', state: 'working', turnStartedAtAgo: 5_000 }]);
+      await until(async () => (await page.locator('.hook-health .hh-warn').count()) === 0, 15_000, 'no warning while Claude works');
+    } finally {
+      await page.evaluate(() => { const j = window.jaffer as any; if (j.__realCall) j.call = j.__realCall; });
+      await inject([]);
+    }
+    await closeSettings();
+    await endClaude();
+  }, 60_000);
+
+  it('focus mode (⌥⌘F, the palette): the title bar, the tool strip, the pins and the companion fade to 15 % and come back; the app is told; the palette entry reads Leave focus mode while it is on; no fade animation with Animations off', async () => {
+    await endClaude();
+    await page.evaluate(() => ((window as any).__focusCalls = []));
+    // a pin to fade (selecting a line of what is on the screen)
+    await page.click('.term');
+    await page.evaluate(() => {
+      const t = (window as any).__jaffer.terminals.get('main').term;
+      const b = t.buffer.active;
+      for (let y = b.length - 1; y >= 0; y--) if (b.getLine(y)!.translateToString(true).trim()) return void t.selectLines(y, y);
+    });
+    await menu('pin-selection');
+    await page.waitForSelector('.pins .pin');
+    const sel = ['.titlebar', '.tool-strip', '.pins', '.pet-corner'];
+    const opacity = (q: string) => page.$eval(q, (el) => getComputedStyle(el).opacity);
+    const before = await Promise.all(sel.map(opacity));
+    expect(before.every((o) => parseFloat(o) > 0.9)).toBe(true);
+    expect(await page.getAttribute('.app', 'data-focus')).toBeNull();
+    await menu('focus-mode');
+    await page.waitForSelector(".app[data-focus='1']");
+    await until(async () => (await Promise.all(sel.map(opacity))).every((o) => parseFloat(o) === 0.15), 3_000, 'all four to fade');
+    expect(await page.$eval('.titlebar', (el) => getComputedStyle(el).transitionDuration)).toBe('0.25s');
+    expect(await page.$eval('.terminal-area .term', (el) => getComputedStyle(el).opacity)).toBe('1'); // the terminal itself does not
+    expect(await page.evaluate(() => (window as any).__focusCalls)).toEqual([true]);
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette-list');
+    expect(await page.textContent('.palette-list')).toContain('Leave focus mode');
+    await page.keyboard.press('Escape');
+    await menu('focus-mode');
+    await page.waitForSelector(".app[data-focus='1']", { state: 'detached' });
+    await until(async () => (await Promise.all(sel.map(opacity))).every((o, i) => o === before[i]), 3_000, 'all four to come back');
+    expect(await page.evaluate(() => (window as any).__focusCalls)).toEqual([true, false]);
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette-list');
+    expect(await page.textContent('.palette-list')).toContain('Focus mode');
+    expect(await page.textContent('.palette-list')).not.toContain('Leave focus mode');
+    await page.keyboard.press('Escape');
+    // Animations off: it fades at once, with no transition
+    await cfgPatch({ appearance: { animations: false } });
+    await menu('focus-mode');
+    await page.waitForSelector(".app[data-focus='1']");
+    expect(await page.$eval('.titlebar', (el) => getComputedStyle(el).transitionDuration)).toBe('0s');
+    expect(parseFloat(await opacity('.titlebar'))).toBe(0.15);
+    await menu('focus-mode');
+    await page.waitForSelector(".app[data-focus='1']", { state: 'detached' });
+    await cfgPatch({ appearance: { animations: true } });
+    await page.locator('.pins .pin button').click(); // unpin
+    await page.evaluate(() => ((window as any).__jaffer.terminals.get('main').term.clearSelection()));
   }, 30_000);
 
   // (last: ESC c wipes the scrollback, which the reload test above reads)

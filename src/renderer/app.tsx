@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, currentClaude, openOverlay, overlay, ready, appVersion, turnDone } from './state';
+import { activePane, activeTheme, cfg, currentClaude, focusMode, hour, openOverlay, overlay, ready, appVersion, systemDark, turnDone } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
 import { Pet } from './components/Pet';
@@ -9,14 +9,25 @@ import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { ToolStrip } from './components/ToolStrip';
 import { FindBar, Onboarding, Palette, PasteBar, Pins, RecentCommands, Settings } from './components/Overlays';
 import { BlockMenu, StickyHeader } from './components/Blocks';
-import { cssVars, themeById } from './themes';
+import { cssVars, windowOpacity } from './themes';
+
+let shownTheme = '';
+let fadeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function applyTheme(): void {
   const c = cfg.value;
   if (!c) return;
-  const th = themeById(c.appearance.theme);
-  const vars = cssVars(th, c.appearance.opacity);
+  const th = activeTheme();
+  const vars = cssVars(th, windowOpacity(c.appearance));
   const root = document.documentElement;
+  // Follow macOS / time of day: the big surfaces fade into the other theme for a second (the terminal's own colours switch at once; CSS
+  // stops the fade under Reduce motion, and Animations off does not start it)
+  if (shownTheme && shownTheme !== th.id && c.appearance.autoTheme !== 'off' && c.appearance.animations !== false) {
+    root.classList.add('theme-fade');
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => root.classList.remove('theme-fade'), 1100);
+  }
+  shownTheme = th.id;
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.style.colorScheme = th.dark ? 'dark' : 'light'; // native controls (scrollbars, selects, date pickers) follow the theme
   root.dataset.motion = c.appearance.animations === false ? 'off' : 'on';
@@ -46,6 +57,23 @@ function StageGlow(): null {
 
 export function App(): VNode | null {
   useEffect(() => effect(applyTheme), []);
+  // what Follow macOS / time of day reads: macOS's appearance while it follows that, the hour (now, and every five minutes) while it follows the clock
+  const auto = cfg.value?.appearance?.autoTheme;
+  useEffect(() => {
+    if (auto === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const on = () => (systemDark.value = mq.matches);
+      on();
+      mq.addEventListener('change', on);
+      return () => mq.removeEventListener('change', on);
+    }
+    if (auto === 'time') {
+      const on = () => (hour.value = new Date().getHours());
+      on();
+      const t = setInterval(on, 300_000);
+      return () => clearInterval(t);
+    }
+  }, [auto]);
   const off = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -69,7 +97,7 @@ export function App(): VNode | null {
   void activePane.value;
   void appVersion.value;
   return (
-    <div class="app">
+    <div class="app" data-focus={focusMode.value ? '1' : undefined}>
       <div class="stage">
         <StageGlow />
         <TitleBar />

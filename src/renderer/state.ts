@@ -8,6 +8,7 @@ import { COMMAND_HEAD } from '../shared/process-badge';
 import type { GitStatus } from '../core/session/git-status';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
 import { FailTracker } from './fail-tracker';
+import { resolveTheme, type JafferTheme } from './themes';
 
 export { fmtDuration };
 
@@ -54,6 +55,20 @@ const failTracker = new FailTracker();
 /** A bell rings again at once when a program rings in a loop: the companion flinches at most once in this long. */
 const BELL_GAP_MS = 2000;
 export const appVersion = signal('');
+/** Focus mode (⌥⌘F): the title bar, the tool strip, the pins and the companion fade, and the app holds its notifications. Session only. */
+export const focusMode = signal(false);
+export function setFocusMode(on: boolean): void {
+  focusMode.value = on;
+  void Promise.resolve(window.jaffer.setFocusMode?.(on)).catch(() => undefined);
+}
+/** For Settings → Appearance → Follow macOS / time of day: whether macOS is dark, and the hour (0..23); the window keeps them current while the setting needs them. */
+export const systemDark = signal(globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true);
+export const hour = signal(new Date().getHours());
+/** The theme that is on now: the chosen one, or the light one by macOS or by the hour. Reads signals, so an effect that calls it follows them. */
+export function activeTheme(): JafferTheme {
+  const a = cfg.value?.appearance;
+  return resolveTheme({ autoTheme: a?.autoTheme ?? 'off', theme: a?.theme ?? '', lightTheme: a?.lightTheme ?? '', systemDark: systemDark.value, hour: hour.value });
+}
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
 export const updateState = signal<UpdateState | null>(null);
 
@@ -142,7 +157,7 @@ export interface ClaudeAuthState {
   loginError?: string;
 }
 /** What the Claude in the terminal is doing, pushed by the daemon from its hook events (newest change first). */
-const claudeLive = signal<ClaudeSession[]>([]);
+export const claudeLive = signal<ClaudeSession[]>([]);
 /** The Claude session the mole and the title bar follow: the most recently changed one that has not ended. */
 export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
 async function loadClaudeState(): Promise<void> {

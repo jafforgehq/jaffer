@@ -73,6 +73,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 ::-webkit-scrollbar-thumb:hover { background: var(--line-strong); background-clip: content-box; border: 3px solid transparent; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 
+/* Settings → Appearance → Follow macOS / time of day: the big surfaces fade into the other theme (app.tsx adds .theme-fade for a second; Reduce motion shortens it to nothing) */
+:root.theme-fade body, :root.theme-fade .stage, :root.theme-fade .titlebar, :root.theme-fade .terminal-area { transition: background-color 1s ease, color 1s ease, border-color 1s ease; }
+/* Focus mode (⌥⌘F): the title bar, the tool strip, the pinned lines and the companion fade; the terminal stays as it is */
+.app[data-focus='1'] :is(.titlebar, .tool-strip, .pins, .pet-corner) { opacity: 0.15; }
+:root:not([data-motion='off']) .app :is(.titlebar, .tool-strip, .pins, .pet-corner) { transition: opacity 0.25s ease; }
+
 /* ============================================================== layout */
 .app { display: flex; height: 100%; }
 .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
@@ -366,6 +372,11 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .field-ctl .row input { min-width: 150px; }
 .field-ctl input[type='text'], .field-ctl input[type='password'], .field-ctl select { width: 100%; min-width: 220px; }
 .field-ctl input[type='number'] { width: 80px; }
+.hook-health { padding: 10px 0; }
+.hook-health ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 22px; }
+.hook-health li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+.hook-health li[data-seen='0'] { color: var(--faint); }
+.hook-health .hh-warn { margin: 8px 0 0; font-size: 12px; color: var(--warn); }
 .upd-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0 0; font-size: 13px; }
 .upd-line small { display: block; margin-top: 2px; color: var(--faint); font-size: 12px; }
 .upd-line[data-upd-status='ready'] small { color: var(--ok); }

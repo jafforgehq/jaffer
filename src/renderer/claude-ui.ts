@@ -98,3 +98,15 @@ export function sparkPath(values: number[], w: number, h: number): string {
   const r = (v: number) => Math.round(v * 10) / 10;
   return values.map((v, i) => `${i ? 'L' : 'M'}${r((i * w) / (values.length - 1))} ${r(span ? h - ((v - min) / span) * h : h / 2)}`).join(' ');
 }
+
+/**
+ * Settings → Claude Code → Hook health: `events` is when each hook event was last heard (ms since epoch, null: not yet). A session began
+ * over an hour ago and no `Stop` has come since while nothing works means the hooks are probably not reaching Jaffer; null otherwise.
+ */
+export function hookHealthWarning(events: Record<string, number | null>, now: number, anyWorking: boolean): string | null {
+  const start = events.SessionStart;
+  if (anyWorking || typeof start !== 'number' || !(now - start > 3_600_000)) return null;
+  const stop = events.Stop;
+  if (typeof stop === 'number' && stop >= start) return null;
+  return 'Stop has not arrived for over an hour: the hooks may be broken. Try Reinstall.';
+}

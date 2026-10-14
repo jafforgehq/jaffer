@@ -73,6 +73,20 @@ export function themeById(id: string): JafferTheme {
   return THEMES.find((x) => x.id === id) ?? THEMES[0]!;
 }
 
+/**
+ * The theme that is on: `theme` (`off`), `theme` or `lightTheme` by macOS appearance (`system`), or by the hour (`time`: the light one
+ * from 07:00 to 18:59, `hour` is 0..23). A theme id nobody knows is the first theme; an unknown mode is `off`.
+ */
+export function resolveTheme(o: { autoTheme: string; theme: string; lightTheme: string; systemDark: boolean; hour: number }): JafferTheme {
+  const light = o.autoTheme === 'system' ? !o.systemDark : o.autoTheme === 'time' ? o.hour >= 7 && o.hour < 19 : false;
+  return themeById(light ? o.lightTheme : o.theme);
+}
+
+/** How opaque the window's colours are: the slider, but only while the window blurs what is behind it (a see-through window without the blur is just hard to read). */
+export function windowOpacity(a: { opacity: number; blur?: boolean }): number {
+  return a.blur === false ? 1 : a.opacity;
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];

@@ -329,3 +329,18 @@ describe('migrated, and the settings 0.6.0 no longer has (the first start\'s cle
     expect(pruneDeadKeys({})).toEqual({});
   });
 });
+
+describe('appearance.autoTheme, appearance.lightTheme and appearance.blur', () => {
+  it('default to off, jaffer-light and blur on, also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.appearance).toMatchObject({ autoTheme: 'off', lightTheme: 'jaffer-light', blur: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'nord' } }));
+    expect(new ConfigStore(env.paths).get().appearance).toMatchObject({ theme: 'nord', autoTheme: 'off', lightTheme: 'jaffer-light', blur: true });
+  });
+
+  it('a choice is kept, and a value of the wrong kind leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ appearance: { autoTheme: 'time', lightTheme: 'nord', blur: false } });
+    store.patch({ appearance: { autoTheme: 3, lightTheme: null, blur: 'no' } } as never);
+    expect(new ConfigStore(env.paths).get().appearance).toMatchObject({ autoTheme: 'time', lightTheme: 'nord', blur: false });
+  });
+});

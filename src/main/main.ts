@@ -9,7 +9,7 @@ import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
-import { isAppUrl, isWebUrl } from '../shared/window-policy';
+import { isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
@@ -23,6 +23,8 @@ import { prepareHome } from './prepare-home';
 import { resetJaffer } from '../core/reset';
 import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 import { editorUrl } from '../shared/editor-url';
+import { MENU_ITEMS } from '../shared/menu-spec';
+import { FocusHold, type HoldKind } from '../shared/focus-hold';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications, global hotkey), and it starts the terminal
@@ -103,6 +105,7 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     if (event === 'config.changed') {
       appCfg = data as typeof appCfg;
       syncSystemStats();
+      syncVibrancy();
     }
   });
   void c
@@ -110,6 +113,7 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     .then((x) => {
       appCfg = x as typeof appCfg;
       syncSystemStats();
+      syncVibrancy();
     })
     .catch(() => undefined);
   void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
@@ -226,10 +230,17 @@ async function prepareHomeBounded(): Promise<void> {
 
 // ---------------------------------------------------------------- notifications & dock
 
+/** Focus mode (⌥⌘F): notifications and the Dock bounce are held, and counted for one summary when it ends. Session state only. */
+const focus = new FocusHold();
 let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
 /** The settings the main process acts on itself (kept current from the daemon's config.changed). */
-let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string }; appearance?: { systemStats?: boolean } } = {};
+let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string }; appearance?: { systemStats?: boolean; blur?: boolean } } = {};
+
+/** The window blurs what is behind it, or not (Settings → Appearance → Blur): at the window's creation and at every change. */
+function syncVibrancy(): void {
+  if (win && !win.isDestroyed()) win.setVibrancy(vibrancyFor(appCfg));
+}
 
 // ---------------------------------------------------------------- system stats (Settings → Appearance → System stats, off by default)
 
@@ -271,7 +282,7 @@ const finished = new FinishedNotifier({
   windowFocused: () => !!win?.isFocused(),
   lastTerminalNotifyAt: () => lastTerminalNotifyAt,
   now: Date.now,
-  notify: (n) => notify(n.title, n.body),
+  notify: (n) => notify(n.title, n.body, 'finished'),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
 });
@@ -279,13 +290,13 @@ const finished = new FinishedNotifier({
 function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
   lastTerminalNotifyAt = Date.now();
-  notify(n.title || 'Terminal', n.body);
+  notify(n.title || 'Terminal', n.body, 'terminal');
 }
 
 let lastBounceAt = 0;
-/** A bell while the window is not in front: one gentle bounce of the Dock icon (at most one in five seconds; the terminal's flash stays). */
+/** A bell while the window is not in front: one gentle bounce of the Dock icon (at most one in five seconds; the terminal's flash stays). Focus mode drops it (a bell is not counted in the summary). */
 function maybeBounce(): void {
-  if (win?.isFocused() || !shouldBounce(Date.now(), lastBounceAt)) return;
+  if (focus.active || win?.isFocused() || !shouldBounce(Date.now(), lastBounceAt)) return;
   lastBounceAt = Date.now();
   app.dock?.bounce('informational');
 }
@@ -300,7 +311,7 @@ function onClaudeState(sessions: ClaudeSession[]): void {
   finished.update(sessions);
   const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
   prevClaude = sessions;
-  if (!n) return;
+  if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
   notify(n.title, n.body);
 }
@@ -308,10 +319,12 @@ function onClaudeState(sessions: ClaudeSession[]): void {
 /** A long command finished while you were looking at something else. */
 function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number }): void {
   const n = commandNotification(c, { windowFocused: !!win?.isFocused() });
-  if (n) notify(n.title, n.body);
+  if (n) notify(n.title, n.body, c.exit === 0 ? 'command' : 'failed');
 }
 
-function notify(title: string, body: string): void {
+/** Shows a notification, unless it is of a `kind` focus mode holds (a notification of no kind, the update prompt's, is always shown). */
+function notify(title: string, body: string, kind?: HoldKind): void {
+  if (kind && focus.hold(kind)) return;
   if (!Notification.isSupported()) return;
   const note = new Notification({ title, body: body.slice(0, 240) });
   note.on('click', () => showWindow());
@@ -463,13 +476,18 @@ function createWindow(): void {
     title: 'Jaffer',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 17 },
-    vibrancy: 'under-window',
+    vibrancy: vibrancyFor(appCfg) ?? undefined,
     visualEffectState: 'active',
     backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
   });
   win.once('ready-to-show', () => win?.show());
-  win.on('closed', syncSystemStats);
+  win.on('closed', () => {
+    syncSystemStats();
+    focus.release(); // (focus mode ends with the window: nothing is left to say it to)
+  });
+  // a page that loads again (a reload) starts without focus mode
+  win.webContents.on('did-finish-load', () => void focus.release());
   syncSystemStats();
   const save = () => {
     if (win && !win.isDestroyed() && !win.isMinimized() && !win.isFullScreen()) writeJson(windowFile, win.getBounds());
@@ -530,7 +548,8 @@ async function syncHotkey(): Promise<void> {
 // ---------------------------------------------------------------- menu
 
 function buildMenu(): void {
-  const act = (id: string) => () => sendToRenderer('jaffer:menu', id);
+  // a menu item that runs the window's action of the same id (labels and accelerators: shared/menu-spec.ts)
+  const item = (id: string): MenuItemConstructorOptions => ({ ...MENU_ITEMS[id], click: () => sendToRenderer('jaffer:menu', id) });
   const template: MenuItemConstructorOptions[] = [
     {
       label: 'Jaffer',
@@ -538,7 +557,7 @@ function buildMenu(): void {
         { role: 'about' },
         { label: 'Check for Updates…', click: () => void manualUpdateCheck() },
         { type: 'separator' },
-        { label: 'Settings…', accelerator: 'Cmd+,', click: act('settings') },
+        item('settings'),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -561,32 +580,33 @@ function buildMenu(): void {
     {
       label: 'Shell',
       submenu: [
-        { label: 'Hide Window', accelerator: 'Cmd+W', click: act('hide-window') },
+        item('hide-window'),
         { type: 'separator' },
-        { label: 'Clear Screen', accelerator: 'Cmd+K', click: act('clear') },
-        { label: 'Find…', accelerator: 'Cmd+F', click: act('find') },
-        { label: 'Find Next', accelerator: 'Cmd+G', click: act('find-next') },
-        { label: 'Find Previous', accelerator: 'Shift+Cmd+G', click: act('find-prev') },
-        { label: 'Copy as Markdown', accelerator: 'Alt+Cmd+C', click: act('copy-markdown') },
+        item('clear'),
+        item('find'),
+        item('find-next'),
+        item('find-prev'),
+        item('copy-markdown'),
         { type: 'separator' },
-        { label: 'Previous Prompt', accelerator: 'Cmd+Up', click: act('prompt-prev') },
-        { label: 'Next Prompt', accelerator: 'Cmd+Down', click: act('prompt-next') },
-        { label: 'Recent Commands…', accelerator: 'Cmd+R', click: act('recent-commands') },
-        { label: 'Pin Selection', accelerator: 'Shift+Cmd+L', click: act('pin-selection') },
+        item('prompt-prev'),
+        item('prompt-next'),
+        item('recent-commands'),
+        item('pin-selection'),
+        item('focus-mode'),
         { type: 'separator' },
-        { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C', click: act('run-claude') },
-        { label: 'Restart Shell', click: act('restart-shell') },
+        item('run-claude'),
+        item('restart-shell'),
       ],
     },
     { role: 'editMenu' },
     {
       label: 'View',
       submenu: [
-        { label: 'Command Palette…', accelerator: 'Cmd+P', click: act('palette') },
+        item('palette'),
         { type: 'separator' },
-        { label: 'Bigger', accelerator: 'Cmd+=', click: act('zoom-in') },
-        { label: 'Smaller', accelerator: 'Cmd+-', click: act('zoom-out') },
-        { label: 'Actual Size', accelerator: 'Cmd+0', click: act('zoom-reset') },
+        item('zoom-in'),
+        item('zoom-out'),
+        item('zoom-reset'),
         { type: 'separator' },
         { role: 'togglefullscreen' },
         ...(app.isPackaged ? [] : ([{ type: 'separator' }, { role: 'toggleDevTools' }] as MenuItemConstructorOptions[])),
@@ -680,6 +700,13 @@ ipcMain.handle('jaffer:reset', async (e) => {
   app.relaunch();
   app.exit(0);
   return { cancelled: false };
+});
+// Focus mode from the window (⌥⌘F, the palette): on holds notifications; off shows the one sentence about what was held, if anything.
+ipcMain.handle('jaffer:focus-mode', (e, on: unknown) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  if (on === true) return void focus.start();
+  const said = focus.release();
+  if (said) notify('Focus mode ended', said);
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });

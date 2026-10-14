@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAppUrl, isWebUrl, osc52Provider } from '../src/shared/window-policy';
+import { isAppUrl, isWebUrl, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
 
 const INDEX = 'file:///Applications/Jaffer.app/Contents/Resources/app/dist/renderer/index.html';
 
@@ -67,5 +67,14 @@ describe('osc52Provider: a program may copy to the clipboard, never read it', ()
       throw new Error('clipboard denied');
     });
     await expect(p.writeText('c', 'x')).rejects.toThrow('clipboard denied');
+  });
+});
+
+describe('vibrancyFor', () => {
+  it('the window blurs what is behind it unless Settings → Appearance → Blur is off', () => {
+    expect(vibrancyFor({ appearance: { blur: true } })).toBe('under-window');
+    expect(vibrancyFor({ appearance: {} })).toBe('under-window'); // (not known yet: the default)
+    expect(vibrancyFor({})).toBe('under-window');
+    expect(vibrancyFor({ appearance: { blur: false } })).toBeNull();
   });
 });

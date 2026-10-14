@@ -12,6 +12,8 @@ export interface JafferBridge {
   reveal(): Promise<void>;
   appInfo(): Promise<{ version: string; platform: string; dark: boolean; home: string; packaged: boolean; openAtLogin: boolean }>;
   setLoginItem(on: boolean): Promise<void>;
+  /** Focus mode (⌥⌘F): the app holds its notifications while it is on, and says in one line what it held when it ends. */
+  setFocusMode(on: boolean): Promise<void>;
   /** "Save output…": the app asks where (a save dialog) and writes the text there; nothing is kept. At most 32 MB. */
   saveText(text: string, name: string): Promise<{ saved: boolean }>;
   /** ⌘-click on a printed path: an absolute path that exists opens in the editor of Settings → Terminal, or is revealed in Finder; nothing runs. */
