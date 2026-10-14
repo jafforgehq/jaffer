@@ -139,7 +139,7 @@ export function CompanionPreview({ companion }: { companion: Companion }): VNode
 export function Pet(): VNode | null {
   const session = currentClaude();
   const live = session?.state;
-  const runningAgents = session ? session.subagents.filter((a) => a.status === 'running').sort((a, b) => a.startedAt - b.startedAt) : [];
+  const runningAgents = session && Array.isArray(session.subagents) ? session.subagents.filter((a) => a.status === 'running').sort((a, b) => a.startedAt - b.startedAt) : [];
   const running = runningAgents.length;
   const busy = info.value.busy ?? null;
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
 import { activePane, cfg, currentClaude, openOverlay, overlay, ready, appVersion, turnDone } from './state';
@@ -30,6 +30,20 @@ function glow(): string | undefined {
   return s === 'needs-you' ? 'needs' : s === 'working' ? 'work' : turnDone.value ? 'done' : undefined;
 }
 
+/** Writes `data-glow` on the stage from its own signals effect, so a claude.state push does not re-render the whole window. */
+function StageGlow(): null {
+  useLayoutEffect(() => {
+    const stage = document.querySelector<HTMLElement>('.stage');
+    return effect(() => {
+      const g = glow();
+      if (!stage) return;
+      if (g) stage.dataset.glow = g;
+      else delete stage.dataset.glow;
+    });
+  }, []);
+  return null;
+}
+
 export function App(): VNode | null {
   useEffect(() => effect(applyTheme), []);
   const off = useRef<(() => void) | null>(null);
@@ -56,7 +70,8 @@ export function App(): VNode | null {
   void appVersion.value;
   return (
     <div class="app">
-      <div class="stage" data-glow={glow()}>
+      <div class="stage">
+        <StageGlow />
         <TitleBar />
         <ToolStrip />
         <DaemonBanner />

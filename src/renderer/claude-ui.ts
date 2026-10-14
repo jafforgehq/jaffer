@@ -26,8 +26,15 @@ export function budgetLevel(todayUsd: number, budgetUsd: number): 'off' | 'ok' |
 /** The calls of the current turn by category. A background-agent turn without a prompt inherits the last prompt's calls: only those since the turn began count. */
 export function turnCounts(calls: ToolCall[] | undefined, turnStartedAt: number | undefined): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const c of Array.isArray(calls) ? calls : []) if (turnStartedAt === undefined || c.startedAt >= turnStartedAt) out[c.category] = (out[c.category] ?? 0) + 1;
+  for (const c of turnCalls(calls, turnStartedAt)) out[c.category] = (out[c.category] ?? 0) + 1;
   return out;
+}
+
+/** The calls of the current turn, odd entries (not a call with a name, a category and a start) left out. */
+export function turnCalls(calls: ToolCall[] | undefined, turnStartedAt: number | undefined): ToolCall[] {
+  return (Array.isArray(calls) ? calls : []).filter(
+    (c) => !!c && typeof c === 'object' && typeof c.name === 'string' && typeof c.category === 'string' && typeof c.startedAt === 'number' && (typeof turnStartedAt !== 'number' || c.startedAt >= turnStartedAt),
+  );
 }
 
 const WORDS: [string, string, string][] = [

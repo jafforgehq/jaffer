@@ -809,7 +809,13 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await page.$(`${ring}[data-progress]`)) === null, 4_000, 'no progress without a typical turn');
       expect(await cs('animationName')).toContain('spin');
       // compacting: dotted, and one toast for it (not one per push)
+      // a session first seen already compacting (or after a switch) says nothing: only a change says something
       const before = await toastCount('Claude is compacting its context');
+      await inject([{ ...base, id: 'ring-2', state: 'idle', compacting: true }]);
+      await until(async () => (await cs('borderTopStyle')) === 'dotted', 4_000, 'a dotted ring for the new session');
+      await sleep(300);
+      expect(await toastCount('Claude is compacting its context')).toBe(before);
+      await inject([{ ...base, state: 'idle' }]);
       await inject([{ ...base, state: 'idle', compacting: true }]);
       await until(async () => (await cs('borderTopStyle')) === 'dotted', 4_000, 'a dotted ring');
       await until(async () => (await toastCount('Claude is compacting its context')) === before + 1, 4_000, 'the compacting toast');
@@ -843,7 +849,7 @@ describe('Jaffer UI end to end', () => {
     await inject([{ id: 'strip-1', state: 'working', turnStartedAtAgo: 20_000, calls }]);
     await until(async () => (await page.locator(seg).count()) === 6, 4_000, 'six segments');
     expect(await page.$$eval(seg, (els) => els.map((e) => (e as HTMLElement).dataset.cat))).toEqual(['read', 'shell', 'write', 'web', 'agent', 'other']);
-    const bg = (i: number) => page.locator(seg).nth(i).evaluate((e) => getComputedStyle(e).backgroundColor);
+    const bg = (i: number) => page.locator(seg).nth(i).evaluate((e) => getComputedStyle(e, '::before').backgroundColor); // (the 2 px bar; the segment is its taller hover target)
     expect(await bg(0)).toBe(await token('--branch'));
     expect(await bg(1)).toBe(await token('--danger')); // the failed Bash
     expect(await bg(2)).toBe(await token('--accent'));
@@ -857,6 +863,8 @@ describe('Jaffer UI end to end', () => {
     const strip = (await page.locator('.tool-strip').boundingBox())!;
     expect(strip.height).toBe(2);
     expect((await page.locator('.workspace').boundingBox())!.y).toBe(work.y); // no layout shift
+    expect((await page.locator(seg).nth(1).boundingBox())!.height).toBeGreaterThanOrEqual(8); // easier to hover than 2 px, taking no room
+    expect(await page.locator(seg).nth(1).evaluate((e) => document.elementFromPoint(e.getBoundingClientRect().x + 3, e.getBoundingClientRect().bottom - 1) === e)).toBe(true);
     await shot('27-tool-strip');
     // the running call grows
     const grow = await w(5);
@@ -866,6 +874,15 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.locator('.tool-strip').count()) === 0, 4_000, 'the strip to go');
     await cfgPatch({ claude: { toolStrip: true } });
     await page.waitForSelector(seg);
+    // more calls than fit: the newest stay in view (the oldest give way), and odd entries are skipped
+    const many = Array.from({ length: 600 }, (_, n) => ({ name: `T${n}`, category: 'read', startAgo: 19_000 - n * 10, endAgo: 19_000 - n * 10 - 5 }));
+    await inject([{ id: 'strip-2', state: 'working', turnStartedAtAgo: 20_000, calls: many }]);
+    await until(async () => (await page.locator(seg).count()) === 600, 4_000, 'six hundred segments');
+    const box = (await page.locator('.tool-strip').boundingBox())!;
+    const last = (await page.locator(seg).last().boundingBox())!;
+    expect(Math.abs(last.x + last.width - (box.x + box.width))).toBeLessThan(1.5); // the newest at the right end
+    expect((await page.locator(seg).first().boundingBox())!.x).toBeLessThan(box.x); // the oldest pushed out on the left
+    expect(await page.locator(seg).last().evaluate((e) => document.elementFromPoint(e.getBoundingClientRect().x + 1, e.getBoundingClientRect().y + 4) === e)).toBe(true);
     // an ended session shows nothing
     await inject([{ id: 'strip-1', state: 'ended', turnStartedAtAgo: 20_000, calls }]);
     await until(async () => (await page.locator(seg).count()) === 0, 4_000, 'no segments for an ended session');
@@ -913,6 +930,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.session-pill .edit-chip svg').count()).toBe(1);
     await page.click('.session-pill .edit-chip');
     expect(await page.evaluate(() => (window as any).__revealed)).toEqual([file]);
+    expect(await page.getAttribute('.session-pill .edit-chip', 'title')).not.toMatch(/proj|src\//); // the name only; the full path goes to Finder alone
     await inject([{ id: 'edit-1', state: 'working', turnStartedAtAgo: 5_000 }]);
     await until(async () => (await page.locator('.session-pill .edit-chip').count()) === 0, 4_000, 'the chip to go when the edit is done');
     await inject([]);
@@ -1095,6 +1113,71 @@ describe('Jaffer UI end to end', () => {
     await shot('32-system-stats');
     await cfgPatch({ appearance: { systemStats: false } });
     await until(async () => (await page.locator(bars).count()) === 0, 4_000, 'the bars to go');
+    // numbers from before (or while it was off) are not shown when it is switched on again: only the next sample
+    await page.evaluate(() => (window as any).__stats(0.1, 0.1));
+    await cfgPatch({ appearance: { systemStats: true } });
+    await sleep(300);
+    expect(await page.locator(bars).count()).toBe(0);
+    await page.evaluate(() => (window as any).__stats(0.5, 0.5));
+    await page.waitForSelector(bars);
+    await cfgPatch({ appearance: { systemStats: false } });
+    await until(async () => (await page.locator(bars).count()) === 0, 4_000, 'the bars to go again');
+  }, 20_000);
+
+  it('the title bar: everything with a tooltip or a click is out of the window-drag region (macOS gives a drag region no hover), and the empty title bar still moves the window', async () => {
+    const region = (sel: string) => page.$eval(sel, (el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'));
+    const repo = path.join(env.userHome, 'drag-pill');
+    fs.mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+    fs.writeFileSync(path.join(repo, 'new.txt'), 'x');
+    await endClaude();
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await page.keyboard.type(`cd ${repo}`, { delay: 4 });
+    await page.keyboard.press('Enter');
+    await until(async () => (await textOf('.session-pill .git-stat')) === '?1', 10_000, 'the git counts');
+    await stubClaude();
+    await cfgPatch({ appearance: { systemStats: true } });
+    try {
+      await page.evaluate(() => (window as any).__stats(0.3, 0.3));
+      await inject([{ id: 'drag-1', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 'd1' }, notice: 'Claude needs your permission to use Bash', file: path.join(repo, 'new.txt'), cost: { usd: 0.1, at: 5 } }]);
+      await page.waitForSelector('.session-pill .needs-chip');
+      for (const sel of ['.session-pill .running', '.session-pill .running .run-dot', '.session-pill .needs-chip', '.session-pill .edit-chip', '.session-pill .git-stat', '.session-pill .cwd-box', '.titlebar .cost-wrap', '[data-cost-chip]', '.titlebar .sys-stats .stat-bar'])
+        expect(await region(sel), sel).toBe('no-drag');
+      for (const sel of ['.titlebar', '.tb-left', '.tb-center', '.session-pill', '.session-pill .live', '.session-pill .branch']) expect(await region(sel), sel).toBe('drag');
+    } finally {
+      await inject([]);
+      await cfgPatch({ appearance: { systemStats: false } });
+      await unstubClaude();
+      await page.keyboard.type('cd /tmp', { delay: 4 });
+      await page.keyboard.press('Enter');
+    }
+  }, 40_000);
+
+  it('odd claude.state objects (calls that are null, a cost without its last answer, a turn without times) show what they can and throw nothing', async () => {
+    const errors: string[] = [];
+    const onErr = (e: Error) => errors.push(e.message);
+    page.on('pageerror', onErr);
+    try {
+      await endClaude();
+      const n = await toastCount('Claude finished in');
+      await page.evaluate(() => {
+        const ev = (window as any).__event;
+        ev('claude.state', { sessions: [{ id: 'odd-1', state: 'working', calls: [null, 7, { name: 'Read' }, { name: 'Bash', category: 'shell', startedAt: Date.now() - 2000 }], cost: { totalUsd: 1, answers: 1, at: 3 }, subagents: [] }] });
+        ev('claude.state', { sessions: [{ id: 'odd-1', state: 'idle', calls: [null, 'x'], cost: { at: 4 }, subagents: [] }] });
+        ev('claude.state', { sessions: [{ id: 'odd-2', state: 'working', since: Date.now(), turnStartedAt: Date.now() - 60_000 }] });
+        ev('claude.state', { sessions: [{ id: 'odd-2', state: 'idle' }] }); // no since: no length to say
+        ev('claude.state', { sessions: [{ id: 'odd-3', state: 'working', since: Date.now() }] });
+        ev('claude.state', { sessions: [{ id: 'odd-3', state: 'idle', since: Date.now() }] }); // no turnStartedAt
+      });
+      await sleep(3500);
+      expect(await toastCount('Claude finished in')).toBe(n);
+      expect(await page.locator('.titlebar').count()).toBe(1);
+      expect(errors).toEqual([]);
+    } finally {
+      page.off('pageerror', onErr);
+      await inject([]);
+    }
   }, 20_000);
 
   it('Settings: system stats and the window glow under Appearance; live cost, the daily budget, the tool strip and the turn summary under Claude Code', async () => {
@@ -1124,6 +1207,17 @@ describe('Jaffer UI end to end', () => {
       await budget.fill('-3');
       await budget.press('Tab');
       await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.dailyBudgetUsd === 0, 8_000, 'a negative budget to be none');
+      await until(async () => (await budget.inputValue()) === '0', 4_000, 'the field to show 0');
+      await budget.fill('-5'); // the config stays 0: the field still shows what was kept
+      await budget.press('Tab');
+      await until(async () => (await budget.inputValue()) === '0', 4_000, 'the field to show 0 again');
+      await budget.fill('999999');
+      await budget.press('Tab');
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.dailyBudgetUsd === 100_000, 8_000, 'the budget capped');
+      await until(async () => (await budget.inputValue()) === '100000', 4_000, 'the field to show the cap');
+      await budget.fill('0');
+      await budget.press('Tab');
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.dailyBudgetUsd === 0, 8_000, 'no budget again');
       await shot('33-settings-claude');
     } finally {
       await page.keyboard.press('Escape');
@@ -1647,6 +1741,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.session-pill .port-chip', { timeout: 8_000 });
     expect(await page.textContent('.session-pill .port-chip')).toBe(':5173 ↗');
     await shot('23-port-chip');
+    expect(await page.$eval('.session-pill .port-chip', (el) => getComputedStyle(el).getPropertyValue('-webkit-app-region'))).toBe('no-drag');
     await page.click('.session-pill .port-chip');
     expect(await page.evaluate(() => (window as any).__opened)).toBe('http://localhost:5173');
     await page.waitForSelector('.session-pill .port-chip', { state: 'detached', timeout: 8_000 });

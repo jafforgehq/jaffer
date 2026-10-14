@@ -183,7 +183,7 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
   const p = s && seen?.id === s.id ? seen : null;
   seen = s;
   if (!s) return;
-  if (s.compacting && !p?.compacting) toast({ kind: 'info', text: 'Claude is compacting its context' });
+  if (p && s.compacting && !p.compacting) toast({ kind: 'info', text: 'Claude is compacting its context' });
   const asked = p?.tool?.name;
   if (p?.state === 'needs-you' && s.state === 'working' && asked) answered.set(`${s.id}\n${asked}`, timesAnswered(s.id, asked) + 1);
   const cost = s.cost && s.cost.at !== p?.cost?.at ? s.cost.last : undefined;
@@ -197,11 +197,12 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
 }
 
 function turnFinished(s: ClaudeSession, usd: number | undefined, costKnown: boolean): void {
-  const durMs = typeof s.turnStartedAt === 'number' ? Math.max(0, s.since - s.turnStartedAt) : 0;
-  turnHistory.value = [...turnHistory.value, { id: s.id, durMs, usd }].slice(-20);
   turnDone.value = true;
   clearTimeout(doneTimer);
   doneTimer = setTimeout(() => (turnDone.value = false), 1200);
+  const durMs = s.since - (s.turnStartedAt as number);
+  if (!Number.isFinite(durMs) || durMs < 0) return; // (no times to tell how long it took: nothing to say)
+  turnHistory.value = [...turnHistory.value, { id: s.id, durMs, usd }].slice(-20);
   if (pending) showSummary(undefined); // an earlier turn's summary still waiting: it goes as it is
   if (cfg.value?.claude?.turnSummary === false || durMs < 10_000) return;
   const counts = turnCounts(s.calls, s.turnStartedAt);
@@ -227,6 +228,9 @@ function showSummary(usd: number | undefined): void {
 
 /** CPU and memory in use (0..1), from the app every 5 s while Settings → Appearance → System stats is on. */
 export const systemStats = signal<{ cpu: number; mem: number } | null>(null);
+effect(() => {
+  if (cfg.value?.appearance?.systemStats !== true) systemStats.value = null; // switched on again, only a new sample shows
+});
 
 // ------------------------------------------------------------------ pty bus (consumed by terminal views)
 
@@ -292,7 +296,7 @@ export async function bootstrap(): Promise<void> {
       away = [];
     }
   });
-  j.onSystemStats?.((st) => (systemStats.value = st));
+  j.onSystemStats?.((st) => cfg.value?.appearance?.systemStats === true && (systemStats.value = st));
   const [config, app] = await Promise.all([j.call('config.get', {}), j.appInfo()]);
   batch(() => {
     cfg.value = config;

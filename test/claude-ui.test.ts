@@ -41,6 +41,7 @@ describe('the title bar’s Claude helpers (pure)', () => {
     expect(turnCounts(calls, 250)).toEqual({ write: 1, read: 1 });
     expect(turnCounts(calls, undefined)).toEqual({ read: 2, shell: 1, write: 1 });
     expect(turnCounts(undefined, 0)).toEqual({});
+    expect(turnCounts([null, 7, 'x', { name: 'Read' }, { name: 'Bash', category: 'shell', startedAt: 'soon' }, { name: 'Bash', category: 'shell', startedAt: 300 }] as never, 0)).toEqual({ shell: 1 }); // odd entries are skipped
   });
 
   it('sessionClockText: how long, how many turns, the cost only when given', () => {

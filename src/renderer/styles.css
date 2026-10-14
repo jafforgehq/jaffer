@@ -85,16 +85,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 @keyframes glow-pulse { 50% { opacity: 0.35; } }
 @keyframes glow-flash { to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .stage[data-glow]::after { display: none; } }
-/* the 2 px tool strip under the title bar: this turn's tool calls (its height is kept while it is empty: nothing moves when it fills) */
-.tool-strip { flex: none; height: 2px; display: flex; gap: 1px; margin: 0 var(--gap); overflow: hidden; }
-.tool-strip .ts-seg { position: relative; flex: 1 1 0; min-width: 2px; border-radius: 1px; background: var(--faint); }
-.tool-strip .ts-seg::after { content: ''; position: absolute; inset: -3px 0 -2px; } /* (an easier target to hover than 2 px) */
-.tool-strip .ts-seg[data-cat='shell'] { background: var(--info); }
-.tool-strip .ts-seg[data-cat='read'] { background: var(--branch); }
-.tool-strip .ts-seg[data-cat='write'] { background: var(--accent); }
-.tool-strip .ts-seg[data-cat='web'] { background: var(--violet); }
-.tool-strip .ts-seg[data-cat='agent'] { background: var(--ok); }
-.tool-strip .ts-seg[data-failed] { background: var(--danger); }
+/* the 2 px tool strip under the title bar: this turn's tool calls (its height is kept while it is empty: nothing moves when it fills).
+   The segments sit in an 8 px row centred on it (an easier target to hover, taking no room), aligned to the end: when they do not fit,
+   the oldest are pushed out on the left and the newest stay in view. Each segment's bar is its ::before. */
+.tool-strip { flex: none; height: 2px; margin: 0 var(--gap); position: relative; z-index: 31; }
+.tool-strip .ts-row { -webkit-app-region: no-drag; position: absolute; left: 0; right: 0; top: -3px; height: 8px; display: flex; justify-content: flex-end; gap: 1px; overflow: hidden; }
+.tool-strip .ts-seg { --seg: var(--faint); flex: 1 1 0; min-width: 2px; display: flex; align-items: center; }
+.tool-strip .ts-seg::before { content: ''; flex: 1; height: 2px; border-radius: 1px; background: var(--seg); }
+.tool-strip .ts-seg[data-cat='shell'] { --seg: var(--info); }
+.tool-strip .ts-seg[data-cat='read'] { --seg: var(--branch); }
+.tool-strip .ts-seg[data-cat='write'] { --seg: var(--accent); }
+.tool-strip .ts-seg[data-cat='web'] { --seg: var(--violet); }
+.tool-strip .ts-seg[data-cat='agent'] { --seg: var(--ok); }
+.tool-strip .ts-seg[data-failed] { --seg: var(--danger); }
 .workspace { flex: 1; min-height: 0; display: flex; gap: var(--gap); padding: 0 var(--gap) var(--gap) var(--gap); }
 .daemon-banner { background: var(--warn); color: #231a00; text-align: center; padding: 4px; font-size: 12px; font-weight: 600; }
 
@@ -102,6 +105,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 .titlebar { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 var(--gap) 0 14px; -webkit-app-region: drag; }
 body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the window has no sidebar to sit beside them */
 .titlebar button, .titlebar input { -webkit-app-region: no-drag; }
+/* On macOS a drag region gets no hover (no tooltip, no :hover) and no click: everything in the title bar that has a tooltip or a click
+   is taken out of it. The rest (the empty bar, the pill's own padding, the dot, the branch) still moves the window. */
+.session-pill .cwd-box, .session-pill .git-stat, .session-pill .running, .session-pill .needs-chip, .session-pill .edit-chip { -webkit-app-region: no-drag; }
 .tb-left, .tb-right { display: flex; align-items: center; gap: 4px; flex: none; }
 /* the pill is centred on the window itself (not on what is left between the traffic lights and the buttons on the right); both sides reserve the same room */
 .titlebar { position: relative; }

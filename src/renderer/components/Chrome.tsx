@@ -15,7 +15,7 @@ function shortPath(p: string): string {
 }
 
 /** The folder's name; when it changes, the old one slides out and the new one in (not with Animations off). */
-function FolderLabel({ text }: { text: string }): VNode {
+function FolderLabel({ text, title }: { text: string; title: string }): VNode {
   const prev = useRef(text);
   const [old, setOld] = useState<string | null>(null);
   const [moved, setMoved] = useState(false);
@@ -30,7 +30,7 @@ function FolderLabel({ text }: { text: string }): VNode {
     return () => clearTimeout(t);
   }, [text]);
   return (
-    <span class="cwd-box">
+    <span class="cwd-box" title={title}>
       {old !== null && (
         <span class="cwd-old" aria-hidden="true">
           {old}
@@ -69,13 +69,14 @@ function Spark({ values, label }: { values: number[]; label: string }): VNode | 
  */
 function CostChip({ s }: { s: ClaudeSession }): VNode | null {
   const c = cfg.value?.claude;
-  const cost = s.cost;
-  const live = c?.liveCost !== false && (s.state === 'working' || s.state === 'needs-you') ? s.live : undefined;
-  if (!cost && !live) return null;
+  const cost = s.cost && typeof s.cost === 'object' ? s.cost : undefined;
+  const l = cost?.last && typeof cost.last === 'object' ? cost.last : undefined;
+  const lv = c?.liveCost !== false && (s.state === 'working' || s.state === 'needs-you') ? s.live : undefined;
+  const live = lv && typeof lv === 'object' ? lv : undefined;
+  if (!l && !live) return null;
   const today = claudeToday.value;
   const budget = c?.dailyBudgetUsd ?? 0;
   const level = budgetLevel(today?.usd ?? 0, budget);
-  const l = cost?.last;
   const text = live
     ? live.usd !== undefined
       ? `≈ ${formatUsd(live.usd)} so far`
@@ -86,14 +87,14 @@ function CostChip({ s }: { s: ClaudeSession }): VNode | null {
   const lines = [
     live && `This answer so far ${live.usd !== undefined ? `≈ ${formatUsd(live.usd)}` : '(no price known for this model)'}: ${formatTokens(live.input)} in, ${formatTokens(live.output)} out`,
     l && `This answer ${l.usd !== undefined ? `≈ ${formatUsd(l.usd)}` : '(no price known for this model)'}: ${formatTokens(l.input + l.cacheWrite)} new in, ${formatTokens(l.cacheRead)} cached, ${formatTokens(l.output)} out`,
-    cost && `This session ${cost.partial ? 'at least ' : ''}≈ ${formatUsd(cost.totalUsd)} over ${cost.answers} answer${cost.answers === 1 ? '' : 's'}`,
+    cost && typeof cost.totalUsd === 'number' && `This session ${cost.partial ? 'at least ' : ''}≈ ${formatUsd(cost.totalUsd)} over ${cost.answers} answer${cost.answers === 1 ? '' : 's'}`,
     today && `Today ≈ ${formatUsd(today.usd)}${budget > 0 ? ` of ${formatUsd(budget)}` : ''}`,
     'An estimate at API list prices, from token counts: a subscription is not billed per token.',
   ].filter(Boolean) as string[];
   const hist = turnHistory.value;
   return (
     <span class="cost-wrap">
-      <span class={`cost-chip${level === 'warn' || level === 'danger' ? ` ${level}` : ''}`} key={live ? 'live' : cost!.at} data-cost-chip data-live={live ? '' : undefined}>
+      <span class={`cost-chip${level === 'warn' || level === 'danger' ? ` ${level}` : ''}`} key={live ? 'live' : cost?.at} data-cost-chip data-live={live ? '' : undefined}>
         {text}
       </span>
       <div class="cost-pop" role="tooltip">
@@ -117,10 +118,12 @@ function SystemStats(): VNode | null {
   const [bat, setBat] = useState<number | null>(null);
   useEffect(() => {
     let b: Battery | null = null;
-    const up = () => b && setBat(hasBattery(b) ? b.level : null);
+    let gone = false;
+    const up = () => !gone && b && setBat(hasBattery(b) ? b.level : null);
     void (navigator as unknown as { getBattery?: () => Promise<Battery> })
       .getBattery?.()
       .then((x) => {
+        if (gone) return; // (unmounted before the answer: nothing to listen to)
         b = x;
         up();
         b.addEventListener('levelchange', up);
@@ -128,6 +131,7 @@ function SystemStats(): VNode | null {
       })
       .catch(() => undefined);
     return () => {
+      gone = true;
       b?.removeEventListener('levelchange', up);
       b?.removeEventListener('chargingchange', up);
     };
@@ -173,9 +177,9 @@ export function TitleBar(): VNode {
     <div class="titlebar">
       <div class="tb-left" />
       <div class="tb-center">
-        <span class="session-pill" title={i.cwd}>
+        <span class="session-pill">
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
-          <FolderLabel text={shortPath(i.cwd) || 'Jaffer'} />
+          <FolderLabel text={shortPath(i.cwd) || 'Jaffer'} title={i.cwd} />
           {i.branch && (
             <>
               <span class="sep" />
@@ -210,7 +214,7 @@ export function TitleBar(): VNode {
             </>
           )}
           {file && (
-            <button class="edit-chip" title={`Claude is editing ${tildePath(file)}: click to show it in Finder`} onClick={() => void window.jaffer.revealPath(file).catch(() => undefined)}>
+            <button class="edit-chip" title={`Claude is editing ${baseName(file)}: click to show it in Finder`} onClick={() => void window.jaffer.revealPath(file).catch(() => undefined)}>
               <IconPencil size={11} />
               {baseName(file)}
             </button>
