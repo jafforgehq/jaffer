@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, nativeTheme, screen, session, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, Tray, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,12 @@ import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 import { editorUrl } from '../shared/editor-url';
 import { MENU_ITEMS } from '../shared/menu-spec';
 import { FocusHold, type HoldKind } from '../shared/focus-hold';
+import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
+import { RecentCommands } from '../shared/recent-commands';
+import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
+import type { DayTotal } from '../shared/claude-cost';
+import type { GitStatus } from '../core/session/git-status';
+import { TRAY_ICONS } from '../generated/tray-icons';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications, global hotkey), and it starts the terminal
@@ -99,9 +105,10 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     if (event === 'pty.command') {
       runningCommand = null;
       maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
+      recentCommands.add((data as { cmd?: unknown }).cmd as string);
     }
     if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
-    if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
+    if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[]; today?: DayTotal }).sessions, (data as { today?: DayTotal }).today);
     if (event === 'config.changed') applyConfig(data as typeof appCfg);
   });
   void c
@@ -119,6 +126,7 @@ async function startTerminal(): Promise<void> {
   client = o.client;
   runningCommand = null;
   prevClaude = []; // a fresh terminal has no Claude yet: nothing of the old one's may count (the quit question, "needs you")
+  syncTrayState(); // (nor the menu bar icon)
   wireClient(o.client, o);
   void o.exited.then((how) => onChildExit(o, how));
   await syncHotkey();
@@ -227,7 +235,13 @@ const focus = new FocusHold();
 let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
 /** The settings the main process acts on itself (kept current from the daemon's config.changed). */
-let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string }; appearance?: { systemStats?: boolean; blur?: boolean } } = {};
+let appCfg: {
+  notifications?: { claudeFinished?: boolean };
+  claude?: { showCost?: boolean };
+  terminal?: { editorUrl?: string };
+  appearance?: { systemStats?: boolean; blur?: boolean };
+  window?: { closeAction?: string; menuBar?: boolean; menuBarOnly?: boolean; menuBarTitle?: string; hintShown?: boolean };
+} = {};
 
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
 function applyConfig(next: typeof appCfg): void {
@@ -235,6 +249,7 @@ function applyConfig(next: typeof appCfg): void {
   appCfg = next;
   if (changed.systemStats) syncSystemStats();
   if (changed.blur) syncVibrancy();
+  syncMenuBar();
 }
 
 /** The window blurs what is behind it, or not (Settings → Appearance → Blur): at the window's creation and at every change. */
@@ -307,13 +322,15 @@ function claudeBusy(): boolean {
 }
 
 /** Claude, in the terminal, is waiting for the user and they are looking elsewhere. */
-function onClaudeState(sessions: ClaudeSession[]): void {
+function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
   finished.update(sessions);
   const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
   prevClaude = sessions;
+  claudeToday = today;
+  syncTrayState();
   if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
-  notify(n.title, n.body);
+  notify(n.title, n.body, 'needs-you'); // (not held again: focus mode returned above)
 }
 
 /** A long command finished while you were looking at something else. */
@@ -322,12 +339,18 @@ function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number
   if (n) notify(n.title, n.body, c.exit === 0 ? 'command' : 'failed');
 }
 
-/** Shows a notification, unless it is of a `kind` focus mode holds (a notification of no kind, the update prompt's, is always shown). */
+/**
+ * Shows a notification, unless it is of a `kind` focus mode holds (a notification of no kind, the update prompt's, is always shown).
+ * "Claude needs you" and "Claude finished" also get a Show button; it and a click on the notification bring the window back, also from
+ * the menu bar.
+ */
 function notify(title: string, body: string, kind?: HoldKind): void {
   if (kind && focus.hold(kind)) return;
   if (!Notification.isSupported()) return;
-  const note = new Notification({ title, body: body.slice(0, 240) });
+  const withShow = kind === 'needs-you' || kind === 'finished';
+  const note = new Notification({ title, body: body.slice(0, 240), ...(withShow ? { actions: [{ type: 'button' as const, text: 'Show' }] } : {}) });
   note.on('click', () => showWindow());
+  if (withShow) note.on('action', () => showWindow());
   note.show();
 }
 
@@ -496,11 +519,12 @@ function createWindow(): void {
   win.on('move', debounce(save, 400));
   win.on('focus', () => sendToRenderer('jaffer:focus', true));
   win.on('blur', () => sendToRenderer('jaffer:focus', false));
-  // Closing the window (⌘W) hides it: the terminal runs on while the app does, the hotkey brings it back, and ⌘Q is the way out.
+  // Closing the window (the red ✕, ⌘W) does what Settings say (`closeWindow`): by default it hides, and the terminal runs on while the
+  // app does; the menu bar icon, the hotkey and the Dock bring it back, and Quit Jaffer is the way out.
   win.on('close', (e) => {
     if (!quitting && process.platform === 'darwin') {
       e.preventDefault();
-      win?.hide();
+      closeWindow();
     }
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -518,18 +542,84 @@ function createWindow(): void {
 }
 
 function showWindow(): void {
+  cancelHide?.();
   if (!win || win.isDestroyed()) createWindow();
   else {
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
   }
-  app.dock?.show();
+  if (!dockHidden) app.dock?.show(); // (Settings → Only in the menu bar keeps the Dock icon away)
 }
 
+/** The hotkey and a click on the menu bar icon: a window in front hides, any other is shown. */
 function toggleWindow(): void {
-  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) win.hide();
+  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) hideWindow();
   else showWindow();
+}
+
+/** A hide that waits for the window to leave full screen; showing the window again calls it off. */
+let cancelHide: (() => void) | null = null;
+
+/**
+ * Hides the window. One in full screen leaves it first (hidden in full screen it would leave an empty Space with nothing to click):
+ * macOS animates that, so it hides once it has left, or after 2 s if the event never comes. `hint`: a close (✕, ⌘W), whose first
+ * hide says where Jaffer went.
+ */
+function hideWindow(hint = false): void {
+  const w = win;
+  if (!w || w.isDestroyed()) return;
+  if (hint) maybeHideHint();
+  cancelHide?.();
+  if (!w.isFullScreen()) return w.hide();
+  const done = () => {
+    cancelHide?.();
+    if (!w.isDestroyed()) w.hide();
+  };
+  const timer = setTimeout(done, 2_000);
+  w.once('leave-full-screen', done);
+  cancelHide = () => {
+    clearTimeout(timer);
+    w.removeListener('leave-full-screen', done);
+    cancelHide = null;
+  };
+  w.setFullScreen(false);
+}
+
+/** The red ✕ and ⌘W (Settings → When I close the window: hide to the menu bar, quit, or ask). */
+function closeWindow(): void {
+  const d = closeDecision({ action: appCfg.window?.closeAction ?? 'menubar', fullScreen: !!win?.isFullScreen(), menuBar: !!tray, running: claudeBusy() || runningCommand !== null });
+  if (d === 'quit') quitFromMenu();
+  else if (d === 'ask') void askOnClose();
+  else hideWindow(true); // ('hide', or 'leave-full-screen-then-hide': hideWindow leaves full screen first)
+}
+
+let askingToClose = false;
+/** Hide to Menu Bar, Quit Jaffer or Cancel (the default: Return and Esc leave the window where it is). */
+async function askOnClose(): Promise<void> {
+  if (askingToClose || !win || win.isDestroyed()) return;
+  askingToClose = true;
+  try {
+    const r = await dialog.showMessageBox(win, { type: 'question', message: CLOSE_ASK.message, detail: CLOSE_ASK.detail, buttons: [...CLOSE_ASK.buttons], defaultId: CLOSE_ASK.defaultId, cancelId: CLOSE_ASK.cancelId });
+    if (r.response === 0) hideWindow(true);
+    else if (r.response === 1) quitFromMenu();
+  } finally {
+    askingToClose = false;
+  }
+}
+
+/** The first time the window hides while the menu bar icon is there: one notification says where Jaffer went (`window.hintShown`). */
+function maybeHideHint(): void {
+  if (!tray || appCfg.window?.hintShown === true) return;
+  appCfg = { ...appCfg, window: { ...appCfg.window, hintShown: true } }; // (at once: a second close before the daemon answers says nothing)
+  notify(HIDE_HINT.title, HIDE_HINT.body);
+  void client?.call('config.patch', { window: { hintShown: true } }).catch(() => undefined);
+}
+
+/** The menu's Quit Jaffer (⌘Q), the menu bar's, and a close set to quit: the one quit that may ask first (see before-quit). */
+function quitFromMenu(): void {
+  askOnQuit = true;
+  app.quit();
 }
 
 async function syncHotkey(): Promise<void> {
@@ -567,14 +657,7 @@ function buildMenu(): void {
         { type: 'separator' },
         // ⌘Q ends the terminal and asks first when something runs (before-quit). Not `role: 'quit'`: only this item marks its quit as
         // one that may ask; a quit the system starts (logout, restart, shut down, the Dock's Quit) must never wait on a question.
-        {
-          label: 'Quit Jaffer',
-          accelerator: 'Cmd+Q',
-          click: () => {
-            askOnQuit = true;
-            app.quit();
-          },
-        },
+        { label: 'Quit Jaffer', accelerator: 'Cmd+Q', click: quitFromMenu },
       ],
     },
     {
@@ -623,6 +706,129 @@ function buildMenu(): void {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// ---------------------------------------------------------------- the menu bar item (Settings → Show Jaffer in the menu bar)
+
+let tray: Tray | null = null;
+let trayPlayer: TrayIconPlayer | null = null;
+/** The Dock icon is hidden (Settings → Only in the menu bar, which needs the menu bar icon). */
+let dockHidden = false;
+/** What the answers finished today cost, from the daemon's `claude.state` (for the menu bar text). */
+let claudeToday: DayTotal | undefined;
+/** The last five commands that finished, for the menu (memory only; never a sensitive one). */
+const recentCommands = new RecentCommands();
+/** Ticks the menu bar text every second, only while it shows the running turn's time and a turn runs. */
+let titleTimer: NodeJS.Timeout | null = null;
+const trayImages = new Map<TrayFrame, Electron.NativeImage>();
+
+/** A frame of the icon, a template image (macOS tints it for the menu bar) at 1x and 2x. Throws when it cannot be made. */
+function trayImage(frame: TrayFrame): Electron.NativeImage {
+  let img = trayImages.get(frame);
+  if (!img) {
+    img = nativeImage.createEmpty();
+    img.addRepresentation({ scaleFactor: 1, dataURL: `data:image/png;base64,${TRAY_ICONS[frame].x1}` });
+    img.addRepresentation({ scaleFactor: 2, dataURL: `data:image/png;base64,${TRAY_ICONS[frame].x2}` });
+    if (img.isEmpty()) throw new Error(`tray icon ${frame} did not load`);
+    img.setTemplateImage(true);
+    trayImages.set(frame, img);
+  }
+  return img;
+}
+
+/** The icon is there while the setting is on (and not while the app quits); the Dock icon follows; the icon and its text show the state. */
+function syncMenuBar(): void {
+  const want = appCfg.window?.menuBar !== false && !quitting;
+  if (want && !tray) {
+    try {
+      tray = new Tray(trayImage('idle'));
+      tray.setToolTip('Jaffer');
+      tray.on('click', () => toggleWindow());
+      tray.on('right-click', (e) => void openTrayMenu(!!e.altKey).catch(() => undefined));
+      trayPlayer = new TrayIconPlayer({
+        show: (f) => {
+          try {
+            tray?.setImage(trayImage(f));
+          } catch {
+            /* the frame before stays */
+          }
+        },
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (x) => clearTimeout(x as NodeJS.Timeout),
+      });
+    } catch {
+      destroyTray(); // (no icon, no crash: the window and the Dock work as before)
+    }
+  } else if (!want && tray) destroyTray();
+  syncTrayState();
+  syncDock();
+}
+
+function destroyTray(): void {
+  trayPlayer?.destroy();
+  trayPlayer = null;
+  if (titleTimer) clearInterval(titleTimer);
+  titleTimer = null;
+  tray?.destroy();
+  tray = null;
+}
+
+/** Only in the menu bar hides the Dock icon, and only while the menu bar icon is there to come back to. */
+function syncDock(): void {
+  const hide = !!tray && appCfg.window?.menuBarOnly === true;
+  if (hide === dockHidden || !app.dock) return;
+  dockHidden = hide;
+  if (hide) app.dock.hide();
+  else void app.dock.show();
+}
+
+/** The icon (idle, working, alert) and the text beside it, from the last `claude.state`. */
+function syncTrayState(): void {
+  if (!tray) return;
+  trayPlayer?.set(trayState(prevClaude));
+  syncTrayTitle();
+}
+
+function syncTrayTitle(): void {
+  const mode = (appCfg.window?.menuBarTitle ?? 'off') as MenuBarTitle;
+  tray?.setTitle(trayTitle(mode, { sessions: prevClaude, today: claudeToday, now: Date.now(), showCost: appCfg.claude?.showCost !== false }), { fontType: 'monospacedDigit' });
+  const tick = !!tray && mode === 'time' && trayState(prevClaude) !== 'idle';
+  if (tick && !titleTimer) titleTimer = setInterval(syncTrayTitle, 1_000);
+  else if (!tick && titleTimer) {
+    clearInterval(titleTimer);
+    titleTimer = null;
+  }
+}
+
+/** The menu, built when it opens (so its status lines are current); with ⌥ held, more lines (and the repository's counts). */
+async function openTrayMenu(alt: boolean): Promise<void> {
+  if (!tray) return;
+  const git = alt ? await client?.call<{ git?: GitStatus }>('session.info', {}, 1_000).then((i) => i?.git).catch(() => undefined) : undefined;
+  if (!tray) return;
+  const visible = !!win && !win.isDestroyed() && win.isVisible();
+  const recent = recentCommands.list();
+  const template: MenuItemConstructorOptions[] = [
+    ...trayMenuLines(prevClaude, Date.now(), { alt, showCost: appCfg.claude?.showCost !== false, git }).map((label) => ({ label, click: () => showWindow() })),
+    { type: 'separator' },
+    visible ? { label: 'Hide Jaffer', click: () => hideWindow() } : { label: 'Show Jaffer', click: () => showWindow() },
+    {
+      label: 'Recent Commands',
+      // a click copies the command (nothing is typed): paste it in the terminal
+      submenu: recent.length ? recent.map((c) => ({ label: c.label, click: () => clipboard.writeText(c.raw) })) : [{ label: 'No commands yet', enabled: false }],
+    },
+    { label: 'Past Conversations', submenu: [{ label: 'Loading…', enabled: false }] },
+    { label: 'Focus Mode', type: 'checkbox', checked: focus.active, click: () => sendToRenderer('jaffer:menu', 'focus-mode') },
+    {
+      label: 'Settings…',
+      click: () => {
+        showWindow();
+        sendToRenderer('jaffer:menu', 'settings');
+      },
+    },
+    { type: 'separator' },
+    { label: 'Quit Jaffer', click: quitFromMenu },
+  ];
+  tray.popUpContextMenu(Menu.buildFromTemplate(template));
 }
 
 // ---------------------------------------------------------------- ipc
@@ -862,6 +1068,7 @@ async function confirmQuit(ask: QuitAsk): Promise<void> {
 // The app's last step: its child is told to end (its pipe ends), given QUIT_WAIT_MS, then killed; then the app exits.
 app.on('will-quit', (e) => {
   globalShortcut.unregisterAll();
+  destroyTray();
   const o = owned;
   if (childStopped || !o || o.ended) return;
   e.preventDefault();

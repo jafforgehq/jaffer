@@ -1303,6 +1303,54 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
+  it('Settings → Appearance → Window: what closing does, the menu bar icon, menu bar only (needs the icon) and the menu bar text, each written to window.*', async () => {
+    const win = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).window;
+    const field = (label: string) => page.locator('label.field', { hasText: label });
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    try {
+      expect(await win()).toEqual({ closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false });
+      const close = field('When I close the window').locator('select');
+      expect(await close.inputValue()).toBe('menubar');
+      expect(await close.locator('option').allTextContents()).toEqual(['Hide to the menu bar', 'Quit Jaffer', 'Ask']);
+      await close.selectOption('ask');
+      await until(async () => (await win()).closeAction === 'ask', 5_000, 'closeAction ask');
+      await close.selectOption('quit');
+      await until(async () => (await win()).closeAction === 'quit', 5_000, 'closeAction quit');
+      await close.selectOption('menubar');
+      await until(async () => (await win()).closeAction === 'menubar', 5_000, 'closeAction back to menubar');
+
+      const title = field('Menu bar text').locator('select');
+      expect(await title.locator('option').allTextContents()).toEqual(['Nothing', 'This session’s cost', 'Running turn', 'Today’s cost']);
+      for (const v of ['cost', 'time', 'today', 'off']) {
+        await title.selectOption(v);
+        await until(async () => (await win()).menuBarTitle === v, 5_000, `menuBarTitle ${v}`);
+      }
+
+      const menuBar = field('Show Jaffer in the menu bar');
+      const only = field('Only in the menu bar');
+      expect(await menuBar.locator('input').isChecked()).toBe(true);
+      expect(await only.locator('input').isDisabled()).toBe(false);
+      await only.locator('.switch').click();
+      await until(async () => (await win()).menuBarOnly === true, 5_000, 'menu bar only on');
+      // the icon off: menu bar only cannot be on without it (the switch shows off and is disabled; the Dock icon comes back)
+      await menuBar.locator('.switch').click();
+      await until(async () => (await win()).menuBar === false, 5_000, 'the menu bar icon off');
+      await until(async () => only.locator('input').isDisabled(), 5_000, 'menu bar only disabled');
+      expect(await only.locator('input').isChecked()).toBe(false);
+      await menuBar.locator('.switch').click();
+      await until(async () => (await win()).menuBar === true, 5_000, 'the menu bar icon on again');
+      await until(async () => !(await only.locator('input').isDisabled()), 5_000, 'menu bar only enabled again');
+      await only.locator('.switch').click();
+      await until(async () => (await win()).menuBarOnly === false, 5_000, 'menu bar only off');
+      expect((await win()).hintShown).toBe(false); // (the main process sets it, the first time the window hides)
+    } finally {
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    }
+  }, 60_000);
+
   it('a program in the terminal can put text on the clipboard (OSC 52) but never read what you copied', async () => {
     await page.evaluate(() => {
       const clip = { reads: 0, written: [] as string[] };

@@ -344,3 +344,23 @@ describe('appearance.autoTheme, appearance.lightTheme and appearance.blur', () =
     expect(new ConfigStore(env.paths).get().appearance).toMatchObject({ autoTheme: 'time', lightTheme: 'nord', blur: false });
   });
 });
+
+describe('window: the close button and the menu bar item (1.0.1)', () => {
+  const WINDOW_DEFAULTS = { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false };
+
+  it('defaults to hide to the menu bar, the item on, the Dock icon kept, no title text and no hint shown yet, also for a config file saved before it existed', () => {
+    expect(DEFAULT_CONFIG.window).toEqual(WINDOW_DEFAULTS);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'nord' } }));
+    expect(new ConfigStore(env.paths).get().window).toEqual(WINDOW_DEFAULTS);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ window: 'menubar' }));
+    expect(new ConfigStore(env.paths).get().window).toEqual(WINDOW_DEFAULTS);
+  });
+
+  it('a choice is kept, and a value of the wrong kind leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    const chosen = { closeAction: 'ask', menuBar: false, menuBarOnly: true, menuBarTitle: 'today', hintShown: true };
+    store.patch({ window: chosen } as never);
+    store.patch({ window: { closeAction: 1, menuBar: 'yes', menuBarOnly: null, menuBarTitle: false, hintShown: 0 } } as never);
+    expect(new ConfigStore(env.paths).get().window).toEqual(chosen);
+  });
+});

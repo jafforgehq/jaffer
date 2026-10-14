@@ -556,6 +556,28 @@ export function Settings(): VNode {
                   }}
                 />
               </Field>
+              <h4>Window</h4>
+              <Field label="When I close the window" hint="the red button and ⌘W. A hidden window keeps the terminal running: the menu bar icon, the hotkey or the Dock bring it back. Ask needs the menu bar icon">
+                <select value={c.window?.closeAction ?? 'menubar'} onChange={(e) => set({ window: { closeAction: (e.target as HTMLSelectElement).value } })}>
+                  <option value="menubar">Hide to the menu bar</option>
+                  <option value="quit">Quit Jaffer</option>
+                  <option value="ask">Ask</option>
+                </select>
+              </Field>
+              <Field label="Show Jaffer in the menu bar" hint="an icon that shows what Claude is doing: click it to show or hide the window, right-click it for a menu (hold ⌥ for more)">
+                <Switch checked={c.window?.menuBar !== false} onChange={(v) => set({ window: { menuBar: v } })} />
+              </Field>
+              <Field label="Only in the menu bar (hide the Dock icon)" hint="needs the menu bar icon; quit from its menu">
+                <Switch checked={c.window?.menuBarOnly === true && c.window?.menuBar !== false} disabled={c.window?.menuBar === false} onChange={(v) => set({ window: { menuBarOnly: v } })} />
+              </Field>
+              <Field label="Menu bar text" hint="beside the icon. The costs are estimates and need “Show what each answer cost” (Claude Code)">
+                <select value={c.window?.menuBarTitle ?? 'off'} onChange={(e) => set({ window: { menuBarTitle: (e.target as HTMLSelectElement).value } })}>
+                  <option value="off">Nothing</option>
+                  <option value="cost">This session’s cost</option>
+                  <option value="time">Running turn</option>
+                  <option value="today">Today’s cost</option>
+                </select>
+              </Field>
             </>
           )}
 

@@ -25,6 +25,7 @@
     "daemon": "node dist/daemon/jafferd.cjs",
     "cli": "node dist/cli/jaffer.cjs",
     "gen": "node scripts/gen-shell.mjs",
+    "gen:tray": "node scripts/gen-tray-icons.mjs",
     "icon": "node scripts/make-icon.mjs",
     "smoke": "JAFFER_SMOKE=1 electron .",
     "screenshots": "JAFFER_SCREENSHOTS=docs/screenshots vitest run --config vitest.e2e.config.ts test/e2e/screenshots.test.ts"

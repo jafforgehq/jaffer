@@ -76,6 +76,19 @@ export interface JafferConfig {
     /** Keep the Mac from idle sleep while Claude works (and while a long command runs). Takes no admin rights and lets go when the work stops. */
     stayAwake: boolean;
   };
+  /** The window's close button and the menu bar item. */
+  window: {
+    /** What the red ✕ (and ⌘W) does: hide the window to the menu bar, quit (asking first when something runs), or ask. */
+    closeAction: 'menubar' | 'quit' | 'ask';
+    /** An icon in the menu bar: Claude's state, a click shows or hides the window, a menu. */
+    menuBar: boolean;
+    /** No Dock icon: Jaffer lives in the menu bar only (only with `menuBar`). */
+    menuBarOnly: boolean;
+    /** Text beside the menu bar icon: nothing, this session's cost, the running turn's time, or today's cost (the costs only with `claude.showCost`). */
+    menuBarTitle: 'off' | 'cost' | 'time' | 'today';
+    /** The one notification that says Jaffer is still running in the menu bar, the first time the window hides, was shown. */
+    hintShown: boolean;
+  };
   hotkey: string;
   /**
    * The one-time clean-up of a Mac an older Jaffer ran on (`core/migrate.ts`) has run (1). It runs at the app's start while this is 0, and
@@ -112,6 +125,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   updates: { auto: true },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
+  window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false },
   hotkey: 'Control+`',
   migrated: 0,
 };
