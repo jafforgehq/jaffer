@@ -364,3 +364,20 @@ describe('window: the close button and the menu bar item (1.0.1)', () => {
     expect(new ConfigStore(env.paths).get().window).toEqual(chosen);
   });
 });
+
+describe('panel: the side panel (1.1.0)', () => {
+  it('is open and 300 px wide by default, also for a config file saved before it existed', () => {
+    expect(DEFAULT_CONFIG.panel).toEqual({ open: true, width: 300 });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'nord' } }));
+    expect(new ConfigStore(env.paths).get().panel).toEqual({ open: true, width: 300 });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ panel: 'open' }));
+    expect(new ConfigStore(env.paths).get().panel).toEqual({ open: true, width: 300 });
+  });
+
+  it('a choice is kept, and a value of the wrong kind leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ panel: { open: false, width: 410 } });
+    store.patch({ panel: { open: 'yes', width: '200' } } as never);
+    expect(new ConfigStore(env.paths).get().panel).toEqual({ open: false, width: 410 });
+  });
+});

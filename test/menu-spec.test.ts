@@ -43,6 +43,13 @@ describe('the menu and the palette agree', () => {
     expect(/\{ role: 'hideOthers'[^}]*\}/.exec(main)?.[0] ?? '').not.toContain('accelerator'); // (the role keeps macOS's own ⌥⌘H)
   });
 
+  it('the side panel is ⌘B in the palette and the View menu (Toggle Side Panel)', () => {
+    expect(MENU_ITEMS['toggle-panel']).toEqual({ label: 'Toggle Side Panel', accelerator: 'Cmd+B' });
+    expect(actions.find((a) => a.id === 'toggle-panel')?.keys).toBe('⌘B');
+    const main = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
+    expect(/label: 'View',\s*submenu: \[[^\]]*item\('toggle-panel'\)/.test(main)).toBe(true);
+  });
+
   it('no accelerator is used twice, and none takes ⌃⌘F (Full Screen) or ⌘Q', () => {
     const all = [...Object.values(MENU_ITEMS).map((i) => i.accelerator), 'Cmd+Q', TOGGLE_FULLSCREEN].filter(Boolean);
     expect(all.length).toBeGreaterThan(15);

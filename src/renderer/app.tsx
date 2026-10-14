@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, activeTheme, cfg, currentClaude, focusMode, hour, openOverlay, overlay, ready, appVersion, systemDark, turnDone } from './state';
+import { activePane, activeTheme, cfg, currentClaude, focusMode, hour, openOverlay, overlay, ready, appVersion, systemDark, togglePanel, turnDone } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
 import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { ToolStrip } from './components/ToolStrip';
+import { SidePanel } from './components/SidePanel';
 import { FindBar, Onboarding, Palette, PasteBar, PastConversations, Pins, RecentCommands, Settings } from './components/Overlays';
 import { BlockMenu, StickyHeader } from './components/Blocks';
 import { cssVars, windowOpacity } from './themes';
@@ -85,6 +86,7 @@ export function App(): VNode | null {
       if (k === 'p' && !e.shiftKey) (e.preventDefault(), overlay.value === 'palette' ? (overlay.value = null) : openOverlay('palette'));
       else if (k === ',') (e.preventDefault(), openOverlay('settings'));
       else if (k === 'f' && !e.shiftKey) (e.preventDefault(), openOverlay('find'));
+      else if (k === 'b' && !e.shiftKey) (e.preventDefault(), togglePanel());
     };
     window.addEventListener('keydown', key);
     return () => {
@@ -112,6 +114,7 @@ export function App(): VNode | null {
             <PasteBar />
             {overlay.value === 'find' && <FindBar />}
           </div>
+          <SidePanel />
         </div>
       </div>
       <BlockMenu />

@@ -89,6 +89,12 @@ export interface JafferConfig {
     /** The one notification that says Jaffer is still running in the menu bar, the first time the window hides, was shown. */
     hintShown: boolean;
   };
+  /** The side panel at the right of the terminal (⌘B): the live Claude status and past conversations. */
+  panel: {
+    open: boolean;
+    /** Its width in px (the window keeps it to 220..480). */
+    width: number;
+  };
   hotkey: string;
   /**
    * The one-time clean-up of a Mac an older Jaffer ran on (`core/migrate.ts`) has run (1). It runs at the app's start while this is 0, and
@@ -126,6 +132,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false },
+  panel: { open: true, width: 300 },
   hotkey: 'Control+`',
   migrated: 0,
 };

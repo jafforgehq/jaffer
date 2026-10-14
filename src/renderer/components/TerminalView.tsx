@@ -10,7 +10,7 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, activeTheme, cfg, firstLine, homeDir, info, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, activeTheme, cfg, firstLine, homeDir, info, layoutHold, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
 import { redactText } from '../../shared/redact';
@@ -260,8 +260,8 @@ export function TerminalView({ pane }: { pane: string }) {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => void call('pty.resize', { pane, cols, rows }).catch(() => undefined), 50);
     });
-    const ro = new ResizeObserver(() => {
-      if (el.clientWidth > 20 && el.clientHeight > 20) {
+    const refit = () => {
+      if (el.clientWidth > 20 && el.clientHeight > 20 && !layoutHold.value) {
         try {
           fit.fit();
           placeRuler();
@@ -269,8 +269,11 @@ export function TerminalView({ pane }: { pane: string }) {
           /* detached */
         }
       }
-    });
+    };
+    const ro = new ResizeObserver(refit);
     ro.observe(el);
+    // while the side panel's edge is dragged the terminal keeps its size; let go, it fits once (one pty.resize, not one per pixel)
+    const stopHold = effect(() => void (!layoutHold.value && requestAnimationFrame(refit)));
 
     // macOS editing conventions and Claude Code's multi-line input.
     term.attachCustomKeyEventHandler((ev) => {
@@ -357,6 +360,7 @@ export function TerminalView({ pane }: { pane: string }) {
       disposed = true;
       stop();
       stopFocus();
+      stopHold();
       off();
       ro.disconnect();
       el.removeEventListener('drop', onDrop);

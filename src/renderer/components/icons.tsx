@@ -94,3 +94,9 @@ export const IconPencil = ({ size, class: c }: P): VNode => (
     <path d="M13.5 6.5l4 4" />
   </svg>
 );
+export const IconSidebar = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M15 4v16" />
+  </svg>
+);

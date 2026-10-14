@@ -589,6 +589,9 @@ export function Settings(): VNode {
               <Field label="System stats in the title bar" hint="small bars for CPU, memory and battery, refreshed every 5 seconds while this is on">
                 <Switch checked={c.appearance.systemStats === true} onChange={(v) => set({ appearance: { systemStats: v } })} />
               </Field>
+              <Field label="Show the side panel" hint="what Claude is doing now and your past conversations, at the right of the terminal (⌘B)">
+                <Switch checked={c.panel?.open !== false} onChange={(v) => set({ panel: { open: v } })} />
+              </Field>
               <Field label="Animations" hint="a little life while Claude works. Also off when macOS Reduce motion is on">
                 <Switch checked={c.appearance.animations !== false} onChange={(v) => set({ appearance: { animations: v } })} />
               </Field>

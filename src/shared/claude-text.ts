@@ -34,11 +34,11 @@ const WORDS: [string, string, string][] = [
   ['other', 'other', 'other'],
 ];
 
-/** "3 reads, 2 edits, 1 shell" (kinds with no call left out); '' for none. */
-export function countsText(counts: Record<string, number>): string {
+/** "3 reads, 2 edits, 1 shell" (kinds with no call left out; the side panel joins them with ` · `); '' for none. */
+export function countsText(counts: Record<string, number>, sep = ', '): string {
   return WORDS.filter(([k]) => counts[k]! > 0)
     .map(([k, one, many]) => `${counts[k]} ${counts[k] === 1 ? one : many}`)
-    .join(', ');
+    .join(sep);
 }
 
 /** `+2 ~3 ?1 ↑1 ↓0` with the zeros left out; '' for no repository. */

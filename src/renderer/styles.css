@@ -74,10 +74,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 
 /* Settings → Appearance → Follow macOS / time of day: the big surfaces fade into the other theme (app.tsx adds .theme-fade for a second; Reduce motion shortens it to nothing) */
-:root.theme-fade body, :root.theme-fade .stage, :root.theme-fade .titlebar, :root.theme-fade .terminal-area { transition: background-color 1s ease, color 1s ease, border-color 1s ease; }
+:root.theme-fade body, :root.theme-fade .stage, :root.theme-fade .titlebar, :root.theme-fade .terminal-area, :root.theme-fade .side-panel { transition: background-color 1s ease, color 1s ease, border-color 1s ease; }
 /* Focus mode (⌥⌘F): the title bar, the tool strip, the pinned lines and the companion fade; the terminal stays as it is */
-.app[data-focus='1'] :is(.titlebar, .tool-strip, .pins, .pet-corner) { opacity: 0.15; }
-:root:not([data-motion='off']) .app :is(.titlebar, .tool-strip, .pins, .pet-corner) { transition: opacity 0.25s ease; }
+.app[data-focus='1'] :is(.titlebar, .tool-strip, .pins, .pet-corner, .side-panel) { opacity: 0.15; }
+:root:not([data-motion='off']) .app :is(.titlebar, .tool-strip, .pins, .pet-corner, .side-panel) { transition: opacity 0.25s ease; }
 
 /* ============================================================== layout */
 .app { display: flex; height: 100%; }
@@ -194,6 +194,44 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .terminal-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
+
+/* ---------- the side panel (⌘B): a column at the right of the terminal card, in the card's look ---------- */
+.side-panel {
+  flex: none; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: 0 0 0 0.5px var(--ring), var(--shadow-sm);
+}
+/* it slides in and out (its layout width changes at once, so the terminal fits once) */
+:root:not([data-motion='off']) .side-panel[data-anim='in'] { animation: panel-in 0.18s ease-out; }
+:root:not([data-motion='off']) .side-panel[data-anim='out'] { animation: panel-out 0.18s ease-in forwards; }
+@keyframes panel-in { from { opacity: 0; transform: translateX(14px); } }
+@keyframes panel-out { to { opacity: 0; transform: translateX(14px); } }
+/* its left edge: a 6 px handle in the gap beside the card */
+.sp-handle { position: absolute; top: 10px; bottom: 10px; left: calc(-1px - var(--gap) / 2 - 3px); width: 6px; cursor: col-resize; z-index: 2; border-radius: 3px; }
+.sp-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; border-radius: 1px; background: transparent; transition: background 0.12s; }
+.sp-handle:hover::after, .sp-handle[data-drag]::after, .sp-handle:focus-visible::after { background: var(--accent-line); }
+.sp-handle:focus-visible { outline: none; }
+.sp-convos { flex: 1; min-height: 0; }
+
+.now-card { flex: none; margin: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.now-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 550; font-size: 12.5px; }
+.now-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
+.now-card[data-state='working'] .now-dot { background: var(--ok); }
+.now-card[data-state='needs-you'] .now-dot { background: var(--warn); }
+.now-card[data-state='off'] .now-dot { background: transparent; border: 1px solid var(--faint); }
+.now-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-elapsed, .now-cost, .now-today { font-variant-numeric: tabular-nums; }
+.now-elapsed { color: var(--muted); font-weight: 400; }
+.now-tool { font: 11.5px var(--font-mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-hint, .now-cost[data-live] { color: var(--faint); }
+.now-progress, .now-budget { position: relative; height: 3px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.now-progress i, .now-budget i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--ok); }
+.now-today { display: flex; flex-direction: column; gap: 4px; }
+.now-today[data-level='warn'] { color: var(--warn); } .now-today[data-level='warn'] .now-budget i { background: var(--warn); }
+.now-today[data-level='danger'] { color: var(--danger); } .now-today[data-level='danger'] .now-budget i { background: var(--danger); }
+.now-agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.now-files { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.now-files button { border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 1px 7px; background: var(--hover); font: 11px var(--font-mono); color: var(--text); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-more { color: var(--faint); font-size: 11px; }
 
 .term { transition: opacity 0.15s; }
 .term { flex: 1; min-width: 0; min-height: 0; padding: 10px 6px 6px 18px; user-select: text; -webkit-user-select: text; }

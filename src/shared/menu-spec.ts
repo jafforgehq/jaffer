@@ -19,6 +19,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'run-claude': { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C' },
   'restart-shell': { label: 'Restart Shell' },
   palette: { label: 'Command Palette…', accelerator: 'Cmd+P' },
+  'toggle-panel': { label: 'Toggle Side Panel', accelerator: 'Cmd+B' },
   'zoom-in': { label: 'Bigger', accelerator: 'Cmd+=' },
   'zoom-out': { label: 'Smaller', accelerator: 'Cmd+-' },
   'zoom-reset': { label: 'Actual Size', accelerator: 'Cmd+0' },

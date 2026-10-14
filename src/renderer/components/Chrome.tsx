@@ -1,11 +1,11 @@
 import type { VNode } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { cfg, claudeToday, currentClaude, daemonUp, dismissToast, info, port, safeCommand, systemStats, tick, tildePath, timesAnswered, toasts, turnHistory } from '../state';
+import { cfg, claudeToday, currentClaude, daemonUp, dismissToast, info, panelOpen, port, safeCommand, systemStats, tick, tildePath, timesAnswered, toasts, togglePanel, turnHistory } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
 import type { ClaudeSession } from '../../core/claude/watcher';
-import { baseName, budgetLevel, fmtDuration, gitText, ordinal, progressFraction, sessionClockText, sparkPath } from '../claude-ui';
-import { IconBranch, IconInfo, IconPencil, IconX } from './icons';
+import { baseName, budgetLevel, COST_ESTIMATE, costFigure, fmtDuration, gitText, ordinal, progressFraction, sessionClockText, sparkPath } from '../claude-ui';
+import { IconBranch, IconInfo, IconPencil, IconSidebar, IconX } from './icons';
 
 function shortPath(p: string): string {
   if (!p) return '';
@@ -73,23 +73,18 @@ function CostChip({ s }: { s: ClaudeSession }): VNode | null {
   const l = cost?.last && typeof cost.last === 'object' ? cost.last : undefined;
   const lv = c?.liveCost !== false && (s.state === 'working' || s.state === 'needs-you') ? s.live : undefined;
   const live = lv && typeof lv === 'object' ? lv : undefined;
-  if (!l && !live) return null;
+  const figure = costFigure(s, c?.liveCost !== false);
+  if (!figure) return null;
   const today = claudeToday.value;
   const budget = c?.dailyBudgetUsd ?? 0;
   const level = budgetLevel(today?.usd ?? 0, budget);
-  const text = live
-    ? live.usd !== undefined
-      ? `≈ ${formatUsd(live.usd)} so far`
-      : `${formatTokens(live.input + live.output)} tokens so far`
-    : l!.usd !== undefined
-      ? `≈ ${formatUsd(l!.usd)}`
-      : `${formatTokens(l!.input + l!.output + l!.cacheRead + l!.cacheWrite)} tokens`;
+  const text = figure.text;
   const lines = [
     live && `This answer so far ${live.usd !== undefined ? `≈ ${formatUsd(live.usd)}` : '(no price known for this model)'}: ${formatTokens(live.input)} in, ${formatTokens(live.output)} out`,
     l && `This answer ${l.usd !== undefined ? `≈ ${formatUsd(l.usd)}` : '(no price known for this model)'}: ${formatTokens(l.input + l.cacheWrite)} new in, ${formatTokens(l.cacheRead)} cached, ${formatTokens(l.output)} out`,
     cost && typeof cost.totalUsd === 'number' && `This session ${cost.partial ? 'at least ' : ''}≈ ${formatUsd(cost.totalUsd)} over ${cost.answers} answer${cost.answers === 1 ? '' : 's'}`,
     today && `Today ≈ ${formatUsd(today.usd)}${budget > 0 ? ` of ${formatUsd(budget)}` : ''}`,
-    'An estimate at API list prices, from token counts: a subscription is not billed per token.',
+    COST_ESTIMATE,
   ].filter(Boolean) as string[];
   const hist = turnHistory.value;
   return (
@@ -230,6 +225,10 @@ export function TitleBar(): VNode {
       <div class="tb-right">
         {c?.appearance?.systemStats === true && <SystemStats />}
         {claude && showCost && <CostChip s={claude} />}
+        {/* (a click keeps the terminal's focus: the keys typed next go to the shell, not to this button) */}
+        <button class="icon-btn sm panel-toggle" aria-label="Side panel" aria-pressed={panelOpen()} title="Side panel (⌘B)" onMouseDown={(e) => e.preventDefault()} onClick={togglePanel}>
+          <IconSidebar size={14} />
+        </button>
       </div>
     </div>
   );

@@ -692,6 +692,7 @@ function buildMenu(): void {
       label: 'View',
       submenu: [
         item('palette'),
+        item('toggle-panel'),
         { type: 'separator' },
         item('zoom-in'),
         item('zoom-out'),

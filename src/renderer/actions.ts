@@ -1,4 +1,4 @@
-import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, toast } from './state';
+import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, toast, togglePanel } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -83,6 +83,7 @@ export const actions: Action[] = [
   { id: 'focus-mode', get title() { return focusMode.value ? 'Leave focus mode' : 'Focus mode'; }, section: 'App', keys: '⌥⌘F', keywords: 'quiet distraction notifications hold fade', run: () => setFocusMode(!focusMode.value) },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
   { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
+  { id: 'toggle-panel', title: 'Toggle side panel', section: 'View', keys: '⌘B', keywords: 'sidebar now claude status conversations', run: togglePanel },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },
   { id: 'zoom-out', title: 'Smaller text', section: 'View', keys: '⌘-', run: () => zoom(-1) },
   { id: 'zoom-reset', title: 'Actual size', section: 'View', keys: '⌘0', run: () => zoom(0) },

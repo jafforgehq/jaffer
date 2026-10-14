@@ -1,8 +1,24 @@
-import { formatUsd } from '../shared/claude-cost';
+import { formatTokens, formatUsd } from '../shared/claude-cost';
 import { countsText, fmtDuration } from '../shared/claude-text';
+import type { ClaudeSession } from '../core/claude/watcher';
 
 // (the pure pieces the menu bar item in the main process shares live in shared/claude-text)
-export { fmtDuration, gitText, turnCalls, turnCounts } from '../shared/claude-text';
+export { countsText, fmtDuration, gitText, turnCalls, turnCounts } from '../shared/claude-text';
+
+/** What every cost figure is, said on hover. */
+export const COST_ESTIMATE = 'An estimate at API list prices, from token counts: a subscription is not billed per token.';
+
+/**
+ * The cost figure of the title bar's chip and the side panel: while Claude works (with `liveCost`), what the answer has cost so far
+ * (`live`); otherwise what the last answer cost; null for neither.
+ */
+export function costFigure(s: ClaudeSession, liveCost: boolean): { text: string; live: boolean } | null {
+  const l = s.cost && typeof s.cost === 'object' && s.cost.last && typeof s.cost.last === 'object' ? s.cost.last : undefined;
+  const lv = liveCost && (s.state === 'working' || s.state === 'needs-you') ? s.live : undefined;
+  if (lv && typeof lv === 'object') return { live: true, text: lv.usd !== undefined ? `≈ ${formatUsd(lv.usd)} so far` : `${formatTokens(lv.input + lv.output)} tokens so far` };
+  if (l) return { live: false, text: l.usd !== undefined ? `≈ ${formatUsd(l.usd)}` : `${formatTokens(l.input + l.output + l.cacheRead + l.cacheWrite)} tokens` };
+  return null;
+}
 
 /** How far a turn is against the typical one, 0..1 (0 when no typical length is known yet). */
 export function progressFraction(elapsedMs: number, typicalMs: number): number {

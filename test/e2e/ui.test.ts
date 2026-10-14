@@ -166,17 +166,21 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.pet-corner .pet');
   }, 90_000);
 
-  it('a calm window: only the terminal, the title bar and the mole, whatever keys are pressed', async () => {
-    for (const k of ['Meta+b', 'Meta+j', 'Meta+Shift+M']) await page.keyboard.press(k); // the sidebar, the Claude panel and the memory drawer are gone
+  it('a calm window: only the terminal, the title bar, the mole and the one side panel, whatever keys are pressed', async () => {
+    for (const k of ['Meta+j', 'Meta+Shift+M']) await page.keyboard.press(k); // the Claude panel and the memory drawer are gone (⌘B is the side panel's since 1.1.0)
     await sleep(300);
     expect(await page.locator('.rail, .statusbar, .agent, .panel-head, .side').count()).toBe(0);
     // 1.0.0 allows command blocks inside the card (gutter marks, the sticky command header, the gutter menu), up to three pinned lines and
-    // the paste question; still no sidebar, drawer, panel or tab
+    // the paste question; still no drawer, other panel or tab
     expect(await page.locator('.sidebar, .drawer, .panel, .tabs, .tab').count()).toBe(0);
     expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar|pins|paste-bar)\b/.test(c)))).toEqual([]);
+    // 1.1.0: the one side panel (⌘B) sits beside the card; nothing else does
+    expect(await page.$$eval('.workspace > *', (els) => els.map((e) => e.className).filter((c) => !/^(terminal-area|side-panel)\b/.test(c)))).toEqual([]);
+    expect(await page.locator('.side-panel').count()).toBe(1);
     // and the 2 px tool strip under the title bar (feature 6): nothing else between the title bar and the card
     expect(await page.$$eval('.stage > *', (els) => els.map((e) => e.className).filter((c) => !/^(titlebar|tool-strip|daemon-banner|workspace)\b/.test(c)))).toEqual([]);
-    expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // no buttons in the title bar: the folder, the branch, the ring, the cost
+    expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // the folder, the branch, the ring, the cost
+    expect(await page.locator('.titlebar button:not(.panel-toggle)').count()).toBe(0); // and one button: the side panel's
     expect(await page.locator('.titlebar', { hasText: /memory/i }).count()).toBe(0);
     const term = (await page.locator('.terminal-area').boundingBox())!;
     const pet = (await page.locator('.pet-corner').boundingBox())!;
@@ -1142,7 +1146,7 @@ describe('Jaffer UI end to end', () => {
       await page.evaluate(() => (window as any).__stats(0.3, 0.3));
       await inject([{ id: 'drag-1', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 'd1' }, notice: 'Claude needs your permission to use Bash', file: path.join(repo, 'new.txt'), cost: { usd: 0.1, at: 5 } }]);
       await page.waitForSelector('.session-pill .needs-chip');
-      for (const sel of ['.session-pill .running', '.session-pill .needs-chip', '.session-pill .edit-chip', '.session-pill .git-stat', '.session-pill .cwd-box', '.titlebar .cost-wrap', '[data-cost-chip]', '.titlebar .sys-stats'])
+      for (const sel of ['.session-pill .running', '.session-pill .needs-chip', '.session-pill .edit-chip', '.session-pill .git-stat', '.session-pill .cwd-box', '.titlebar .cost-wrap', '[data-cost-chip]', '.titlebar .sys-stats', '.titlebar .panel-toggle'])
         expect(await region(sel), sel).toBe('no-drag');
       // (only the bar itself carries `drag`: whether a child reports its parent's value differs between Chromium versions, so children are not asserted)
       expect(await region('.titlebar'), '.titlebar').toBe('drag');
@@ -2130,6 +2134,223 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toContain('before-the-exit-71');
   }, 40_000);
 
+  // 1.1.0, the side panel (spec features 1 and 2)
+  const panelCfg = async () => (await page.evaluate(() => window.jaffer.call('config.get'))).panel;
+  const cols = () => page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.cols as number);
+  /** Counts the window's pty.resize calls from here on. */
+  const countResizes = () =>
+    page.evaluate(() => {
+      const w = window as any;
+      w.__resizes = [];
+      if (!w.__resizeSpy) {
+        const orig = w.jaffer.call;
+        w.jaffer.call = (m: string, p: unknown) => (m === 'pty.resize' && w.__resizes.push(p), orig(m, p));
+        w.__resizeSpy = true;
+      }
+    });
+  const resizes = () => page.evaluate(() => (window as any).__resizes.length as number);
+
+  it('the side panel: open by default beside the card; ⌘B, the menu, the title bar button, the palette and Settings toggle it, kept in panel.open; closed, nothing of it renders; it slides (not with motion off) and fades in focus mode', async () => {
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.workspace > .side-panel');
+    expect(await panelCfg()).toEqual({ open: true, width: 300 });
+    const card = (await page.locator('.terminal-area').boundingBox())!;
+    const panel = (await page.locator('.side-panel').boundingBox())!;
+    expect(panel.x).toBeGreaterThan(card.x + card.width); // at the right of the card
+    expect(Math.round(panel.width)).toBe(300);
+    expect(await page.getAttribute('.titlebar .panel-toggle', 'aria-pressed')).toBe('true');
+    const onDisk = () => JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).panel?.open;
+
+    // ⌘B closes it (sliding out first), and the choice is written to the config file
+    await page.click('.term');
+    await page.keyboard.press('Meta+b');
+    expect(await page.locator('.side-panel[data-anim="out"]').count()).toBe(1);
+    expect(await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)).toBe('panel-out');
+    await page.waitForSelector('.side-panel', { state: 'detached', timeout: 2_000 });
+    expect(await page.locator('.side-panel, .now-card, .sp-convos').count()).toBe(0);
+    await until(async () => onDisk() === false, 5_000, 'panel.open false on disk');
+    expect(await page.getAttribute('.titlebar .panel-toggle', 'aria-pressed')).toBe('false');
+    // the menu item opens it again (sliding in)
+    await menu('toggle-panel');
+    await page.waitForSelector('.side-panel[data-anim="in"]');
+    expect(await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)).toBe('panel-in');
+    await until(async () => onDisk() === true, 5_000, 'panel.open true on disk');
+    // the title bar's button closes it, and the terminal keeps the keyboard
+    await page.click('.term');
+    await page.click('.titlebar .panel-toggle');
+    await page.waitForSelector('.side-panel', { state: 'detached', timeout: 2_000 });
+    expect(await page.evaluate(() => !!document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true);
+    await until(async () => (await panelCfg()).open === false, 5_000, 'panel.open false');
+    // the palette opens it
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('side panel');
+    expect(await page.textContent('.palette-list')).toContain('Toggle side panel');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.side-panel');
+    await until(async () => (await panelCfg()).open === true, 5_000, 'panel.open true');
+    // Settings → Appearance → Show the side panel
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    const sw = page.locator('label.field', { hasText: 'Show the side panel' }).locator('input');
+    expect(await sw.isChecked()).toBe(true);
+    await sw.click();
+    await until(async () => (await panelCfg()).open === false, 5_000, 'switched off');
+    await page.waitForSelector('.side-panel', { state: 'detached', timeout: 2_000 });
+    await sw.click();
+    await until(async () => (await panelCfg()).open === true, 5_000, 'switched on');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await page.waitForSelector('.side-panel');
+    // motion off: it comes and goes at once, with no slide
+    await cfgPatch({ appearance: { animations: false } });
+    try {
+      await page.click('.term');
+      await page.keyboard.press('Meta+b');
+      expect(await page.locator('.side-panel').count()).toBe(0); // gone at once
+      await page.keyboard.press('Meta+b');
+      await page.waitForSelector('.side-panel');
+      expect(await page.getAttribute('.side-panel', 'data-anim')).toBeNull();
+      expect(await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)).toBe('none');
+    } finally {
+      await cfgPatch({ appearance: { animations: true } });
+    }
+    // focus mode: it fades with the other chrome
+    await menu('focus-mode');
+    await until(async () => (await page.$eval('.side-panel', (el) => getComputedStyle(el).opacity)) === '0.15', 3_000, 'the panel to fade');
+    await menu('focus-mode');
+    await until(async () => (await page.$eval('.side-panel', (el) => getComputedStyle(el).opacity)) === '1', 3_000, 'the panel to come back');
+    expect(await panelCfg()).toEqual({ open: true, width: 300 });
+  }, 40_000);
+
+  it('the side panel and the terminal: open, close and a drag of its edge re-fit the terminal once each (it keeps its size while dragged), the width stays in 220..480 and is kept in panel.width, and nothing on the screen is lost', async () => {
+    await page.click('.term');
+    await page.evaluate(() => window.jaffer.call('pty.write', { data: '\x15echo panel-marker-$((40+2))\r' }));
+    await until(async () => /^panel-marker-42/m.test(await termText()), 10_000, 'the marker');
+    await countResizes();
+    const open = await cols();
+    // closing gives the terminal the panel's room: more columns, one resize of the shell
+    await page.keyboard.press('Meta+b');
+    await until(async () => (await cols()) > open, 3_000, 'more columns with the panel closed');
+    const closed = await cols();
+    await sleep(400);
+    expect(await resizes()).toBe(1);
+    expect(await cols()).toBe(closed);
+    await countResizes();
+    await page.keyboard.press('Meta+b');
+    await until(async () => (await cols()) === open, 3_000, 'the columns back with the panel open');
+    await sleep(400);
+    expect(await resizes()).toBe(1);
+
+    // dragging the edge 100 px to the left: the panel follows, the terminal keeps its size until it is let go, then fits once
+    await countResizes();
+    const h = (await page.locator('.sp-handle').boundingBox())!;
+    const x = h.x + h.width / 2;
+    const y = h.y + h.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(x - i * 10, y);
+    await sleep(250);
+    expect(Math.round((await page.locator('.side-panel').boundingBox())!.width)).toBe(400);
+    expect(await page.locator('.sp-handle[data-drag]').count()).toBe(1);
+    expect(await cols()).toBe(open); // held while dragging
+    expect(await resizes()).toBe(0);
+    await page.mouse.up();
+    await until(async () => (await cols()) < open, 3_000, 'fewer columns once let go');
+    await sleep(400);
+    expect(await resizes()).toBe(1);
+    await until(async () => (await panelCfg()).width === 400, 5_000, 'panel.width 400');
+    // and past its ends it stops at 480 and at 220
+    const drag = async (dx: number) => {
+      const b = (await page.locator('.sp-handle').boundingBox())!;
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(b.x + b.width / 2 + dx / 2, b.y + b.height / 2);
+      await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 2);
+      await page.mouse.up();
+    };
+    await drag(-600);
+    await until(async () => (await panelCfg()).width === 480, 5_000, 'panel.width 480');
+    expect(Math.round((await page.locator('.side-panel').boundingBox())!.width)).toBe(480);
+    await drag(900);
+    await until(async () => (await panelCfg()).width === 220, 5_000, 'panel.width 220');
+    expect(Math.round((await page.locator('.side-panel').boundingBox())!.width)).toBe(220);
+    // the handle also takes the arrow keys
+    await page.focus('.sp-handle');
+    await page.keyboard.press('ArrowLeft');
+    await until(async () => (await panelCfg()).width === 240, 5_000, 'panel.width 240');
+    // nothing on the screen was lost to the resizes
+    expect(await termText()).toMatch(/^panel-marker-42/m);
+    await cfgPatch({ panel: { width: 300 } });
+    await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) === 300, 5_000, 'back to 300');
+    await page.click('.term');
+  }, 40_000);
+
+  it('the Now card: not running (⇧⌘C starts it), working (the tool, the time, the progress, the cost, today against the budget, the agents without ids, the counts, the files to reveal), needs you, and a finished turn’s summary', async () => {
+    await endClaude();
+    await inject([]);
+    await page.waitForSelector('.now-card[data-state="off"]');
+    expect(await textOf('.now-card')).toContain('Claude is not running');
+    expect(await textOf('.now-card')).toContain('⇧⌘C');
+    await cfgPatch({ claude: { typicalTurnMs: 60_000, dailyBudgetUsd: 5 } });
+    try {
+      const files = Array.from({ length: 10 }, (_, i) => `/work/app/src/file${i}.ts`);
+      const calls = [
+        { name: 'Read', category: 'read', startAgo: 120_000, endAgo: 119_000 }, // before this turn: not counted
+        { name: 'Read', category: 'read', startAgo: 25_000, endAgo: 24_000 },
+        { name: 'Read', category: 'read', startAgo: 20_000, endAgo: 19_000 },
+        { name: 'Edit', category: 'write', startAgo: 15_000, endAgo: 14_000 },
+        { name: 'Bash', category: 'shell', startAgo: 2_000 },
+      ];
+      const subagents = [
+        { id: 'agent-opaque-id-1', status: 'running', startAgo: 130_000, tool: 'Read' },
+        { id: 'agent-opaque-id-2', status: 'done', startAgo: 90_000 },
+      ];
+      await inject([{ id: 'now-1', state: 'working', turnStartedAtAgo: 30_000, tool: { name: 'Bash', id: 'n1' }, calls, files, subagents, live: { input: 1000, output: 500, usd: 0.03, at: 1 } }], { usd: 4, date: 'today' });
+      await page.waitForSelector('.now-card[data-state="working"]');
+      expect(await textOf('.now-label')).toBe('Claude is working');
+      expect(await textOf('.now-tool')).toBe('Bash');
+      expect(await textOf('.now-elapsed')).toMatch(/^3\ds$/);
+      const bar = await page.$eval('.now-progress i', (el) => parseFloat((el as HTMLElement).style.width));
+      expect(bar).toBeGreaterThanOrEqual(50);
+      expect(bar).toBeLessThan(60);
+      expect(await textOf('.now-cost')).toBe('≈ $0.03 so far');
+      expect(await page.getAttribute('.now-cost', 'title')).toMatch(/estimate.*not billed per token/i);
+      expect(await textOf('.now-today > span')).toBe('Today ≈ $4.00 of $5.00');
+      expect(await page.getAttribute('.now-today', 'data-level')).toBe('warn');
+      expect(await page.$$eval('.now-agents li', (els) => els.map((e) => e.textContent))).toEqual([expect.stringMatching(/^Agent 1 · Read · 2m 1\ds$/)]);
+      expect(await textOf('.side-panel')).not.toContain('opaque-id');
+      expect(await textOf('.now-counts')).toBe('2 reads · 1 edit · 1 shell');
+      expect(await page.$$eval('.now-files button', (els) => els.map((e) => e.textContent))).toEqual(files.slice(0, 8).map((f) => f.split('/').pop()));
+      expect(await textOf('.now-more')).toBe('+2 more');
+      await page.evaluate(() => ((window as any).__revealed = []));
+      await page.locator('.now-files button').first().click();
+      await until(async () => (await page.evaluate(() => (window as any).__revealed)).includes(files[0]), 3_000, 'the file revealed in Finder');
+      await shot('19a-side-panel-working');
+
+      // needs you: the tool it asks about, no progress bar
+      await inject([{ id: 'now-1', state: 'needs-you', turnStartedAtAgo: 40_000, tool: { name: 'Bash', id: 'n1' }, notice: 'Claude needs your permission to use Bash' }]);
+      await page.waitForSelector('.now-card[data-state="needs-you"]');
+      expect(await textOf('.now-label')).toBe('Claude needs you');
+      expect(await textOf('.now-tool')).toBe('Bash');
+      expect(await textOf('.now-hint')).toMatch(/terminal/);
+      expect(await page.locator('.now-progress').count()).toBe(0);
+
+      // a finished turn (another session: no summary toast from this injection): its summary line
+      await inject([{ id: 'now-2', state: 'idle', sinceAgo: 1_000, turnStartedAtAgo: 73_000, cost: { usd: 0.04, at: 7 }, calls: [{ name: 'Read', category: 'read', startAgo: 60_000, endAgo: 59_000 }] }]);
+      await page.waitForSelector('.now-card[data-state="idle"]');
+      expect(await textOf('.now-summary')).toBe('Claude finished in 1m 12s · 1 read · ≈ $0.04');
+      expect(await textOf('.now-cost')).toBe('≈ $0.04');
+      // showCost off: no figure anywhere on the card
+      await cfgPatch({ claude: { showCost: false } });
+      await until(async () => (await page.locator('.now-cost, .now-today').count()) === 0, 5_000, 'the figures to go');
+      expect(await textOf('.now-summary')).toBe('Claude finished in 1m 12s · 1 read');
+    } finally {
+      await cfgPatch({ claude: { showCost: true, typicalTurnMs: 0, dailyBudgetUsd: 0 } });
+      await inject([]);
+    }
+  }, 40_000);
+
   it('the layout lines up at any window size: the pill is centred in the title bar and on the window, the card has even margins, the mole sits inside, nothing overflows', async () => {
     const box = async (sel: string) => (await page.locator(sel).first().boundingBox())!;
     const cy = (b: { y: number; height: number }) => b.y + b.height / 2;
@@ -2139,7 +2360,8 @@ describe('Jaffer UI end to end', () => {
       const pill = await box('.session-pill');
       const card = await box('.terminal-area');
       const pet = await box('.pet-corner');
-      const where = `${w}x${h}`;
+      const panel = open ? await box('.side-panel') : null;
+      const where = `${w}x${h}${open ? '' : ' (panel closed)'}`;
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 0.5), `no sideways scroll at ${where}`).toBe(true);
       expect(Math.abs(cy(pill) - cy(bar)), `pill centred in the title bar at ${where}`).toBeLessThan(1.5);
       expect(Math.abs(cx(pill) - w / 2), `pill centred on the window at ${where}`).toBeLessThan(2);
@@ -2148,8 +2370,15 @@ describe('Jaffer UI end to end', () => {
       expect(Math.abs(left - bottom), `card margins even (left ${left}, bottom ${bottom}) at ${where}`).toBeLessThan(1.5);
       expect(pet.x + pet.width, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.x + card.width);
       expect(pet.y + pet.height, `mole inside the card at ${where}`).toBeLessThanOrEqual(card.y + card.height);
-      expect(Math.abs(w - (card.x + card.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
+      // 1.1.0: open, the side panel is the card's right neighbour: the same gap between them, the same top and bottom, the margin on its right
+      const right = panel ?? card;
+      expect(Math.abs(w - (right.x + right.width) - left), `right margin equals the left one at ${where}`).toBeLessThan(1.5);
+      if (panel) {
+        expect(Math.abs(panel.x - (card.x + card.width) - left), `the gap between the card and the panel at ${where}`).toBeLessThan(1.5);
+        expect(Math.abs(panel.y - card.y) + Math.abs(panel.height - card.height), `panel and card level at ${where}`).toBeLessThan(1.5);
+      }
     };
+    let open = true;
     for (const [w, h] of [[1360, 860], [900, 640], [660, 520]] as const) {
       await page.setViewportSize({ width: w, height: h });
       await sleep(200);
@@ -2157,6 +2386,13 @@ describe('Jaffer UI end to end', () => {
       if (w < 1000) await shot(`15-layout-${w}`);
     }
     await page.setViewportSize({ width: 1360, height: 860 });
+    await menu('toggle-panel');
+    await page.waitForSelector('.side-panel', { state: 'detached' });
+    open = false;
+    await sleep(200);
+    await measure(1360, 860);
+    await menu('toggle-panel');
+    await page.waitForSelector('.side-panel');
   });
 
   it('when the terminal stops the window says so (the app offers a fresh one or Quit), and a fresh terminal clears it', async () => {

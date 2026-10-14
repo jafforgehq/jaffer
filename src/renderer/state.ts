@@ -352,6 +352,22 @@ export async function patchConfig(p: object): Promise<void> {
   cfg.value = next;
 }
 
+// ------------------------------------------------------------------ the side panel
+
+/** Whether the side panel is open (`panel.open`, open by default). */
+export const panelOpen = (): boolean => cfg.value?.panel?.open !== false;
+/** A change to the panel: shown at once (a drag ends without a jump back, ⌘B twice is open again), then kept in the config. */
+export function patchPanel(p: Partial<JafferConfig['panel']>): void {
+  const c = cfg.value;
+  if (!c) return;
+  cfg.value = { ...c, panel: { ...c.panel, ...p } };
+  void patchConfig({ panel: p }).catch(() => undefined);
+}
+/** ⌘B, the title bar's button, the palette, Settings. */
+export const togglePanel = (): void => patchPanel({ open: !panelOpen() });
+/** True while the panel's edge is dragged: the terminal keeps its size and fits once when it is let go (not a resize per pixel). */
+export const layoutHold = signal(false);
+
 // ------------------------------------------------------------------ small display helpers
 
 /** A command as it may be shown in the UI: secrets redacted, sensitive commands hidden. Only its head is read (a command line is forgeable at any length). */
