@@ -1,5 +1,6 @@
 import type { ClaudeSession } from '../core/claude/watcher';
 import { isSensitiveCommand, redactText } from './redact';
+import { COMMAND_HEAD } from './process-badge';
 
 /** Claude Code's own terminal notification (OSC 9) and ours must not both fire for one event. */
 const TERMINAL_NOTIFY_WINDOW_MS = 10_000;
@@ -34,7 +35,8 @@ export function took(ms: number): string {
 
 export function commandNotification(c: { cmd: string; exit: number | null; durMs: number }, ctx: { windowFocused: boolean }): { title: string; body: string } | null {
   if (c.durMs < LONG_COMMAND_MS || ctx.windowFocused || !c.cmd.trim()) return null;
-  const shown = isSensitiveCommand(c.cmd) ? 'A command' : redactText(c.cmd).replace(/\s+/g, ' ').trim().slice(0, 120);
+  const head = c.cmd.slice(0, 4 * COMMAND_HEAD); // a command line is forgeable at any length: only its head is read
+  const shown = isSensitiveCommand(head) ? 'A command' : redactText(head).replace(/\s+/g, ' ').trim().slice(0, 120);
   return { title: c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, body: `${shown} — ${took(c.durMs)}` };
 }
 

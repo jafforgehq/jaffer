@@ -43,6 +43,14 @@ describe('commandNotification', () => {
     expect(run('sleep 31', { durMs: 89_000 })!.body).toBe('sleep 31 — 89s');
   });
 
+  it('a forged command of 8 MB: only its head is read, quickly and without throwing, and a sensitive one is still hidden', () => {
+    const t0 = performance.now();
+    const n = run('echo ' + 'x'.repeat(8 * 1024 * 1024))!;
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(n.body).toMatch(/^echo x+ — 45s$/);
+    expect(run('cat ~/.ssh/id_rsa ' + 'y'.repeat(8 * 1024 * 1024))!.body).toBe('A command — 45s');
+  });
+
   it('stays quiet for a short command, while the window is in front, or for an empty line', () => {
     expect(run('ls', { durMs: 29_999 })).toBeNull();
     expect(commandNotification({ cmd: 'npm run build', exit: 0, durMs: 60_000 }, { windowFocused: true })).toBeNull();

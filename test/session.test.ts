@@ -125,6 +125,19 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
   });
 });
 
+describe('shell marks are forgeable at any length', () => {
+  it('a forged 8 MB command (633;E) is kept clipped to its head, and so is a forged folder (633;P;Cwd)', async () => {
+    const { PtySession: Session } = await import('../src/core/session/terminal');
+    const { COMMAND_HEAD } = await import('../src/shared/process-badge');
+    const script = "const big = 'a'.repeat(8 * 1024 * 1024); process.stdout.write('\\x1b]133;A\\x07\\x1b]633;E;' + big + '\\x07\\x1b]133;C\\x07done\\r\\n\\x1b]133;D;0\\x07\\x1b]633;P;Cwd=/' + big + '\\x07\\x1b]133;A\\x07'); setTimeout(() => {}, 30000);";
+    sh = new Session({ file: process.execPath, args: ['-e', script], cwd: env.root, env: { PATH: process.env.PATH ?? '' }, cols: 80, rows: 24 });
+    const cwd = waitFor(sh, (e) => (e.type === 'cwd' ? e : false), 20_000);
+    const cmd = await waitFor(sh, isCmd, 20_000);
+    expect(cmd.cmd).toHaveLength(4 * COMMAND_HEAD);
+    expect((await cwd).cwd.length).toBeLessThanOrEqual(4 * COMMAND_HEAD);
+  }, 40_000);
+});
+
 describe('shell integration regressions (found by macOS CI)', () => {
   it('bash: only commands the user typed are recorded, even with user PROMPT_COMMAND hooks from their rc file', async () => {
     // (the test helper starts a non-login shell, which reads ~/.bashrc — where real users put such hooks)

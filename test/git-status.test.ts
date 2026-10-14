@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseGitStatus, readGitStatus } from '../src/core/session/git-status';
+import { parseGitStatus, readGitStatus, repoFilters } from '../src/core/session/git-status';
 
 describe('parseGitStatus: `git status --porcelain=v2 --branch`, counted', () => {
   it('counts what is staged, changed and untracked, and how far the branch is ahead and behind', () => {
@@ -57,6 +57,21 @@ describe('parseGitStatus: `git status --porcelain=v2 --branch`, counted', () => 
   }
 });
 
+describe('repoFilters: filter drivers a repository names itself (`git config --show-scope --get-regexp`)', () => {
+  it('a filter from the system or the person\'s own global config is theirs; one from the repository (or any other scope) is not', () => {
+    expect(repoFilters('')).toBe(false);
+    expect(repoFilters('global\tfilter.lfs.clean git-lfs clean -- %f\nglobal\tfilter.lfs.process git-lfs filter-process\nsystem\tfilter.x.smudge cat\n')).toBe(false);
+    expect(repoFilters('global\tfilter.lfs.clean git-lfs clean -- %f\nlocal\tfilter.x.clean touch /tmp/pwned\n')).toBe(true);
+    for (const scope of ['local', 'worktree', 'command', 'unknown', '']) expect(repoFilters(`${scope}\tfilter.x.process run-me\n`), scope).toBe(true);
+  });
+
+  it('stays fast on 8 MB', () => {
+    const t0 = performance.now();
+    expect(repoFilters('global\tfilter.a.clean x\n'.repeat(400_000))).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
+});
+
 describe('readGitStatus: real git, in temporary repositories only', () => {
   let dir: string;
   const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
@@ -108,5 +123,24 @@ describe('readGitStatus: real git, in temporary repositories only', () => {
     git(repo, 'fetch', '-q');
     expect(await readGitStatus(repo)).toEqual({ staged: 0, changed: 1, untracked: 1, ahead: 1, behind: 1 });
     expect(fs.existsSync(path.join(repo, '.git', 'index.lock'))).toBe(false);
+  });
+
+  it('never runs a program the repository names: with a filter driver in its own config, there is no status at all', async () => {
+    const repo = path.join(dir, 'filtered');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(repo, '.gitattributes'), '* filter=x\n');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'one');
+    const marker = path.join(dir, 'filter-ran');
+    git(repo, 'config', 'filter.x.clean', `touch '${marker}'; cat`);
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(path.join(repo, 'a.txt'), later, later); // changed stat info: git status would clean the file again
+    expect(await readGitStatus(repo)).toBeUndefined();
+    expect(fs.existsSync(marker)).toBe(false);
+    // (what it guards against: a plain `git status` here runs the repository's program)
+    git(repo, 'status', '--porcelain');
+    expect(fs.existsSync(marker)).toBe(true);
   });
 });

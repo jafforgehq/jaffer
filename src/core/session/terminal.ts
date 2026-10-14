@@ -4,6 +4,7 @@ import * as nodePty from '@lydell/node-pty';
 import type { IPty } from '@lydell/node-pty';
 import { Emitter } from '../../shared/util';
 import { unescapeOsc } from '../../shared/osc';
+import { COMMAND_HEAD } from '../../shared/process-badge';
 
 export type PtyEvent =
   | { type: 'data'; data: string; seq: number }
@@ -223,9 +224,10 @@ export class PtySession {
       const semi = data.indexOf(';');
       const kind = semi < 0 ? data : data.slice(0, semi);
       const rest = semi < 0 ? '' : data.slice(semi + 1);
-      if (kind === 'E') this.pendingCmd = unescapeOsc(rest);
+      // marks are forgeable at any length (any program can print them): only their head is kept
+      if (kind === 'E') this.pendingCmd = unescapeOsc(rest.slice(0, 4 * COMMAND_HEAD));
       else if (kind === 'P' && rest.startsWith('Cwd=')) {
-        const cwd = unescapeOsc(rest.slice(4));
+        const cwd = unescapeOsc(rest.slice(4, 4 + 4 * COMMAND_HEAD));
         if (cwd && cwd !== this.cwd) {
           this.cwd = cwd;
           this.events.emit({ type: 'cwd', cwd });
