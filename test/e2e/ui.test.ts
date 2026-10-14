@@ -730,7 +730,7 @@ describe('Jaffer UI end to end', () => {
             else o[k] = v;
           }
           o.calls = (o.calls as Record<string, any>[]).map((c) => ({ name: c.name, category: c.category, failed: c.failed, startedAt: now - c.startAgo, endedAt: c.endAgo === undefined ? undefined : now - c.endAgo }));
-          o.subagents = (o.subagents as Record<string, any>[]).map((a) => ({ id: a.id, status: a.status, startedAt: now - a.startAgo }));
+          o.subagents = (o.subagents as Record<string, any>[]).map((a) => ({ id: a.id, status: a.status, startedAt: now - a.startAgo, tool: a.tool }));
           if (o.cost) o.cost = { last: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, usd: o.cost.usd }, totalUsd: o.cost.total ?? o.cost.usd, answers: 1, partial: false, at: o.cost.at };
           return o;
         };
@@ -2029,6 +2029,194 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toMatch(/cat <<EOF\n.*\$ /);
     await page.keyboard.press('Control+c');
   });
+
+  // The companion (spec features 1, 4, 5, 20, 28): the tool it shows, helpers, dozing, "Fixed it!" and the bell.
+  const working = (tool?: string, subagents: Record<string, unknown>[] = []) => inject([{ id: 'comp-1', state: 'working', tool: tool ? { name: tool, id: 'c1' } : undefined, subagents }]);
+  const motion = (on: boolean) => page.evaluate((a) => window.jaffer.call('config.patch', { appearance: { animations: a } }), on);
+
+  it('the companion shows the tool Claude uses: data-tool on the mole and on its helpers, a prop for each kind, and the props stand still without motion', async () => {
+    const mole = '.pet-corner .pet[data-role="main"]';
+    const opacity = (sel: string) => page.$eval(sel, (el) => getComputedStyle(el).opacity);
+    await endClaude();
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
+    await page.waitForSelector(mole);
+    const props: Record<string, string | null> = { Bash: null, Read: '.pet-book', Grep: '.pet-book', Edit: '.pet-hammer', WebFetch: '.pet-dish', Task: '.pet-hat' };
+    const cats: Record<string, string> = { Bash: 'shell', Read: 'read', Grep: 'read', Edit: 'write', WebFetch: 'web', Task: 'agent', mcp__x__y: 'other' };
+    for (const [tool, cat] of Object.entries(cats)) {
+      await working(tool);
+      await until(async () => (await page.getAttribute(mole, 'data-tool')) === cat, 5_000, `${tool}: data-tool ${cat}`);
+      for (const prop of ['.pet-book', '.pet-hammer', '.pet-dish']) expect(await opacity(`${mole} ${prop}`), `${tool} ${prop}`).toBe(props[tool] === prop ? '1' : '0'); // only its own prop shows
+      if (props[tool] === '.pet-hat') await until(async () => (await opacity(`${mole} .pet-hat`)) === '1', 3_000, 'the hard hat on for agents'); // (it fades in)
+    }
+    await working(); // working without a tool call open: no prop
+    await until(async () => (await page.getAttribute(mole, 'data-tool')) === null, 5_000, 'no data-tool without a tool call');
+    await working('Read');
+    await until(async () => (await page.getAttribute(mole, 'data-tool')) === 'read', 5_000, 'Read');
+    await shot('16a-pet-read');
+    await inject([{ id: 'comp-1', state: 'idle', tool: { name: 'Read', id: 'c1' } }]); // not working: none
+    await until(async () => (await page.getAttribute(mole, 'data-tool')) === null, 5_000, 'no data-tool while idle');
+    // helpers carry their own tool, and show the same props smaller
+    await working('Bash', [
+      { id: 'h1', status: 'running', startAgo: 4_000, tool: 'Read' },
+      { id: 'h2', status: 'running', startAgo: 4_000, tool: 'Edit' },
+      { id: 'h3', status: 'running', startAgo: 4_000 },
+    ]);
+    await until(async () => (await page.locator('.pet-corner .pet-helper').count()) === 3, 5_000, 'three helpers');
+    expect(await page.$$eval('.pet-corner .pet-helper', (els) => els.map((e) => e.getAttribute('data-tool')))).toEqual(['read', 'write', null]);
+    expect(await page.getAttribute(mole, 'data-tool')).toBe('shell');
+    expect(await opacity('.pet-corner .pet-helper[data-tool="read"] .pet-book')).toBe('1');
+    await shot('16b-pet-helpers-tools');
+    // motion off: the prop still shows, nothing moves
+    await working('Read');
+    await motion(false);
+    try {
+      await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+      expect(await opacity(`${mole} .pet-book`)).toBe('1');
+      expect(await page.$eval(`${mole} .pet-book .pet-page`, (el) => getComputedStyle(el).animationName)).toBe('none');
+    } finally {
+      await motion(true);
+    }
+    // macOS Reduce motion: the page stops flipping
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(parseFloat(await page.$eval(`${mole} .pet-book .pet-page`, (el) => getComputedStyle(el).animationDuration))).toBeLessThan(0.001);
+    await page.emulateMedia({ reducedMotion: null });
+    await endClaude();
+  }, 60_000);
+
+  it('the scenes carry data-tool too, and change their colour with the kind of work', async () => {
+    try {
+      await endClaude();
+      for (const variant of ['matrix', 'agents', 'warp', 'radar', 'core']) {
+        await page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), variant);
+        const scene = `.pet-corner[data-companion='${variant}'] .scene`;
+        await page.waitForSelector(scene);
+        const colour = () => page.$eval(scene, (el) => getComputedStyle(el).getPropertyValue('--c').trim());
+        const seen: Record<string, string> = {};
+        for (const [tool, cat] of [['Bash', 'shell'], ['Read', 'read'], ['Edit', 'write'], ['WebFetch', 'web'], ['Task', 'agent']] as const) {
+          await working(tool);
+          await until(async () => (await page.getAttribute(scene, 'data-tool')) === cat && (await page.getAttribute(scene, 'data-mood')) === 'dig', 5_000, `${variant}: ${tool}`);
+          seen[cat] = await colour();
+        }
+        const said = `${variant} ${JSON.stringify(seen)}`;
+        expect(seen.read, said).not.toBe(seen.shell); // cooler
+        expect(seen.write, said).not.toBe(seen.shell); // warmer
+        expect(seen.read, said).not.toBe(seen.write);
+        expect(seen.web, said).toBe(seen.shell); // the web is quicker, not another colour
+        await inject([]); // (no session at all: no cheering for the end of a turn either)
+        await until(async () => (await page.getAttribute(scene, 'data-tool')) === null && (await page.getAttribute(scene, 'data-mood')) === 'sleep', 5_000, `${variant}: no tool, asleep`);
+      }
+    } finally {
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+      await endClaude();
+    }
+  }, 90_000);
+
+  it('the companion dozes after ten quiet minutes (dimmer, Zzz) and wakes at once with any activity', async () => {
+    const mole = '.pet-corner .pet[data-role="main"]';
+    const dbg = (ago: number) => page.evaluate((a) => ((window as any).__jaffer.activity.value = Date.now() - a), ago);
+    await endClaude();
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
+    await inject([{ id: 'comp-2', state: 'idle' }]); // Claude is open and idle (rest), not working
+    await until(async () => (await page.getAttribute(mole, 'data-mood')) === 'rest', 5_000, 'rest');
+    await dbg(9 * 60_000);
+    await sleep(300);
+    expect(await page.getAttribute(mole, 'data-idle')).toBeNull(); // nine minutes: not yet
+    await dbg(11 * 60_000);
+    await until(async () => (await page.getAttribute(mole, 'data-idle')) === 'doze', 5_000, 'doze');
+    expect(await page.$eval(mole, (el) => getComputedStyle(el).opacity)).toBe('0.5');
+    expect(await page.$eval(`${mole} .pet-zs`, (el) => getComputedStyle(el).opacity)).toBe('1');
+    await shot('16c-pet-doze');
+    // Claude starts working: awake at once, and it does not doze while it works however long it takes
+    await working('Bash');
+    await until(async () => (await page.getAttribute(mole, 'data-idle')) === null, 3_000, 'awake with Claude working');
+    await dbg(30 * 60_000);
+    await sleep(200);
+    expect(await page.getAttribute(mole, 'data-idle')).toBeNull(); // a long turn is not a quiet one
+    await inject([{ id: 'comp-2', state: 'idle' }]);
+    await until(async () => (await page.getAttribute(mole, 'data-idle')) === 'doze', 3_000, 'doze again once idle and quiet');
+    // a command (pty.start) wakes it too
+    await page.evaluate(() => (window as any).__event('pty.start', { pane: 'main', cmd: 'sleep 1' }));
+    await until(async () => (await page.getAttribute(mole, 'data-idle')) === null, 3_000, 'awake with a command');
+    await page.evaluate(() => (window as any).__event('pty.command', { pane: 'main', cmd: 'sleep 1', exit: 0, durMs: 5, cwd: '/tmp' }));
+    await endClaude();
+  }, 30_000);
+
+  it('"Fixed it!": a short burst of sparks after a command that failed three times in a row finally works (none with motion off, and none for fewer failures)', async () => {
+    const burst = '.pet-corner .pet-burst';
+    const cmd = (c: string, exit: number) => page.evaluate((d) => (window as any).__event('pty.command', { pane: 'main', cwd: '/tmp', durMs: 5, ...d }), { cmd: c, exit });
+    await endClaude();
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
+    await page.waitForSelector('.pet-corner .pet');
+    await cmd('make fixit-a', 2);
+    await cmd('make fixit-a', 2);
+    await cmd('make fixit-a', 0); // only two failures
+    await sleep(300);
+    expect(await page.locator(burst).count()).toBe(0);
+    await cmd('make fixit-b', 1);
+    await cmd('make fixit-b', 1);
+    await cmd('ls', 0); // other commands in between do not matter
+    await cmd('make fixit-b', 1);
+    await cmd('make fixit-b', 0);
+    await page.waitForSelector(burst, { state: 'attached' });
+    const n = await page.locator(`${burst} .pet-spark`).count();
+    expect(n).toBeGreaterThanOrEqual(6);
+    expect(n).toBeLessThanOrEqual(8);
+    expect(await page.$eval(burst, (el) => getComputedStyle(el).pointerEvents)).toBe('none');
+    await sleep(250);
+    await shot('16d-pet-fixed-it');
+    await until(async () => (await page.locator(burst).count()) === 0, 4_000, 'the burst to end by itself');
+    // the same again with Animations off: nothing
+    for (let i = 0; i < 3; i++) await cmd('make fixit-c', 1);
+    await motion(false);
+    try {
+      await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+      await cmd('make fixit-c', 0);
+      await sleep(400);
+      expect(await page.locator(burst).count()).toBe(0);
+    } finally {
+      await motion(true);
+    }
+    // macOS Reduce motion: it exists but is never drawn
+    for (let i = 0; i < 3; i++) await cmd('make fixit-d', 1);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await cmd('make fixit-d', 0);
+    await page.waitForSelector(burst, { state: 'attached' });
+    expect(await page.$eval(burst, (el) => getComputedStyle(el).display)).toBe('none');
+    await page.emulateMedia({ reducedMotion: null });
+    // the scenes get it too
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'radar' } }));
+    await page.waitForSelector(".pet-corner[data-companion='radar'] .scene");
+    await sleep(1_600);
+    for (let i = 0; i < 3; i++) await cmd('make fixit-e', 1);
+    await cmd('make fixit-e', 0);
+    await page.waitForSelector(`.pet-corner[data-companion='radar'] .pet-burst`, { state: 'attached' });
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+  }, 40_000);
+
+  it('a bell makes the companion flinch for a moment (once in two seconds)', async () => {
+    const mole = '.pet-corner .pet[data-role="main"]';
+    const bell = () => page.evaluate(() => (window as any).__event('pty.bell', { pane: 'main' }));
+    await endClaude();
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
+    await page.waitForSelector(mole);
+    expect(await page.getAttribute(mole, 'data-flinch')).toBeNull();
+    await sleep(2_100); // (an earlier test may have rung)
+    await bell();
+    await until(async () => (await page.getAttribute(mole, 'data-flinch')) === '1', 2_000, 'a flinch');
+    expect(await page.$eval(mole, (el) => getComputedStyle(el).animationName)).toContain('pet-flinch');
+    await until(async () => (await page.getAttribute(mole, 'data-flinch')) === null, 2_000, 'the flinch to end');
+    await bell(); // within two seconds of the last one: ignored
+    await sleep(300);
+    expect(await page.getAttribute(mole, 'data-flinch')).toBeNull();
+    // the scenes flinch too
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'warp' } }));
+    const scene = ".pet-corner[data-companion='warp'] .scene";
+    await page.waitForSelector(scene);
+    await sleep(2_100);
+    await bell();
+    await until(async () => (await page.getAttribute(scene, 'data-flinch')) === '1', 2_000, 'a scene flinch');
+    await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
+  }, 30_000);
 
   // (last: ESC c wipes the scrollback, which the reload test above reads)
   it('Clear and a full reset (ESC c) take the blocks along: an open gutter menu closes, no stale marks, no stale prompt to jump to', async () => {

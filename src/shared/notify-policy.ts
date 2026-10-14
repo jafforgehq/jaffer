@@ -37,3 +37,11 @@ export function commandNotification(c: { cmd: string; exit: number | null; durMs
   const shown = isSensitiveCommand(c.cmd) ? 'A command' : redactText(c.cmd).replace(/\s+/g, ' ').trim().slice(0, 120);
   return { title: c.exit === 0 ? 'Command finished' : `Command failed (exit ${c.exit})`, body: `${shown} — ${took(c.durMs)}` };
 }
+
+/** A bell bounces the Dock icon at most this often. */
+const BOUNCE_GAP_MS = 5_000;
+
+/** Whether a bell at `now` may bounce the Dock icon, given when it last did (a clock that went backwards waits). */
+export function shouldBounce(now: number, last: number): boolean {
+  return now - last >= BOUNCE_GAP_MS;
+}

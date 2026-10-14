@@ -4,6 +4,7 @@ import type { Companion } from '../../shared/companions';
 import type { CrewMood } from '../../shared/pet-crew';
 import type { Effort } from '../../shared/pet-effort';
 import type { PetMood } from '../../shared/pet-mood';
+import type { ToolCategory } from '../../shared/tool-category';
 import {
   AGENT_HUB,
   AGENT_LETTERS,
@@ -23,6 +24,7 @@ import {
   SCOPE,
   sceneDensity,
   sceneTempo,
+  toolTempo,
   starsShown,
   warpShips,
   warpStars,
@@ -41,6 +43,12 @@ export interface SceneProps {
   effort: Effort;
   agents: SceneAgent[];
   label: string;
+  /** What kind of work Claude is doing now (a hue and a tempo), when it is working with a tool. */
+  tool?: ToolCategory | null;
+  /** Quiet for ten minutes: dimmer and slower. */
+  dozing?: boolean;
+  /** A bell just rang: a flinch. */
+  flinch?: boolean;
 }
 
 /** What every scene draws from: the props, and the id its clip path, scan lines and gradient go by (one page can show seven scenes). */
@@ -61,8 +69,11 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
       data-mood={p.mood}
       data-effort={p.effort}
       data-agents={p.agents.length}
-      data-density={sceneDensity(p.mood, p.effort)}
-      style={{ '--t': `${sceneTempo(p.effort)}s` } as never}
+      data-density={sceneDensity(p.mood, p.effort, p.tool)}
+      data-tool={p.tool ?? undefined}
+      data-idle={p.dozing ? 'doze' : undefined}
+      data-flinch={p.flinch ? '1' : undefined}
+      style={{ '--t': `${sceneTempo(p.effort) * toolTempo(p.tool)}s` } as never}
       viewBox={`0 0 ${SCENE_W} ${SCENE_H}`}
       role="img"
       aria-label={p.label}
@@ -95,7 +106,7 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
 const COLUMNS = matrixColumns();
 
 function Matrix({ p }: { p: Inner }): VNode {
-  const shown = matrixShown(sceneDensity(p.mood, p.effort));
+  const shown = matrixShown(sceneDensity(p.mood, p.effort, p.tool));
   const colX = (slot: number) => COLUMNS[MATRIX_AGENT_COLUMNS[slot]!]!.x;
   return (
     <Frame p={p}>
@@ -204,7 +215,7 @@ const STARS = warpStars();
 const SHIP = 'M0 -7 L6 6 L0 3 L-6 6 Z';
 
 function Warp({ p }: { p: Inner }): VNode {
-  const stars = STARS.slice(0, starsShown(sceneDensity(p.mood, p.effort)));
+  const stars = STARS.slice(0, starsShown(sceneDensity(p.mood, p.effort, p.tool)));
   const ships = warpShips(p.agents.length);
   return (
     <Frame p={p}>

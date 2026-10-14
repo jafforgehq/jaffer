@@ -8,7 +8,7 @@ import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
-import { commandNotification, needsYouNotification } from '../shared/notify-policy';
+import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
 import { isAppUrl, isWebUrl } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
@@ -92,6 +92,7 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
+    if (event === 'pty.bell') maybeBounce();
     if (event === 'pty.start') runningCommand = (data as { cmd?: string }).cmd || 'command';
     if (event === 'pty.command') {
       runningCommand = null;
@@ -279,6 +280,14 @@ function maybeNotify(n: { title: string; body: string }): void {
   if (win?.isFocused()) return;
   lastTerminalNotifyAt = Date.now();
   notify(n.title || 'Terminal', n.body);
+}
+
+let lastBounceAt = 0;
+/** A bell while the window is not in front: one gentle bounce of the Dock icon (at most one in five seconds; the terminal's flash stays). */
+function maybeBounce(): void {
+  if (win?.isFocused() || !shouldBounce(Date.now(), lastBounceAt)) return;
+  lastBounceAt = Date.now();
+  app.dock?.bounce('informational');
 }
 
 /** Claude Code works, or waits for the person (from its hooks). */

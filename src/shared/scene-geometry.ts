@@ -1,5 +1,6 @@
 import type { PetMood } from './pet-mood';
 import type { Effort } from './pet-effort';
+import type { ToolCategory } from './tool-category';
 
 /**
  * Where everything sits in the scenes that can replace the mole (Matrix, Agent network, Warp, Radar, Reactor core). One frame for all of
@@ -37,18 +38,23 @@ export function sceneTempo(effort: Effort): number {
   return [1, 0.8, 0.6, 0.45][effort] ?? 1;
 }
 
+/** What the kind of work does to that beat: the web is a little quicker, reading a little calmer. */
+export function toolTempo(tool?: ToolCategory | null): number {
+  return tool === 'web' ? 0.75 : tool === 'read' ? 1.15 : 1;
+}
+
 /**
  * How much is going on, 0 (nothing) to 6 (everything): the number of rain columns, stars or packets that show. Asleep is nothing,
  * Claude open and idle is a little, working is a lot and more the longer it goes on.
  */
-export function sceneDensity(mood: PetMood, effort: Effort): number {
+export function sceneDensity(mood: PetMood, effort: Effort, tool?: ToolCategory | null): number {
   switch (mood) {
     case 'sleep':
       return 0;
     case 'rest':
       return 1;
     case 'dig':
-      return 3 + effort;
+      return Math.min(6, 3 + effort + (tool === 'agent' ? 1 : 0)); // (agents at work: a little denser)
     case 'alert':
       return 2;
     case 'cheer':

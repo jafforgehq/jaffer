@@ -21,6 +21,7 @@ import {
   SCOPE,
   sceneDensity,
   sceneTempo,
+  toolTempo,
   warpShips,
   warpStars,
   WARP_FLAGSHIP,
@@ -62,6 +63,16 @@ describe('how hard a scene works', () => {
     for (const m of moods) for (const e of efforts) expect(sceneDensity(m, e)).toBeLessThanOrEqual(6);
     expect(sceneDensity('dig', 0)).toBeGreaterThan(sceneDensity('rest', 0));
     expect(sceneDensity('alert', 3)).toBeLessThan(sceneDensity('dig', 0)); // waiting for you is calmer than working
+  });
+
+  it('the tool changes the beat and the crowd a little: web is quicker, read calmer, agents are denser (never past the most)', () => {
+    expect(toolTempo('web')).toBeLessThan(1);
+    expect(toolTempo('read')).toBeGreaterThan(1);
+    for (const t of ['shell', 'write', 'agent', 'other', null, undefined] as const) expect(toolTempo(t)).toBe(1);
+    expect(sceneDensity('dig', 0, 'agent')).toBe(sceneDensity('dig', 0) + 1);
+    expect(sceneDensity('dig', 3, 'agent')).toBe(6);
+    expect(sceneDensity('rest', 0, 'agent')).toBe(sceneDensity('rest', 0)); // only while it works
+    expect(sceneDensity('dig', 1, 'read')).toBe(sceneDensity('dig', 1));
   });
 });
 

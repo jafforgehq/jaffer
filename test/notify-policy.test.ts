@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandNotification, needsYouNotification } from '../src/shared/notify-policy';
+import { commandNotification, needsYouNotification, shouldBounce } from '../src/shared/notify-policy';
 import type { ClaudeSession, ClaudeState } from '../src/core/claude/watcher';
 
 const s = (state: ClaudeState, notice?: string, id = 's1'): ClaudeSession => ({ id, state, since: 1, startedAt: 1, turns: 0, calls: [], counts: {}, files: [], subagents: [], notice });
@@ -67,5 +67,16 @@ describe('commandNotification', () => {
     const n = run(`echo ${'x'.repeat(500)}\nsecond line`)!;
     expect(n.body.length).toBeLessThanOrEqual(120 + ' — 45s'.length);
     expect(n.body).not.toContain('\n');
+  });
+});
+
+describe('shouldBounce: the Dock bounces for a bell at most once in five seconds', () => {
+  it('bounces the first time, then not within five seconds', () => {
+    expect(shouldBounce(100_000, 0)).toBe(true);
+    expect(shouldBounce(100_000, 96_000)).toBe(false);
+    expect(shouldBounce(100_000, 95_000)).toBe(true);
+  });
+  it('a clock that went backwards waits', () => {
+    expect(shouldBounce(1_000, 50_000)).toBe(false);
   });
 });

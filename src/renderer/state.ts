@@ -7,6 +7,7 @@ import { isSensitiveCommand, redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import type { GitStatus } from '../core/session/git-status';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
+import { FailTracker } from './fail-tracker';
 
 export { fmtDuration };
 
@@ -44,6 +45,14 @@ export function openOverlay(next: Exclude<Overlay, 'onboarding' | null>): void {
   overlay.value = next;
 }
 export const windowFocused = signal(true);
+/** When Claude last worked or asked for the person, or a command last started or ended (ms since epoch): the companion dozes after ten quiet minutes. */
+export const lastActivityAt = signal(Date.now());
+/** When a command last worked after three failures in a row (the companion's "Fixed it!" burst), and when a bell last rang (its flinch); 0 = never. */
+export const fixedAt = signal(0);
+export const bellAt = signal(0);
+const failTracker = new FailTracker();
+/** A bell rings again at once when a program rings in a loop: the companion flinches at most once in this long. */
+const BELL_GAP_MS = 2000;
 export const appVersion = signal('');
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
 export const updateState = signal<UpdateState | null>(null);
@@ -178,6 +187,7 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
   batch(() => {
     claudeLive.value = Array.isArray(data?.sessions) ? data.sessions : [];
     claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
+    if (claudeLive.value.some((c) => c?.state === 'working' || c?.state === 'needs-you')) lastActivityAt.value = Date.now();
   });
   const s = currentClaude();
   const p = s && seen?.id === s.id ? seen : null;
@@ -256,19 +266,25 @@ export async function bootstrap(): Promise<void> {
     if (event.startsWith('pty.')) {
       ptyBus.emit({ event, data });
       if (event === 'pty.start') {
+        lastActivityAt.value = Date.now();
         if (data.pane === 'main') {
           info.value = { ...info.value, busy: data.cmd || 'command', busySince: Date.now() };
           port.value = null;
         }
         void refreshInfoSoon();
       } else if (event === 'pty.command') {
+        lastActivityAt.value = Date.now();
         info.value = { ...info.value, busy: null, busySince: null };
         if (data.pane === 'main') {
           port.value = null;
+          if (failTracker.record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) fixedAt.value = Date.now();
           remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0 });
           if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
         }
         void refreshInfoSoon();
+      } else if (event === 'pty.bell') {
+        const now = Date.now();
+        if (now - bellAt.value >= BELL_GAP_MS) bellAt.value = now;
       } else if (event === 'pty.cwd') {
         info.value = { ...info.value, cwd: data.cwd };
         void refreshInfoSoon();

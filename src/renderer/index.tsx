@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { App } from './app';
-import { bootstrap } from './state';
+import { bootstrap, lastActivityAt } from './state';
 import './styles.css';
 
 render(<App />, document.getElementById('root')!);
@@ -14,5 +14,5 @@ void window.jaffer?.appInfo().then((i) => ((window as unknown as { __home?: stri
 
 // Test hook: lets end-to-end tests read terminal buffers. Only active with ?debug in the URL.
 if (location.search.includes('debug')) {
-  void Promise.all([import('./components/TerminalView'), import('./components/Blocks')]).then(([m, b]) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals, blocks: b.currentBlocks }));
+  void Promise.all([import('./components/TerminalView'), import('./components/Blocks')]).then(([m, b]) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals, blocks: b.currentBlocks, activity: lastActivityAt }));
 }

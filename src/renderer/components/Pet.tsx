@@ -1,8 +1,9 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { cfg, currentClaude, info } from '../state';
+import { bellAt, cfg, currentClaude, fixedAt, info, lastActivityAt } from '../state';
 import { processBadge } from '../../shared/process-badge';
-import { petMood, type PetMood } from '../../shared/pet-mood';
+import { isDozing, petMood, petTool, type PetMood } from '../../shared/pet-mood';
+import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
 import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
 import { COMPANIONS, companionOf, type Companion } from '../../shared/companions';
@@ -26,9 +27,12 @@ const SAYS: Record<PetMood, string> = {
 };
 
 let moleCount = 0;
+/** How long the "Fixed it!" burst and the bell's flinch last. */
+const BURST_MS = 1400;
+const FLINCH_MS = 400;
 
 /** One mole on its own molehill. The main one follows Claude and the terminal; a helper stands for one background agent. */
-function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: string; helper?: number; effort?: Effort }): VNode {
+function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood: PetMood; label: string; helper?: number; effort?: Effort; tool?: ToolCategory | null; dozing?: boolean; flinch?: boolean }): VNode {
   const id = useRef(0);
   if (!id.current) id.current = ++moleCount;
   const clip = `pet-clip-${id.current}`; // one page can show nine moles: an id may be used once
@@ -38,6 +42,9 @@ function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: strin
       data-mood={mood}
       data-effort={effort}
       data-role={helper === undefined ? 'main' : 'helper'}
+      data-tool={tool ?? undefined}
+      data-idle={dozing ? 'doze' : undefined}
+      data-flinch={flinch ? '1' : undefined}
       style={helper === undefined ? undefined : ({ '--i': helper + 1 } as never)}
       viewBox="0 0 120 72"
       role="img"
@@ -70,10 +77,25 @@ function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: strin
           <g class="pet-arm pet-arm-l">
             <ellipse class="pet-paw" cx="43" cy="54" rx="6.8" ry="4.6" />
             <path class="pet-claws" d="M38.6 57.6l-1.6 2.6M42 58.6l-.4 3M45.6 58.2l.8 2.8" />
+            <g class="pet-book">
+              <rect class="pet-cover" x="29" y="40" width="17" height="12" rx="1.6" />
+              <path class="pet-leaf" d="M30.6 41.4h14v9.2h-14z" />
+              <path class="pet-page" d="M37.6 41.4h7v9.2h-7z" />
+            </g>
           </g>
           <g class="pet-arm pet-arm-r">
             <ellipse class="pet-paw" cx="77" cy="54" rx="6.8" ry="4.6" />
             <path class="pet-claws" d="M81.4 57.6l1.6 2.6M78 58.6l.4 3M74.4 58.2l-.8 2.8" />
+            <g class="pet-hammer">
+              <path class="pet-haft" d="M79 52L88 36" />
+              <rect class="pet-head" x="83.6" y="30.4" width="10" height="5.6" rx="1.2" transform="rotate(32 88.6 33.2)" />
+            </g>
+          </g>
+          <g class="pet-dish">
+            <path class="pet-mast" d="M60 27.6V16.4" />
+            <path class="pet-bowl" d="M53.6 13.6q6.4 8 12.8 0z" />
+            <path class="pet-wave" d="M68.4 9.6q4.2 3.6 0 7.4" />
+            <path class="pet-wave two" d="M72.4 7q6.4 5.4 0 12.2" />
           </g>
         </g>
       </g>
@@ -104,6 +126,18 @@ function Mole({ mood, label, helper, effort = 0 }: { mood: PetMood; label: strin
         <path d="M100 38l1.2 3 3 1.2-3 1.2-1.2 3-1.2-3-3-1.2 3-1.2z" />
       </g>
     </svg>
+  );
+}
+
+/** "Fixed it!": a ring of sparks flying out of the companion for a moment (CSS only; Settings → Animations and Reduce motion keep it away). */
+const SPARKS = Array.from({ length: 8 }, (_, i) => ({ a: i * 45 + 12, d: 46 + (i % 3) * 8, dl: (i % 4) * 0.05 }));
+function Burst(): VNode {
+  return (
+    <div class="pet-burst" aria-hidden="true">
+      {SPARKS.map((p, i) => (
+        <i key={i} class="pet-spark" style={{ '--a': `${p.a}deg`, '--d': `${p.d}px`, animationDelay: `${p.dl}s` } as never} />
+      ))}
+    </div>
   );
 }
 
@@ -179,6 +213,34 @@ export function Pet(): VNode | null {
   }, [target]);
   useEffect(() => () => clearTimeout(leave.current), []);
 
+  // a command that worked after three failures: a burst of sparks for a moment
+  const fixed = fixedAt.value;
+  const [burst, setBurst] = useState(0);
+  useEffect(() => {
+    if (!fixed || Date.now() - fixed > BURST_MS) return;
+    setBurst(fixed);
+    const t = setTimeout(() => setBurst(0), BURST_MS);
+    return () => clearTimeout(t);
+  }, [fixed]);
+
+  // a bell: a flinch
+  const bell = bellAt.value;
+  const [flinch, setFlinch] = useState(false);
+  useEffect(() => {
+    if (!bell || Date.now() - bell > FLINCH_MS) return;
+    setFlinch(true);
+    const t = setTimeout(() => setFlinch(false), FLINCH_MS);
+    return () => clearTimeout(t);
+  }, [bell]);
+
+  // ten quiet minutes: doze. Any activity (the signal changes) wakes it at once; the clock is looked at twice a minute
+  const lastActivity = lastActivityAt.value;
+  const [, slowTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => slowTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
   if (cfg.value?.appearance.pet === false) return null;
   const companion = companionOf(cfg.value?.appearance.companion);
   const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
@@ -187,6 +249,9 @@ export function Pet(): VNode | null {
   const tired = effort >= 2 ? ' · working hard' : '';
   const crew = running > 0 ? ` · ${running} background agent${running === 1 ? '' : 's'} working` : '';
   const helpers = crewMoods(running, shown);
+  const tool = petTool(session);
+  const dozing = live !== 'working' && live !== 'needs-you' && running === 0 && !processBadge(busy, live).spin && isDozing(lastActivity, now);
+  const sparks = burst && cfg.value?.appearance.animations !== false ? <Burst key={burst} /> : null;
   if (companion !== 'mole') {
     const name = COMPANIONS.find((c) => c.id === companion)!.name;
     return (
@@ -197,22 +262,28 @@ export function Pet(): VNode | null {
           effort={effort}
           agents={helpers.map((m, i) => ({ mood: m, effort: m === 'dig' ? effortLevel(longestRunning([runningAgents[i]?.startedAt], now)) : (0 as Effort) }))}
           label={`${name}: ${SCENE_SAYS[mood]}${tired}${crew}`}
+          tool={tool}
+          dozing={dozing}
+          flinch={flinch}
         />
+        {sparks}
       </div>
     );
   }
   return (
     <div class="pet-corner" data-companion="mole">
-      <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${crew}`} />
+      <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${dozing ? ' · dozing' : ''}${crew}`} tool={tool} dozing={dozing} flinch={flinch} />
       {helpers.map((m, i) => (
         <Mole
           key={i}
           helper={i}
           mood={m}
           effort={m === 'dig' ? effortLevel(longestRunning([runningAgents[i]?.startedAt], now)) : 0}
+          tool={m === 'dig' && runningAgents[i]?.tool ? toolCategory(runningAgents[i]!.tool!) : null}
           label={m === 'cheer' ? 'A background agent finished' : 'A background agent is working'}
         />
       ))}
+      {sparks}
     </div>
   );
 }
