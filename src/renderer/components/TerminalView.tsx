@@ -10,11 +10,11 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, cfg, homeDir, info, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, cfg, firstLine, homeDir, info, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
 import { redactText } from '../../shared/redact';
-import { COMMAND_HEAD } from '../../shared/process-badge';
+import { isClaudeCommand } from '../../shared/process-badge';
 import { themeById, xtermTheme } from '../themes';
 import { attachBlocks, type BlocksHandle } from './Blocks';
 
@@ -58,16 +58,9 @@ function openFound(f: FoundPath): void {
   const abs = resolvePath(f.path);
   if (!abs) return;
   void window.jaffer.openPath({ path: abs, line: f.line, col: f.col }).then(
-    (r) => r.opened || toast({ kind: 'info', text: 'No file there.' }, 2500),
+    (r) => r.opened || toast({ kind: 'info', text: r.editorFailed ? 'Could not open the editor link' : 'No file there.' }, 3000),
     () => undefined,
   );
-}
-
-/** How many lines a paste has (a trailing newline does not start one). */
-function lineCount(text: string): number {
-  let n = 1;
-  for (let i = text.indexOf('\n'); i >= 0 && i < text.length - 1; i = text.indexOf('\n', i + 1)) n++;
-  return n;
 }
 
 function shellQuote(p: string): string {
@@ -162,8 +155,7 @@ export function TerminalView({ pane }: { pane: string }) {
       if (lines < 2) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      const first = text.slice(0, 4 * COMMAND_HEAD).split(/\r?\n/)[0]!;
-      pasteAsk.value = { text, lines, first: redactText(first).slice(0, 80) };
+      pasteAsk.value = { text, lines, first: redactText(firstLine(text)).slice(0, 80) };
     };
     el.addEventListener('paste', onPaste, true);
 
@@ -243,8 +235,10 @@ export function TerminalView({ pane }: { pane: string }) {
       if (event === 'pty.data') {
         if (!attached) pending.push({ seq: data.seq, data: data.data });
         else if (data.seq > snapshotSeq) apply(data.seq, data.data);
-        // Feature 37: a local server the running command prints (not inside a full-screen program); the finder reads a bounded head
-        if (info.value.busy && cfg.value?.terminal?.portLinks !== false && term.buffer.active.type !== 'alternate') {
+        // Feature 37: a local server the running command prints (not inside a full-screen program, and not Claude Code's own screen,
+        // which it draws in the normal buffer); the finder reads a bounded head
+        const busy = info.value.busy;
+        if (busy && !isClaudeCommand(busy) && cfg.value?.terminal?.portLinks !== false && term.buffer.active.type !== 'alternate') {
           const found = findPorts(data.data);
           if (found.length) port.value = found.at(-1)!;
         }

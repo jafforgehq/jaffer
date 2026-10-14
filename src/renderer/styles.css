@@ -150,7 +150,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .term .xterm-decoration.block-hl { background: var(--accent-soft); pointer-events: none; }
 /* the command of the output you scrolled up into, pinned at the top of the card; a click goes to its prompt */
 .sticky-cmd {
-  position: absolute; top: 6px; left: 12px; z-index: 4; max-width: calc(100% - 300px); display: inline-flex; align-items: center; gap: 8px;
+  position: absolute; top: calc(6px + var(--pins-h, 0px)); left: 12px; z-index: 4; max-width: calc(100% - 300px); display: inline-flex; align-items: center; gap: 8px;
   padding: 3px 10px 3px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--raised-2); box-shadow: var(--shadow-sm);
   color: var(--muted); font: 11.5px/1.4 var(--font-mono); cursor: pointer;
 }
@@ -256,7 +256,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pal-title mark { background: none; color: var(--accent); font-weight: 650; }
 .pal-foot { display: flex; align-items: center; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 11px; color: var(--faint); }
 .pal-foot span { display: inline-flex; align-items: center; gap: 5px; }
-.findbar { position: absolute; top: 10px; right: 14px; z-index: 10; display: flex; gap: 4px; align-items: center; padding: 5px; border-radius: 12px; background: var(--raised-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+.findbar { position: absolute; top: calc(10px + var(--pins-h, 0px)); right: 14px; z-index: 10; display: flex; gap: 4px; align-items: center; padding: 5px; border-radius: 12px; background: var(--raised-2); border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
 .findbar input { width: 200px; height: 26px; }
 .findbar .find-count { min-width: 58px; padding: 0 4px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 /* ⌘R: this session's commands, in the palette's look */
@@ -271,6 +271,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .paste-bar .btn { height: 26px; }
 .paste-bar kbd { margin-left: 4px; }
 /* ⇧⌘L: pinned lines at the top of the card, each with its × */
+/* (--pins-h, the strip's height, is set on the card: the sticky header and the find bar sit below it) */
 .pins { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px 4px 18px; border-bottom: 1px solid var(--line); }
 .pins .pin { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font: 11.5px/1.5 var(--font-mono); }
 .pins .pin-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; -webkit-user-select: text; }

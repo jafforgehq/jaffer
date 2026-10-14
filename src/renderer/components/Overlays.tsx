@@ -15,7 +15,8 @@ const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
 function Modal({ title, onClose, children, wide, xwide, center }: { title?: string; onClose: () => void; children: preact.ComponentChildren; wide?: boolean; xwide?: boolean; center?: boolean }): VNode {
   const dialog = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  // (a layout effect: an Esc pressed right after the dialog appeared must already find this listener)
+  useLayoutEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && (e.stopPropagation(), onClose());
     window.addEventListener('keydown', k, true);
     // keyboard focus goes into the dialog (the terminal keeps it otherwise, and Tab and typing would go to the shell behind it)
@@ -235,7 +236,7 @@ export function RecentCommands(): VNode {
   const rows = useMemo(() => {
     const t = q.trim().toLowerCase();
     return commands.value.map((c) => ({ c, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
-  }, [q]);
+  }, [q, commands.value]); // (a command that ends while the list is open shows up)
   useEffect(() => setSel(0), [q]);
   useEffect(() => {
     list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
@@ -303,7 +304,7 @@ export function PasteBar(): VNode | null {
   useLayoutEffect(() => {
     if (!ask) return;
     const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      if ((e.key !== 'Enter' && e.key !== 'Escape') || overlay.value) return; // another dialog's keys are its own
       e.preventDefault();
       e.stopPropagation();
       done(e.key === 'Enter');
@@ -328,9 +329,16 @@ export function PasteBar(): VNode | null {
 
 /** Feature 39: up to three pinned lines under the title bar; memory only. */
 export function Pins(): VNode | null {
-  if (!pins.value.length) return null;
+  const strip = useRef<HTMLDivElement>(null);
+  const n = pins.value.length;
+  // what anchors at the top of the card (the sticky command header, the find bar) moves down by the strip's height
+  useLayoutEffect(() => {
+    const area = strip.current?.parentElement ?? document.querySelector<HTMLElement>('.terminal-area');
+    area?.style.setProperty('--pins-h', `${strip.current?.offsetHeight ?? 0}px`);
+  }, [n]);
+  if (!n) return null;
   return (
-    <div class="pins">
+    <div class="pins" ref={strip}>
       {pins.value.map((p) => (
         <div key={p.id} class="pin" title={p.text}>
           <span class="pin-text">{p.text}</span>

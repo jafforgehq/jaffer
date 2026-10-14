@@ -1038,6 +1038,22 @@ describe('Jaffer UI end to end', () => {
     await until(async () => /^unguarded-45/m.test(await termText()), 8_000, 'the lines pasted without a question');
     expect(await page.locator('.paste-bar').count()).toBe(0);
     await patch({ terminal: { pasteGuard: true } });
+    // a lone carriage return breaks a line too (older Mac text): it still asks
+    await page.click('.term');
+    await pasteText('echo cr-a-46\recho cr-b-47');
+    await page.waitForSelector('.paste-bar');
+    expect(await page.textContent('.paste-bar b')).toBe('Paste 2 lines?');
+    expect(await page.textContent('.paste-bar .paste-first')).toBe('echo cr-a-46');
+    // while another dialog is open, its Esc and Enter are its own: the question waits
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.palette', { state: 'detached' });
+    expect(await page.locator('.paste-bar').count()).toBe(1);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    await sleep(300);
+    expect(await termText()).not.toContain('cr-a-46');
   }, 60_000);
 
   it('⌘-click on a printed path opens it (absolute, relative to the folder, with its line and column); a plain click does not', async () => {
@@ -1083,6 +1099,11 @@ describe('Jaffer UI end to end', () => {
     await metaClick(where.text.indexOf('src/app.ts:7') + 2);
     await until(async () => (await page.evaluate(() => (window as any).__openedPath.length)) === 2, 3_000, 'the relative path opened');
     expect(await page.evaluate(() => (window as any).__openedPath[1])).toEqual({ path: path.join(dir, 'src', 'app.ts'), line: 7 });
+    // the editor link could not be opened (no app for its scheme): the window says so
+    await page.evaluate(() => ((window as any).__openPathAnswer = { opened: false, editorFailed: true }));
+    await metaClick(5);
+    await toastSaid('Could not open the editor link');
+    await page.evaluate(() => delete (window as any).__openPathAnswer);
   }, 40_000);
 
   it('the find bar counts matches ("2 of 3"), marks them on the overview ruler, and ⌘G / ⇧⌘G go on with the bar closed', async () => {
@@ -1141,6 +1162,13 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.recent-list', { state: 'detached' });
     await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === 'echo recent-one-55', 3_000, 'the command on the clipboard');
     await toastSaid('Copied. Paste it in the terminal.');
+    // a command that ends while the list is open shows up in it
+    await menu('recent-commands');
+    await page.waitForSelector('.recent-list input');
+    await page.evaluate(() => (window as any).__event('pty.command', { pane: 'main', cmd: 'echo while-open-56', exit: 0, durMs: 5, cwd: '/tmp' }));
+    await until(async () => (await page.textContent('.recent-list .recent-cmd')) === 'echo while-open-56', 3_000, 'the new command in the open list');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.recent-list', { state: 'detached' });
     await sleep(500);
     expect(await termText()).toBe(before); // nothing typed
     // the palette has the new actions
@@ -1210,6 +1238,15 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.session-pill .port-chip').count()).toBe(0);
     await until(async () => !(await page.evaluate(() => window.jaffer.call('session.info'))).busy, 8_000, 'the command to end');
     await patch({ terminal: { portLinks: true } });
+    // Claude Code draws its own screen in the normal buffer: what it prints is not a server of the command's
+    await page.click('.term');
+    await enter(`claude() { printf 'see http://local%s:3000\\n' host; sleep 2; }`);
+    await enter('claude');
+    await until(async () => /^see http:\/\/localhost:3000/m.test(await termText()), 8_000, 'the stub Claude output');
+    await sleep(300);
+    expect(await page.locator('.session-pill .port-chip').count()).toBe(0);
+    await until(async () => !(await page.evaluate(() => window.jaffer.call('session.info'))).busy, 8_000, 'the stub to end');
+    await enter('unset -f claude');
   }, 40_000);
 
   it('⇧⌘L pins the selected line (redacted) under the title bar, at most three, each with its ×', async () => {
@@ -1263,6 +1300,29 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.pins')).not.toContain('pppppppppp');
     for (let i = 0; i < 3; i++) await page.locator('.pins .pin button').first().click();
     await page.waitForSelector('.pins', { state: 'detached' });
+  }, 40_000);
+
+  it('the pin strip pushes the sticky command header and the find bar down: nothing covers a pin or its ×', async () => {
+    await page.click('.term');
+    await enter('seq 1 300');
+    const seq = await ended('seq 1 300');
+    await page.evaluate((y) => (window as any).__jaffer.terminals.get('main').term.selectLines(y, y), seq.outputStart! + 298);
+    await menu('pin-selection');
+    await page.waitForSelector('.pins .pin');
+    await sleep(200);
+    await page.evaluate((line) => (window as any).__jaffer.terminals.get('main').term.scrollToLine(line), seq.outputStart! + 120);
+    await page.waitForSelector('.sticky-cmd');
+    await page.keyboard.press('Meta+f');
+    await page.waitForSelector('.findbar input');
+    const rect = (sel: string) => page.evaluate((q) => { const r = document.querySelector(q)!.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; }, sel);
+    const strip = await rect('.pins');
+    for (const sel of ['.sticky-cmd', '.findbar']) expect((await rect(sel)).top, sel).toBeGreaterThanOrEqual(strip.bottom);
+    await shot('25-pins-sticky-find');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.findbar', { state: 'detached' });
+    await page.locator('.pins .pin button').click({ timeout: 3_000 }); // nothing covers it
+    await page.waitForSelector('.pins', { state: 'detached' });
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.scrollToBottom());
   }, 40_000);
 
   it('back at the window, a toast says which long command finished while you were away', async () => {

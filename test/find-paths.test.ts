@@ -39,9 +39,30 @@ describe('findPaths: file paths printed in a terminal line', () => {
   });
 
   it('keeps an extension of 1 to 8 letters or digits, with at least one letter', () => {
-    expect(paths('a.c b.toolongext c.12 d.mp4')).toEqual([
+    expect(paths('a.c b.toolongext c.12 x/d.mp4')).toEqual([
       ['a.c', undefined, undefined],
-      ['d.mp4', undefined, undefined],
+      ['x/d.mp4', undefined, undefined],
+    ]);
+  });
+
+  it('reads the path out of an option or an assignment (`--flag=src/a.ts`, `key=value.json`, `-x/y.ts`)', () => {
+    const line = 'run --out=src/a.ts key=value.json -lib/b.ts';
+    expect(paths(line)).toEqual([
+      ['src/a.ts', undefined, undefined],
+      ['value.json', undefined, undefined],
+      ['lib/b.ts', undefined, undefined],
+    ]);
+    for (const m of findPaths(line)) expect(line.slice(m.start, m.end)).toBe(m.path);
+  });
+
+  it('a bare name.ext (no slash) is a path only with a source-like extension or a :line', () => {
+    expect(paths('e.g. i.e. example.com docs.dev x.io Node.js Vue.js clip.mp4')).toEqual([]);
+    expect(paths('app.ts notes.md Makefile.lock clip.mp4:3 media/clip.mp4')).toEqual([
+      ['app.ts', undefined, undefined],
+      ['notes.md', undefined, undefined],
+      ['Makefile.lock', undefined, undefined],
+      ['clip.mp4', 3, undefined],
+      ['media/clip.mp4', undefined, undefined],
     ]);
   });
 

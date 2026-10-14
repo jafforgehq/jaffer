@@ -28,6 +28,10 @@ describe('editorUrl: an editor link for a file, from the template in Settings', 
     expect(editorUrl(undefined as unknown as string, '/a')).toBeNull();
   });
 
+  it('null, never a throw, for a path that cannot be encoded (a lone surrogate)', () => {
+    expect(editorUrl('vscode://file/{path}', '/a/\ud800.ts')).toBeNull();
+  });
+
   it('line and column only as positive whole numbers', () => {
     expect(editorUrl('vscode://file/{path}:{line}:{col}', '/a', -2, Number.NaN)).toBe('vscode://file//a:1:1');
     expect(editorUrl('vscode://file/{path}:{line}', '/a', 1.5)).toBe('vscode://file//a:1');

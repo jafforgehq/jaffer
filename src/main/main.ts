@@ -648,15 +648,20 @@ function existingPath(p: unknown): string | null {
   return typeof p === 'string' && p.length <= 4096 && path.isAbsolute(p) && fs.existsSync(p) ? p : null;
 }
 // ⌘-click on a printed path: the editor link from Settings (editor schemes only), else Finder. Never `shell.openPath`: a printed path to a script must not run.
-ipcMain.handle('jaffer:open-path', (e, p: unknown) => {
+ipcMain.handle('jaffer:open-path', async (e, p: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   const { path: file, line, col } = (p ?? {}) as { path?: unknown; line?: unknown; col?: unknown };
   const abs = existingPath(file);
   if (!abs) return { opened: false };
   const url = editorUrl(appCfg.terminal?.editorUrl ?? '', abs, typeof line === 'number' ? line : undefined, typeof col === 'number' ? col : undefined);
-  if (url) void shell.openExternal(url);
-  else shell.showItemInFolder(abs);
-  return { opened: true };
+  if (!url) {
+    shell.showItemInFolder(abs);
+    return { opened: true };
+  }
+  return shell.openExternal(url).then(
+    () => ({ opened: true }),
+    () => ({ opened: false, editorFailed: true }), // no app for that scheme
+  );
 });
 // Shows a file the window names in Finder: selects it there, never opens or runs it.
 ipcMain.handle('jaffer:reveal-path', (e, p: unknown) => {

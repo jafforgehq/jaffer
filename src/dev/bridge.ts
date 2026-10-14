@@ -44,7 +44,7 @@ const SHIM = `(() => {
     updates: { state: async () => ({ status: 'idle', current: ${JSON.stringify(VERSION)}, auto: true }), check: async () => ({ status: 'uptodate', current: ${JSON.stringify(VERSION)}, auto: true }) },
     setLoginItem: async (on) => { window.__loginItem = on; }, pathForFile: () => '', platform: 'darwin',
     saveText: async (text, name) => { (window.__saved = window.__saved || []).push({ text, name }); return { saved: true }; }, // the person picked a file
-    openPath: async (p) => { (window.__openedPath = window.__openedPath || []).push(p); return { opened: true }; },
+    openPath: async (p) => { (window.__openedPath = window.__openedPath || []).push(p); return window.__openPathAnswer || { opened: true }; }, // a test may answer otherwise
     revealPath: async (p) => { (window.__revealed = window.__revealed || []).push(p); return { revealed: true }; },
   };
 })();`;

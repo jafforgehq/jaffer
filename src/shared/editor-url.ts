@@ -14,6 +14,11 @@ export function editorUrl(template: string, abs: string, line?: number, col?: nu
   const scheme = SCHEME.exec(template)?.[1]?.toLowerCase();
   if (!scheme || !(EDITOR_SCHEMES as readonly string[]).includes(scheme)) return null;
   const num = (n: number | undefined) => String(Number.isSafeInteger(n) && n! > 0 ? n : 1);
-  const path = abs.split('/').map(encodeURIComponent).join('/');
+  let path: string;
+  try {
+    path = abs.split('/').map(encodeURIComponent).join('/');
+  } catch {
+    return null; // (a lone surrogate cannot be encoded)
+  }
   return template.replaceAll('{path}', path).replaceAll('{line}', num(line)).replaceAll('{col}', num(col));
 }

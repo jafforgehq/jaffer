@@ -13,7 +13,7 @@ export interface JafferBridge {
   /** "Save output…": the app asks where (a save dialog) and writes the text there; nothing is kept. At most 32 MB. */
   saveText(text: string, name: string): Promise<{ saved: boolean }>;
   /** ⌘-click on a printed path: an absolute path that exists opens in the editor of Settings → Terminal, or is revealed in Finder; nothing runs. */
-  openPath(p: { path: string; line?: number; col?: number }): Promise<{ opened: boolean }>;
+  openPath(p: { path: string; line?: number; col?: number }): Promise<{ opened: boolean; editorFailed?: boolean }>;
   /** Selects an existing file in Finder (never opens it). */
   revealPath(path: string): Promise<{ revealed: boolean }>;
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };

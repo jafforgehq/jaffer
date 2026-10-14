@@ -61,6 +61,19 @@ export const port = signal<number | null>(null);
 /** A paste of several lines, waiting for Paste or Cancel. */
 export const pasteAsk = signal<{ text: string; lines: number; first: string } | null>(null);
 
+/** How many lines a paste has: `\r\n`, `\n` and a lone `\r` each end one; a trailing break does not start another. */
+export function lineCount(text: string): number {
+  let n = 1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 13 && text.charCodeAt(i + 1) === 10) i++;
+    if ((c === 10 || c === 13) && i < text.length - 1) n++;
+  }
+  return n;
+}
+/** The first line of a paste (of its head: a paste can be any size). */
+export const firstLine = (text: string): string => text.slice(0, 4 * COMMAND_HEAD).split(/\r\n|\r|\n/)[0]!;
+
 let pinId = 1;
 export function addPin(text: string): void {
   pins.value = [...pins.value.slice(-2), { id: pinId++, text }];
