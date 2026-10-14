@@ -125,40 +125,42 @@ async function readEnds(fh: fs.promises.FileHandle, id: string, size: number, mt
   return conv;
 }
 
-/** Claude's latest summary or title line (the tail first, then the head), else the first real user message of the head. */
+/** The person's latest own title, else Claude's latest AI title, else its latest summary (the tail first, then the head), else the first real user message of the head. */
 async function readTitle(fh: fs.promises.FileHandle, size: number): Promise<string | undefined> {
   const head = lines(await readAt(fh, 0, Math.min(size, WINDOW)), true, size <= WINDOW);
   const from = Math.max(0, size - WINDOW);
   const tail = lines(await readAt(fh, from, size - from), from === 0, true);
-  for (const ls of [tail, head]) {
-    for (let i = ls.length - 1; i >= 0; i--) {
-      const line = ls[i]!;
-      if (!line.includes('"summary"') && !line.includes('"aiTitle"') && !line.includes('"customTitle"')) continue;
-      const o = parse(line);
-      const t = typeof o?.customTitle === 'string' ? o.customTitle : typeof o?.aiTitle === 'string' ? o.aiTitle : o?.type === 'summary' && typeof o.summary === 'string' ? o.summary : undefined;
-      const title = t === undefined ? undefined : cleanTitle(t);
-      if (title) return title;
+  for (const key of ['customTitle', 'aiTitle', 'summary']) {
+    for (const ls of [tail, head]) {
+      for (let i = ls.length - 1; i >= 0; i--) {
+        if (!ls[i]!.includes(`"${key}"`)) continue;
+        const o = parse(ls[i]!);
+        const t = key === 'summary' && o?.type !== 'summary' ? undefined : o?.[key];
+        const title = typeof t === 'string' ? cleanTitle(t) : undefined;
+        if (title) return title;
+      }
     }
   }
   for (const line of head) {
     if (!line.includes('"user"')) continue;
     const o = parse(line);
     const m = o?.message as Record<string, unknown> | undefined;
-    if (o?.type !== 'user' || o.isMeta === true || !m || m.role !== 'user') continue;
+    if (o?.type !== 'user' || o.isMeta === true || o.isSidechain === true || o.isCompactSummary === true || !m || m.role !== 'user') continue;
     const c = m.content;
     const part = Array.isArray(c) ? (c as { type?: unknown; text?: unknown }[]).find((p) => p?.type === 'text') : undefined;
     const text = (typeof c === 'string' ? c : typeof part?.text === 'string' ? part.text : '').trim();
     if (!text || text.startsWith('<')) continue; // a system tag (<command-name>, <local-command-caveat>), not the person's words
-    const title = cleanTitle(text.slice(0, 4 * COMMAND_HEAD).split('\n')[0]!);
+    const title = cleanTitle(text.slice(0, COMMAND_HEAD).split('\n')[0]!);
     if (title) return title;
   }
   return undefined;
 }
 
-/** Redacted (before any cut, so no token is half shown), one line without control characters, at most 80 characters. */
+/** Redacted (before the cut to 80, so no token is half shown; 4 KB at most, which keeps 30 of them quick), one line without control or format characters. */
 function cleanTitle(text: string): string | undefined {
-  const one = redactText(text.slice(0, 4 * COMMAND_HEAD))
-    .replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ')
+  const one = redactText(text.slice(0, COMMAND_HEAD))
+    .replace(/\p{Cf}/gu, '')
+    .replace(/\p{Cc}/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const chars = Array.from(one);

@@ -158,8 +158,11 @@ describe('listConversations', () => {
     write(uuid(2), [user('first question', '/a', T0), JSON.stringify({ type: 'ai-title', aiTitle: 'An AI title', sessionId: 'x' })], T0 + 2000);
     write(uuid(3), [user('first question', '/a', T0), JSON.stringify({ type: 'custom-title', customTitle: 'Named by me', sessionId: 'x' })], T0 + 3000);
     write(uuid(4), [user('first question', '/a', T0), JSON.stringify({ type: 'summary', summary: 42 })], T0 + 4000); // not text: no summary
+    // the person's own title wins over a later AI title, which wins over a later summary
+    write(uuid(5), [JSON.stringify({ type: 'custom-title', customTitle: 'Mine' }), JSON.stringify({ type: 'ai-title', aiTitle: 'AI later' }), summary('Summary later')], T0 + 5000);
+    write(uuid(6), [JSON.stringify({ type: 'ai-title', aiTitle: 'AI first' }), summary('Summary later')], T0 + 6000);
     const by = Object.fromEntries((await listConversations({ claudeDir })).map((c) => [c.id, c.title]));
-    expect(by).toEqual({ [uuid(1)]: 'Newer summary', [uuid(2)]: 'An AI title', [uuid(3)]: 'Named by me', [uuid(4)]: 'first question' });
+    expect(by).toEqual({ [uuid(1)]: 'Newer summary', [uuid(2)]: 'An AI title', [uuid(3)]: 'Named by me', [uuid(4)]: 'first question', [uuid(5)]: 'Mine', [uuid(6)]: 'AI first' });
   });
 
   it('otherwise titles it with the first real user message: its first line, skipping system tags, meta lines and tool results', async () => {
@@ -169,6 +172,8 @@ describe('listConversations', () => {
       line({ message: { role: 'user', content: '<command-name>/clear</command-name>' } }),
       line({ message: { role: 'user', content: '  <local-command-caveat>Caveat</local-command-caveat>' } }),
       line({ message: { role: 'user', content: [{ type: 'tool_result', content: 'output' }] } }),
+      line({ isSidechain: true, message: { role: 'user', content: 'a subagent prompt' } }),
+      line({ isCompactSummary: true, message: { role: 'user', content: 'This session is being continued from a previous conversation' } }),
       JSON.stringify({ type: 'assistant', timestamp: iso(T0), message: { role: 'assistant', content: 'not the person' } }),
       line({ message: { role: 'user', content: '  Make the list show titles\nand the second line stays out  ' } }),
       line({ message: { role: 'user', content: 'a later question' } }),
@@ -184,7 +189,9 @@ describe('listConversations', () => {
     write(uuid(1), [user('word '.repeat(40), '/a', T0)], T0 + 1000);
     write(uuid(2), [summary('Two\u001b[31m\tparts\r\n of a ‮summary\u0007')], T0 + 2000);
     write(uuid(3), [summary(' \u0007\n ')], T0 + 3000); // nothing left: no title
-    const [c3, c2, c1] = await listConversations({ claudeDir });
+    write(uuid(4), [summary('Zero\u200Bwidth\uFEFF and \u061Cmark\u2060s')], T0 + 4000); // format characters are dropped
+    const [c4, c3, c2, c1] = await listConversations({ claudeDir });
+    expect(c4!.title).toBe('Zerowidth and marks');
     expect(c1!.title).toHaveLength(80);
     expect(c1!.title).toBe('word '.repeat(16).slice(0, 79) + '…');
     expect(c2!.title).toBe('Two [31m parts of a summary');
@@ -197,9 +204,12 @@ describe('listConversations', () => {
     write(uuid(1), [user(`use ${token} to push`, '/a', T0)], T0 + 1000);
     write(uuid(2), [summary(`Set password: hunter2hunter2 and ${key}`)], T0 + 2000);
     write(uuid(3), [user(`${'x '.repeat(90)}${token}`, '/a', T0)], T0 + 3000); // past the 80 shown, still redacted before the cut
+    // redacted before any cut: cut first, the token's head would no longer match a rule, and the masked text before it would pull it into the 80 shown
+    write(uuid(4), [user(`password=${'A'.repeat(170)} ${token}`, '/a', T0)], T0 + 4000);
     const items = await listConversations({ claudeDir });
     const json = JSON.stringify(items);
-    for (const secret of [token, key, 'hunter2', 'ghp_A1b2', 'sk-ant-api']) expect(json).not.toContain(secret);
+    for (const secret of [token, key, 'hunter2', 'ghp_', 'A1b2C3', 'sk-ant-api']) expect(json).not.toContain(secret);
+    expect(items.find((c) => c.id === uuid(4))!.title).toBe('password=[REDACTED] [REDACTED]:github-token');
     expect(items.find((c) => c.id === uuid(1))!.title).toMatch(/^use \[REDACTED\]:github-token\b/); // the redaction's own bias may mask a word more
   });
 
@@ -238,6 +248,15 @@ describe('listConversations', () => {
     expect(by[uuid(3)]).toBe('c'.repeat(79) + '…');
     expect(by[uuid(4)]).toBe('q');
     expect(by[uuid(5)]!.length).toBeLessThanOrEqual(80);
+  });
+
+  it('is quick on 30 first messages built to slow the redaction down (a run of words a rule looks behind)', async () => {
+    for (let i = 1; i <= 30; i++) write(uuid(i), [user('mysql '.repeat(3000), '/a', T0)], T0 + i * 1000);
+    const t0 = performance.now();
+    const items = await listConversations({ claudeDir });
+    expect(performance.now() - t0).toBeLessThan(300);
+    expect(items).toHaveLength(30);
+    expect(items.every((c) => typeof c.title === 'string' && c.title.length <= 80)).toBe(true);
   });
 
   it('writes the titles nowhere: the folders hold the same files before and after', async () => {

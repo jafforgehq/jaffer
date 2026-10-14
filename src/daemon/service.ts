@@ -523,7 +523,7 @@ export class JafferService {
     });
     r.handle('claude.state', () => this.claudeState());
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
-    // Past conversations, from Claude Code's own transcripts: ids, folders, times and (with showCost) token counts, read on request, kept nowhere
+    // Past conversations, from Claude Code's own transcripts: ids, folders, times, titles for the 30 newest (redacted) and (with showCost) token counts, read on request, kept nowhere
     r.handle('claude.history', async () => ({
       items: await listConversations({ claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), limit: 50, withCost: this.config.get().claude.showCost }),
     }));
