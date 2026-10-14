@@ -55,7 +55,7 @@ describe('listConversations', () => {
     write(uuid(3), [user('middle', '/Users/me/code', T0 + 1000), reply('m3', 'ok', T0 + 2000)], T0 + 1_800_000);
     const items = await listConversations({ claudeDir });
     expect(items.map((c) => c.id)).toEqual([uuid(2), uuid(3), uuid(1)]);
-    expect(items[0]).toEqual({ id: uuid(2), cwd: '/Users/me/other', startedAt: T0 + 3_600_000, endedAt: T0 + 3_660_000, durMs: 60_000 });
+    expect(items[0]).toEqual({ id: uuid(2), cwd: '/Users/me/other', startedAt: T0 + 3_600_000, endedAt: T0 + 3_660_000, durMs: 60_000, title: 'next' });
     expect(items[2]).toMatchObject({ id: uuid(1), cwd: '/Users/me/code', startedAt: T0, endedAt: T0 + 60_000, durMs: 60_000 });
   });
 
@@ -66,7 +66,7 @@ describe('listConversations', () => {
 
   it('a transcript without timestamps ends when the file was last written, and has no duration', async () => {
     write(uuid(1), [summary('nothing dated')], T0);
-    expect(await listConversations({ claudeDir })).toEqual([{ id: uuid(1), endedAt: T0 }]);
+    expect(await listConversations({ claudeDir })).toEqual([{ id: uuid(1), endedAt: T0, title: 'nothing dated' }]);
   });
 
   it('reads only the head and the tail: a big middle is not read, and the first and last timestamps come from the ends', async () => {
@@ -103,12 +103,15 @@ describe('listConversations', () => {
     expect(items.find((c) => c.id === uuid(2))!.cwd).toBeUndefined();
   });
 
-  it('keeps nothing of what was said: no prompt, reply, tool input or summary reaches the result', async () => {
+  it('keeps nothing of what was said but the title: no other prompt, reply or tool input reaches the result', async () => {
     const tool = JSON.stringify({ type: 'assistant', cwd: '/Users/me/code', timestamp: iso(T0 + 5), message: { id: 't1', model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'echo SECRET-TOOL-INPUT' } }], usage: { input_tokens: 1, output_tokens: 1 } } });
-    write(uuid(1), [summary('SECRET-SUMMARY'), user('SECRET-PROMPT', '/Users/me/code', T0), tool, reply('m1', 'SECRET-REPLY', T0 + 10)], T0);
+    const toolResult = JSON.stringify({ type: 'user', cwd: '/Users/me/code', timestamp: iso(T0 + 6), message: { role: 'user', content: [{ type: 'tool_result', content: 'SECRET-TOOL-RESULT' }] } });
+    write(uuid(1), [summary('Fixing the build'), user('SECRET-PROMPT', '/Users/me/code', T0), tool, toolResult, reply('m1', 'SECRET-REPLY', T0 + 10)], T0);
+    write(uuid(2), [user('Tidy the docs', '/Users/me/code', T0), tool, toolResult, user('SECRET-LATER-PROMPT', '/Users/me/code', T0 + 7), reply('m2', 'SECRET-REPLY', T0 + 10)], T0 - 1000);
     const items = await listConversations({ claudeDir, withCost: true });
-    expect(items).toHaveLength(1);
-    expect(Object.keys(items[0]!).sort()).toEqual(['cwd', 'durMs', 'endedAt', 'id', 'startedAt', 'usd']);
+    expect(items).toHaveLength(2);
+    expect(Object.keys(items[0]!).sort()).toEqual(['cwd', 'durMs', 'endedAt', 'id', 'startedAt', 'title', 'usd']);
+    expect(items.map((c) => c.title)).toEqual(['Fixing the build', 'Tidy the docs']);
     const json = JSON.stringify(items);
     for (const word of ['SECRET', 'Bash', 'summary', 'claude-sonnet', 'message']) expect(json).not.toContain(word);
   });
@@ -145,9 +148,105 @@ describe('listConversations', () => {
     expect(performance.now() - t0).toBeLessThan(1000); // a few milliseconds in practice; generous for CI
     expect(items).toEqual([
       { id: uuid(3), endedAt: T0 + 2000 },
-      { id: uuid(2), cwd: '/b', startedAt: T0, endedAt: T0 + 9, durMs: 9 },
+      { id: uuid(2), cwd: '/b', startedAt: T0, endedAt: T0 + 9, durMs: 9, title: 'q' },
       { id: uuid(1), endedAt: T0 },
     ]);
+  });
+
+  it('titles a conversation with Claude\'s own summary or title line, the latest one, before the first message', async () => {
+    write(uuid(1), [user('first question', '/a', T0), summary('Old summary'), reply('m1', 'a', T0 + 1), summary('Newer summary')], T0 + 1000);
+    write(uuid(2), [user('first question', '/a', T0), JSON.stringify({ type: 'ai-title', aiTitle: 'An AI title', sessionId: 'x' })], T0 + 2000);
+    write(uuid(3), [user('first question', '/a', T0), JSON.stringify({ type: 'custom-title', customTitle: 'Named by me', sessionId: 'x' })], T0 + 3000);
+    write(uuid(4), [user('first question', '/a', T0), JSON.stringify({ type: 'summary', summary: 42 })], T0 + 4000); // not text: no summary
+    const by = Object.fromEntries((await listConversations({ claudeDir })).map((c) => [c.id, c.title]));
+    expect(by).toEqual({ [uuid(1)]: 'Newer summary', [uuid(2)]: 'An AI title', [uuid(3)]: 'Named by me', [uuid(4)]: 'first question' });
+  });
+
+  it('otherwise titles it with the first real user message: its first line, skipping system tags, meta lines and tool results', async () => {
+    const line = (o: object) => JSON.stringify({ type: 'user', cwd: '/a', timestamp: iso(T0), ...o });
+    write(uuid(1), [
+      line({ isMeta: true, message: { role: 'user', content: 'Caveat: the messages below were generated by the user' } }),
+      line({ message: { role: 'user', content: '<command-name>/clear</command-name>' } }),
+      line({ message: { role: 'user', content: '  <local-command-caveat>Caveat</local-command-caveat>' } }),
+      line({ message: { role: 'user', content: [{ type: 'tool_result', content: 'output' }] } }),
+      JSON.stringify({ type: 'assistant', timestamp: iso(T0), message: { role: 'assistant', content: 'not the person' } }),
+      line({ message: { role: 'user', content: '  Make the list show titles\nand the second line stays out  ' } }),
+      line({ message: { role: 'user', content: 'a later question' } }),
+    ], T0 + 1000);
+    write(uuid(2), [line({ message: { role: 'user', content: [{ type: 'image', source: {} }, { type: 'text', text: 'What is in this picture?' }] } })], T0 + 2000);
+    write(uuid(3), [line({ message: { role: 'user', content: '<command-name>/help</command-name>' } }), reply('m3', 'help text', T0 + 1)], T0 + 3000);
+    const by = Object.fromEntries((await listConversations({ claudeDir })).map((c) => [c.id, c.title]));
+    expect(by).toEqual({ [uuid(1)]: 'Make the list show titles', [uuid(2)]: 'What is in this picture?', [uuid(3)]: undefined });
+    expect((await listConversations({ claudeDir })).find((c) => c.id === uuid(3))).not.toHaveProperty('title');
+  });
+
+  it('a title is one short line: control characters gone, 80 characters at most, cut with an ellipsis', async () => {
+    write(uuid(1), [user('word '.repeat(40), '/a', T0)], T0 + 1000);
+    write(uuid(2), [summary('Two\u001b[31m\tparts\r\n of a ‮summary\u0007')], T0 + 2000);
+    write(uuid(3), [summary(' \u0007\n ')], T0 + 3000); // nothing left: no title
+    const [c3, c2, c1] = await listConversations({ claudeDir });
+    expect(c1!.title).toHaveLength(80);
+    expect(c1!.title).toBe('word '.repeat(16).slice(0, 79) + '…');
+    expect(c2!.title).toBe('Two [31m parts of a summary');
+    expect(c3).not.toHaveProperty('title');
+  });
+
+  it('redacts a title: a token in the first message never comes out', async () => {
+    const token = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+    const key = 'sk-ant-' + 'api03-abcdefghijklmnopqrstuvwxyz012345';
+    write(uuid(1), [user(`use ${token} to push`, '/a', T0)], T0 + 1000);
+    write(uuid(2), [summary(`Set password: hunter2hunter2 and ${key}`)], T0 + 2000);
+    write(uuid(3), [user(`${'x '.repeat(90)}${token}`, '/a', T0)], T0 + 3000); // past the 80 shown, still redacted before the cut
+    const items = await listConversations({ claudeDir });
+    const json = JSON.stringify(items);
+    for (const secret of [token, key, 'hunter2', 'ghp_A1b2', 'sk-ant-api']) expect(json).not.toContain(secret);
+    expect(items.find((c) => c.id === uuid(1))!.title).toMatch(/^use \[REDACTED\]:github-token\b/); // the redaction's own bias may mask a word more
+  });
+
+  it('titles only the 30 newest', async () => {
+    for (let i = 1; i <= 32; i++) write(uuid(i), [user(`question ${i}`, '/a', T0)], T0 + i * 1000);
+    const items = await listConversations({ claudeDir });
+    expect(items).toHaveLength(32);
+    expect(items.slice(0, 30).map((c) => c.title)).toEqual(Array.from({ length: 30 }, (_, i) => `question ${32 - i}`));
+    expect(items.slice(30).some((c) => 'title' in c)).toBe(false);
+    // one newer conversation pushes another out of the 30: it loses its title, and the one that came back in has one
+    write(uuid(33), [user('question 33', '/a', T0)], T0 + 33 * 1000);
+    const again = await listConversations({ claudeDir });
+    expect(again.find((c) => c.id === uuid(3))).not.toHaveProperty('title');
+    expect(again.find((c) => c.id === uuid(4))!.title).toBe('question 4');
+  });
+
+  it('takes the title only from the head and the tail: a summary in a big middle is not read', async () => {
+    const filler = Array.from({ length: 200 }, (_, i) => reply(`f${i}`, 'x'.repeat(1000), T0 + i));
+    write(uuid(1), [user('<command-name>/x</command-name>', '/a', T0), ...filler, summary('IN THE MIDDLE'), ...filler, reply('m1', 'end', T0 + 9)], T0 + 1000);
+    const [c] = await listConversations({ claudeDir });
+    expect(c).not.toHaveProperty('title');
+  });
+
+  it('is quick and does not throw on titles from lines of 1 MB and 8 MB, or a first message of one long run that fits the window', async () => {
+    write(uuid(1), [user('a'.repeat(1024 * 1024), '/a', T0)], T0 + 1000); // cut by both windows: skipped
+    write(uuid(2), [user('b'.repeat(8 * 1024 * 1024), '/a', T0)], T0 + 2000);
+    write(uuid(3), [user('c'.repeat(60 * 1024), '/a', T0)], T0 + 3000); // the whole line is in the window
+    write(uuid(4), [user('q', '/a', T0), summary('d'.repeat(8 * 1024 * 1024))], T0 + 4000);
+    write(uuid(5), [user(`${'Ab9-'.repeat(15_000)}`, '/a', T0)], T0 + 5000); // a long high-entropy-ish run for the redaction rules
+    const t0 = performance.now();
+    const items = await listConversations({ claudeDir });
+    expect(performance.now() - t0).toBeLessThan(1000);
+    const by = Object.fromEntries(items.map((c) => [c.id, c.title]));
+    expect(by[uuid(1)]).toBeUndefined();
+    expect(by[uuid(2)]).toBeUndefined();
+    expect(by[uuid(3)]).toBe('c'.repeat(79) + '…');
+    expect(by[uuid(4)]).toBe('q');
+    expect(by[uuid(5)]!.length).toBeLessThanOrEqual(80);
+  });
+
+  it('writes the titles nowhere: the folders hold the same files before and after', async () => {
+    write(uuid(1), [summary('A title to keep in memory'), user('first', '/a', T0)], T0 + 1000);
+    const files = () => fs.readdirSync(env.root, { recursive: true }).map(String).sort();
+    const before = files();
+    const items = await listConversations({ claudeDir, withCost: true });
+    expect(items[0]!.title).toBe('A title to keep in memory');
+    expect(files()).toEqual(before);
   });
 
   it('is an empty list when there is no projects folder (Claude Code never ran here)', async () => {

@@ -1,13 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { summarizeLines } from '../../shared/claude-cost';
+import { COMMAND_HEAD } from '../../shared/process-badge';
+import { redactText } from '../../shared/redact';
 import { isSessionId } from '../../shared/session-id';
 import { MAX_READ } from './cost';
 
 /**
  * Past Claude Code conversations, from the transcripts Claude Code keeps in `<claudeDir>/projects/<folder>/<session id>.jsonl`. Read
- * only, and only this: the file name (the session id), the `cwd` of its first lines, its first and last timestamps and (asked for)
- * the token counts of the newest. Never a prompt, a reply, a tool input or anything else; nothing of it is written anywhere.
+ * only, and only this: the file name (the session id), the `cwd` of its first lines, its first and last timestamps, for the newest a
+ * title (Claude's own summary or title line, else the first line of the first real user message: redacted, one line, 80 characters)
+ * and (asked for) their token counts. Never another prompt, a reply, a tool input or anything else; nothing of it is written anywhere.
  */
 export interface Conversation {
   id: string;
@@ -19,6 +22,8 @@ export interface Conversation {
   durMs?: number;
   /** An estimate at API list prices (see `shared/claude-cost.ts`): only with `withCost`, for the 30 newest up to 24 MB. */
   usd?: number;
+  /** For the 30 newest: Claude's summary or title, else the first user message's first line; redacted, at most 80 characters. */
+  title?: string;
 }
 
 /** How much of each end of a transcript is read for its folder and its timestamps. */
@@ -30,6 +35,8 @@ interface Seen {
   conv: Conversation;
   /** null: counted, and nothing to say. */
   usd?: number | null;
+  /** null: looked for, and none. */
+  title?: string | null;
 }
 
 /** What was read of a transcript, by path and size+mtime, so a list asked again reads only what changed. In memory only. */
@@ -58,7 +65,7 @@ export async function listConversations(opts: { claudeDir: string; limit?: numbe
   found.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const out: Conversation[] = [];
   for (const f of found.slice(0, opts.limit ?? 50)) {
-    const conv = await readOne(root, f.file, f.id, opts.withCost === true && out.length < COSTED);
+    const conv = await readOne(root, f.file, f.id, out.length < COSTED, opts.withCost === true);
     if (conv) out.push(conv);
   }
   return out;
@@ -68,7 +75,7 @@ async function names(dir: string): Promise<string[]> {
   return fs.promises.readdir(dir).catch(() => []);
 }
 
-async function readOne(root: string, file: string, id: string, withCost: boolean): Promise<Conversation | undefined> {
+async function readOne(root: string, file: string, id: string, newest: boolean, wantCost: boolean): Promise<Conversation | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
     // confined to the projects folder: the real path stays inside it, and the file is opened without following a link swapped in since
@@ -85,9 +92,13 @@ async function readOne(root: string, file: string, id: string, withCost: boolean
       cache.set(file, seen);
       if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
     }
+    const withCost = wantCost && newest;
     if (withCost && seen.usd === undefined) seen.usd = st.size <= MAX_READ ? (summarizeLines(lines(await readAt(fh, 0, st.size), true, true))?.usd ?? null) : null;
+    if (newest && seen.title === undefined) seen.title = (await readTitle(fh, st.size)) ?? null;
     const usd = withCost ? seen.usd : undefined;
-    return typeof usd === 'number' ? { ...seen.conv, usd } : { ...seen.conv };
+    const conv: Conversation = typeof usd === 'number' ? { ...seen.conv, usd } : { ...seen.conv };
+    if (newest && seen.title) conv.title = seen.title;
+    return conv;
   } catch {
     return undefined;
   } finally {
@@ -112,6 +123,55 @@ async function readEnds(fh: fs.promises.FileHandle, id: string, size: number, mt
   if (startedAt !== undefined) conv.startedAt = startedAt;
   if (startedAt !== undefined && last !== undefined) conv.durMs = Math.max(0, last - startedAt);
   return conv;
+}
+
+/** Claude's latest summary or title line (the tail first, then the head), else the first real user message of the head. */
+async function readTitle(fh: fs.promises.FileHandle, size: number): Promise<string | undefined> {
+  const head = lines(await readAt(fh, 0, Math.min(size, WINDOW)), true, size <= WINDOW);
+  const from = Math.max(0, size - WINDOW);
+  const tail = lines(await readAt(fh, from, size - from), from === 0, true);
+  for (const ls of [tail, head]) {
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const line = ls[i]!;
+      if (!line.includes('"summary"') && !line.includes('"aiTitle"') && !line.includes('"customTitle"')) continue;
+      const o = parse(line);
+      const t = typeof o?.customTitle === 'string' ? o.customTitle : typeof o?.aiTitle === 'string' ? o.aiTitle : o?.type === 'summary' && typeof o.summary === 'string' ? o.summary : undefined;
+      const title = t === undefined ? undefined : cleanTitle(t);
+      if (title) return title;
+    }
+  }
+  for (const line of head) {
+    if (!line.includes('"user"')) continue;
+    const o = parse(line);
+    const m = o?.message as Record<string, unknown> | undefined;
+    if (o?.type !== 'user' || o.isMeta === true || !m || m.role !== 'user') continue;
+    const c = m.content;
+    const part = Array.isArray(c) ? (c as { type?: unknown; text?: unknown }[]).find((p) => p?.type === 'text') : undefined;
+    const text = (typeof c === 'string' ? c : typeof part?.text === 'string' ? part.text : '').trim();
+    if (!text || text.startsWith('<')) continue; // a system tag (<command-name>, <local-command-caveat>), not the person's words
+    const title = cleanTitle(text.slice(0, 4 * COMMAND_HEAD).split('\n')[0]!);
+    if (title) return title;
+  }
+  return undefined;
+}
+
+/** Redacted (before any cut, so no token is half shown), one line without control characters, at most 80 characters. */
+function cleanTitle(text: string): string | undefined {
+  const one = redactText(text.slice(0, 4 * COMMAND_HEAD))
+    .replace(/[\p{Cc}\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = Array.from(one);
+  return chars.length > 80 ? chars.slice(0, 79).join('') + '…' : one || undefined;
+}
+
+function parse(line: string): Record<string, unknown> | undefined {
+  try {
+    const d: unknown = JSON.parse(line);
+    return d && typeof d === 'object' ? (d as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readAt(fh: fs.promises.FileHandle, position: number, length: number): Promise<string> {
