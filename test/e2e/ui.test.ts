@@ -2454,7 +2454,8 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.side-panel, .now-card, .sp-convos').count()).toBe(0);
     await until(async () => onDisk() === false, 5_000, 'panel.open false on disk');
     expect(await page.getAttribute('.titlebar .panel-toggle', 'aria-pressed')).toBe('false');
-    // the menu item opens it again (sliding in)
+    // the menu item opens it again (sliding in); 250 ms after the key press, a menu toggle would count as that same press
+    await sleep(300);
     await menu('toggle-panel');
     await page.waitForSelector('.side-panel[data-anim="in"]');
     expect(await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)).toBe('panel-in');
