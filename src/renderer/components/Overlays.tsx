@@ -380,6 +380,14 @@ export function Settings(): VNode {
   };
   useEffect(refresh, []);
   const set = (p: object) => void patchConfig(p).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }));
+  /** The daily budget field: what was typed, kept to 0..100000 (anything else keeps the setting); the field shows what was kept, also when the config does not change and nothing re-renders. */
+  const commitBudget = (el: HTMLInputElement) => {
+    const kept = cfg.value?.claude?.dailyBudgetUsd ?? 0;
+    const v = Number(el.value);
+    const usd = Number.isFinite(v) ? Math.min(100_000, Math.max(0, v)) : kept;
+    el.value = String(usd);
+    if (usd !== kept) set({ claude: { dailyBudgetUsd: usd } });
+  };
   const [openAtLogin, setOpenAtLogin] = useState(false);
   useEffect(() => void window.jaffer.appInfo().then((i) => setOpenAtLogin(!!i.openAtLogin)).catch(() => undefined), []);
   const run = async (name: string, fn: () => Promise<unknown>, ok: string) => {
@@ -611,13 +619,9 @@ export function Settings(): VNode {
                 <Switch checked={c.claude?.liveCost !== false} disabled={c.claude?.showCost === false} onChange={(v) => set({ claude: { liveCost: v } })} />
               </Field>
               <Field label="Daily budget (USD, 0 = off)" hint="the figure turns yellow at 80 % of today's estimate and red past it; memory only, it starts again at midnight">
-                <input type="number" min={0} max={100_000} step={0.5} value={c.claude?.dailyBudgetUsd ?? 0} onChange={(e) => {
-                    const el = e.target as HTMLInputElement;
-                    const v = Number(el.value);
-                    const usd = Number.isFinite(v) ? Math.min(100_000, Math.max(0, v)) : (c.claude?.dailyBudgetUsd ?? 0);
-                    el.value = String(usd); // (shown as kept, also when the config does not change and nothing re-renders)
-                    set({ claude: { dailyBudgetUsd: usd } });
-                  }}
+                <input type="number" min={0} max={100_000} step={0.5} value={c.claude?.dailyBudgetUsd ?? 0}
+                  /* on change and on blur: whether the browser fires `change` for a value that was set from code differs between Chromium versions */
+                  onChange={(e) => commitBudget(e.target as HTMLInputElement)} onBlur={(e) => commitBudget(e.target as HTMLInputElement)}
                 />
               </Field>
               <Field label="Tool strip" hint="a thin line under the title bar: this turn's tool calls, coloured by kind, red when one failed">
