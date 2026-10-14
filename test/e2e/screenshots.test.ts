@@ -209,6 +209,34 @@ sleep 30
   fs.appendFileSync(path.join(repo, 'README.md'), '\n## Testing\n\nRun `./bin/test`.\n');
 }
 
+/** Six conversations in the demo person's own (temporary) Claude folder: only ids, folders and times are read from them, so the "words" are placeholders. */
+function plantConversations(): void {
+  const T = Date.now();
+  const demo: [string, number, number, number, number][] = [
+    ['projects/app', 4 * 60_000, 18 * 60_000, 21_000, 6_800],
+    ['projects/api', 2 * 3_600_000, 41 * 60_000, 64_000, 17_200],
+    ['projects/web', 5 * 3_600_000, 7 * 60_000, 9_000, 2_400],
+    ['projects/docs', 26 * 3_600_000, 12 * 60_000, 15_000, 4_100],
+    ['code/acme-api', 3 * 86_400_000, 55 * 60_000, 120_000, 31_000],
+    ['projects/tools', 6 * 86_400_000, 3 * 60_000, 4_000, 900],
+  ];
+  demo.forEach(([dir, endAgo, dur, inTok, outTok], i) => {
+    const cwd = path.join(userHome, dir);
+    const proj = path.join(userHome, '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+    fs.mkdirSync(proj, { recursive: true });
+    const file = path.join(proj, `${`0000000${i + 1}`.slice(-8)}-1111-4222-8333-444455556666.jsonl`);
+    const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+    fs.writeFileSync(
+      file,
+      [
+        line('user', T - endAgo - dur, { message: { role: 'user', content: 'demo' } }),
+        line('assistant', T - endAgo, { message: { id: `demo${i}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'demo' }], usage: { input_tokens: inTok, output_tokens: outTok } } }),
+      ].join('\n') + '\n',
+    );
+    fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
+  });
+}
+
 describe.skipIf(!OUT)('README screenshots', () => {
   beforeAll(async () => {
     expect(CHROME, 'a Chromium binary is required (set JAFFER_CHROME)').toBeTruthy();
@@ -232,6 +260,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
       ].join('\n'),
     );
     writeDemoProject();
+    plantConversations();
     mock = new MockAnthropic();
     const mockUrl = await mock.listen();
     // the demo person is signed in to Claude: first run passes the sign-in step by itself (everything but `claude auth` is the real claude)
@@ -409,39 +438,52 @@ describe.skipIf(!OUT)('README screenshots', () => {
 
   it('past Claude conversations (read from transcripts planted in the demo home)', async () => {
     await clearToasts();
-    // six conversations in the demo person's own (temporary) Claude folder: only ids, folders and times are read from them, so the "words" are placeholders
-    const T = Date.now();
-    const demo: [string, number, number, number, number][] = [
-      ['projects/app', 4 * 60_000, 18 * 60_000, 21_000, 6_800],
-      ['projects/api', 2 * 3_600_000, 41 * 60_000, 64_000, 17_200],
-      ['projects/web', 5 * 3_600_000, 7 * 60_000, 9_000, 2_400],
-      ['projects/docs', 26 * 3_600_000, 12 * 60_000, 15_000, 4_100],
-      ['code/acme-api', 3 * 86_400_000, 55 * 60_000, 120_000, 31_000],
-      ['projects/tools', 6 * 86_400_000, 3 * 60_000, 4_000, 900],
-    ];
-    demo.forEach(([dir, endAgo, dur, inTok, outTok], i) => {
-      const cwd = path.join(userHome, dir);
-      const proj = path.join(userHome, '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
-      fs.mkdirSync(proj, { recursive: true });
-      const file = path.join(proj, `${`0000000${i + 1}`.slice(-8)}-1111-4222-8333-444455556666.jsonl`);
-      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
-      fs.writeFileSync(
-        file,
-        [
-          line('user', T - endAgo - dur, { message: { role: 'user', content: 'demo' } }),
-          line('assistant', T - endAgo, { message: { id: `demo${i}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'demo' }], usage: { input_tokens: inTok, output_tokens: outTok } } }),
-        ].join('\n') + '\n',
-      );
-      fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
-    });
+    // (the six conversations were planted before the app started, so the panel has had them in every shot)
     await page.evaluate(() => (window as any).__menu('history'));
     await page.waitForSelector('.side-panel .conv-search input'); // (1.1.0: the list is the side panel's; ⇧⌘O opens it with the search focused)
-    await page.click('.sp-convos .conv-refresh'); // (the panel read the list when it opened, before these were planted)
+    await page.click('.sp-convos .conv-refresh'); // (a refresh, as a person would press it)
     await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 6, 10_000, 'the six conversations');
     expect(await page.textContent('.sp-convos .conv-list')).toContain('~/projects/app'); // the demo person's home, shown as ~
     await shot('18-past-conversations');
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape'); // (the keyboard back to the terminal)
+    // the whole panel: the Now card while Claude works (agents, counts, edited files, cost, today against a budget) above the same six conversations
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { dailyBudgetUsd: 10, typicalTurnMs: 240_000 } }));
+    await page.evaluate(
+      ([dir]) => {
+        const now = Date.now();
+        const call = (name: string, category: string, startAgo: number, endAgo?: number) => ({ name, category, startedAt: now - startAgo, endedAt: endAgo === undefined ? undefined : now - endAgo });
+        (window as any).__event('claude.state', {
+          sessions: [
+            {
+              id: 'demo-panel',
+              state: 'working',
+              since: now,
+              startedAt: now - 42 * 60_000,
+              turns: 9,
+              turnStartedAt: now - 150_000,
+              tool: { name: 'Edit', id: 'p9' },
+              calls: [call('Read', 'read', 148_000, 145_000), call('Grep', 'read', 144_000, 143_000), call('Read', 'read', 140_000, 137_000), call('Bash', 'shell', 130_000, 112_000), call('Edit', 'write', 100_000, 94_000), call('Edit', 'write', 55_000, 47_000), call('Edit', 'write', 8_000)],
+              counts: { read: 3, write: 3, shell: 1 },
+              files: ['src/auth/session.ts', 'src/auth/session.test.ts', 'src/auth/token.ts'].map((f) => `${dir}/${f}`),
+              subagents: [
+                { id: 'p-a', status: 'running', startedAt: now - 6 * 60_000, tool: 'Read' },
+                { id: 'p-b', status: 'running', startedAt: now - 150_000 },
+              ],
+              live: { input: 184_000, output: 5_200, usd: 0.06, at: now },
+              cost: { last: { input: 3000, output: 4200, cacheRead: 180_000, cacheWrite: 0, usd: 0.13 }, totalUsd: 1.2, answers: 8, partial: false, at: now - 120_000 },
+            },
+          ],
+          today: { usd: 4.82, date: new Date().toISOString().slice(0, 10) },
+        });
+      },
+      [repo] as const,
+    );
+    await page.waitForSelector('.now-card[data-state="working"] .now-files button');
+    await sleep(400);
+    await shot('19-side-panel');
+    await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { dailyBudgetUsd: 0 } }));
   }, 40_000);
 
   it('command blocks (marks, one lit, a pinned line) and the title bar while Claude works', async () => {

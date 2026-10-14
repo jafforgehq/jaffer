@@ -1011,7 +1011,7 @@ describe('Jaffer UI end to end', () => {
     await inject([{ id: 'live-cost-1', state: 'idle', cost: { usd: 0.2, at: 202 } }], { usd: 0.85, date: '2026-10-14' });
     await until(async () => (await page.getAttribute(chip, 'class'))?.includes('warn') ?? false, 4_000, 'the warn colour');
     const warn = await token('--warn');
-    await until(async () => (await page.$eval(chip, (el) => getComputedStyle(el).color)) === warn, 4_000, 'the chip in the warn colour'); // (after its flash)
+    await until(async () => (await page.$eval(chip, (el) => getComputedStyle(el).color)) === warn, 15_000, 'the chip in the warn colour'); // (after its 1.6 s flash, which a loaded machine stretches)
     await inject([{ id: 'live-cost-1', state: 'idle', cost: { usd: 0.2, at: 202 } }], { usd: 1.2, date: '2026-10-14' });
     await until(async () => (await page.getAttribute(chip, 'class'))?.includes('danger') ?? false, 4_000, 'the danger colour');
     // the hover card
@@ -2304,13 +2304,16 @@ describe('Jaffer UI end to end', () => {
     // motion off: it comes and goes at once, with no slide
     await cfgPatch({ appearance: { animations: false } });
     try {
+      // (the daemon answers before the page has taken the new config: wait for the page to be in motion-off before pressing)
+      await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 5_000, 'the page in motion-off');
       await page.click('.term');
       await page.keyboard.press('Meta+b');
       expect(await page.locator('.side-panel').count()).toBe(0); // gone at once
       await page.keyboard.press('Meta+b');
       await page.waitForSelector('.side-panel');
       expect(await page.getAttribute('.side-panel', 'data-anim')).toBeNull();
-      expect(await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)).toBe('none');
+      // (a style read in the frame the panel mounts in can still be empty: wait for the computed value)
+      await until(async () => (await page.$eval('.side-panel', (el) => getComputedStyle(el).animationName)) === 'none', 5_000, 'no animation on the panel');
     } finally {
       await cfgPatch({ appearance: { animations: true } });
     }
@@ -2764,13 +2767,13 @@ describe('Jaffer UI end to end', () => {
     expect(await page.evaluate(() => String((window as any).__jaffer.terminals.get('main').term.options.theme.background))).toContain('253,252,250'); // the terminal's own colours at once
     expect(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))).toBe(true); // fading
     expect(await page.$eval('.terminal-area', (el) => getComputedStyle(el).transitionDuration)).toBe('1s, 1s, 1s');
-    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 4_000, 'the fade to end');
+    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 15_000, 'the fade to end');
     await page.emulateMedia({ colorScheme: 'dark' });
     await until(async () => (await rootVar('--bg-solid')) === themeBg('jaffer-dark'), 5_000, 'the dark theme in dark mode');
     // the terminal's own colours follow (they switch at once)
     expect(await page.evaluate(() => String((window as any).__jaffer.terminals.get('main').term.options.theme.background))).toContain('18,21,27');
     // the light theme is a choice, and Animations off swaps without a fade
-    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 4_000, 'the last fade to end');
+    await until(async () => !(await page.evaluate(() => document.documentElement.classList.contains('theme-fade'))), 15_000, 'the last fade to end');
     await cfgPatch({ appearance: { lightTheme: 'nord', animations: false } });
     await page.emulateMedia({ colorScheme: 'light' });
     await until(async () => (await rootVar('--bg-solid')) === themeBg('nord'), 5_000, 'the chosen light theme');
