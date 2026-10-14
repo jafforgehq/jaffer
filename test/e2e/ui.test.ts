@@ -1142,9 +1142,10 @@ describe('Jaffer UI end to end', () => {
       await page.evaluate(() => (window as any).__stats(0.3, 0.3));
       await inject([{ id: 'drag-1', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 'd1' }, notice: 'Claude needs your permission to use Bash', file: path.join(repo, 'new.txt'), cost: { usd: 0.1, at: 5 } }]);
       await page.waitForSelector('.session-pill .needs-chip');
-      for (const sel of ['.session-pill .running', '.session-pill .needs-chip', '.session-pill .edit-chip', '.session-pill .git-stat', '.session-pill .cwd-box', '.titlebar .cost-wrap', '[data-cost-chip]', '.titlebar .sys-stats .stat-bar'])
+      for (const sel of ['.session-pill .running', '.session-pill .needs-chip', '.session-pill .edit-chip', '.session-pill .git-stat', '.session-pill .cwd-box', '.titlebar .cost-wrap', '[data-cost-chip]', '.titlebar .sys-stats'])
         expect(await region(sel), sel).toBe('no-drag');
-      for (const sel of ['.titlebar', '.tb-left', '.tb-center', '.session-pill', '.session-pill .live', '.session-pill .branch']) expect(await region(sel), sel).toBe('drag');
+      // (only the bar itself carries `drag`: whether a child reports its parent's value differs between Chromium versions, so children are not asserted)
+      expect(await region('.titlebar'), '.titlebar').toBe('drag');
     } finally {
       await inject([]);
       await cfgPatch({ appearance: { systemStats: false } });
