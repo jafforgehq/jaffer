@@ -1764,7 +1764,7 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Escape');
   }, 40_000);
 
-  it('⌥⌘H lists past Claude conversations from the transcripts; a filter, Enter copies `claude --resume <id>` (a bad id never), nothing is typed', async () => {
+  it('⇧⌘O lists past Claude conversations from the transcripts; a filter, Enter copies `claude --resume <id>` (a bad id never), nothing is typed', async () => {
     await clipStub();
     const T = Date.now();
     const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';

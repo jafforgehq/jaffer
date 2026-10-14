@@ -656,7 +656,7 @@ function buildMenu(): void {
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
-        { role: 'hideOthers', accelerator: 'Alt+Shift+Cmd+H' }, // (the role's own ⌥⌘H is Past Claude Conversations')
+        { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
         // ⌘Q ends the terminal and asks first when something runs (before-quit). Not `role: 'quit'`: only this item marks its quit as

@@ -13,7 +13,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'prompt-prev': { label: 'Previous Prompt', accelerator: 'Cmd+Up' },
   'prompt-next': { label: 'Next Prompt', accelerator: 'Cmd+Down' },
   'recent-commands': { label: 'Recent Commands…', accelerator: 'Cmd+R' },
-  history: { label: 'Past Claude Conversations…', accelerator: 'Alt+Cmd+H' },
+  history: { label: 'Past Claude Conversations…', accelerator: 'Shift+Cmd+O' },
   'pin-selection': { label: 'Pin Selection', accelerator: 'Shift+Cmd+L' },
   'focus-mode': { label: 'Focus Mode', accelerator: 'Alt+Cmd+F' }, // (⌃⌘F is Full Screen's, which macOS and Electron's own role hold)
   'run-claude': { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C' },

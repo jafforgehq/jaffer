@@ -304,7 +304,7 @@ interface PastConversation {
   usd?: number;
 }
 
-/** ⌥⌘H: the 50 newest Claude Code conversations. Enter copies `claude --resume <id>` to the clipboard; nothing is typed, nothing is kept. */
+/** ⇧⌘O: the 50 newest Claude Code conversations. Enter copies `claude --resume <id>` to the clipboard; nothing is typed, nothing is kept. */
 export function PastConversations(): VNode {
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
