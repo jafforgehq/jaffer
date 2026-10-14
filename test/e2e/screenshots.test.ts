@@ -407,6 +407,106 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Escape');
   }, 60_000);
 
+  it('command blocks (marks, one lit, a pinned line) and the title bar while Claude works', async () => {
+    await clearToasts();
+    // something for the git counts in the title bar: one staged, one changed (the fixed session.ts), one untracked
+    git('add', 'README.md');
+    fs.writeFileSync(path.join(repo, 'notes.md'), '# notes\n');
+    await page.click('.term');
+    await page.keyboard.type('clear', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await sleep(600);
+    // real commands, so the marks are the shell's own: worked, worked, failed, worked
+    await typeCommand('git status -sb');
+    await typeCommand('./bin/test');
+    await typeCommand('ls src/missing');
+    await typeCommand('git log --oneline -3');
+    const blocks = (): Promise<{ id: number; cmd?: string; endedAt?: number }[]> => page.evaluate(() => (window as any).__jaffer.blocks());
+    const ran = await until(async () => (await blocks()).find((b) => b.cmd === './bin/test' && b.endedAt !== undefined), 10_000, 'the block of ./bin/test');
+    await until(async () => (await page.locator('.xterm-decoration.gutter-mark[data-state="fail"]').count()) > 0, 10_000, 'a red mark');
+    // pin the summary line of the test run: the selection is the person's, ⇧⌘L pins it
+    await page.evaluate(() => {
+      const t = (window as any).__jaffer.terminals.get('main').term;
+      const b = t.buffer.active;
+      for (let y = b.length - 1; y >= 0; y--) if (/Tests\s+16 passed/.test(b.getLine(y)!.translateToString(true))) return void t.selectLines(y, y);
+    });
+    await page.evaluate(() => (window as any).__menu('pin-selection'));
+    await page.waitForSelector('.pins .pin');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await sleep(400); // the terminal refits under the pin strip
+    await page.hover(`.xterm-decoration.gutter-mark[data-block="${ran.id}"]`);
+    await page.waitForSelector('.block-hl', { state: 'attached' });
+    await shot('16-command-blocks');
+    await page.locator('.pins .pin button').click();
+    await page.waitForSelector('.pins', { state: 'detached' });
+    await page.mouse.move(700, 4);
+
+    // the title bar with Claude at work: a stand-in `claude` that only waits gives the running command; its hook state is scripted
+    await page.click('.term');
+    await page.keyboard.type('claude() { sleep 120; }', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    await page.keyboard.type('claude', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.session-pill .running[data-kind="claude"]');
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { typicalTurnMs: 240_000 } }));
+    await page.evaluate(
+      ([file]) => {
+        const now = Date.now();
+        const call = (name: string, category: string, startAgo: number, endAgo?: number, failed?: boolean) => ({ name, category, failed, startedAt: now - startAgo, endedAt: endAgo === undefined ? undefined : now - endAgo });
+        (window as any).__event('claude.state', {
+          sessions: [
+            {
+              id: 'demo-title',
+              state: 'working',
+              since: now,
+              startedAt: now - 42 * 60_000,
+              turns: 9,
+              turnStartedAt: now - 150_000,
+              tool: { name: 'Edit', id: 't12' },
+              file,
+              calls: [
+                call('Read', 'read', 148_000, 145_000),
+                call('Grep', 'read', 144_000, 143_000),
+                call('Read', 'read', 142_000, 138_000),
+                call('Bash', 'shell', 130_000, 112_000),
+                call('Read', 'read', 110_000, 108_000),
+                call('Edit', 'write', 100_000, 94_000),
+                call('Bash', 'shell', 90_000, 62_000, true),
+                call('Read', 'read', 60_000, 57_000),
+                call('Edit', 'write', 55_000, 47_000),
+                call('Bash', 'shell', 45_000, 20_000),
+                call('Edit', 'write', 8_000),
+              ],
+              counts: { read: 5, write: 3, shell: 3 },
+              files: [],
+              subagents: [],
+              live: { input: 184_000, output: 5_200, usd: 0.06, at: now },
+              cost: { last: { input: 3000, output: 4200, cacheRead: 180_000, cacheWrite: 0, usd: 0.13 }, totalUsd: 1.2, answers: 8, partial: false, at: now - 120_000 },
+            },
+          ],
+          today: { usd: 4.82, date: new Date().toISOString().slice(0, 10) },
+        });
+      },
+      [path.join(repo, 'src/auth/session.ts')] as const,
+    );
+    await page.waitForSelector('.edit-chip');
+    await page.waitForSelector('.running .spinner[data-progress]');
+    await page.waitForSelector('[data-cost-chip][data-live]');
+    await until(async () => (await page.locator('.git-stat').count()) > 0, 10_000, 'the git counts');
+    await sleep(500);
+    fs.mkdirSync(OUT!, { recursive: true });
+    // the top of the window is the picture: a clip keeps the small things readable
+    await page.screenshot({ path: path.join(OUT!, '17-title-bar.png'), clip: { x: 0, y: 0, width: 1360, height: 150 } });
+    // back to a quiet window
+    await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await page.keyboard.type('unset -f claude', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
+  }, 120_000);
+
   // Opt-in (JAFFER_CLAUDE_SHOT=1): the real Claude Code UI running inside Jaffer, talking to the scripted API. Run it on a
   // normal machine; inside a hosted sandbox Claude Code prints that sandbox's own auth warning, which would end up in the picture.
   it.skipIf(!process.env.JAFFER_CLAUDE_SHOT)('runs the real Claude Code inside the terminal', async () => {

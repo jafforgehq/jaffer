@@ -2160,6 +2160,29 @@ describe('Jaffer UI end to end', () => {
   it('"Fixed it!": a short burst of sparks after a command that failed three times in a row finally works (none with motion off, and none for fewer failures)', async () => {
     const burst = '.pet-corner .pet-burst';
     const cmd = (c: string, exit: number) => page.evaluate((d) => (window as any).__event('pty.command', { pane: 'main', cwd: '/tmp', durMs: 5, ...d }), { cmd: c, exit });
+    /**
+     * The command ends, and the burst is looked at from inside the page the moment it appears (a MutationObserver): it lasts 1.4 s, and a
+     * wait for it followed by a second evaluate can miss it on a busy machine. Null: none appeared within 4 s.
+     */
+    const fixes = (c: string, root = '.pet-corner') =>
+      page.evaluate(
+        ([text, r]) =>
+          new Promise<{ sparks: number; pointerEvents: string; display: string } | null>((resolve) => {
+            const look = () => {
+              const el = document.querySelector(`${r} .pet-burst`);
+              return el ? { sparks: el.querySelectorAll('.pet-spark').length, pointerEvents: getComputedStyle(el).pointerEvents, display: getComputedStyle(el).display } : null;
+            };
+            const done = (v: ReturnType<typeof look>) => (obs.disconnect(), clearTimeout(timer), resolve(v));
+            const obs = new MutationObserver(() => {
+              const l = look();
+              if (l) done(l);
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+            const timer = setTimeout(() => done(null), 4_000);
+            (window as any).__event('pty.command', { pane: 'main', cwd: '/tmp', durMs: 5, cmd: text, exit: 0 });
+          }),
+        [c, root] as const,
+      );
     await endClaude();
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
     await page.waitForSelector('.pet-corner .pet');
@@ -2172,13 +2195,11 @@ describe('Jaffer UI end to end', () => {
     await cmd('make fixit-b', 1);
     await cmd('ls', 0); // other commands in between do not matter
     await cmd('make fixit-b', 1);
-    await cmd('make fixit-b', 0);
-    await page.waitForSelector(burst, { state: 'attached' });
-    const n = await page.locator(`${burst} .pet-spark`).count();
-    expect(n).toBeGreaterThanOrEqual(6);
-    expect(n).toBeLessThanOrEqual(8);
-    expect(await page.$eval(burst, (el) => getComputedStyle(el).pointerEvents)).toBe('none');
-    await sleep(250);
+    const b = await fixes('make fixit-b');
+    expect(b).not.toBeNull();
+    expect(b!.sparks).toBeGreaterThanOrEqual(6);
+    expect(b!.sparks).toBeLessThanOrEqual(8);
+    expect(b!.pointerEvents).toBe('none');
     await shot('16d-pet-fixed-it');
     await until(async () => (await page.locator(burst).count()) === 0, 4_000, 'the burst to end by itself');
     // the same again with Animations off: nothing
@@ -2195,42 +2216,55 @@ describe('Jaffer UI end to end', () => {
     // macOS Reduce motion: it exists but is never drawn
     for (let i = 0; i < 3; i++) await cmd('make fixit-d', 1);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await cmd('make fixit-d', 0);
-    await page.waitForSelector(burst, { state: 'attached' });
-    expect(await page.$eval(burst, (el) => getComputedStyle(el).display)).toBe('none');
-    await page.emulateMedia({ reducedMotion: null });
+    try {
+      expect((await fixes('make fixit-d'))?.display).toBe('none');
+    } finally {
+      await page.emulateMedia({ reducedMotion: null }); // (a failed assertion must not leave Reduce motion on for the tests after this one)
+    }
     // the scenes get it too
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'radar' } }));
     await page.waitForSelector(".pet-corner[data-companion='radar'] .scene");
     await sleep(1_600);
     for (let i = 0; i < 3; i++) await cmd('make fixit-e', 1);
-    await cmd('make fixit-e', 0);
-    await page.waitForSelector(`.pet-corner[data-companion='radar'] .pet-burst`, { state: 'attached' });
+    expect(await fixes('make fixit-e', ".pet-corner[data-companion='radar']")).not.toBeNull();
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
   }, 40_000);
 
   it('a bell makes the companion flinch for a moment (once in two seconds)', async () => {
     const mole = '.pet-corner .pet[data-role="main"]';
-    const bell = () => page.evaluate(() => (window as any).__event('pty.bell', { pane: 'main' }));
+    /**
+     * Rings the bell and reports, from a MutationObserver inside the page, whether `sel` got `data-flinch` within `ms` and what its animation
+     * was at that moment: a flinch lasts 400 ms, which polling from outside can miss on a busy machine (and so can a second evaluate).
+     */
+    const bell = (sel: string, ms: number) =>
+      page.evaluate(
+        ([s, wait]) =>
+          new Promise<{ seen: boolean; animation: string }>((resolve) => {
+            const el = document.querySelector(s as string)!;
+            const done = (seen: boolean, animation = '') => (obs.disconnect(), clearTimeout(timer), resolve({ seen, animation }));
+            const obs = new MutationObserver(() => el.getAttribute('data-flinch') === '1' && done(true, getComputedStyle(el).animationName));
+            obs.observe(el, { attributes: true, attributeFilter: ['data-flinch'] });
+            const timer = setTimeout(() => done(false), wait as number);
+            (window as any).__event('pty.bell', { pane: 'main' });
+          }),
+        [sel, ms] as const,
+      );
     await endClaude();
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true } }));
     await page.waitForSelector(mole);
     expect(await page.getAttribute(mole, 'data-flinch')).toBeNull();
     await sleep(2_100); // (an earlier test may have rung)
-    await bell();
-    await until(async () => (await page.getAttribute(mole, 'data-flinch')) === '1', 2_000, 'a flinch');
-    expect(await page.$eval(mole, (el) => getComputedStyle(el).animationName)).toContain('pet-flinch');
+    const first = await bell(mole, 3_000);
+    expect(first.seen).toBe(true);
+    expect(first.animation).toContain('pet-flinch');
     await until(async () => (await page.getAttribute(mole, 'data-flinch')) === null, 2_000, 'the flinch to end');
-    await bell(); // within two seconds of the last one: ignored
-    await sleep(300);
-    expect(await page.getAttribute(mole, 'data-flinch')).toBeNull();
+    expect((await bell(mole, 700)).seen).toBe(false); // within two seconds of the last one: ignored
     // the scenes flinch too
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'warp' } }));
     const scene = ".pet-corner[data-companion='warp'] .scene";
     await page.waitForSelector(scene);
     await sleep(2_100);
-    await bell();
-    await until(async () => (await page.getAttribute(scene, 'data-flinch')) === '1', 2_000, 'a scene flinch');
+    expect((await bell(scene, 3_000)).seen).toBe(true);
     await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole' } }));
   }, 30_000);
 

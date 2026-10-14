@@ -88,7 +88,7 @@ describe('Claude Code hooks', () => {
     }
   });
 
-  it('SessionStart and Stop are async and guarded like the other eight: nothing for Claude Code to wait for, nothing outside Jaffer', () => {
+  it('SessionStart and Stop are async and guarded like the other nine: nothing for Claude Code to wait for, nothing outside Jaffer', () => {
     installHooks('/x/jaffer', env.userHome);
     const hooks = readSettings().hooks;
     expect(hooks.SessionStart).toEqual([{ hooks: [{ type: 'command', command: `[ "$JAFFER_SESSION" = 1 ] || exit 0; '/x/jaffer' hook session-start # jaffer-managed`, timeout: 5, async: true }] }]);

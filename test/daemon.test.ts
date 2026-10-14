@@ -751,7 +751,10 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await states()).find((s) => s.id === 'sess-live')?.cost?.last.output === 2000, 5_000);
   }, 30_000);
 
-  it('adds every finished answer to today\'s total once (a Stop heard twice is one answer), on the claude.state payload beside the sessions', async () => {
+  it('adds every finished answer to today\'s total once (a Stop heard twice is one answer), on the claude.state payload beside the sessions', async (ctx) => {
+    // the daemon's day is the local date: a run across local midnight would see two days (the clock is the daemon's own, a process of its own)
+    const now = new Date();
+    if (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() < 60_000) return ctx.skip();
     const transcript = path.join(env3.root, 'sess-today.jsonl');
     const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 0, output_tokens: 10_000 } } })}\n`;
     fs.writeFileSync(transcript, '');
