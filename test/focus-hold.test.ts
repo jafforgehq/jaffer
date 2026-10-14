@@ -17,7 +17,7 @@ describe('FocusHold: what a focus session holds back, and the one sentence when 
     expect(f.hold('finished')).toBe(true);
     expect(f.hold('needs-you')).toBe(true);
     expect(f.hold('failed')).toBe(true);
-    expect(f.release()).toBe('While you were focused: Claude finished 2 times, Claude needed you once, 1 command failed');
+    expect(f.release()).toBe('While you were focused: Claude finished twice, Claude needed you once, 1 command failed');
     expect(f.active).toBe(false);
     expect(f.hold('finished')).toBe(false);
     expect(f.release()).toBeNull();

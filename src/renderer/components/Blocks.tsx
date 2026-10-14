@@ -30,6 +30,8 @@ interface Tracked {
   prompt: IMarker;
   start?: IMarker;
   end?: IMarker;
+  /** The end's line after its marker went with an erased line: as an offset from the start's (both move together). */
+  endDelta?: number;
   gutter?: IDecoration;
 }
 
@@ -103,15 +105,44 @@ export function attachBlocks(term: Terminal): BlocksHandle {
   let hl: IDecoration | undefined;
   let raf = 0;
 
-  /** Lines move when the scrollback is trimmed: the markers know where they are now. */
+  /** Lines move when the scrollback is trimmed: the markers know where they are now (a disposed marker knows nothing: line -1). */
   const sync = () => {
     for (const b of model.blocks()) {
       const t = tracked.get(b.id);
-      if (!t) continue;
+      if (!t || t.prompt.isDisposed) continue;
       b.promptLine = t.prompt.line;
-      if (t.start) b.outputStart = t.start.line;
-      if (t.end) b.outputEnd = t.end.line;
+      if (!t.start || t.start.isDisposed) continue;
+      b.outputStart = t.start.line;
+      if (t.end && !t.end.isDisposed) b.outputEnd = t.end.line;
+      else if (t.endDelta !== undefined) b.outputEnd = t.start.line + t.endDelta;
     }
+  };
+
+  // xterm drops the markers of a line that is erased (Ctrl-L, `clear`, ⌘K): the output range follows what is left of it.
+  /** Its output's first line was erased: there is no output to copy, save or select any more (the block itself goes on). */
+  const watchStart = (b: Block, t: Tracked, m: IMarker | undefined) => {
+    t.start = m;
+    m?.onDispose(() => {
+      if (t.start !== m) return;
+      t.start = t.end = t.endDelta = undefined;
+      b.outputStart = b.outputEnd = undefined;
+      unlight();
+      queueSticky();
+    });
+  };
+  /** Its output's last line was erased but not its first: the output ends at the last line above the erased screen. */
+  const watchEnd = (b: Block, t: Tracked, m: IMarker | undefined) => {
+    t.end = m;
+    t.endDelta = undefined;
+    m?.onDispose(() => {
+      if (t.end !== m) return;
+      t.end = undefined;
+      const s = t.start;
+      if (!s || s.isDisposed) return;
+      const before = b.outputEnd !== undefined && b.outputStart !== undefined ? b.outputEnd - b.outputStart : Infinity; // (from the last sync: both as stale)
+      t.endDelta = Math.max(-1, Math.min(before, term.buffer.active.baseY - 1 - s.line));
+      queueSticky();
+    });
   };
 
   const unlight = () => {
@@ -132,19 +163,35 @@ export function attachBlocks(term: Terminal): BlocksHandle {
   };
 
   const output = (b: Block) => (sync(), blockOutputText(term.buffer.active, b));
+  /** The output, or a toast that there is none (and nothing is copied or saved). */
+  const someOutput = (b: Block): string | undefined => {
+    const text = output(b);
+    if (!text) toast({ kind: 'info', text: 'Nothing to copy' }, 2500);
+    return text || undefined;
+  };
 
   const menuFor = (b: Block): MenuItem[] => {
     const items: MenuItem[] = [];
     if (b.cmd && !isSensitiveCommand(b.cmd)) items.push({ label: 'Copy command', run: () => copy(b.cmd!, 'Copied') }); // the raw text, to the person's own clipboard
+    if (b.outputStart === undefined) return items; // its output was erased (or never started)
     items.push(
-      { label: 'Copy output', run: () => copy(output(b), 'Copied') },
+      {
+        label: 'Copy output',
+        run: () => {
+          const text = someOutput(b);
+          if (text) copy(text, 'Copied');
+        },
+      },
       {
         label: 'Save output…',
-        run: () =>
-          void window.jaffer.saveText(output(b), saveName(b)).then(
-            (r) => r.saved && toast({ kind: 'info', text: 'Saved' }, 2500),
-            (e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }),
-          ),
+        run: () => {
+          const text = someOutput(b);
+          if (text)
+            void window.jaffer.saveText(text, saveName(b)).then(
+              (r) => r.saved && toast({ kind: 'info', text: 'Saved' }, 2500),
+              (e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }),
+            );
+        },
       },
       { label: 'Copy as Markdown', run: () => copy(fenceText(output(b), shownCommand(b)), 'Copied as Markdown') },
     );
@@ -188,7 +235,7 @@ export function attachBlocks(term: Terminal): BlocksHandle {
     tracked.set(b.id, { prompt });
     prompt.onDispose(() => {
       if (tracked.get(b.id)?.prompt !== prompt) return;
-      if (b.outputStart === undefined && model.blocks().at(-1) === b) {
+      if (b.startedAt === undefined && model.blocks().at(-1) === b) {
         tracked.delete(b.id);
         return;
       }
@@ -224,13 +271,13 @@ export function attachBlocks(term: Terminal): BlocksHandle {
     if (buf.type !== 'normal') return false; // a full-screen program is one block: nothing inside the alternate screen
     const offset = kind === 'D' && buf.cursorX === 0 ? -1 : 0; // D: the output's last line is the one above the cursor, unless it did not end with a newline
     const last = model.blocks().at(-1);
-    const lost = kind === 'A' && last && last.outputStart !== undefined && last.endedAt === undefined ? last : undefined;
+    const lost = kind === 'A' && last && last.startedAt !== undefined && last.endedAt === undefined ? last : undefined;
     const b = model.onMark(kind, payload, buf.baseY + buf.cursorY + offset, Date.now());
     if (!b) return false;
     if (kind === 'A') {
       if (lost) {
         const t = tracked.get(lost.id);
-        if (t) t.end = term.registerMarker(-1);
+        if (t?.start) watchEnd(lost, t, term.registerMarker(-1));
         t?.gutter?.element && style(t.gutter.element, lost);
       }
       const prompt = term.registerMarker(0);
@@ -242,16 +289,19 @@ export function attachBlocks(term: Terminal): BlocksHandle {
     } else if (kind === 'C') {
       if (!tracked.has(b.id)) {
         const prompt = term.registerMarker(-1); // its prompt was erased while it waited: the line above the output stands in
-        if (!prompt) return false;
+        if (!prompt) {
+          model.remove(b.id);
+          return false;
+        }
         anchor(b, prompt);
       }
       const t = tracked.get(b.id)!;
-      t.start = term.registerMarker(0);
+      watchStart(b, t, term.registerMarker(0));
       addGutter(b, t);
     } else if (kind === 'D') {
       const t = tracked.get(b.id);
       if (!t) return false;
-      t.end = term.registerMarker(offset);
+      if (t.start) watchEnd(b, t, term.registerMarker(offset));
       if (t.gutter?.element) style(t.gutter.element, b);
     }
     return false;

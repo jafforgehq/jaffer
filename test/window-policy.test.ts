@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAppUrl, isWebUrl, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
+import { appearanceChanged, isAppUrl, isWebUrl, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
 
 const INDEX = 'file:///Applications/Jaffer.app/Contents/Resources/app/dist/renderer/index.html';
 
@@ -76,5 +76,16 @@ describe('vibrancyFor', () => {
     expect(vibrancyFor({ appearance: {} })).toBe('under-window'); // (not known yet: the default)
     expect(vibrancyFor({})).toBe('under-window');
     expect(vibrancyFor({ appearance: { blur: false } })).toBeNull();
+  });
+});
+
+describe('appearanceChanged: what the main process does again after a config change', () => {
+  it('the blur and the system stats only when they changed (any other change of the config touches neither)', () => {
+    const cfg = (blur?: boolean, systemStats?: boolean) => ({ appearance: { blur, systemStats }, claude: { showCost: true } });
+    expect(appearanceChanged(cfg(true, false), { ...cfg(true, false), claude: { showCost: false } })).toEqual({ blur: false, systemStats: false });
+    expect(appearanceChanged(cfg(true, false), cfg(false, false))).toEqual({ blur: true, systemStats: false });
+    expect(appearanceChanged(cfg(false, false), cfg(false, true))).toEqual({ blur: false, systemStats: true });
+    expect(appearanceChanged({}, cfg(true, false))).toEqual({ blur: false, systemStats: false }); // (not known yet is the default: blur on, stats off)
+    expect(appearanceChanged({}, cfg(false, true))).toEqual({ blur: true, systemStats: true });
   });
 });

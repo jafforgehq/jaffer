@@ -9,7 +9,7 @@ import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
-import { isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
+import { appearanceChanged, isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
@@ -102,19 +102,11 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     }
     if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
-    if (event === 'config.changed') {
-      appCfg = data as typeof appCfg;
-      syncSystemStats();
-      syncVibrancy();
-    }
+    if (event === 'config.changed') applyConfig(data as typeof appCfg);
   });
   void c
     .call('config.get', {})
-    .then((x) => {
-      appCfg = x as typeof appCfg;
-      syncSystemStats();
-      syncVibrancy();
-    })
+    .then((x) => applyConfig(x as typeof appCfg))
     .catch(() => undefined);
   void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
   c.onClose.on(() => void onConnectionLost(o));
@@ -236,6 +228,14 @@ let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
 /** The settings the main process acts on itself (kept current from the daemon's config.changed). */
 let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string }; appearance?: { systemStats?: boolean; blur?: boolean } } = {};
+
+/** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
+function applyConfig(next: typeof appCfg): void {
+  const changed = appearanceChanged(appCfg, next);
+  appCfg = next;
+  if (changed.systemStats) syncSystemStats();
+  if (changed.blur) syncVibrancy();
+}
 
 /** The window blurs what is behind it, or not (Settings → Appearance → Blur): at the window's creation and at every change. */
 function syncVibrancy(): void {

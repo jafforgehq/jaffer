@@ -1571,6 +1571,22 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).not.toContain('cr-a-46');
   }, 60_000);
 
+  it('the find bar is no dialog: with it open, the paste question still takes Esc and Enter', async () => {
+    await page.click('.term');
+    await page.keyboard.press('Meta+f');
+    await page.waitForSelector('.findbar');
+    await pasteText('echo find-a-48\necho find-b-49\n');
+    await page.waitForSelector('.paste-bar');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    expect(await page.locator('.findbar').count()).toBe(1); // the Esc was the question's
+    await sleep(300);
+    expect(await termText()).not.toContain('find-a-48');
+    await page.focus('.findbar input'); // (answering the question gave the terminal the keys back)
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.findbar', { state: 'detached' });
+  }, 30_000);
+
   it('⌘-click on a printed path opens it (absolute, relative to the folder, with its line and column); a plain click does not', async () => {
     const dir = path.join(env.userHome, 'links-91');
     fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
@@ -2399,6 +2415,42 @@ describe('Jaffer UI end to end', () => {
     await page.locator('.pins .pin button').click(); // unpin
     await page.evaluate(() => ((window as any).__jaffer.terminals.get('main').term.clearSelection()));
   }, 30_000);
+
+  it('Ctrl-L erases what is on the screen: a block keeps the part of its output above it, and copying nothing says so, never a false "Copied"', async () => {
+    await page.evaluate(() => {
+      const clip = { written: [] as string[] };
+      (window as any).__eraseClip = clip;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => '', writeText: async (t: string) => void clip.written.push(t) } });
+    });
+    const copies = () => page.evaluate(() => ((window as any).__eraseClip.written as string[]).slice());
+    const term = (fn: string, arg?: number) => page.evaluate(([f, a]) => (window as any).__jaffer.terminals.get('main').term[f as string](a), [fn, arg] as const);
+    await page.click('.term');
+    await enter('true'); // no output at all
+    await ended('true');
+    await (await markOf('true')).click({ button: 'right' });
+    await page.locator('.ctx-menu button', { hasText: 'Copy output' }).click();
+    await toastSaid('Nothing to copy');
+    expect(await copies()).toEqual([]);
+    await (await markOf('true')).click({ button: 'right' });
+    await page.locator('.ctx-menu button', { hasText: 'Save output…' }).click();
+    await sleep(300);
+    expect(await page.evaluate(() => ((window as any).__saved ?? []).filter((x: { name: string }) => x.name === 'true-output.txt').length)).toBe(0);
+
+    await page.click('.term');
+    await enter('seq 1 200');
+    const seq = await ended('seq 1 200');
+    await page.keyboard.press('Control+l');
+    await until(async () => !(await termText()).split('\n').slice(-60).some((l) => l === '200'), 5_000, 'the screen to be erased');
+    await term('scrollToLine', seq.promptLine);
+    await (await markOf('seq 1 200')).click({ button: 'right' });
+    await page.locator('.ctx-menu button', { hasText: 'Copy output' }).click();
+    await until(async () => (await copies()).length === 1, 3_000, 'the part left to be copied');
+    const left = (await copies())[0]!.split('\n');
+    expect(left.slice(0, 3)).toEqual(['1', '2', '3']);
+    expect(left.length).toBeLessThan(200); // the erased lines are not copied as blank lines
+    expect(left.every((l, i) => l === String(i + 1))).toBe(true);
+    await term('scrollToBottom');
+  }, 40_000);
 
   // (last: ESC c wipes the scrollback, which the reload test above reads)
   it('Clear and a full reset (ESC c) take the blocks along: an open gutter menu closes, no stale marks, no stale prompt to jump to', async () => {

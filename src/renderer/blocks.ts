@@ -37,7 +37,7 @@ export class BlockModel {
     if (!Number.isInteger(line) || line < 0) return undefined;
     const last = this.list[this.list.length - 1];
     if (kind === 'A') {
-      if (last && last.outputStart === undefined) this.drop(this.list.length - 1); // a prompt where nothing ran (Enter on an empty line)
+      if (last && last.startedAt === undefined) this.drop(this.list.length - 1); // a prompt where nothing ran (Enter on an empty line)
       else if (last && last.endedAt === undefined) Object.assign(last, { outputEnd: line - 1, exit: null, endedAt: now }); // its D was lost
       const b: Block = { id: this.nextId++, promptLine: line };
       this.list.push(b);
@@ -49,10 +49,11 @@ export class BlockModel {
       if (last.cmd !== undefined) return undefined;
       last.cmd = unescapeOsc(payload.slice(0, 4 * COMMAND_HEAD)); // a mark is forgeable at any length: only its head is kept
     } else if (kind === 'C') {
-      if (last.outputStart !== undefined) return undefined;
+      if (last.startedAt !== undefined) return undefined;
       Object.assign(last, { outputStart: line, startedAt: now });
     } else {
-      if (last.outputStart === undefined) return undefined;
+      // (`startedAt`, not `outputStart`: the view drops the output range of a block whose output was erased, and the block goes on)
+      if (last.startedAt === undefined) return undefined;
       const n = /^-?\d{1,16}$/.test(payload) ? Number.parseInt(payload, 10) : Number.NaN;
       const exit = Number.isSafeInteger(n) ? n : null;
       Object.assign(last, { outputEnd: line, exit, endedAt: now });

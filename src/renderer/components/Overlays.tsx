@@ -305,7 +305,7 @@ export function PasteBar(): VNode | null {
   useLayoutEffect(() => {
     if (!ask) return;
     const key = (e: KeyboardEvent) => {
-      if ((e.key !== 'Enter' && e.key !== 'Escape') || overlay.value) return; // another dialog's keys are its own
+      if ((e.key !== 'Enter' && e.key !== 'Escape') || (overlay.value && overlay.value !== 'find')) return; // another dialog's keys are its own (the find bar is no dialog)
       e.preventDefault();
       e.stopPropagation();
       done(e.key === 'Enter');

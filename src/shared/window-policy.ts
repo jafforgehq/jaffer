@@ -36,3 +36,9 @@ export function osc52Provider(write: (text: string) => Promise<void>): Osc52Prov
 export function vibrancyFor(cfg: { appearance?: { blur?: boolean } }): 'under-window' | null {
   return cfg.appearance?.blur === false ? null : 'under-window';
 }
+
+type AppearanceCfg = { appearance?: { blur?: boolean; systemStats?: boolean }; [other: string]: unknown };
+/** Which of the settings the main process applies itself changed from `prev` to `next` (a value not known yet is its default). */
+export function appearanceChanged(prev: AppearanceCfg, next: AppearanceCfg): { blur: boolean; systemStats: boolean } {
+  return { blur: vibrancyFor(prev) !== vibrancyFor(next), systemStats: (prev.appearance?.systemStats === true) !== (next.appearance?.systemStats === true) };
+}

@@ -78,6 +78,20 @@ describe('BlockModel: a block per command, from the shell marks', () => {
     expect(m.blocks()[0]!.exit).toBeNull();
   });
 
+  it('a block whose output was erased (the view clears its range) is not taken for a prompt where nothing ran: the next prompt keeps it, its D still ends it', () => {
+    const m = new BlockModel();
+    m.onMark('A', '', 0, 1);
+    m.onMark('E', 'tail -f log', 1, 2);
+    m.onMark('C', '', 1, 2);
+    Object.assign(m.blocks()[0]!, { outputStart: undefined }); // Ctrl-L erased the screen it was on
+    m.onMark('C', '', 5, 3); // (not a second start)
+    expect(m.blocks()[0]!.outputStart).toBeUndefined();
+    m.onMark('D', '130', 7, 4);
+    expect(m.blocks()[0]).toMatchObject({ exit: 130, endedAt: 4 });
+    m.onMark('A', '', 8, 5);
+    expect(m.blocks().map((b) => b.cmd)).toEqual(['tail -f log', undefined]);
+  });
+
   it('a forged command of 10 MB is kept clipped (its head, before unescaping), quickly', () => {
     const m = new BlockModel();
     m.onMark('A', '', 0, 1);

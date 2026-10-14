@@ -8,7 +8,7 @@ const SAYING: Record<HoldKind, (n: number) => string> = {
   failed: (n) => `${n} command${n === 1 ? '' : 's'} failed`,
   terminal: (n) => `${n} terminal notification${n === 1 ? '' : 's'}`,
 };
-const times = (n: number): string => (n === 1 ? 'once' : `${n} times`);
+const times = (n: number): string => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 
 /**
  * Focus mode (⌥⌘F): while it is on, notifications are held instead of shown, only counted by kind (never what they said), and ending it
