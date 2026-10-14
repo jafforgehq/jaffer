@@ -8,7 +8,7 @@ import { summarizeLines, type TurnCost } from '../../shared/claude-cost';
 export const STOP_AFTER_END_GRACE_MS = 10_000;
 
 /** A long agentic answer can run to a few megabytes of transcript; beyond this only the end of it is read. */
-const MAX_READ = 24 * 1024 * 1024;
+export const MAX_READ = 24 * 1024 * 1024;
 
 /** Where a transcript stands now, so a turn can be measured from here. 0 when it is not there (yet). */
 export function transcriptSize(file: string | undefined): number {

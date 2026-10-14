@@ -390,6 +390,36 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await sleep(800);
     expect((await info()).git).toBeUndefined();
   });
+
+  it('lists past Claude conversations from Claude Code\'s transcripts (newest first, the cost only with showCost) and keeps nothing of what was said', async () => {
+    const c = await connect();
+    const dir = path.join(env.userHome, '.claude', 'projects', '-history-test'); // the daemon's CLAUDE_CONFIG_DIR
+    fs.mkdirSync(dir, { recursive: true });
+    const ids = ['a0000000-1111-4222-8333-444455556666', 'b0000000-1111-4222-8333-444455556666'];
+    ids.forEach((id, i) => {
+      const at = Date.parse('2026-10-01T10:00:00Z') + i * 3_600_000;
+      const lines = [
+        { type: 'user', cwd: '/history/folder', timestamp: new Date(at).toISOString(), message: { role: 'user', content: 'SECRET-PROMPT' } },
+        { type: 'assistant', cwd: '/history/folder', timestamp: new Date(at + 30_000).toISOString(), message: { id: `m${i}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 1000 } } },
+      ];
+      const file = path.join(dir, `${id}.jsonl`);
+      fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      fs.utimesSync(file, at / 1000 + 60, at / 1000 + 60);
+    });
+    const mine = (r: { items: any[] }) => r.items.filter((x) => ids.includes(x.id));
+    const priced = await c.call('claude.history', {});
+    expect(JSON.stringify(priced)).not.toContain('SECRET');
+    expect(mine(priced)).toEqual([
+      { id: ids[1], cwd: '/history/folder', startedAt: Date.parse('2026-10-01T11:00:00Z'), endedAt: Date.parse('2026-10-01T11:00:30Z'), durMs: 30_000, usd: (1000 * 2 + 1000 * 10) / 1e6 },
+      { id: ids[0], cwd: '/history/folder', startedAt: Date.parse('2026-10-01T10:00:00Z'), endedAt: Date.parse('2026-10-01T10:00:30Z'), durMs: 30_000, usd: (1000 * 2 + 1000 * 10) / 1e6 },
+    ]);
+    await c.call('config.patch', { claude: { showCost: false } });
+    try {
+      expect(mine(await c.call('claude.history', {})).some((x) => 'usd' in x)).toBe(false);
+    } finally {
+      await c.call('config.patch', { claude: { showCost: true } });
+    }
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {

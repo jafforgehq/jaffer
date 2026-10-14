@@ -15,6 +15,7 @@ import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
+import { listConversations } from '../core/claude/history';
 import { dayTotal, type DayTotal } from '../shared/claude-cost';
 import { nextTypicalTurnMs } from '../shared/turn-median';
 import { readGitStatus, type GitStatus } from '../core/session/git-status';
@@ -522,6 +523,10 @@ export class JafferService {
     });
     r.handle('claude.state', () => this.claudeState());
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
+    // Past conversations, from Claude Code's own transcripts: ids, folders, times and (with showCost) token counts, read on request, kept nowhere
+    r.handle('claude.history', async () => ({
+      items: await listConversations({ claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), limit: 50, withCost: this.config.get().claude.showCost }),
+    }));
 
     // ---- config
     r.handle('config.get', () => this.config.get());
