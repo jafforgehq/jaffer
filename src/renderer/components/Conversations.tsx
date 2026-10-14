@@ -86,9 +86,16 @@ export function Conversations(): VNode {
   };
   const onKey = (e: KeyboardEvent) => {
     const n = Math.max(1, flat.length);
-    if (e.key === 'ArrowDown') (e.preventDefault(), setSel((sel + 1) % n));
-    else if (e.key === 'ArrowUp') (e.preventDefault(), setSel((sel - 1 + n) % n));
-    else if (e.key === 'Enter') (e.preventDefault(), pick(sel)); // (preventDefault: a focused row is not clicked a second time)
+    const t = e.target as HTMLElement;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = (sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      setSel(next);
+      // on a row, the keyboard moves along (Enter on a row is the row's own click: it copies the row that has the keyboard)
+      if (t.classList.contains('conv-row')) list.current?.querySelectorAll<HTMLElement>('.conv-row')[next]?.focus();
+    }
+    // Enter in the search copies the selected row (not an Enter that commits an input method's text); rows and the refresh button take Enter themselves
+    else if (e.key === 'Enter' && t === input.current && !e.isComposing) (e.preventDefault(), pick(sel));
     else if (e.key === 'Escape') (e.preventDefault(), toTerminal());
   };
 
@@ -116,7 +123,7 @@ export function Conversations(): VNode {
               const n = i++;
               const r = conversationRow(c, home, showCost);
               return (
-                <button key={`${n}-${c.id}`} class="conv-row" data-id={c.id} data-sel={n === sel ? '' : undefined} title={r.dir || undefined} onClick={() => pick(n)}>
+                <button key={`${n}-${c.id}`} class="conv-row" data-id={c.id} data-sel={n === sel ? '' : undefined} title={r.dir || undefined} onFocus={() => setSel(n)} onMouseEnter={() => setSel(n)} onClick={() => pick(n)}>
                   <b class="conv-name">{r.name}</b>
                   <span class="conv-time">{r.time}</span>
                   <span class="conv-dir">{r.dir}</span>

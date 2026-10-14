@@ -23,6 +23,15 @@ describe('the side panel (pure)', () => {
     expect(panelWidth(301.6)).toBe(302);
   });
 
+  it('panelWidth with the window width: the terminal keeps at least 360 px of the window, never below 220, the kept width untouched otherwise', () => {
+    expect(panelWidth(480, 640)).toBe(280);
+    expect(panelWidth(300, 640)).toBe(280);
+    expect(panelWidth(300, 1360)).toBe(300);
+    expect(panelWidth(480, 500)).toBe(220);
+    expect(panelWidth(undefined, 600)).toBe(240);
+    expect(panelWidth(300, Number.NaN)).toBe(300);
+  });
+
   it('no Claude session: "Claude is not running" with the hint that ⇧⌘C starts it, and nothing else about a turn', () => {
     const m = nowCardModel(null, opts());
     expect(m.state).toBe('off');

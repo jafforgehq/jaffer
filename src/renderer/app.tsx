@@ -86,7 +86,7 @@ export function App(): VNode | null {
       if (k === 'p' && !e.shiftKey) (e.preventDefault(), overlay.value === 'palette' ? (overlay.value = null) : openOverlay('palette'));
       else if (k === ',') (e.preventDefault(), openOverlay('settings'));
       else if (k === 'f' && !e.shiftKey) (e.preventDefault(), openOverlay('find'));
-      else if (k === 'b' && !e.shiftKey) (e.preventDefault(), togglePanel('key'));
+      else if (k === 'b' && !e.shiftKey) (e.preventDefault(), e.repeat || togglePanel('key')); // (⌘B held down: one toggle, not a flapping panel)
     };
     window.addEventListener('keydown', key);
     return () => {

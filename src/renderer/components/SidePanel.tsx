@@ -1,11 +1,14 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick } from '../state';
+import { activePane, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick } from '../state';
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth } from '../panel';
 import { Conversations } from './Conversations';
+import { terminals } from './TerminalView';
 
 const SLIDE_MS = 180;
+/** The arrow keys on the edge write `panel.width` (and fit the terminal) once they stop for this long. */
+const KEY_SETTLE_MS = 400;
 const motionOn = () => cfg.value?.appearance?.animations !== false && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const pct = (f: number) => `${Math.round(Math.min(1, Math.max(0, f)) * 100)}%`;
 
@@ -81,6 +84,8 @@ export function SidePanel(): VNode | null {
   if (was.current !== open) {
     was.current = open;
     anim.current = motionOn() ? (open ? 'in' : 'out') : null;
+    // closed while it has the keyboard: the terminal takes it (read now: without the slide, the panel is gone before any effect runs)
+    if (!open && document.activeElement?.closest('.side-panel')) queueMicrotask(() => terminals.get(activePane.value)?.focus());
   }
   const leaving = !open && anim.current === 'out';
   useEffect(() => {
@@ -89,9 +94,27 @@ export function SidePanel(): VNode | null {
     return () => clearTimeout(t);
   }, [leaving]);
   const [dragW, setDragW] = useState<number | null>(null);
-  useEffect(() => () => void (layoutHold.value = false), []);
+  // the window's width: the panel gives way in a narrow window, so the terminal keeps 360 px of it (the kept width stays as it is)
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(() => {
+    const on = () => setWinW(window.innerWidth);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
+  // the arrow keys: the width shows at once and the terminal waits; one write and one fit once they stop (or the edge loses the keyboard)
+  const keyed = useRef<{ w: number; t: ReturnType<typeof setTimeout> } | null>(null);
+  const settleKeys = () => {
+    const k = keyed.current;
+    if (!k) return;
+    keyed.current = null;
+    clearTimeout(k.t);
+    patchPanel({ width: k.w });
+    setDragW(null);
+    layoutHold.value = false;
+  };
+  useEffect(() => () => (settleKeys(), void (layoutHold.value = false)), []);
   if (!open && !leaving) return null;
-  const width = dragW ?? panelWidth(cfg.value?.panel?.width);
+  const width = dragW ?? panelWidth(cfg.value?.panel?.width, winW);
 
   const onDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
@@ -102,7 +125,7 @@ export function SidePanel(): VNode | null {
     const w0 = width;
     let w = w0;
     layoutHold.value = true;
-    const move = (ev: PointerEvent) => setDragW((w = panelWidth(w0 + x0 - ev.clientX)));
+    const move = (ev: PointerEvent) => setDragW((w = panelWidth(w0 + x0 - ev.clientX, winW)));
     const up = () => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
@@ -119,7 +142,11 @@ export function SidePanel(): VNode | null {
     const step = e.key === 'ArrowLeft' ? 20 : e.key === 'ArrowRight' ? -20 : 0;
     if (!step) return;
     e.preventDefault();
-    patchPanel({ width: panelWidth(width + step) });
+    const w = panelWidth(width + step, winW);
+    if (keyed.current) clearTimeout(keyed.current.t);
+    keyed.current = { w, t: setTimeout(settleKeys, KEY_SETTLE_MS) };
+    layoutHold.value = true;
+    setDragW(w);
   };
 
   return (
@@ -136,6 +163,7 @@ export function SidePanel(): VNode | null {
         data-drag={dragW !== null ? '' : undefined}
         onPointerDown={onDown}
         onKeyDown={onKey}
+        onBlur={settleKeys}
       />
       <NowCard />
       <Conversations />

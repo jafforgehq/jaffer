@@ -1871,6 +1871,36 @@ describe('Jaffer UI end to end', () => {
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
     expect(await focused()).toBe('terminal');
+    // Tab to a row: Enter copies THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and copies nothing
+    await page.fill('.sp-convos .conv-search input', 'hist-proj');
+    await until(async () => (await mine()).length === 3, 3_000, 'the three for Tab');
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(72));
+    expect((await mine()).map((r) => r.sel)).toEqual([false, true, false]);
+    await page.keyboard.press('Enter');
+    await until(async () => (await clipLast()) === `claude --resume ${sid(72)}`, 3_000, 'Enter on the focused second row to copy it');
+    await page.focus(`.sp-convos .conv-row[data-id="${sid(71)}"]`);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(73));
+    expect((await mine()).map((r) => r.sel)).toEqual([false, false, true]);
+    await page.keyboard.press('Enter');
+    await until(async () => (await clipLast()) === `claude --resume ${sid(73)}`, 3_000, 'Enter on the row the arrows reached');
+    let copied = await written();
+    let reads = await histCalls();
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-refresh'))).toBe(true);
+    await page.keyboard.press('Enter');
+    await until(async () => (await histCalls()) === reads + 1, 3_000, 'Enter on the refresh button to read the list');
+    await sleep(300);
+    expect(await written()).toBe(copied);
+    // an Enter that commits an input method's text copies nothing
+    await page.evaluate(() => document.querySelector('.sp-convos .conv-search input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
+    await sleep(300);
+    expect(await written()).toBe(copied);
     await page.fill('.sp-convos .conv-search input', '');
     // a bad id from the daemon is refused: nothing copied, an error says so
     const copies = await written();
@@ -2385,6 +2415,60 @@ describe('Jaffer UI end to end', () => {
     expect(await termText()).toMatch(/^panel-marker-42/m);
     await cfgPatch({ panel: { width: 300 } });
     await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) === 300, 5_000, 'back to 300');
+    await page.click('.term');
+  }, 40_000);
+
+  it('the side panel keeps the terminal first: a held ⌘B does not flap it, closing it from inside gives the keyboard to the terminal, the arrow keys on its edge write the width once and fit the terminal once, and a narrow window caps it (the terminal keeps 360 px)', async () => {
+    if (!(await panelCfg()).open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel');
+    // ⌘B held down: only the first press counts (the repeats do nothing)
+    await page.click('.term');
+    await page.evaluate(() => { for (let i = 0; i < 3; i++) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true, repeat: true, bubbles: true, cancelable: true })); });
+    await sleep(400);
+    expect(await page.locator('.side-panel').count()).toBe(1);
+    expect((await panelCfg()).open).toBe(true);
+    // closed while its search has the keyboard: the terminal gets it (with the slide, and with motion off)
+    const focusIs = () => page.evaluate(() => (document.activeElement?.classList.contains('xterm-helper-textarea') ? 'terminal' : document.activeElement?.matches('.side-panel *') ? 'panel' : 'other'));
+    for (const motion of [true, false]) {
+      await cfgPatch({ appearance: { animations: motion } });
+      await page.focus('.sp-convos .conv-search input');
+      expect(await focusIs()).toBe('panel');
+      await page.keyboard.press('Meta+b');
+      await page.waitForSelector('.side-panel', { state: 'detached' });
+      expect(await focusIs(), `motion ${motion}`).toBe('terminal');
+      await page.keyboard.press('Meta+b');
+      await page.waitForSelector('.side-panel');
+      await sleep(250);
+    }
+    await cfgPatch({ appearance: { animations: true } });
+    // the arrow keys on the edge: shown at once, the terminal held, one write of panel.width and one fit after the keys stop
+    await until(async () => (await panelCfg()).width === 300, 3_000, 'width 300 to start');
+    await sleep(300);
+    const before = await cols();
+    await countResizes();
+    await page.focus('.sp-handle');
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowLeft');
+    expect(Math.round((await page.locator('.side-panel').boundingBox())!.width)).toBe(360);
+    expect((await panelCfg()).width).toBe(300);
+    expect(await cols()).toBe(before);
+    expect(await resizes()).toBe(0);
+    await until(async () => (await panelCfg()).width === 360, 3_000, 'panel.width 360 once the keys stop');
+    await until(async () => (await cols()) < before, 3_000, 'the terminal to fit');
+    await sleep(400);
+    expect(await resizes()).toBe(1);
+    await cfgPatch({ panel: { width: 480 } });
+    // a narrow window: the panel gives way so the terminal keeps 360 px of it; the kept width is not rewritten
+    await page.setViewportSize({ width: 640, height: 520 });
+    try {
+      await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) === 280, 3_000, 'the panel capped at 640 − 360');
+      expect((await page.locator('.terminal-area').boundingBox())!.width).toBeGreaterThanOrEqual(300);
+      expect((await panelCfg()).width).toBe(480);
+    } finally {
+      await page.setViewportSize({ width: 1360, height: 860 });
+    }
+    await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) === 480, 3_000, 'the kept width back in a wide window');
+    await cfgPatch({ panel: { width: 300 } });
+    await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) === 300, 3_000, 'back to 300');
     await page.click('.term');
   }, 40_000);
 

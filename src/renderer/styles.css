@@ -199,6 +199,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .side-panel {
   flex: none; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r-lg); box-shadow: 0 0 0 0.5px var(--ring), var(--shadow-sm);
+  max-width: calc(100vw - 360px); /* (the window caps it in JS too: the terminal keeps 360 px of the window) */
 }
 /* it slides in and out (its layout width changes at once, so the terminal fits once) */
 :root:not([data-motion='off']) .side-panel[data-anim='in'] { animation: panel-in 0.18s ease-out; }

@@ -5,9 +5,10 @@ import { baseName, budgetLevel, costFigure, countsText, fmtDuration, progressFra
 
 /** The side panel's pure pieces: its width, and what its Now card says (built from what the window already has, nothing new). */
 
-/** `panel.width` as the window uses it: whole pixels, 220..480, 300 for anything that is not a number. */
-export function panelWidth(w: unknown): number {
-  return typeof w === 'number' && Number.isFinite(w) ? Math.round(Math.min(480, Math.max(220, w))) : 300;
+/** `panel.width` as the window uses it: whole pixels, 220..480, 300 for anything that is not a number; with the window's width, also no wider than leaves the terminal 360 px of it (but never under 220). */
+export function panelWidth(w: unknown, windowWidth = Infinity): number {
+  const kept = typeof w === 'number' && Number.isFinite(w) ? Math.round(Math.min(480, Math.max(220, w))) : 300;
+  return Number.isFinite(windowWidth) ? Math.min(kept, Math.max(220, Math.round(windowWidth) - 360)) : kept;
 }
 
 /** At most this many edited files are named; the rest are counted. */
