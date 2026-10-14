@@ -12,15 +12,15 @@ describe('resume a past conversation (1.1.1): what a click types, or copies and 
     expect(shellQuote('')).toBe("''");
   });
 
-  it('idle, same folder: Ctrl-E Ctrl-U (the whole line goes, wherever the cursor is), `claude --resume <id>`, Enter', () => {
-    expect(resumeAction({ cwd: DIR, busy: null }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15claude --resume ${ID}\r` });
-    expect(resumeAction({ cwd: DIR }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15claude --resume ${ID}\r` });
+  it('idle, same folder: Ctrl-E Ctrl-U Ctrl-X Ctrl-K (the whole line goes, wherever the cursor is, and zsh\'s whole buffer), `claude --resume <id>`, Enter', () => {
+    expect(resumeAction({ cwd: DIR, busy: null }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15\x18\x0bclaude --resume ${ID}\r` });
+    expect(resumeAction({ cwd: DIR }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15\x18\x0bclaude --resume ${ID}\r` });
   });
 
   it('idle, another folder: `cd \'<folder>\' && claude --resume <id>`, the folder single-quoted (spaces, quotes, $, backticks stay inert)', () => {
-    expect(resumeAction({ cwd: '/tmp', busy: '' }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15cd '${DIR}' && claude --resume ${ID}\r` });
-    expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd: "/Users/maya/it's a dir" })).toEqual({ kind: 'type', text: `\x05\x15cd '/Users/maya/it'\\''s a dir' && claude --resume ${ID}\r` });
-    expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd: '/x/$(touch y)`z`' })).toEqual({ kind: 'type', text: `\x05\x15cd '/x/$(touch y)\`z\`' && claude --resume ${ID}\r` });
+    expect(resumeAction({ cwd: '/tmp', busy: '' }, { id: ID, cwd: DIR })).toEqual({ kind: 'type', text: `\x05\x15\x18\x0bcd '${DIR}' && claude --resume ${ID}\r` });
+    expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd: "/Users/maya/it's a dir" })).toEqual({ kind: 'type', text: `\x05\x15\x18\x0bcd '/Users/maya/it'\\''s a dir' && claude --resume ${ID}\r` });
+    expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd: '/x/$(touch y)`z`' })).toEqual({ kind: 'type', text: `\x05\x15\x18\x0bcd '/x/$(touch y)\`z\`' && claude --resume ${ID}\r` });
     expect(resumeAction({ cwd: '' }, { id: ID, cwd: DIR }).kind).toBe('type'); // (the shell's folder not known yet: the cd is harmless)
   });
 
@@ -50,6 +50,13 @@ describe('resume a past conversation (1.1.1): what a click types, or copies and 
     expect(resumeAction({ cwd: DIR }, { id: ID, cwd: `/${'a'.repeat(4095)}` }).kind).toBe('type');
   });
 
+  it('a folder with a backslash is unknown too (it never goes on a command line): only `claude --resume <id>` is copied', () => {
+    for (const cwd of ["/tmp/a\\';id;#", '/tmp/a\\', '/tmp/x\\ny']) {
+      expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd }), cwd).toEqual({ kind: 'copy', text: `claude --resume ${ID}`, why: 'Folder unknown: command copied' });
+      expect(resumeLine({ cwd: '/tmp' }, { id: ID, cwd })).toBe(`claude --resume ${ID}`);
+    }
+  });
+
   it('a bad id: nothing typed, nothing copied', () => {
     for (const id of ['', 'abc', `${ID}; rm -rf ~`, `${ID}\n`, '$(touch x)', 7 as never]) {
       expect(resumeAction({ cwd: DIR }, { id, cwd: DIR }), JSON.stringify(id)).toEqual({ kind: 'none', why: 'That conversation has no valid id.' });
@@ -57,7 +64,7 @@ describe('resume a past conversation (1.1.1): what a click types, or copies and 
     }
   });
 
-  it('resumeLine (the copy button): the same command as a click would run, never Ctrl-E, Ctrl-U or Enter', () => {
+  it('resumeLine (the copy button): the same command as a click would run, never the clearing keys or Enter', () => {
     expect(resumeLine({ cwd: DIR }, { id: ID, cwd: DIR })).toBe(`claude --resume ${ID}`);
     expect(resumeLine({ cwd: '/tmp', busy: 'claude' }, { id: ID, cwd: DIR })).toBe(`cd '${DIR}' && claude --resume ${ID}`);
     expect(resumeLine({ cwd: '/tmp' }, { id: ID, cwd: '/a\nb' })).toBe(`claude --resume ${ID}`);

@@ -1799,7 +1799,7 @@ describe('Jaffer UI end to end', () => {
       w.__typed = [];
       w.jaffer.call = (m: string, p: any) =>
         m === 'claude.history' ? (w.__histCalls++, w.__histStub ? w.__histStub() : w.__histReal(m, p))
-        : m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__typed.push(p.data), queueMicrotask(() => (w.__event('pty.start', { pane: 'main', cmd: 'claude' }), w.__event('pty.command', { pane: 'main', cmd: 'claude', exit: 0, durMs: 1 }))), Promise.resolve({})) // (as if the shell ran it: the next click may type again)
+        : m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__typed.push(p.data), w.__noStart || queueMicrotask(() => (w.__event('pty.start', { pane: 'main', cmd: 'claude' }), w.__event('pty.command', { pane: 'main', cmd: 'claude', exit: 0, durMs: 1 }))), Promise.resolve({})) // (as if the shell ran it: the next click may type again)
         : w.__histReal(m, p);
     });
     const histCalls = () => page.evaluate(() => (window as any).__histCalls as number);
@@ -1818,7 +1818,7 @@ describe('Jaffer UI end to end', () => {
     const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
     const typedLast = () => page.evaluate(() => (window as any).__typed.at(-1) as string | undefined);
     const typedCount = () => page.evaluate(() => (window as any).__typed.length as number);
-    const resumes = (n: number) => `\x05\x15cd '${path.join(env.userHome, `hist-proj-${'abc'[n - 71]}`)}' && claude --resume ${sid(n)}\r`; // (the shell is elsewhere: cd first)
+    const resumes = (n: number) => `\x05\x15\x18\x0bcd '${path.join(env.userHome, `hist-proj-${'abc'[n - 71]}`)}' && claude --resume ${sid(n)}\r`; // (the shell is elsewhere: cd first)
     const mine = () => page.$$eval('.sp-convos .conv-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, sel: (x as HTMLElement).dataset.sel !== undefined, day: x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '', text: x.textContent ?? '' })));
     const turn = (state: string) => page.evaluate((st) => { const now = Date.now(); (window as any).__event('claude.state', { sessions: [{ id: 'hist-turn', state: st, since: now, turnStartedAt: now - 2000, startedAt: now - 60_000, calls: [], counts: {}, files: [], subagents: [], turns: 1 }] }); }, state);
 
@@ -1883,9 +1883,18 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await typedLast()) === resumes(71), 3_000, 'the click to resume');
     let typed = await typedCount();
     await page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(72)}"]) .conv-copy`).click();
-    await until(async () => (await clipLast()) === resumes(72).slice(2, -1), 3_000, 'the copy button');
+    await until(async () => (await clipLast()) === resumes(72).slice(4, -1), 3_000, 'the copy button');
     await toastSaid('Copied. Paste it in the terminal.');
     expect(await typedCount()).toBe(typed);
+    // a second click before the shell has started the first line types nothing and says so
+    await page.evaluate(() => void ((window as any).__noStart = true));
+    await page.locator(`.sp-convos .conv-row[data-id="${sid(71)}"]`).click();
+    await until(async () => (await typedCount()) === typed + 1, 3_000, 'the first click to type');
+    await page.locator(`.sp-convos .conv-row[data-id="${sid(72)}"]`).click();
+    await toastSaid('Already resuming…');
+    expect(await typedCount()).toBe(typed + 1);
+    await page.evaluate(() => { const w = window as any; w.__noStart = false; w.__event('pty.start', { pane: 'main', cmd: 'claude' }); w.__event('pty.command', { pane: 'main', cmd: 'claude', exit: 0, durMs: 1 }); });
+    typed = await typedCount();
     // Esc gives the keyboard back to the terminal
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
@@ -2112,20 +2121,21 @@ describe('Jaffer UI end to end', () => {
     await page.click('.term');
     await page.keyboard.press('Control+c');
     await ended('sleep 31');
-    // Claude runs: nothing is typed, the line is copied and the toast says to quit it first
+    // Claude runs (resumed by a click, so after a cd into the folder with a space and a quote): nothing is typed, the line is copied and
+    // the toast says to quit it first
     await enter(`claude() { echo CLAUDE-UP; sleep 30; }`);
-    await enter('claude --stand-in');
-    await running('claude --stand-in');
+    await row(81).click();
+    await running(lineFor(81, here));
     await until(async () => (await count('CLAUDE-UP')) >= 1, 5_000, 'the stand-in claude');
     before = await termText();
     await row(82).click();
-    await until(async () => (await clipLast()) === lineFor(82), 3_000, 'the copy while Claude runs');
+    await until(async () => (await clipLast()) === lineFor(82), 3_000, 'the copy while Claude runs'); // (the shell says its folder at a prompt: still the odd one)
     await toastSaid('Claude is already running here: quit it first (/exit)');
     await sleep(400);
     expect(await termText()).toBe(before);
     await page.click('.term');
     await page.keyboard.press('Control+c');
-    await ended('claude --stand-in');
+    await until(async () => !(await blocks()).some((b) => b.cmd === lineFor(81, here) && b.endedAt === undefined), 10_000, 'the stand-in to end');
     await enter('unset -f claude');
   }, 60_000);
 

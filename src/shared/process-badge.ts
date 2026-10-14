@@ -13,13 +13,18 @@ export interface ProcessBadge {
   spin: boolean;
 }
 
+/** The `cd '<folder>' && ` a click on a past conversation types before `claude --resume` (1.1.1): single quotes, a quote written `'\''`, no backslash otherwise. */
+const RESUME_CD = /^cd '(?:[^'\\]|'\\'')*' && /;
+
 /**
- * Is this command line Claude Code itself (`claude`, `FOO=1 claude -c`, `command claude`, `/usr/local/bin/claude`), and not just a line that
- * mentions claude? The line can come from the terminal's forgeable marks at any length (the window reads it too), so only its first
- * `COMMAND_HEAD` characters are read.
+ * Is this command line Claude Code itself (`claude`, `FOO=1 claude -c`, `command claude`, `/usr/local/bin/claude`, and after exactly the
+ * `cd '<folder>' && ` a resume types), and not just a line that mentions claude? The line can come from the terminal's forgeable marks at
+ * any length (the window reads it too), so only its head is read: `COMMAND_HEAD` characters after that cd, and the cd itself within
+ * `5 * COMMAND_HEAD` (a folder of 4096 characters, each a quote written in four).
  */
 export function isClaudeCommand(cmd: string): boolean {
-  return /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(cmd.slice(0, COMMAND_HEAD));
+  const cd = RESUME_CD.exec(cmd.slice(0, 5 * COMMAND_HEAD));
+  return /^\s*(?:\w+=\S*\s+)*(?:command\s+)?(?:\S*\/)?claude(?:\s|$)/.test(cmd.slice(cd ? cd[0].length : 0).slice(0, COMMAND_HEAD));
 }
 
 /**

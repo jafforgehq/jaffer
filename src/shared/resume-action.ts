@@ -11,8 +11,11 @@ export function shellQuote(s: string): string {
 type Where = { cwd?: string; busy?: string | null };
 type Past = { id: string; cwd?: string };
 
-/** A folder that may go on a command line: absolute, at most 4096 characters, no control character (no newline can end the line early). */
-const okFolder = (p: unknown): p is string => typeof p === 'string' && p.length <= 4096 && /^\/[^\u0000-\u001f\u007f-\u009f]*$/.test(p);
+/**
+ * A folder that may go on a command line: absolute, at most 4096 characters, no control character (no newline can end the line early) and
+ * no backslash (`isClaudeCommand` must know the line again, and a backslash is the one character that reads differently around quotes).
+ */
+const okFolder = (p: unknown): p is string => typeof p === 'string' && p.length <= 4096 && /^\/[^\u0000-\u001f\u007f-\u009f\\]*$/.test(p);
 
 /** The command that resumes a conversation from the terminal's folder: `claude --resume <id>`, with `cd '<folder>' && ` first when the folder differs; null for a bad id. */
 export function resumeLine(info: Where, c: Past): string | null {
@@ -23,7 +26,8 @@ export function resumeLine(info: Where, c: Past): string | null {
 
 /**
  * What a click on a past conversation does (1.1.1). At an idle prompt (the shell's marks say nothing runs) it types Ctrl-E Ctrl-U
- * (a half-typed line goes, wherever the cursor is: bash's Ctrl-U kills only what is before it), the resume line and Enter. While any command runs, Claude included, or when the folder is not known,
+ * Ctrl-X Ctrl-K (a half-typed line goes, wherever the cursor is: bash's Ctrl-U kills only what is before it; and zsh's whole buffer,
+ * which Shift+Enter can make several lines long: Ctrl-X Ctrl-K is zsh's kill-buffer, bash only rings the bell), the resume line and Enter. While any command runs, Claude included, or when the folder is not known,
  * nothing is typed: the command is copied and `why` says so. A bad id gives nothing at all.
  */
 export function resumeAction(info: Where, c: Past): { kind: 'type'; text: string } | { kind: 'copy'; text: string; why: string } | { kind: 'none'; why: string } {
@@ -33,5 +37,5 @@ export function resumeAction(info: Where, c: Past): { kind: 'type'; text: string
   if (busy && isClaudeCommand(busy)) return { kind: 'copy', text: line, why: 'Claude is already running here: quit it first (/exit)' };
   if (busy) return { kind: 'copy', text: line, why: `${isSensitiveCommand(busy) || busy === 'command' ? 'A command' : clipLabel(redactText(busy), 40)} is running: command copied` };
   if (!okFolder(c.cwd)) return { kind: 'copy', text: line, why: 'Folder unknown: command copied' };
-  return { kind: 'type', text: `\x05\x15${line}\r` };
+  return { kind: 'type', text: `\x05\x15\x18\x0b${line}\r` };
 }

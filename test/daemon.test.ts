@@ -848,6 +848,18 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await states()).every((s) => s.state === 'ended'), 8_000);
   });
 
+  it('a Claude resumed from the side panel (`cd \'<folder>\' && claude --resume <id>`, a space and a quote in the folder) ends every session when it ends', async () => {
+    await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-cd', prompt: 'resumed' }));
+    expect((await states()).find((s) => s.id === 'sess-cd')?.state).toBe('working');
+    const odd = path.join(env3.userHome, "it's odd");
+    fs.mkdirSync(odd, { recursive: true });
+    await c.call('pty.write', { data: 'claude() { :; }\r' });
+    await sleep(300);
+    await c.call('pty.write', { data: `cd '${odd.replace(/'/g, `'\\''`)}' && claude --resume 01234567-89ab-4cde-8f01-23456789abcd\r` });
+    await waitUntil(async () => (await states()).find((s) => s.id === 'sess-cd')?.state === 'ended', 8_000);
+    await c.call('pty.write', { data: 'cd ~\r' });
+  });
+
   // The real thing end to end: Claude Code fires its real hooks, the real `jaffer hook` reports from inside the daemon's shell
   // (JAFFER_SESSION is exported by Jaffer's shell integration), and the daemon ends up knowing what Claude did.
   it.skipIf(!CLAUDE)('a real Claude Code turn, run in the shell, reaches the live state through its real hooks', async () => {

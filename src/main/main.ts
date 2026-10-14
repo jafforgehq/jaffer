@@ -725,7 +725,7 @@ let dockHidden = false;
 let claudeToday: DayTotal | undefined;
 /** The last five commands that finished, for the menu (memory only; never a sensitive one). */
 const recentCommands = new RecentCommands();
-/** The newest past Claude conversations for the menu bar's submenu (ids, folders and times only; memory only). Refreshed in the background. */
+/** The newest past Claude conversations for the menu bar's submenu (ids, folders, times and the redacted titles; memory only). Refreshed in the background. */
 let pastConversations: Conversation[] = [];
 let pastBusy: Promise<void> | null = null;
 function refreshPastConversations(): Promise<void> {

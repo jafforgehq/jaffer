@@ -34,6 +34,15 @@ describe('isClaudeCommand', () => {
     for (const c of ['claude', 'claude --resume', 'claude -p "fix it"', 'FOO=1 BAR=x claude -c', 'command claude', '/usr/local/bin/claude', '~/.local/bin/claude --model opus', '  claude']) expect(isClaudeCommand(c), c).toBe(true);
   });
 
+  it('is Claude Code after exactly the `cd \'<folder>\' && ` a resume types (1.1.1), quotes in the folder written \'\\\'\'', () => {
+    for (const c of ["cd '/Users/maya/code/api' && claude --resume x", "cd '/Users/maya/it'\\''s odd' && claude --resume x", "cd '/a b' && FOO=1 claude", "cd '' && claude"]) {
+      expect(isClaudeCommand(c), c).toBe(true);
+      expect(processBadge(c, 'working'), c).toEqual({ kind: 'claude', spin: true });
+    }
+    // only that exact form: not another cd, not a quote left open, not a command after the cd that is not claude
+    for (const c of ['cd /a && claude', 'cd "/a" && claude', "cd '/a' ; claude", "cd '/a'&& claude", "cd '/a' && echo claude", "cd '/it's' && claude", "cd '/a' && cd '/b' && claude", " cd '/a' && claude x", "cd '/a\\' && claude"]) expect(isClaudeCommand(c), c).toBe(false);
+  });
+
   it('is not Claude Code when a line merely mentions it', () => {
     for (const c of ['git log --grep claude', 'tail -f ~/.claude/debug.log', 'npm run claude-lint', 'claudette --serve', 'echo claude', 'cat claude.md', 'ls ~/.claude', '', 'claude-code-guide']) expect(isClaudeCommand(c), c).toBe(false);
   });
@@ -51,6 +60,9 @@ describe('isClaudeCommand on a forged line (the terminal can say any command lin
     'command ': 'command '.repeat((8 * MB) / 8),
     'A=1 ... claude': 'A=1 '.repeat((8 * MB) / 4) + 'claude',
     'a=\n\t': 'a=\n\t'.repeat((8 * MB) / 4),
+    "cd '…": "cd '" + 'a'.repeat(8 * MB),
+    "cd '\\'' …": "cd '" + "'\\''".repeat((8 * MB) / 4),
+    "cd 'x' && cd 'x' && …": "cd 'x' && ".repeat((8 * MB) / 10),
   };
   for (const [what, line] of Object.entries(crafted)) {
     it(`does not throw and stays fast on 8 MB of ${what}, in isClaudeCommand and in processBadge`, () => {
@@ -64,6 +76,18 @@ describe('isClaudeCommand on a forged line (the terminal can say any command lin
   it('reads a line by its head: a line that begins with claude is claude however long it is', () => {
     expect(isClaudeCommand('claude ' + 'x '.repeat(MB))).toBe(true);
     expect(isClaudeCommand(' '.repeat(5000) + 'claude')).toBe(false);
+  });
+
+  it('a resume into the longest folder it types (4096 characters, every one a quote) is still Claude; 1 MB and 8 MB cd lines stay fast', () => {
+    expect(isClaudeCommand(`cd '${"'\\''".repeat(4095)}x' && claude --resume x`)).toBe(true);
+    expect(isClaudeCommand(`cd '${'a'.repeat(4095)}' && claude --resume x`)).toBe(true);
+    for (const n of [1, 8]) {
+      const t0 = performance.now();
+      expect(isClaudeCommand(`cd '${'a'.repeat(n * MB)}' && claude`)).toBe(false);
+      expect(isClaudeCommand(`cd '${"'\\''".repeat((n * MB) / 4)}' && claude`)).toBe(false);
+      expect(isClaudeCommand(`cd 'x' && claude ${'y '.repeat((n * MB) / 2)}`)).toBe(true);
+      expect(performance.now() - t0).toBeLessThan(500);
+    }
   });
 });
 

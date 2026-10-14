@@ -90,9 +90,10 @@ export function Conversations(): VNode {
     if (a.kind === 'none') return void toast({ kind: 'error', text: a.why });
     if (a.kind === 'copy') return copy(a.text, a.why);
     const t = terminals.get(activePane.value);
-    if (!t || Date.now() - typedAt < 2000) return;
+    if (!t) return;
+    if (Date.now() - typedAt < 2000) return void toast({ kind: 'info', text: 'Already resuming…' }, 2500);
     typedAt = Date.now();
-    t.type(a.text); // (Ctrl-E Ctrl-U, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
+    t.type(a.text); // (Ctrl-E Ctrl-U Ctrl-X Ctrl-K, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
     toast({ kind: 'info', text: 'Resuming…' }, 2500);
     t.focus();
   };
