@@ -209,9 +209,10 @@ sleep 30
   fs.appendFileSync(path.join(repo, 'README.md'), '\n## Testing\n\nRun `./bin/test`.\n');
 }
 
-/** Six conversations in the demo person's own (temporary) Claude folder: only ids, folders and times are read from them, so the "words" are placeholders. */
+/** Six conversations in the demo person's own (temporary) Claude folder: ids, folders, times and titles (the first message's first line) are read from them; the rest of the "words" are placeholders. */
 function plantConversations(): void {
   const T = Date.now();
+  const titles = ['Fix the flaky session expiry test', 'Add rate limiting to the invoice API', 'Dark mode for the settings page', 'Document the release steps', 'Migrate billing to the new tax rules', 'Tidy the dev scripts'];
   const demo: [string, number, number, number, number][] = [
     ['projects/app', 4 * 60_000, 18 * 60_000, 21_000, 6_800],
     ['projects/api', 2 * 3_600_000, 41 * 60_000, 64_000, 17_200],
@@ -229,7 +230,7 @@ function plantConversations(): void {
     fs.writeFileSync(
       file,
       [
-        line('user', T - endAgo - dur, { message: { role: 'user', content: 'demo' } }),
+        line('user', T - endAgo - dur, { message: { role: 'user', content: titles[i] } }),
         line('assistant', T - endAgo, { message: { id: `demo${i}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'demo' }], usage: { input_tokens: inTok, output_tokens: outTok } } }),
       ].join('\n') + '\n',
     );
