@@ -228,7 +228,7 @@ function Field({ label, hint, children, buttons }: { label: string; hint?: strin
   return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
-type Section = 'appearance' | 'integrations' | 'updates' | 'reset';
+type Section = 'appearance' | 'terminal' | 'integrations' | 'updates' | 'reset';
 
 export function Settings(): VNode {
   const c = cfg.value!;
@@ -257,6 +257,7 @@ export function Settings(): VNode {
 
   const nav: { id: Section; label: string; icon: VNode }[] = [
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
+    { id: 'terminal', label: 'Terminal', icon: <IconTerminal size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
     { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
     { id: 'reset', label: 'Reset', icon: <IconReset size={14} /> },
@@ -381,6 +382,16 @@ export function Settings(): VNode {
                     void window.jaffer.setLoginItem(v).catch(() => setOpenAtLogin(!v));
                   }}
                 />
+              </Field>
+            </>
+          )}
+
+          {section === 'terminal' && (
+            <>
+              <h4>Terminal</h4>
+              <p class="lede">What the terminal adds around your commands. Nothing of a command or its output is kept.</p>
+              <Field label="Command blocks" hint="a mark beside every command (green when it worked, red when it failed; hover for its times, click to select its output, right-click to copy or save it), ⌘↑ / ⌘↓ between prompts, and the command pinned on top while you read its output">
+                <Switch checked={c.terminal?.blocks !== false} onChange={(v) => set({ terminal: { blocks: v } })} />
               </Field>
             </>
           )}

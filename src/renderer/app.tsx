@@ -7,6 +7,7 @@ import { PaneTree } from './components/PaneTree';
 import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { FindBar, Onboarding, Palette, Settings } from './components/Overlays';
+import { BlockMenu, StickyHeader } from './components/Blocks';
 import { cssVars, themeById } from './themes';
 
 function applyTheme(): void {
@@ -52,11 +53,13 @@ export function App(): VNode | null {
         <div class="workspace">
           <div class="terminal-area">
             <PaneTree />
+            <StickyHeader />
             <Pet />
             {overlay.value === 'find' && <FindBar />}
           </div>
         </div>
       </div>
+      <BlockMenu />
       <Toasts />
       {overlay.value === 'palette' && <Palette />}
       {overlay.value === 'settings' && <Settings />}

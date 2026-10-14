@@ -14,5 +14,5 @@ void window.jaffer?.appInfo().then((i) => ((window as unknown as { __home?: stri
 
 // Test hook: lets end-to-end tests read terminal buffers. Only active with ?debug in the URL.
 if (location.search.includes('debug')) {
-  void import('./components/TerminalView').then((m) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals }));
+  void Promise.all([import('./components/TerminalView'), import('./components/Blocks')]).then(([m, b]) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals, blocks: b.currentBlocks }));
 }

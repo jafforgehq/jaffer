@@ -3,6 +3,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
 import type { IPty } from '@lydell/node-pty';
 import { Emitter } from '../../shared/util';
+import { unescapeOsc } from '../../shared/osc';
 
 export type PtyEvent =
   | { type: 'data'; data: string; seq: number }
@@ -23,10 +24,6 @@ export interface PtyOptions {
   cols: number;
   rows: number;
   scrollback?: number;
-}
-
-function unescapeOsc(s: string): string {
-  return s.replace(/\\x([0-9a-fA-F]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
 }
 
 /**

@@ -170,6 +170,9 @@ describe('Jaffer UI end to end', () => {
     for (const k of ['Meta+b', 'Meta+j', 'Meta+Shift+M']) await page.keyboard.press(k); // the sidebar, the Claude panel and the memory drawer are gone
     await sleep(300);
     expect(await page.locator('.rail, .statusbar, .agent, .panel-head, .side').count()).toBe(0);
+    // 1.0.0 allows command blocks inside the card (gutter marks, the sticky command header, the gutter menu); still no sidebar, drawer, panel or tab
+    expect(await page.locator('.sidebar, .drawer, .panel, .tabs, .tab').count()).toBe(0);
+    expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar)\b/.test(c)))).toEqual([]);
     expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // no buttons in the title bar: the folder, the branch, the ring, the cost
     expect(await page.locator('.titlebar', { hasText: /memory/i }).count()).toBe(0);
     const term = (await page.locator('.terminal-area').boundingBox())!;
@@ -804,6 +807,166 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.evaluate(() => (window as any).__clip.written as string[])).includes('copied by a script'), 8_000, 'the text to reach the clipboard');
   }, 60_000);
 
+  // Command blocks (spec features 7, 8, 22, 24, 26, 27): the renderer reads bash's real shell marks.
+  const menu = (id: string) => page.evaluate((m) => (window as any).__menu(m), id);
+  const enter = async (line: string) => {
+    await page.keyboard.type(line, { delay: 4 });
+    await page.keyboard.press('Enter');
+  };
+  type ShownBlock = { id: number; promptLine: number; outputStart?: number; outputEnd?: number; cmd?: string; exit?: number | null; endedAt?: number };
+  const blocks = (): Promise<ShownBlock[]> => page.evaluate(() => (window as any).__jaffer.blocks());
+  const ended = (cmd: string) => until(async () => (await blocks()).find((b) => b.cmd === cmd && b.endedAt !== undefined), 10_000, `the block of ${cmd}`);
+  const markOf = async (cmd: string) => page.locator(`.xterm-decoration.gutter-mark[data-block="${(await ended(cmd)).id}"]`);
+  const viewTop = () => page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.buffer.active.viewportY as number);
+  const shownMarks = () => page.$$eval('.xterm-decoration.gutter-mark', (els) => els.filter((e) => (e as HTMLElement).style.display !== 'none').length);
+  const toastSaid = (text: string) => until(async () => (await page.locator('.toast-text', { hasText: text }).count()) > 0, 5_000, `a toast saying ${text}`);
+
+  it('command blocks: a mark beside every command (green when it worked, red when it failed), its times on hover, its output lit on hover and selected on a click', async () => {
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await enter('echo hi-block'); // (no clearing the screen first: a later test finds this session's earlier output after a reload)
+    await ended('echo hi-block'); // (typed ahead, the next command would be echoed into this one's output)
+    await enter('false');
+    await until(async () => (await (await markOf('false')).count()) === 1, 10_000, 'a mark for the failed command');
+    const ok = await markOf('echo hi-block');
+    expect(await ok.getAttribute('data-state')).toBe('ok');
+    expect(await (await markOf('false')).getAttribute('data-state')).toBe('fail');
+    // hovering says when it started and how long it took, and never names the command
+    const tip = (await ok.getAttribute('title')) ?? '';
+    expect(tip).toMatch(/^Started \d\d:\d\d:\d\d · took \d+ ?(ms|s|min)$/);
+    expect(tip).not.toContain('echo');
+    // the mark sits in the gutter, left of the text
+    const markBox = (await ok.boundingBox())!;
+    const screenBox = (await page.locator('.term .xterm-screen').boundingBox())!;
+    expect(markBox.x + markBox.width).toBeLessThanOrEqual(screenBox.x + 0.5);
+    expect(markBox.x).toBeGreaterThanOrEqual((await page.locator('.terminal-area').boundingBox())!.x);
+    await ok.hover();
+    await until(async () => (await page.locator('.xterm-decoration.block-hl').count()) === 1, 3_000, 'the output to light up');
+    await shot('16-command-blocks');
+    await page.mouse.move(700, 420);
+    await until(async () => (await page.locator('.xterm-decoration.block-hl').count()) === 0, 3_000, 'the light to go');
+    await ok.click();
+    expect(await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.getSelection().trim())).toBe('hi-block');
+  }, 40_000);
+
+  it('the gutter menu: copy the command (never a sensitive one), copy the output, save it, copy it as Markdown; ⌥⌘C copies a selection fenced', async () => {
+    await page.evaluate(() => {
+      const clip = { written: [] as string[] };
+      (window as any).__blockClip = clip;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => '', writeText: async (t: string) => void clip.written.push(t) } });
+    });
+    const lastCopied = () => page.evaluate(() => ((window as any).__blockClip.written as string[]).at(-1));
+    const pick = async (cmd: string, item: string) => {
+      await (await markOf(cmd)).click({ button: 'right' });
+      await page.waitForSelector('.ctx-menu');
+      await page.locator('.ctx-menu button', { hasText: item }).click();
+      await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    };
+    await (await markOf('echo hi-block')).click({ button: 'right' });
+    await page.waitForSelector('.ctx-menu');
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy command', 'Copy output', 'Save output…', 'Copy as Markdown']);
+    await shot('17-gutter-menu');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+
+    await pick('echo hi-block', 'Copy command');
+    await until(async () => (await lastCopied()) === 'echo hi-block', 3_000, 'the command on the clipboard');
+    await toastSaid('Copied');
+    await pick('echo hi-block', 'Copy output');
+    await until(async () => (await lastCopied()) === 'hi-block', 3_000, 'the output on the clipboard');
+    await pick('echo hi-block', 'Save output…');
+    await until(async () => page.evaluate(() => (window as any).__saved?.length === 1), 3_000, 'the save');
+    expect(await page.evaluate(() => (window as any).__saved[0])).toEqual({ text: 'hi-block', name: 'echo-output.txt' });
+    await pick('echo hi-block', 'Copy as Markdown');
+    await until(async () => (await lastCopied()) === '```\n$ echo hi-block\nhi-block\n```', 3_000, 'the Markdown on the clipboard');
+    await toastSaid('Copied as Markdown');
+
+    // a sensitive command is not offered for copying, and not named in the Markdown either
+    await page.click('.term');
+    await enter('echo $NO_SUCH_TOKEN');
+    await (await markOf('echo $NO_SUCH_TOKEN')).click({ button: 'right' });
+    await page.waitForSelector('.ctx-menu');
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy output', 'Save output…', 'Copy as Markdown']);
+    await page.mouse.click(700, 420); // a click elsewhere closes it
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    await pick('echo $NO_SUCH_TOKEN', 'Copy as Markdown');
+    await until(async () => (await lastCopied()) === '```\n\n```', 3_000, 'the Markdown without the command');
+
+    // ⌥⌘C: a selection inside one block's output gets its command as the first line
+    await (await markOf('echo hi-block')).click();
+    await menu('copy-markdown');
+    await until(async () => (await lastCopied()) === '```\n$ echo hi-block\nhi-block\n```', 3_000, 'the selection as Markdown');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.clearSelection());
+    await menu('copy-markdown');
+    await toastSaid('Select something first');
+  }, 60_000);
+
+  it('⌘↑ / ⌘↓ jump between prompts; scrolled up into a long output, its command stays pinned on top, and a click goes to its prompt', async () => {
+    await page.click('.term');
+    await enter('seq 1 300');
+    const seq = await ended('seq 1 300');
+    const before = (await blocks()).filter((b) => b.promptLine < seq.promptLine).at(-1)!;
+    expect(await page.locator('.sticky-cmd').count()).toBe(0); // at the bottom, nothing is pinned
+    await menu('prompt-prev');
+    expect(await viewTop()).toBe(seq.promptLine);
+    await menu('prompt-prev');
+    expect(await viewTop()).toBe(before.promptLine);
+    await menu('prompt-next');
+    expect(await viewTop()).toBe(seq.promptLine);
+    await page.evaluate((line) => (window as any).__jaffer.terminals.get('main').term.scrollToLine(line), seq.outputStart! + 120);
+    await page.waitForSelector('.sticky-cmd');
+    expect(await page.textContent('.sticky-cmd')).toContain('seq 1 300');
+    expect(await page.getAttribute('.sticky-cmd', 'data-state')).toBe('ok');
+    await shot('18-sticky-header');
+    await page.click('.sticky-cmd');
+    expect(await viewTop()).toBe(seq.promptLine);
+    await page.waitForSelector('.sticky-cmd', { state: 'detached' });
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.scrollToBottom());
+    // the palette has them too
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('prompt');
+    expect(await page.textContent('.palette-list')).toMatch(/Previous prompt[\s\S]*Next prompt|Next prompt[\s\S]*Previous prompt/);
+    await page.keyboard.press('Escape');
+  }, 40_000);
+
+  it('command blocks stand aside in the alternate screen, and Settings → Terminal → Command blocks switches them all off and on', async () => {
+    await page.click('.term');
+    await enter('echo alt-before-80');
+    await until(async () => (await shownMarks()) >= 1, 5_000, 'a mark on the screen');
+    await enter("printf '\\033[?1049h'"); // a full-screen program (Claude Code, vim) takes the alternate screen
+    await until(async () => (await shownMarks()) === 0, 5_000, 'the marks to stand aside');
+    expect(await page.locator('.sticky-cmd').count()).toBe(0);
+    await enter("printf '\\033[?1049l'");
+    await until(async () => (await shownMarks()) >= 1, 5_000, 'the marks back');
+
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Terminal' }).click();
+    const field = page.locator('label.field', { hasText: 'Command blocks' });
+    expect(await field.locator('input').isChecked()).toBe(true);
+    await field.locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).terminal.blocks === false, 5_000, 'the switch to be saved');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    await until(async () => (await page.locator('.xterm-decoration.gutter-mark').count()) === 0, 5_000, 'every mark gone');
+    await page.click('.term');
+    await enter('echo blocks-off-81');
+    await until(async () => /^blocks-off-81/m.test(await termText()), 8_000, 'the output');
+    await sleep(400);
+    expect(await page.locator('.xterm-decoration.gutter-mark').count()).toBe(0);
+    expect(await blocks()).toEqual([]);
+    const top = await viewTop();
+    await menu('prompt-prev');
+    expect(await viewTop()).toBe(top);
+
+    await page.evaluate(() => window.jaffer.call('config.patch', { terminal: { blocks: true } }));
+    await sleep(300);
+    await enter(''); // blocks start at the next prompt: the one already on the screen was printed while they were off
+    await enter('echo blocks-on-82');
+    expect(await (await markOf('echo blocks-on-82')).getAttribute('data-state')).toBe('ok');
+  }, 60_000);
+
   it('Settings → Claude Code: the cost switch, and nothing about resuming or restarting Claude Code', async () => {
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
@@ -856,7 +1019,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Claude Code', 'Updates', 'Reset']);
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Terminal', 'Claude Code', 'Updates', 'Reset']);
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
     for (const section of ['Appearance', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);

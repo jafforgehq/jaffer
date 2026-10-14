@@ -131,7 +131,30 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .term .xterm { height: 100%; }
 .term .xterm-viewport { background: transparent !important; }
 .term .xterm-viewport::-webkit-scrollbar { width: 10px; }
-/* a stripe in the gutter for every finished command: green when it worked, red when it failed */
+/* Command blocks. The 18 px left padding of .term is the gutter: a mark beside each command's prompt (green: it worked, red: it
+   failed, faint: running or not known). xterm places the decoration at the line's first cell (no inline left for x 0), so it is moved
+   into the padding here; it is the hover and click target, the bar is its ::before. Hovering lights the command's output. */
+.term .xterm-decoration.gutter-mark { left: -13px; cursor: pointer; pointer-events: auto; }
+.term .xterm-decoration.gutter-mark::before { content: ''; position: absolute; left: 3px; top: 18%; bottom: 18%; width: 3px; border-radius: 2px; background: var(--faint); opacity: 0.6; transition: opacity 0.12s, width 0.12s; }
+.term .xterm-decoration.gutter-mark[data-state='ok']::before { background: var(--ok); opacity: 0.85; }
+.term .xterm-decoration.gutter-mark[data-state='fail']::before { background: var(--danger); opacity: 0.95; }
+.term .xterm-decoration.gutter-mark:hover::before { opacity: 1; width: 4px; }
+.term .xterm-decoration.block-hl { background: var(--accent-soft); pointer-events: none; }
+/* the command of the output you scrolled up into, pinned at the top of the card; a click goes to its prompt */
+.sticky-cmd {
+  position: absolute; top: 6px; left: 12px; z-index: 4; max-width: calc(100% - 300px); display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 10px 3px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--raised-2); box-shadow: var(--shadow-sm);
+  color: var(--muted); font: 11.5px/1.4 var(--font-mono); cursor: pointer;
+}
+.sticky-cmd:hover { color: var(--text); }
+.sticky-cmd .sticky-mark { flex: none; width: 3px; height: 12px; border-radius: 2px; background: var(--faint); }
+.sticky-cmd[data-state='ok'] .sticky-mark { background: var(--ok); }
+.sticky-cmd[data-state='fail'] .sticky-mark { background: var(--danger); }
+.sticky-cmd .sticky-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the gutter mark's menu (the window's own, not a native one) */
+.ctx-menu { position: fixed; z-index: 60; min-width: 180px; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); }
+.ctx-menu button { border: 0; border-radius: var(--r-xs); padding: 6px 10px; background: transparent; text-align: left; font-size: 12.5px; }
+.ctx-menu button:hover, .ctx-menu button:focus-visible { background: var(--hover); outline: none; }
 
 /* Motion. All of it is decoration, so it is scoped to :root:not([data-motion='off']) (Settings → Appearance → Animations) and
    stands still under macOS Reduce motion (the global rule at the end of this file). Cheap by design: small elements only, and the

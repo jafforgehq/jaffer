@@ -21,6 +21,7 @@ import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { prepareHome } from './prepare-home';
 import { resetJaffer } from '../core/reset';
+import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 
 /**
  * Electron shell. It owns the window and the macOS-native bits (menu, dock, notifications, global hotkey), and it starts the terminal
@@ -510,6 +511,10 @@ function buildMenu(): void {
         { type: 'separator' },
         { label: 'Clear Screen', accelerator: 'Cmd+K', click: act('clear') },
         { label: 'Find…', accelerator: 'Cmd+F', click: act('find') },
+        { label: 'Copy as Markdown', accelerator: 'Alt+Cmd+C', click: act('copy-markdown') },
+        { type: 'separator' },
+        { label: 'Previous Prompt', accelerator: 'Cmd+Up', click: act('prompt-prev') },
+        { label: 'Next Prompt', accelerator: 'Cmd+Down', click: act('prompt-next') },
         { type: 'separator' },
         { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C', click: act('run-claude') },
         { label: 'Restart Shell', click: act('restart-shell') },
@@ -620,6 +625,17 @@ ipcMain.handle('jaffer:reset', async (e) => {
 });
 ipcMain.handle('jaffer:set-login-item', (e, on: boolean) => {
   if (trusted(e)) app.setLoginItemSettings({ openAtLogin: !!on });
+});
+// "Save output…" of a command block: written only where the person picks in the save dialog, and not kept anywhere else
+ipcMain.handle('jaffer:save-text', async (e, text: unknown, name: unknown) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  if (typeof text !== 'string') throw new Error('Nothing to save.');
+  if (text.length > SAVE_TEXT_MAX) throw new Error('That output is more than 32 MB: too much to save.');
+  const ask = { defaultPath: path.join(app.getPath('downloads'), safeFileName(name)) };
+  const r = win && !win.isDestroyed() ? await dialog.showSaveDialog(win, ask) : await dialog.showSaveDialog(ask);
+  if (r.canceled || !r.filePath) return { saved: false };
+  await fs.promises.writeFile(r.filePath, text, { mode: 0o600 });
+  return { saved: true };
 });
 
 // ---------------------------------------------------------------- lifecycle

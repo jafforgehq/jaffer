@@ -10,6 +10,8 @@ export interface JafferBridge {
   reveal(): Promise<void>;
   appInfo(): Promise<{ version: string; platform: string; dark: boolean; home: string; packaged: boolean; openAtLogin: boolean }>;
   setLoginItem(on: boolean): Promise<void>;
+  /** "Save output…": the app asks where (a save dialog) and writes the text there; nothing is kept. At most 32 MB. */
+  saveText(text: string, name: string): Promise<{ saved: boolean }>;
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */
   reset(): Promise<{ cancelled: boolean }>;

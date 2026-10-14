@@ -37,6 +37,10 @@ export interface JafferConfig {
     /** How long a turn of Claude typically takes (ms; the median of the last finished ones of 3 s or more), for the ring's progress. Kept by the daemon, not a setting; 0 is not known yet. */
     typicalTurnMs: number;
   };
+  terminal: {
+    /** Command blocks: a mark beside every command's prompt (its exit, its times), jumping between prompts, the sticky command header, copying and saving a command's output. */
+    blocks: boolean;
+  };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
   updates: { auto: boolean };
   /** What Jaffer may tell you while it is in the background. */
@@ -75,6 +79,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 },
+  terminal: { blocks: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },

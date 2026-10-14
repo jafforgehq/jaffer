@@ -89,6 +89,21 @@ describe('claude.liveCost, claude.dailyBudgetUsd and claude.typicalTurnMs', () =
   });
 });
 
+describe('terminal.blocks', () => {
+  it('is on by default, also for a config file saved before the terminal section existed; a choice is kept, a value of the wrong kind is not', () => {
+    expect(DEFAULT_CONFIG.terminal).toEqual({ blocks: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true });
+    const store = new ConfigStore(env.paths);
+    store.patch({ terminal: { blocks: false } });
+    expect(new ConfigStore(env.paths).get().terminal.blocks).toBe(false);
+    store.patch({ terminal: { blocks: 'on' } as never });
+    expect(new ConfigStore(env.paths).get().terminal.blocks).toBe(false);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ terminal: 'blocks' }));
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true });
+  });
+});
+
 describe('session.restoreScreen, gone in 0.6.0', () => {
   it('is not a setting and not a default; an old file that has it loads, changes nothing, and keeps the key as it was after a patch of another key', () => {
     expect('restoreScreen' in DEFAULT_CONFIG.session).toBe(false);

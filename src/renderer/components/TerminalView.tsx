@@ -12,6 +12,7 @@ import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
 import { activePane, cfg, overlay, ptyBus, windowFocused, daemonUp } from '../state';
 import { themeById, xtermTheme } from '../themes';
+import { attachBlocks, type BlocksHandle } from './Blocks';
 
 /** Registry so menus, the palette and the find bar can reach a pane's terminal. */
 export interface TermHandle {
@@ -21,6 +22,8 @@ export interface TermHandle {
   clear(): void;
   paste(text: string): void;
   type(text: string): void;
+  /** Command blocks: prompts to jump between, a selection to copy as Markdown. */
+  blocks: BlocksHandle;
 }
 export const terminals = new Map<string, TermHandle>();
 
@@ -88,6 +91,8 @@ export function TerminalView({ pane }: { pane: string }) {
       /* falls back to the DOM renderer */
     }
 
+    const blocks = attachBlocks(term);
+
     let attached = false;
     let snapshotSeq = -1;
     let lastSeq = -1;
@@ -103,6 +108,7 @@ export function TerminalView({ pane }: { pane: string }) {
       try {
         const r = await call('session.attach', { pane, cols: term.cols, rows: term.rows });
         if (disposed) return;
+        blocks.reset(); // the snapshot carries no marks: blocks start again from here
         term.reset();
         term.write(r.snapshot.data);
         snapshotSeq = lastSeq = r.snapshot.seq;
@@ -134,6 +140,7 @@ export function TerminalView({ pane }: { pane: string }) {
         if (!attached) pending.push({ seq: data.seq, data: data.data });
         else if (data.seq > snapshotSeq) apply(data.seq, data.data);
       } else if (event === 'pty.reset') {
+        blocks.reset();
         term.reset();
         term.write(data.snapshot.data);
         snapshotSeq = lastSeq = data.snapshot.seq;
@@ -172,9 +179,9 @@ export function TerminalView({ pane }: { pane: string }) {
         if (ev.key === 'Backspace') return send('\x15'); // delete to line start
         if (ev.key === 'ArrowLeft') return send('\x01');
         if (ev.key === 'ArrowRight') return send('\x05');
-        if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') return true;
-        return false; // let menu accelerators (copy, paste, split…) win
+        return false; // let menu accelerators (copy, paste, ⌘↑/⌘↓ between prompts…) win
       }
+      if (ev.metaKey && ev.altKey && !ev.ctrlKey) return false; // ⌥⌘C (copy as Markdown) is the menu's
       if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
         void call('pty.write', { pane, data: '\x1b\r' }).catch(() => undefined); // newline in Claude Code, shell prompts and editors alike
         return false;
@@ -210,6 +217,7 @@ export function TerminalView({ pane }: { pane: string }) {
       },
       paste: (t) => term.paste(t),
       type: (t) => void call('pty.write', { pane, data: t }).catch(() => undefined),
+      blocks,
     };
     terminals.set(pane, handle);
 
@@ -249,6 +257,7 @@ export function TerminalView({ pane }: { pane: string }) {
       el.removeEventListener('drop', onDrop);
       el.removeEventListener('dragover', onDragOver);
       terminals.delete(pane);
+      blocks.dispose();
       void call('session.detach', {}).catch(() => undefined);
       try {
         webgl?.dispose();
