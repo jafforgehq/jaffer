@@ -36,6 +36,15 @@ describe('the menu and the palette agree', () => {
     ]);
   });
 
+  it('past conversations are ⌥⌘H in the palette and the Shell menu, and Hide Others (which macOS binds to ⌥⌘H) gives the keys up', () => {
+    expect(MENU_ITEMS['history']).toEqual({ label: 'Past Claude Conversations…', accelerator: 'Alt+Cmd+H' });
+    expect(actions.find((a) => a.id === 'history')?.keys).toBe('⌥⌘H');
+    const main = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
+    const hideOthers = /\{ role: 'hideOthers'[^}]*\}/.exec(main)?.[0] ?? '';
+    expect(hideOthers).toMatch(/accelerator: '[^']+'/);
+    expect(hideOthers).not.toContain(MENU_ITEMS['history']!.accelerator!);
+  });
+
   it('no accelerator is used twice, and none takes ⌃⌘F (Full Screen) or ⌘Q', () => {
     const all = [...Object.values(MENU_ITEMS).map((i) => i.accelerator), 'Cmd+Q', TOGGLE_FULLSCREEN].filter(Boolean);
     expect(all.length).toBeGreaterThan(15);

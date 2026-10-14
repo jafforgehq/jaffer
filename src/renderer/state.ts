@@ -5,6 +5,7 @@ import type { UpdateState } from '../shared/update-policy';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
+import { fmtAgo, tildeOf } from '../shared/history-label';
 import type { GitStatus } from '../core/session/git-status';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
 import { FailTracker } from './fail-tracker';
@@ -29,7 +30,7 @@ export interface SessionInfo {
   git?: GitStatus;
 }
 
-export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent';
+export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent' | 'history';
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
@@ -365,17 +366,8 @@ export function homeDir(): string {
 
 /** `/Users/maya/code/api` → `~/code/api`. */
 export function tildePath(p: string): string {
-  const home = homeDir();
-  if (home && (p === home || p.startsWith(home + '/'))) return '~' + p.slice(home.length);
-  return p;
+  return tildeOf(p, homeDir());
 }
 
-export function fmtAgo(ts: number | string, now = Date.now()): string {
-  const t = typeof ts === 'number' ? ts : Date.parse(ts);
-  const s = Math.max(0, (now - t) / 1000);
-  if (s < 45) return 'just now';
-  if (s < 5400) return `${Math.max(1, Math.round(s / 60))}m ago`;
-  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
+export { fmtAgo };
 

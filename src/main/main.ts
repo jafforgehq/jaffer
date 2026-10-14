@@ -27,6 +27,8 @@ import { MENU_ITEMS } from '../shared/menu-spec';
 import { FocusHold, type HoldKind } from '../shared/focus-hold';
 import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
 import { RecentCommands } from '../shared/recent-commands';
+import { historyMenuItems, resumeCommand } from '../shared/history-label';
+import type { Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
 import type { GitStatus } from '../core/session/git-status';
@@ -323,10 +325,12 @@ function claudeBusy(): boolean {
 
 /** Claude, in the terminal, is waiting for the user and they are looking elsewhere. */
 function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
+  const wasBusy = claudeBusy();
   finished.update(sessions);
   const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
   prevClaude = sessions;
   claudeToday = today;
+  if (wasBusy && !claudeBusy()) void refreshPastConversations(); // (a finished turn changes the list)
   syncTrayState();
   if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
@@ -652,7 +656,7 @@ function buildMenu(): void {
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
-        { role: 'hideOthers' },
+        { role: 'hideOthers', accelerator: 'Alt+Shift+Cmd+H' }, // (the role's own ⌥⌘H is Past Claude Conversations')
         { role: 'unhide' },
         { type: 'separator' },
         // ⌘Q ends the terminal and asks first when something runs (before-quit). Not `role: 'quit'`: only this item marks its quit as
@@ -674,6 +678,7 @@ function buildMenu(): void {
         item('prompt-prev'),
         item('prompt-next'),
         item('recent-commands'),
+        item('history'),
         item('pin-selection'),
         item('focus-mode'),
         { type: 'separator' },
@@ -718,6 +723,16 @@ let dockHidden = false;
 let claudeToday: DayTotal | undefined;
 /** The last five commands that finished, for the menu (memory only; never a sensitive one). */
 const recentCommands = new RecentCommands();
+/** The newest past Claude conversations for the menu bar's submenu (ids, folders and times only; memory only). Refreshed in the background. */
+let pastConversations: Conversation[] = [];
+let pastBusy: Promise<void> | null = null;
+function refreshPastConversations(): Promise<void> {
+  pastBusy ??= (client?.call<{ items?: Conversation[] }>('claude.history', {}, 10_000) ?? Promise.resolve(undefined))
+    .then((r) => void (Array.isArray(r?.items) && (pastConversations = r.items)))
+    .catch(() => undefined)
+    .finally(() => void (pastBusy = null));
+  return pastBusy;
+}
 /** Ticks the menu bar text every second, only while it shows the running turn's time and a turn runs. */
 let titleTimer: NodeJS.Timeout | null = null;
 const trayImages = new Map<TrayFrame, Electron.NativeImage>();
@@ -805,8 +820,12 @@ async function openTrayMenu(alt: boolean): Promise<void> {
   if (!tray) return;
   const git = alt ? await client?.call<{ git?: GitStatus }>('session.info', {}, 1_000).then((i) => i?.git).catch(() => undefined) : undefined;
   if (!tray) return;
+  // never block the menu: the last list is used if the daemon is slow (400 ms), and the refresh goes on in the background
+  await Promise.race([refreshPastConversations(), sleep(400)]);
+  if (!tray) return;
   const visible = !!win && !win.isDestroyed() && win.isVisible();
   const recent = recentCommands.list();
+  const past = historyMenuItems(pastConversations, os.homedir(), Date.now());
   const template: MenuItemConstructorOptions[] = [
     ...trayMenuLines(prevClaude, Date.now(), { alt, showCost: appCfg.claude?.showCost !== false, git }).map((label) => ({ label, click: () => showWindow() })),
     { type: 'separator' },
@@ -816,7 +835,11 @@ async function openTrayMenu(alt: boolean): Promise<void> {
       // a click copies the command (nothing is typed): paste it in the terminal
       submenu: recent.length ? recent.map((c) => ({ label: c.label, click: () => clipboard.writeText(c.raw) })) : [{ label: 'No commands yet', enabled: false }],
     },
-    { label: 'Past Conversations', submenu: [{ label: 'Loading…', enabled: false }] },
+    {
+      label: 'Past Conversations',
+      // a click copies `claude --resume <id>` (nothing is typed): paste it in the terminal
+      submenu: past.length ? past.map((c) => ({ label: c.label, click: () => { const cmd = resumeCommand(c.id); if (cmd) clipboard.writeText(cmd); } })) : [{ label: 'No conversations', enabled: false }],
+    },
     { label: 'Focus Mode', type: 'checkbox', checked: focus.active, click: () => sendToRenderer('jaffer:menu', 'focus-mode') },
     {
       label: 'Settings…',

@@ -1764,6 +1764,93 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Escape');
   }, 40_000);
 
+  it('⌥⌘H lists past Claude conversations from the transcripts; a filter, Enter copies `claude --resume <id>` (a bad id never), nothing is typed', async () => {
+    await clipStub();
+    const T = Date.now();
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const plant = (n: number, proj: string, endAgo: number, cwd: string) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', proj);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(file, [line('user', T - endAgo - 90_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', T - endAgo, { message: { id: `m${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
+      fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
+    };
+    plant(71, '-hist-a', 60_000, path.join(env.userHome, 'hist-proj-a'));
+    plant(72, '-hist-b', 3 * 3_600_000, path.join(env.userHome, 'hist-proj-b'));
+    plant(73, '-hist-c', 2 * 86_400_000, path.join(env.userHome, 'hist-proj-c'));
+    await page.click('.term');
+    const before = await termText();
+    await menu('history');
+    await page.waitForSelector('.hist-list input');
+    await until(async () => (await page.locator('.hist-list .pal-row[data-id^="0000007"]').count()) === 3, 5_000, 'the three planted conversations');
+    const mine = () => page.$$eval('.hist-list .pal-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, text: x.textContent ?? '' })));
+    let rows = await mine();
+    expect(rows.map((r) => r.id)).toEqual([sid(71), sid(72), sid(73)]); // newest first
+    expect(rows[0]!.text).toMatch(/1m ago.*hist-proj-a.*1m 30s.*≈ \$0\.0\d/);
+    expect(rows[1]!.text).toContain('3h ago');
+    expect(rows[2]!.text).toContain('2d ago');
+    expect(rows.some((r) => /SECRET/.test(r.text))).toBe(false);
+    await shot('18-past-conversations');
+    // the cost only with the switch
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: false } }));
+    await until(async () => (await page.locator('.hist-list .hist-cost').count()) === 0, 5_000, 'the cost column to go');
+    await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
+    await until(async () => (await page.locator('.hist-list .hist-cost').count()) > 0, 5_000, 'the cost column back');
+    // filter by folder, Enter copies
+    await page.keyboard.type('proj-b');
+    await until(async () => (await mine()).length === 1, 3_000, 'the filter');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.hist-list', { state: 'detached' });
+    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === `claude --resume ${sid(72)}`, 3_000, 'the resume line on the clipboard');
+    await toastSaid('Copied. Paste it in the terminal.');
+    // a click copies too; arrows move
+    await menu('history');
+    await page.waitForSelector('.hist-list input');
+    await until(async () => (await mine()).length === 3, 5_000, 'the list again');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
+    await page.locator(`.hist-list .pal-row[data-id="${sid(73)}"]`).click();
+    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === `claude --resume ${sid(73)}`, 3_000, 'the click to copy');
+    // a bad id from the daemon is refused: nothing copied, an error says so
+    const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
+    const copies = await written();
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__realCall = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.history' ? Promise.resolve({ items: [{ id: 'x; rm -rf ~', cwd: '/tmp/evil', endedAt: Date.now() }] }) : w.__realCall(m, p));
+    });
+    await menu('history');
+    await page.waitForSelector('.hist-list .pal-row');
+    await page.keyboard.press('Enter');
+    await toastSaid('no valid id');
+    expect(await written()).toBe(copies);
+    // empty and failing and slow
+    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? Promise.resolve({ items: [] }) : (window as any).__realCall(m))));
+    await menu('history');
+    await until(async () => ((await page.textContent('.hist-list .palette-list')) ?? '').includes('No Claude Code conversations found.'), 3_000, 'the empty state');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.hist-list', { state: 'detached' });
+    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? Promise.reject(new Error('history is broken')) : (window as any).__realCall(m))));
+    await menu('history');
+    await toastSaid('history is broken');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? new Promise((r) => setTimeout(() => r({ items: [] }), 800)) : (window as any).__realCall(m))));
+    await menu('history');
+    await until(async () => ((await page.textContent('.hist-list .palette-list')) ?? '').includes('Loading…'), 3_000, 'the loading state');
+    await page.evaluate(() => ((window as any).jaffer.call = (window as any).__realCall));
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.hist-list', { state: 'detached' });
+    // the palette has it, and nothing was ever typed
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('past claude');
+    expect((await page.textContent('.palette-list')) ?? '').toContain('Past Claude conversations');
+    await page.keyboard.press('Escape');
+    await sleep(500);
+    expect(await termText()).toBe(before);
+  }, 60_000);
+
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
     const errors: string[] = [];
     const onErr = (e: Error) => errors.push(e.message);

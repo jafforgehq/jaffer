@@ -338,6 +338,11 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 /* ⌘R: this session's commands, in the palette's look */
 .recent-list .recent-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
 .recent-list .recent-ago { flex: none; font-size: 11px; color: var(--faint); }
+.hist-list .hist-ago { flex: none; width: 64px; font-size: 11px; color: var(--faint); }
+.hist-list .hist-dir { font-family: var(--font-mono); font-size: 12px; }
+.hist-list .hist-dur, .hist-list .hist-cost { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
+.hist-list .hist-dur { width: 58px; }
+.hist-list .hist-cost { width: 64px; }
 /* "Paste 14 lines?" over the bottom of the terminal card */
 .paste-bar {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 40px);
