@@ -1,15 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, tildePath, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
 import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { FIND_OPTS, terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { fmtDuration, hookHealthWarning } from '../claude-ui';
-import { formatUsd } from '../../shared/claude-cost';
-import { resumeCommand } from '../../shared/history-label';
+import { hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, companionOf } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset } from './icons';
@@ -284,100 +282,6 @@ export function RecentCommands(): VNode {
         <div class="pal-foot">
           <span>
             <kbd>↵</kbd> copy to the clipboard
-          </span>
-          <span>
-            <kbd>esc</kbd> close
-          </span>
-          <span>Nothing is typed; this list is not saved.</span>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-/** One of Claude Code's past conversations (the daemon's `claude.history`: only what the transcript's ends say, never what was said). */
-interface PastConversation {
-  id: string;
-  cwd?: string;
-  endedAt: number;
-  durMs?: number;
-  usd?: number;
-}
-
-/** ⇧⌘O: the 50 newest Claude Code conversations. Enter copies `claude --resume <id>` to the clipboard; nothing is typed, nothing is kept. */
-export function PastConversations(): VNode {
-  const [q, setQ] = useState('');
-  const [sel, setSel] = useState(0);
-  const [items, setItems] = useState<PastConversation[] | null>(null); // null: still loading
-  const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
-  const showCost = cfg.value?.claude?.showCost !== false;
-  useLayoutEffect(() => input.current?.focus(), []);
-  useEffect(() => {
-    let on = true;
-    window.jaffer.call<{ items: PastConversation[] }>('claude.history', {}).then(
-      (r) => on && setItems(Array.isArray(r?.items) ? r.items : []),
-      (e) => {
-        if (!on) return;
-        setItems([]);
-        toast({ kind: 'error', text: e instanceof Error ? e.message : 'Could not read the past conversations.' });
-      },
-    );
-    return () => void (on = false);
-  }, []);
-  const rows = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return (items ?? []).map((c) => ({ c, dir: c.cwd ? tildePath(c.cwd) : '' })).filter((r) => !t || r.dir.toLowerCase().includes(t));
-  }, [q, items]);
-  useEffect(() => setSel(0), [q]);
-  useEffect(() => {
-    list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
-  }, [sel]);
-  const close = () => (overlay.value = null);
-  const pick = (i: number) => {
-    const r = rows[i];
-    if (!r) return;
-    const cmd = resumeCommand(r.c.id);
-    close();
-    if (!cmd) return toast({ kind: 'error', text: 'That conversation has no valid id.' });
-    void navigator.clipboard.writeText(cmd).then(
-      () => toast({ kind: 'info', text: 'Copied. Paste it in the terminal.' }, 3500),
-      () => toast({ kind: 'error', text: 'Could not copy to the clipboard.' }),
-    );
-  };
-  return (
-    <Modal onClose={close}>
-      <div class="palette hist-list">
-        <div class="pal-input">
-          <IconSearch size={17} />
-          <input
-            ref={input}
-            placeholder="Past Claude conversations… (filter by folder)"
-            value={q}
-            onInput={(e) => setQ((e.target as HTMLInputElement).value)}
-            onKeyDown={(e) => {
-              const n = Math.max(1, rows.length);
-              if (e.key === 'ArrowDown') (e.preventDefault(), setSel((sel + 1) % n));
-              else if (e.key === 'ArrowUp') (e.preventDefault(), setSel((sel - 1 + n) % n));
-              else if (e.key === 'Enter') (e.preventDefault(), pick(sel));
-            }}
-          />
-        </div>
-        <div class="palette-list" ref={list}>
-          {items === null && <div class="pal-group">Loading…</div>}
-          {items !== null && rows.length === 0 && <div class="pal-group">{items.length ? 'No match' : 'No Claude Code conversations found.'}</div>}
-          {rows.map((r, i) => (
-            <button key={`${i}-${r.c.id}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-id={r.c.id} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
-              <span class="hist-ago">{fmtAgo(r.c.endedAt)}</span>
-              <span class="pal-title hist-dir">{highlight(r.dir || '(folder unknown)', q)}</span>
-              <span class="hist-dur">{typeof r.c.durMs === 'number' ? fmtDuration(r.c.durMs) : '–'}</span>
-              {showCost && <span class="hist-cost">{typeof r.c.usd === 'number' ? `≈ ${formatUsd(r.c.usd)}` : '–'}</span>}
-            </button>
-          ))}
-        </div>
-        <div class="pal-foot">
-          <span>
-            <kbd>↵</kbd> copy <code>claude --resume</code> to the clipboard
           </span>
           <span>
             <kbd>esc</kbd> close

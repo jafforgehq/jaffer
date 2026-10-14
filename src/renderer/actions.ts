@@ -1,4 +1,4 @@
-import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, toast, togglePanel } from './state';
+import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, toast, togglePanel } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -75,7 +75,7 @@ export const actions: Action[] = [
   { id: 'find-next', title: 'Find next', section: 'Terminal', keys: '⌘G', keywords: 'search again match', run: () => findAgain(1) },
   { id: 'find-prev', title: 'Find previous', section: 'Terminal', keys: '⇧⌘G', keywords: 'search again match', run: () => findAgain(-1) },
   { id: 'recent-commands', title: 'Recent commands', section: 'Terminal', keys: '⌘R', keywords: 'history copy clipboard', run: () => openOverlay('recent') },
-  { id: 'history', title: 'Past Claude conversations…', section: 'App', keys: '⇧⌘O', keywords: 'resume claude history copy clipboard', run: () => openOverlay('history') },
+  { id: 'history', title: 'Past Claude conversations…', section: 'App', keys: '⇧⌘O', keywords: 'resume claude history copy clipboard', run: showConversations },
   { id: 'pin-selection', title: 'Pin selection', section: 'Terminal', keys: '⇧⌘L', keywords: 'pin line keep', run: pinSelection },
   { id: 'prompt-prev', title: 'Previous prompt', section: 'Terminal', keys: '⌘↑', keywords: 'jump command block scroll up', run: () => term()?.blocks.jump(-1) },
   { id: 'prompt-next', title: 'Next prompt', section: 'Terminal', keys: '⌘↓', keywords: 'jump command block scroll down', run: () => term()?.blocks.jump(1) },

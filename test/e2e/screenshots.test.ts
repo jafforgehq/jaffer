@@ -435,12 +435,13 @@ describe.skipIf(!OUT)('README screenshots', () => {
       fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
     });
     await page.evaluate(() => (window as any).__menu('history'));
-    await page.waitForSelector('.hist-list input');
-    await until(async () => (await page.locator('.hist-list .pal-row').count()) === 6, 10_000, 'the six conversations');
-    expect(await page.textContent('.hist-list .palette-list')).toContain('~/projects/app'); // the demo person's home, shown as ~
+    await page.waitForSelector('.side-panel .conv-search input'); // (1.1.0: the list is the side panel's; ⇧⌘O opens it with the search focused)
+    await page.click('.sp-convos .conv-refresh'); // (the panel read the list when it opened, before these were planted)
+    await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 6, 10_000, 'the six conversations');
+    expect(await page.textContent('.sp-convos .conv-list')).toContain('~/projects/app'); // the demo person's home, shown as ~
     await shot('18-past-conversations');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.hist-list', { state: 'detached' });
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Escape'); // (the keyboard back to the terminal)
   }, 40_000);
 
   it('command blocks (marks, one lit, a pinned line) and the title bar while Claude works', async () => {

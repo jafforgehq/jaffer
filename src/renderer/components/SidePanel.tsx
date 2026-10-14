@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick } from '../state';
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth } from '../panel';
+import { Conversations } from './Conversations';
 
 const SLIDE_MS = 180;
 const motionOn = () => cfg.value?.appearance?.animations !== false && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -65,11 +66,6 @@ export function NowCard(): VNode {
       )}
     </section>
   );
-}
-
-/** Where past conversations go, below the Now card (filled in by the past-conversations section). */
-export function ConversationsSlot(): VNode {
-  return <section class="sp-convos" data-slot="conversations" />;
 }
 
 /**
@@ -142,7 +138,7 @@ export function SidePanel(): VNode | null {
         onKeyDown={onKey}
       />
       <NowCard />
-      <ConversationsSlot />
+      <Conversations />
     </aside>
   );
 }

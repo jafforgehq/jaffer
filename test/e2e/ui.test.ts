@@ -1768,88 +1768,187 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('Escape');
   }, 40_000);
 
-  it('⇧⌘O lists past Claude conversations from the transcripts; a filter, Enter copies `claude --resume <id>` (a bad id never), nothing is typed', async () => {
+  // 1.1.0: replaces the 1.0.1 test of the ⇧⌘O overlay ("⇧⌘O lists past Claude conversations from the transcripts; …"), deliberately: the list moved into the side panel
+  it('past conversations in the side panel: planted transcripts by day, the folder search, a click or Enter copies `claude --resume <id>` (a bad id never), ↑/↓/Esc, ⇧⌘O opens a closed panel with the search focused, read on open, after a turn and on refresh (never while closed), nothing typed', async () => {
     await clipStub();
     const T = Date.now();
+    const d0 = new Date(T);
+    const midnight = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()).getTime();
     const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
-    const plant = (n: number, proj: string, endAgo: number, cwd: string) => {
+    const plant = (n: number, proj: string, end: number, cwd: string) => {
       const dir = path.join(env.userHome, '.claude', 'projects', proj);
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${sid(n)}.jsonl`);
       const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
-      fs.writeFileSync(file, [line('user', T - endAgo - 90_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', T - endAgo, { message: { id: `m${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
-      fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
+      fs.writeFileSync(file, [line('user', end - 90_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', end, { message: { id: `m${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
+      fs.utimesSync(file, end / 1000, end / 1000);
     };
-    plant(71, '-hist-a', 60_000, path.join(env.userHome, 'hist-proj-a'));
-    plant(72, '-hist-b', 3 * 3_600_000, path.join(env.userHome, 'hist-proj-b'));
-    plant(73, '-hist-c', 2 * 86_400_000, path.join(env.userHome, 'hist-proj-c'));
+    const endA = Math.max(T - 60_000, midnight + 1000); // today
+    const endB = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - 1, 12).getTime(); // yesterday noon
+    const endC = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - 3, 12).getTime(); // three days ago
+    plant(71, '-hist-a', endA, path.join(env.userHome, 'hist-proj-a'));
+    plant(72, '-hist-b', endB, path.join(env.userHome, 'hist-proj-b'));
+    plant(73, '-hist-c', endC, path.join(env.userHome, 'hist-proj-c'));
+    // every claude.history call is counted; a stub can stand in for the daemon's answer
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__histReal = w.jaffer.call;
+      w.__histCalls = 0;
+      w.__histStub = null;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.history' ? (w.__histCalls++, w.__histStub ? w.__histStub() : w.__histReal(m, p)) : w.__histReal(m, p));
+    });
+    const histCalls = () => page.evaluate(() => (window as any).__histCalls as number);
+    const stub = (kind: 'bad' | 'empty' | 'fail' | 'slow' | null) =>
+      page.evaluate((k) => {
+        const w = window as any;
+        w.__histStub =
+          k === 'bad' ? () => Promise.resolve({ items: [{ id: 'x; rm -rf ~', cwd: '/tmp/evil', endedAt: Date.now() }] })
+          : k === 'empty' ? () => Promise.resolve({ items: [] })
+          : k === 'fail' ? () => Promise.reject(new Error('history is broken'))
+          : k === 'slow' ? () => new Promise((r) => setTimeout(() => r({ items: [] }), 800))
+          : null;
+      }, kind);
+    const focused = () => page.evaluate(() => (document.activeElement?.matches('.conv-search input') ? 'search' : document.activeElement?.classList.contains('xterm-helper-textarea') ? 'terminal' : document.activeElement?.className ?? 'none'));
+    const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1));
+    const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
+    const mine = () => page.$$eval('.sp-convos .conv-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, sel: (x as HTMLElement).dataset.sel !== undefined, day: x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '', text: x.textContent ?? '' })));
+    const turn = (state: string) => page.evaluate((st) => { const now = Date.now(); (window as any).__event('claude.state', { sessions: [{ id: 'hist-turn', state: st, since: now, turnStartedAt: now - 2000, startedAt: now - 60_000, calls: [], counts: {}, files: [], subagents: [], turns: 1 }] }); }, state);
+
+    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-search input');
+    expect(await page.getAttribute('.sp-convos .conv-search input', 'placeholder')).toBe('Search folders');
     await page.click('.term');
     const before = await termText();
-    await menu('history');
-    await page.waitForSelector('.hist-list input');
-    await until(async () => (await page.locator('.hist-list .pal-row[data-id^="0000007"]').count()) === 3, 5_000, 'the three planted conversations');
-    const mine = () => page.$$eval('.hist-list .pal-row[data-id^="0000007"]', (r) => r.map((x) => ({ id: (x as HTMLElement).dataset.id!, text: x.textContent ?? '' })));
+    // the refresh button reads the list again: the three planted ones, newest first, by day
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await mine()).length === 3, 5_000, 'the three planted conversations');
+    expect(await histCalls()).toBe(1);
     let rows = await mine();
-    expect(rows.map((r) => r.id)).toEqual([sid(71), sid(72), sid(73)]); // newest first
-    expect(rows[0]!.text).toMatch(/1m ago.*hist-proj-a.*1m 30s.*≈ \$0\.0\d/);
-    expect(rows[1]!.text).toContain('3h ago');
-    expect(rows[2]!.text).toContain('2d ago');
+    expect(rows.map((r) => r.id)).toEqual([sid(71), sid(72), sid(73)]);
+    expect([rows[0]!.day, rows[1]!.day]).toEqual(['Today', 'Yesterday']);
+    expect(rows[2]!.day).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)( \d{4})?$/);
+    const hhmm = (t: number) => `${String(new Date(t).getHours()).padStart(2, '0')}:${String(new Date(t).getMinutes()).padStart(2, '0')}`;
+    expect(rows[0]!.text).toContain('hist-proj-a');
+    expect(rows[0]!.text).toMatch(/~\/(\S+\/)?hist-proj-a/); // (the bridge's home is a folder above the test's HOME)
+    expect(rows[0]!.text).toContain(hhmm(endA));
+    expect(rows[0]!.text).toMatch(/1m 30s · ≈ \$0\.0\d/);
+    expect(rows[1]!.text).toContain(hhmm(endB));
     expect(rows.some((r) => /SECRET/.test(r.text))).toBe(false);
+    expect(await page.textContent('.side-panel')).not.toContain('SECRET');
     await shot('18-past-conversations');
     // the cost only with the switch
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: false } }));
-    await until(async () => (await page.locator('.hist-list .hist-cost').count()) === 0, 5_000, 'the cost column to go');
+    await until(async () => (await mine()).every((r) => !r.text.includes('≈')), 5_000, 'the cost to go');
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
-    await until(async () => (await page.locator('.hist-list .hist-cost').count()) > 0, 5_000, 'the cost column back');
-    // filter by folder, Enter copies
+    await page.click('.sp-convos .conv-refresh'); // (the daemon reads token costs only with the switch on)
+    await until(async () => (await mine()).some((r) => r.text.includes('≈')), 5_000, 'the cost back');
+    // the search filters by folder; Enter copies the selected one and gives the keyboard back to the terminal
+    await page.click('.sp-convos .conv-search input');
     await page.keyboard.type('proj-b');
     await until(async () => (await mine()).length === 1, 3_000, 'the filter');
+    expect(await page.$$eval('.sp-convos .conv-row', (r) => r.length)).toBe(1);
     await page.keyboard.press('Enter');
-    await page.waitForSelector('.hist-list', { state: 'detached' });
-    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === `claude --resume ${sid(72)}`, 3_000, 'the resume line on the clipboard');
+    await until(async () => (await clipLast()) === `claude --resume ${sid(72)}`, 3_000, 'the resume line on the clipboard');
     await toastSaid('Copied. Paste it in the terminal.');
-    // a click copies too; arrows move
-    await menu('history');
-    await page.waitForSelector('.hist-list input');
-    await until(async () => (await mine()).length === 3, 5_000, 'the list again');
+    expect(await focused()).toBe('terminal');
+    // ↑/↓ move the selection, Enter copies it
+    await page.fill('.sp-convos .conv-search input', 'hist-proj');
+    await page.focus('.sp-convos .conv-search input');
+    await until(async () => (await mine()).length === 3, 3_000, 'the three again');
+    expect((await mine()).map((r) => r.sel)).toEqual([true, false, false]);
+    await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowUp');
-    await page.locator(`.hist-list .pal-row[data-id="${sid(73)}"]`).click();
-    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === `claude --resume ${sid(73)}`, 3_000, 'the click to copy');
-    // a bad id from the daemon is refused: nothing copied, an error says so
-    const written = () => page.evaluate(() => (window as any).__powerClip.written.length as number);
-    const copies = await written();
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__realCall = w.jaffer.call;
-      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.history' ? Promise.resolve({ items: [{ id: 'x; rm -rf ~', cwd: '/tmp/evil', endedAt: Date.now() }] }) : w.__realCall(m, p));
-    });
-    await menu('history');
-    await page.waitForSelector('.hist-list .pal-row');
+    await page.keyboard.press('ArrowDown');
+    expect((await mine()).map((r) => r.sel)).toEqual([false, false, true]);
+    expect(await focused()).toBe('search');
     await page.keyboard.press('Enter');
+    await until(async () => (await clipLast()) === `claude --resume ${sid(73)}`, 3_000, 'Enter on the selected row');
+    // a click copies too
+    await page.locator(`.sp-convos .conv-row[data-id="${sid(71)}"]`).click();
+    await until(async () => (await clipLast()) === `claude --resume ${sid(71)}`, 3_000, 'the click to copy');
+    // Esc gives the keyboard back to the terminal
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Escape');
+    expect(await focused()).toBe('terminal');
+    await page.fill('.sp-convos .conv-search input', '');
+    // a bad id from the daemon is refused: nothing copied, an error says so
+    const copies = await written();
+    await stub('bad');
+    await page.click('.sp-convos .conv-refresh');
+    await page.waitForSelector('.sp-convos .conv-row[data-id="x; rm -rf ~"]');
+    await page.click('.sp-convos .conv-row[data-id="x; rm -rf ~"]');
     await toastSaid('no valid id');
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Enter');
+    await sleep(300);
     expect(await written()).toBe(copies);
-    // empty and failing and slow
-    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? Promise.resolve({ items: [] }) : (window as any).__realCall(m))));
-    await menu('history');
-    await until(async () => ((await page.textContent('.hist-list .palette-list')) ?? '').includes('No Claude Code conversations found.'), 3_000, 'the empty state');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.hist-list', { state: 'detached' });
-    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? Promise.reject(new Error('history is broken')) : (window as any).__realCall(m))));
-    await menu('history');
+    // empty, failing and slow
+    await stub('empty');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => ((await page.textContent('.sp-convos .conv-list')) ?? '').includes('No Claude Code conversations found.'), 3_000, 'the empty state');
+    await stub('fail');
+    await page.click('.sp-convos .conv-refresh');
     await toastSaid('history is broken');
-    await page.keyboard.press('Escape');
-    await page.evaluate(() => ((window as any).jaffer.call = (m: string) => (m === 'claude.history' ? new Promise((r) => setTimeout(() => r({ items: [] }), 800)) : (window as any).__realCall(m))));
+    await until(async () => ((await page.textContent('.sp-convos .conv-note')) ?? '').includes('history is broken'), 3_000, 'the error in the panel');
+    await stub('slow');
+    await page.click('.sp-convos .conv-refresh');
+    await page.waitForSelector('.sp-convos .conv-refresh[data-busy]');
+    await page.waitForSelector('.sp-convos .conv-refresh[data-busy]', { state: 'detached' });
+    expect(await page.textContent('.sp-convos .conv-list')).not.toContain('history is broken'); // (a good answer clears the error)
+    await stub(null);
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await mine()).length === 3, 5_000, 'the real list again');
+    // a finished turn (working → idle) reads it again, once
+    let n = await histCalls();
+    await turn('working');
+    await sleep(200);
+    expect(await histCalls()).toBe(n);
+    await turn('idle');
+    await until(async () => (await histCalls()) === n + 1, 3_000, 'a read after the turn');
+    await sleep(300);
+    expect(await histCalls()).toBe(n + 1);
+    // closed, the panel reads nothing (not even after a turn)
+    await page.click('.term');
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.side-panel', { state: 'detached' });
+    n = await histCalls();
+    await turn('working');
+    await turn('idle');
+    await sleep(1500);
+    expect(await histCalls()).toBe(n);
+    // ⇧⌘O (the menu, the menu bar's All Past Conversations…) opens it with the search focused, and it reads the list
     await menu('history');
-    await until(async () => ((await page.textContent('.hist-list .palette-list')) ?? '').includes('Loading…'), 3_000, 'the loading state');
-    await page.evaluate(() => ((window as any).jaffer.call = (window as any).__realCall));
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.hist-list', { state: 'detached' });
-    // the palette has it, and nothing was ever typed
+    await page.waitForSelector('.side-panel .conv-search input');
+    await until(async () => (await focused()) === 'search', 3_000, 'the search to take the keyboard');
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).panel.open).toBe(true);
+    await until(async () => (await histCalls()) === n + 1, 3_000, 'a read on open');
+    await until(async () => (await mine()).length === 3, 5_000, 'the list in the reopened panel');
+    // open already: ⇧⌘O only focuses the search (no second read)
+    await page.click('.term');
+    await menu('history');
+    await until(async () => (await focused()) === 'search', 3_000, 'the search to take the keyboard again');
+    await sleep(300);
+    expect(await histCalls()).toBe(n + 1);
+    // ⌘B reopening it later does not take the keyboard from the terminal
+    await page.click('.term');
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.side-panel', { state: 'detached' });
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.side-panel .conv-search input');
+    await sleep(300);
+    expect(await focused()).toBe('terminal');
+    // no overlay is left of it, the palette still has it, and nothing was ever typed
+    expect(await page.locator('.hist-list, .modal').count()).toBe(0);
+    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__histReal; });
+    await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
     await page.keyboard.press('Meta+p');
     await page.waitForSelector('.palette input');
     await page.keyboard.type('past claude');
     expect((await page.textContent('.palette-list')) ?? '').toContain('Past Claude conversations');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.palette', { state: 'detached' });
+    await until(async () => (await focused()) === 'search', 3_000, 'the palette entry to focus the search');
     await page.keyboard.press('Escape');
     await sleep(500);
     expect(await termText()).toBe(before);

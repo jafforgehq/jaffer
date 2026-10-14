@@ -7,6 +7,7 @@ import { isSensitiveCommand, redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { fmtAgo, tildeOf } from '../shared/history-label';
 import type { GitStatus } from '../core/session/git-status';
+import type { Conversation } from '../core/claude/history';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
 import { FailTracker } from './fail-tracker';
 import { resolveTheme, type JafferTheme } from './themes';
@@ -30,7 +31,7 @@ export interface SessionInfo {
   git?: GitStatus;
 }
 
-export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent' | 'history';
+export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent';
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
@@ -372,6 +373,17 @@ export const togglePanel = (via = 'other'): void => {
   lastPanelToggle = { at: now, via };
   patchPanel({ open: !panelOpen() });
 };
+/** The past conversations the panel last read (`claude.history`: ids, folders, times, token costs), so it shows them at once when it opens again; null: never read. Memory only. */
+export const historyItems = signal<Conversation[] | null>(null);
+/** Bumped by ⇧⌘O: the panel's search takes the keyboard (once per bump, also when the bump opened the panel). */
+export const panelFocusSearch = signal(0);
+/** ⇧⌘O, the menu bar's All Past Conversations…: the panel opens (when closed) with its search focused. */
+export function showConversations(): void {
+  if (overlay.value === 'onboarding') return; // (first run has to be answered first)
+  if (overlay.value !== 'find') overlay.value = null; // a dialog would sit over the search (it used to be replaced by the list)
+  if (!panelOpen()) patchPanel({ open: true });
+  panelFocusSearch.value++;
+}
 /** True while the panel's edge is dragged: the terminal keeps its size and fits once when it is let go (not a resize per pixel). */
 export const layoutHold = signal(false);
 
