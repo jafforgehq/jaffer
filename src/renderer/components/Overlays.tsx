@@ -1033,7 +1033,7 @@ export function Onboarding(): VNode {
                   <IconTerminal size={15} />
                 </div>
                 <b>One calm terminal</b>
-                One shell, a thin title bar and the companion. ⌘W hides the window; quitting Jaffer ends the shell and anything running in it.
+                One shell, a thin title bar and the companion. Closing the window hides it to the menu bar (you can change that in Settings); quitting Jaffer ends the shell and anything running in it.
               </div>
               <div class="feature">
                 <div class="f-ico">

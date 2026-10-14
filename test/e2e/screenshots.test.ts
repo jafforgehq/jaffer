@@ -407,6 +407,42 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Escape');
   }, 60_000);
 
+  it('past Claude conversations (read from transcripts planted in the demo home)', async () => {
+    await clearToasts();
+    // six conversations in the demo person's own (temporary) Claude folder: only ids, folders and times are read from them, so the "words" are placeholders
+    const T = Date.now();
+    const demo: [string, number, number, number, number][] = [
+      ['projects/app', 4 * 60_000, 18 * 60_000, 21_000, 6_800],
+      ['projects/api', 2 * 3_600_000, 41 * 60_000, 64_000, 17_200],
+      ['projects/web', 5 * 3_600_000, 7 * 60_000, 9_000, 2_400],
+      ['projects/docs', 26 * 3_600_000, 12 * 60_000, 15_000, 4_100],
+      ['code/acme-api', 3 * 86_400_000, 55 * 60_000, 120_000, 31_000],
+      ['projects/tools', 6 * 86_400_000, 3 * 60_000, 4_000, 900],
+    ];
+    demo.forEach(([dir, endAgo, dur, inTok, outTok], i) => {
+      const cwd = path.join(userHome, dir);
+      const proj = path.join(userHome, '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+      fs.mkdirSync(proj, { recursive: true });
+      const file = path.join(proj, `${`0000000${i + 1}`.slice(-8)}-1111-4222-8333-444455556666.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(
+        file,
+        [
+          line('user', T - endAgo - dur, { message: { role: 'user', content: 'demo' } }),
+          line('assistant', T - endAgo, { message: { id: `demo${i}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'demo' }], usage: { input_tokens: inTok, output_tokens: outTok } } }),
+        ].join('\n') + '\n',
+      );
+      fs.utimesSync(file, (T - endAgo) / 1000, (T - endAgo) / 1000);
+    });
+    await page.evaluate(() => (window as any).__menu('history'));
+    await page.waitForSelector('.hist-list input');
+    await until(async () => (await page.locator('.hist-list .pal-row').count()) === 6, 10_000, 'the six conversations');
+    expect(await page.textContent('.hist-list .palette-list')).toContain('~/projects/app'); // the demo person's home, shown as ~
+    await shot('18-past-conversations');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.hist-list', { state: 'detached' });
+  }, 40_000);
+
   it('command blocks (marks, one lit, a pinned line) and the title bar while Claude works', async () => {
     await clearToasts();
     // something for the git counts in the title bar: one staged, one changed (the fixed session.ts), one untracked
