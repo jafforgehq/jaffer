@@ -167,7 +167,7 @@ scripts/release-mac.sh         # on your Mac: build, sign, notarize, verify; --p
 
 - **1.0.1's additions** (the menu bar item and the close behaviour are Electron wiring that no test here runs: the pure parts, such as the close decision, the icon's states, the menu's text and the clipboard strings, are unit-tested, and the list of past conversations is checked in headless Chromium against the real daemon, but the pieces below have not been used on a real Mac):
   - the menu bar `Tray` itself and its icons: that the generated template icons appear and are tinted right in a light and a dark menu bar, at 1x and 2x, and the 500 ms digging animation and the three flashes for *needs you*; the text beside the icon (monospaced digits, the 1 second tick of the running time);
-  - the menu: a right-click opening it, what ⌥ held at that moment adds (whether the modifier arrives on a right-click), the clicks on its items, and the *Past Conversations* submenu waiting up to 400 ms for the daemon on the first, cold call;
+  - the menu: a right-click opening it, what ⌥ held at that moment adds (whether the modifier arrives on a right-click), the clicks on its items, and the *Past Claude Conversations* lines waiting up to 400 ms for the daemon on the first, cold call;
   - leaving full screen and hiding across Spaces (the 2 second fallback if macOS never reports that it left), and showing the window again afterwards;
   - hiding the Dock icon: whether the window stays usable, and whether `⌘Q`, `⌘W` and the global hotkey keep working while Jaffer is an accessory app with no Dock icon;
   - the notifications' *Show* button (macOS lists it only under *Options* in some notification styles) and the one notification shown the first time the window hides;

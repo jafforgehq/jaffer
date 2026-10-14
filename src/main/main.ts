@@ -761,6 +761,7 @@ function syncMenuBar(): void {
       tray.setToolTip('Jaffer');
       tray.on('click', () => toggleWindow());
       tray.on('right-click', (e) => void openTrayMenu(!!e.altKey).catch(() => undefined));
+      void refreshPastConversations(); // (the first right click already has the list)
       trayPlayer = new TrayIconPlayer({
         show: (f) => {
           try {
@@ -836,11 +837,14 @@ async function openTrayMenu(alt: boolean): Promise<void> {
       // a click copies the command (nothing is typed): paste it in the terminal
       submenu: recent.length ? recent.map((c) => ({ label: c.label, click: () => clipboard.writeText(c.raw) })) : [{ label: 'No commands yet', enabled: false }],
     },
-    {
-      label: 'Past Conversations',
-      // a click copies `claude --resume <id>` (nothing is typed): paste it in the terminal
-      submenu: past.length ? past.map((c) => ({ label: c.label, click: () => { const cmd = resumeCommand(c.id); if (cmd) clipboard.writeText(cmd); } })) : [{ label: 'No conversations', enabled: false }],
-    },
+    // the newest conversations right in the menu (not behind a submenu): a click copies `claude --resume <id>` (nothing is typed), paste it in the terminal
+    { type: 'separator' },
+    { label: 'Past Claude Conversations', enabled: false },
+    ...(past.length
+      ? past.map((c): MenuItemConstructorOptions => ({ label: c.label, click: () => { const cmd = resumeCommand(c.id); if (cmd) clipboard.writeText(cmd); } }))
+      : [{ label: 'No conversations found', enabled: false } as MenuItemConstructorOptions]),
+    { label: 'All Past Conversations…', accelerator: 'Shift+Cmd+O', click: () => { showWindow(); sendToRenderer('jaffer:menu', 'history'); } },
+    { type: 'separator' },
     { label: 'Focus Mode', type: 'checkbox', checked: focus.active, click: () => sendToRenderer('jaffer:menu', 'focus-mode') },
     {
       label: 'Settings…',

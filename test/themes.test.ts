@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveTheme, windowOpacity } from '../src/renderer/themes';
+import { THEMES, resolveTheme, windowOpacity, xtermTheme } from '../src/renderer/themes';
 
 const base = { theme: 'nord', lightTheme: 'jaffer-light', systemDark: true, hour: 12 };
 
@@ -38,5 +38,14 @@ describe('windowOpacity: the slider counts only while the window blurs what is b
   it('blur off (or anything but true) means opaque, blur on the slider', () => {
     expect(windowOpacity({ opacity: 0.8, blur: true })).toBe(0.8);
     expect(windowOpacity({ opacity: 0.8, blur: false })).toBe(1);
+  });
+});
+
+describe('xtermTheme: the search ruler on the right edge has no bright border line', () => {
+  it('every theme, at every opacity, makes the overview ruler border fully transparent', () => {
+    for (const t of THEMES) for (const o of [1, 0.96, 0.6]) {
+      const b = xtermTheme(t, o).overviewRulerBorder ?? '';
+      expect(b, `${t.id} at ${o}`).toMatch(/^rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)$/);
+    }
   });
 });

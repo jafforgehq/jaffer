@@ -99,7 +99,8 @@ function withAlpha(hex: string, a: number): string {
 
 /** Terminal theme with the user's opacity applied to its background. */
 export function xtermTheme(theme: JafferTheme, opacity: number): ITheme {
-  return { ...theme.term, background: opacity >= 0.995 ? theme.term.background : withAlpha(theme.term.background, opacity) };
+  // (`overviewRulerBorder` none: xterm draws the search-match ruler's left edge as a bright line down the whole right side otherwise)
+  return { ...theme.term, background: opacity >= 0.995 ? theme.term.background : withAlpha(theme.term.background, opacity), overviewRulerBorder: withAlpha(theme.term.background, 0) };
 }
 
 function toHex(r: number, g: number, b: number): string {
