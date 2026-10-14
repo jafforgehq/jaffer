@@ -88,3 +88,9 @@ export const IconCommandKey = ({ size, class: c }: P): VNode => (
     <path d="M9 9V7a3 3 0 10-3 3h12a3 3 0 10-3-3v10a3 3 0 103-3H6a3 3 0 103 3V9" />
   </svg>
 );
+export const IconPencil = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M4 20h4L19 9l-4-4L4 16v4z" />
+    <path d="M13.5 6.5l4 4" />
+  </svg>
+);

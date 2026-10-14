@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('jaffer', {
     ipcRenderer.on('jaffer:focus', h);
     return () => ipcRenderer.removeListener('jaffer:focus', h);
   },
+  onSystemStats: (cb: (s: { cpu: number; mem: number }) => void) => {
+    const h = (_e: unknown, s: { cpu: number; mem: number }) => cb(s);
+    ipcRenderer.on('jaffer:system-stats', h);
+    return () => ipcRenderer.removeListener('jaffer:system-stats', h);
+  },
   openExternal: (url: string) => ipcRenderer.invoke('jaffer:open-external', url),
   reveal: () => ipcRenderer.invoke('jaffer:reveal'),
   appInfo: () => ipcRenderer.invoke('jaffer:app-info'),

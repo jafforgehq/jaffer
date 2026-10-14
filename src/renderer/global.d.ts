@@ -5,6 +5,8 @@ export interface JafferBridge {
   onEvent(cb: (event: string, data: any) => void): () => void;
   onMenu(cb: (id: string) => void): () => void;
   onFocus(cb: (focused: boolean) => void): () => void;
+  /** CPU and memory in use (0..1), every 5 s while Settings → Appearance → System stats is on. */
+  onSystemStats(cb: (s: { cpu: number; mem: number }) => void): () => void;
   openExternal(url: string): Promise<void>;
   /** Opens Jaffer's own folder in Finder (never a path the page names). */
   reveal(): Promise<void>;

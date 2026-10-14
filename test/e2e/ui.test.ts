@@ -174,6 +174,8 @@ describe('Jaffer UI end to end', () => {
     // the paste question; still no sidebar, drawer, panel or tab
     expect(await page.locator('.sidebar, .drawer, .panel, .tabs, .tab').count()).toBe(0);
     expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar|pins|paste-bar)\b/.test(c)))).toEqual([]);
+    // and the 2 px tool strip under the title bar (feature 6): nothing else between the title bar and the card
+    expect(await page.$$eval('.stage > *', (els) => els.map((e) => e.className).filter((c) => !/^(titlebar|tool-strip|daemon-banner|workspace)\b/.test(c)))).toEqual([]);
     expect(await page.locator('.titlebar .seg-btn, .titlebar .seg').count()).toBe(0); // no buttons in the title bar: the folder, the branch, the ring, the cost
     expect(await page.locator('.titlebar', { hasText: /memory/i }).count()).toBe(0);
     const term = (await page.locator('.terminal-area').boundingBox())!;
@@ -672,7 +674,7 @@ describe('Jaffer UI end to end', () => {
     // (1000 × 2 + 2000 × 10 + 100000 × 0.2) / 1e6 = $0.042
     await answer({ input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 100_000 }, 'c1');
     await until(async () => /≈ \$0\.04/.test((await page.locator(chip).textContent()) ?? ''), 8_000, 'the cost of the first answer');
-    let tip = (await page.locator(chip).getAttribute('title')) ?? '';
+    let tip = (await page.locator('.cost-pop > div').allTextContents()).join('\n'); // (the hover card's lines, not a title attribute: it also carries today and the sparklines)
     expect(tip).toMatch(/This answer ≈ \$0\.04: 1k new in, 100k cached, 2k out/);
     expect(tip).toMatch(/This session ≈ \$0\.04 over 1 answer\b/);
     expect(tip).toMatch(/not billed per token/); // it says what the figure is, and what it is not
@@ -682,7 +684,7 @@ describe('Jaffer UI end to end', () => {
     // the next answer replaces the figure and adds to the session
     await answer({ input_tokens: 0, output_tokens: 100_000 }, 'c2'); // $1.00
     await until(async () => /≈ \$1\.00/.test((await page.locator(chip).textContent()) ?? ''), 8_000, 'the cost of the second answer');
-    tip = (await page.locator(chip).getAttribute('title')) ?? '';
+    tip = (await page.locator('.cost-pop > div').allTextContents()).join('\n');
     expect(tip).toMatch(/This session ≈ \$1\.04 over 2 answers/);
     // the title bar stays aligned with the chip in it, at the narrowest window too
     for (const w of [1360, 660]) {
@@ -709,6 +711,425 @@ describe('Jaffer UI end to end', () => {
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
     for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
   }, 90_000);
+
+  // The title bar and Claude (spec features 2, 3, 6, 13–16, 18, 19, 29–33, 35, 36): what the daemon would push, injected.
+  const cfgPatch = (p: object) => page.evaluate((x) => window.jaffer.call('config.patch', x), p);
+  const endClaude = async () => {
+    for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });
+    await sleep(500); // the daemon's own trailing push of those endings must not land on top of what is injected next
+  };
+  /** A session as the daemon pushes it; times are relative to now (ms ago) where the key ends in `Ago`. */
+  const inject = (sessions: Record<string, unknown>[], today?: object) =>
+    page.evaluate(
+      ([ss, t]) => {
+        const now = Date.now();
+        const at = (s: Record<string, any>) => {
+          const o: Record<string, any> = { since: now, calls: [], counts: {}, files: [], subagents: [], turns: 1, startedAt: now - 60_000 };
+          for (const [k, v] of Object.entries(s)) {
+            if (k.endsWith('Ago')) o[k.slice(0, -3)] = v === undefined ? undefined : now - (v as number);
+            else o[k] = v;
+          }
+          o.calls = (o.calls as Record<string, any>[]).map((c) => ({ name: c.name, category: c.category, failed: c.failed, startedAt: now - c.startAgo, endedAt: c.endAgo === undefined ? undefined : now - c.endAgo }));
+          o.subagents = (o.subagents as Record<string, any>[]).map((a) => ({ id: a.id, status: a.status, startedAt: now - a.startAgo }));
+          if (o.cost) o.cost = { last: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, usd: o.cost.usd }, totalUsd: o.cost.total ?? o.cost.usd, answers: 1, partial: false, at: o.cost.at };
+          return o;
+        };
+        (window as any).__event('claude.state', { sessions: (ss as Record<string, any>[]).map(at), today: t });
+      },
+      [sessions, today] as const,
+    );
+  const token = (name: string) =>
+    page.evaluate((n) => {
+      const d = document.createElement('div');
+      d.style.color = `var(${n})`;
+      document.body.appendChild(d);
+      const c = getComputedStyle(d).color;
+      d.remove();
+      return c;
+    }, name);
+  const stubClaude = async () => {
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await page.keyboard.type('claude() { sleep 90; }', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    await page.keyboard.type('claude', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.session-pill .running[data-kind="claude"]');
+  };
+  const unstubClaude = async () => {
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await until(async () => !(await page.$('.session-pill .running')), 10_000, 'the stub to end');
+    await page.keyboard.type('unset -f claude', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await sleep(300);
+  };
+  const toastCount = (text: string) => page.locator('.toast-text', { hasText: text }).count();
+  const textOf = (sel: string) => page.evaluate((x) => document.querySelector(x)?.textContent ?? null, sel); // (no waiting for it to appear)
+
+  it('the ring fills against the typical turn, stays full and pulses past it, turns dotted while compacting (one toast), and its tooltip tells the session clock and the running agents', async () => {
+    const ring = '.session-pill .running .spinner';
+    const cs = (prop: string) => page.$eval(ring, (el, p) => (getComputedStyle(el) as any)[p as string], prop);
+    await endClaude();
+    await cfgPatch({ claude: { typicalTurnMs: 60_000 } });
+    await stubClaude();
+    try {
+      const base = { id: 'ring-1', state: 'working', startedAtAgo: 42 * 60_000 + 5_000, turns: 9 };
+      // half way through a typical turn: half full, and it does not spin
+      await inject([{ ...base, turnStartedAtAgo: 30_000 }]);
+      await page.waitForSelector(`${ring}[data-progress]`);
+      const p = Number(await page.$eval(ring, (el) => (el as HTMLElement).style.getPropertyValue('--p')));
+      expect(p).toBeGreaterThan(0.45);
+      expect(p).toBeLessThan(0.6);
+      expect(await cs('backgroundImage')).toContain('conic-gradient');
+      expect(await cs('animationName')).not.toContain('spin');
+      // it fills as time goes by (its own one-second clock while Claude works)
+      await until(async () => Number(await page.$eval(ring, (el) => (el as HTMLElement).style.getPropertyValue('--p'))) > p, 4_000, 'the ring to fill on');
+      await shot('26-ring-progress');
+      // past the typical length: full, and it pulses
+      await inject([{ ...base, turnStartedAtAgo: 90_000 }]);
+      await until(async () => (await page.$(`${ring}[data-full]`)) !== null, 4_000, 'a full ring');
+      expect(await cs('animationName')).toContain('ring-pulse');
+      await cfgPatch({ appearance: { animations: false } });
+      await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+      expect(await cs('animationName')).toBe('none');
+      await cfgPatch({ appearance: { animations: true } });
+      // the tooltip: the session clock, the cost (only with showCost), the running agents (never their ids)
+      await inject([{ ...base, turnStartedAtAgo: 10_000, cost: { usd: 0.2, total: 1.2, at: 1 }, subagents: [{ id: 'agent-secret-id-7', status: 'running', startAgo: 130_000 }, { id: 'done-1', status: 'done', startAgo: 10_000 }] }]);
+      await until(async () => /Claude · 42 min · 9 turns · ≈ \$1\.20/.test((await page.getAttribute('.session-pill .running', 'title')) ?? ''), 4_000, 'the session clock');
+      let tip = (await page.getAttribute('.session-pill .running', 'title')) ?? '';
+      expect(tip).toMatch(/Agent 1 · 2m 1\ds/);
+      expect(tip).not.toMatch(/Agent 2|secret|done-1/);
+      await cfgPatch({ claude: { showCost: false } });
+      await until(async () => !/≈/.test((await page.getAttribute('.session-pill .running', 'title')) ?? ''), 4_000, 'the cost to leave the tooltip');
+      await cfgPatch({ claude: { showCost: true } });
+      // no typical length yet: a plain spin
+      await cfgPatch({ claude: { typicalTurnMs: 0 } });
+      await until(async () => (await page.$(`${ring}[data-progress]`)) === null, 4_000, 'no progress without a typical turn');
+      expect(await cs('animationName')).toContain('spin');
+      // compacting: dotted, and one toast for it (not one per push)
+      const before = await toastCount('Claude is compacting its context');
+      await inject([{ ...base, state: 'idle', compacting: true }]);
+      await until(async () => (await cs('borderTopStyle')) === 'dotted', 4_000, 'a dotted ring');
+      await until(async () => (await toastCount('Claude is compacting its context')) === before + 1, 4_000, 'the compacting toast');
+      await inject([{ ...base, state: 'idle', compacting: true, turns: 10 }]);
+      await sleep(300);
+      expect(await toastCount('Claude is compacting its context')).toBe(before + 1);
+      await inject([{ ...base, state: 'idle' }]);
+      await until(async () => (await page.$(ring)) === null, 4_000, 'the ring to go back to a dot when compacting ends');
+    } finally {
+      await inject([]);
+      await cfgPatch({ claude: { typicalTurnMs: 0, showCost: true }, appearance: { animations: true } });
+      await unstubClaude();
+    }
+  }, 60_000);
+
+  it('the tool strip: this turn’s calls under the title bar, coloured by kind, as wide as they took, failures red, the name and time on hover; Settings switches it off', async () => {
+    await endClaude();
+    const seg = '.tool-strip .ts-seg';
+    const work = (await page.locator('.workspace').boundingBox())!;
+    expect(await page.locator('.tool-strip').count()).toBe(1); // its 2 px are kept even when empty: nothing moves when it fills
+    expect(await page.locator(seg).count()).toBe(0);
+    const calls = [
+      { name: 'Read', category: 'read', startAgo: 60_000, endAgo: 59_000 }, // the last prompt's: not this turn
+      { name: 'Read', category: 'read', startAgo: 19_000, endAgo: 15_000 },
+      { name: 'Bash', category: 'shell', startAgo: 15_000, endAgo: 10_000, failed: true },
+      { name: 'Edit', category: 'write', startAgo: 10_000, endAgo: 9_000 },
+      { name: 'WebFetch', category: 'web', startAgo: 9_000, endAgo: 8_000 },
+      { name: 'Task', category: 'agent', startAgo: 8_000, endAgo: 7_000 },
+      { name: 'mcp__x__y', category: 'other', startAgo: 5_000 }, // running
+    ];
+    await inject([{ id: 'strip-1', state: 'working', turnStartedAtAgo: 20_000, calls }]);
+    await until(async () => (await page.locator(seg).count()) === 6, 4_000, 'six segments');
+    expect(await page.$$eval(seg, (els) => els.map((e) => (e as HTMLElement).dataset.cat))).toEqual(['read', 'shell', 'write', 'web', 'agent', 'other']);
+    const bg = (i: number) => page.locator(seg).nth(i).evaluate((e) => getComputedStyle(e).backgroundColor);
+    expect(await bg(0)).toBe(await token('--branch'));
+    expect(await bg(1)).toBe(await token('--danger')); // the failed Bash
+    expect(await bg(2)).toBe(await token('--accent'));
+    expect(await bg(3)).toBe(await token('--violet'));
+    expect(await bg(4)).toBe(await token('--ok'));
+    expect(await page.locator(seg).nth(1).getAttribute('title')).toBe('Bash · 5.0 s · failed');
+    expect(await page.locator(seg).nth(0).getAttribute('title')).toBe('Read · 4.0 s');
+    const w = async (i: number) => (await page.locator(seg).nth(i).boundingBox())!.width;
+    expect(await w(1)).toBeGreaterThan((await w(2)) * 3); // 5 s against 1 s
+    expect(await w(2)).toBeGreaterThanOrEqual(2);
+    const strip = (await page.locator('.tool-strip').boundingBox())!;
+    expect(strip.height).toBe(2);
+    expect((await page.locator('.workspace').boundingBox())!.y).toBe(work.y); // no layout shift
+    await shot('27-tool-strip');
+    // the running call grows
+    const grow = await w(5);
+    await until(async () => (await w(5)) > grow, 4_000, 'the running call to grow');
+    // Settings → Claude Code → Tool strip, off: gone
+    await cfgPatch({ claude: { toolStrip: false } });
+    await until(async () => (await page.locator('.tool-strip').count()) === 0, 4_000, 'the strip to go');
+    await cfgPatch({ claude: { toolStrip: true } });
+    await page.waitForSelector(seg);
+    // an ended session shows nothing
+    await inject([{ id: 'strip-1', state: 'ended', turnStartedAtAgo: 20_000, calls }]);
+    await until(async () => (await page.locator(seg).count()) === 0, 4_000, 'no segments for an ended session');
+    await inject([]);
+  }, 30_000);
+
+  it('needs-you in the title bar: the tool and the notice (clipped), and how many times that tool asked before', async () => {
+    await endClaude();
+    const chip = '.session-pill .needs-chip';
+    const notice = 'Claude needs your permission to use Bash for something that takes a long sentence to say';
+    const ask = { id: 'needs-1', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 't1' }, notice };
+    await inject([ask]);
+    await page.waitForSelector(chip);
+    expect(await page.locator(`${chip} .alert-dot`).count()).toBe(1);
+    let text = (await page.textContent(chip)) ?? '';
+    expect(text).toContain('Bash');
+    expect(text).toContain(notice.slice(0, 40));
+    expect(text).not.toContain(notice); // clipped
+    expect(text).not.toMatch(/time/);
+    await shot('28-needs-you');
+    // answered (back to working), asked again: the second time
+    await inject([{ ...ask, state: 'working' }]);
+    await until(async () => (await page.locator(chip).count()) === 0, 4_000, 'the chip to go when answered');
+    await inject([ask]);
+    await until(async () => /Bash.*· 2nd time/.test((await page.textContent(chip)) ?? ''), 4_000, 'the 2nd time');
+    await inject([{ ...ask, state: 'working' }]);
+    await inject([ask]);
+    await until(async () => /· 3rd time/.test((await page.textContent(chip)) ?? ''), 4_000, 'the 3rd time');
+    // another tool counts on its own
+    await inject([{ ...ask, state: 'working' }]);
+    await inject([{ ...ask, tool: { name: 'Write', id: 't2' }, notice: 'Claude needs your permission to use Write' }]);
+    await until(async () => /Write/.test((await page.textContent(chip)) ?? ''), 4_000, 'the Write prompt');
+    text = (await page.textContent(chip)) ?? '';
+    expect(text).not.toMatch(/time/);
+    await inject([]);
+  }, 30_000);
+
+  it('the editing chip: the file Claude is writing, beside the ring; a click shows it in Finder', async () => {
+    await endClaude();
+    await page.evaluate(() => ((window as any).__revealed = []));
+    const file = path.join(env.userHome, 'proj', 'src', 'app.ts');
+    await inject([{ id: 'edit-1', state: 'working', turnStartedAtAgo: 5_000, file, tool: { name: 'Edit', id: 'e1' } }]);
+    await page.waitForSelector('.session-pill .edit-chip');
+    expect((await page.textContent('.session-pill .edit-chip'))?.trim()).toBe('app.ts');
+    expect(await page.locator('.session-pill .edit-chip svg').count()).toBe(1);
+    await page.click('.session-pill .edit-chip');
+    expect(await page.evaluate(() => (window as any).__revealed)).toEqual([file]);
+    await inject([{ id: 'edit-1', state: 'working', turnStartedAtAgo: 5_000 }]);
+    await until(async () => (await page.locator('.session-pill .edit-chip').count()) === 0, 4_000, 'the chip to go when the edit is done');
+    await inject([]);
+  }, 20_000);
+
+  it('a finished turn: a summary toast (how long, what Claude did, the cost once it is known) with the edited files to reveal; none for a short or cut-short turn, or with the switch off', async () => {
+    await endClaude();
+    await page.evaluate(() => ((window as any).__revealed = []));
+    const files = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'].map((f) => path.join(env.userHome, 'proj', f));
+    const calls = [
+      { name: 'Read', category: 'read', startAgo: 70_000, endAgo: 69_000 },
+      { name: 'Grep', category: 'read', startAgo: 68_000, endAgo: 67_000 },
+      { name: 'Read', category: 'read', startAgo: 66_000, endAgo: 65_000 },
+      { name: 'Edit', category: 'write', startAgo: 60_000, endAgo: 59_000 },
+      { name: 'Write', category: 'write', startAgo: 50_000, endAgo: 49_000 },
+      { name: 'Bash', category: 'shell', startAgo: 40_000, endAgo: 30_000 },
+    ];
+    const turn = { id: 'sum-1', turnStartedAtAgo: 72_000, calls, files };
+    await inject([{ ...turn, state: 'working' }]);
+    await inject([{ ...turn, state: 'idle' }]);
+    await sleep(500);
+    expect(await toastCount('Claude finished in')).toBe(0); // it waits a moment for the cost
+    await inject([{ ...turn, state: 'idle', cost: { usd: 0.04, at: 77 } }]);
+    const summary = 'Claude finished in 1m 12s · 3 reads, 2 edits, 1 shell · ≈ $0.04';
+    await until(async () => (await toastCount(summary)) === 1, 4_000, 'the summary toast');
+    const toast = page.locator('.toast', { hasText: summary });
+    expect(await toast.locator('.toast-act').allTextContents()).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts']);
+    expect(await toast.locator('.toast-note').textContent()).toBe('+1 more');
+    await shot('29-turn-summary');
+    await toast.locator('.toast-act', { hasText: 'b.ts' }).click();
+    expect(await page.evaluate(() => (window as any).__revealed)).toEqual([files[1]]);
+    // no cost after 3 s: the summary without it
+    const t2 = { id: 'sum-2', turnStartedAtAgo: 15_000, calls: [{ name: 'Read', category: 'read', startAgo: 14_000, endAgo: 13_000 }] };
+    await inject([{ ...t2, state: 'working' }]);
+    await inject([{ ...t2, state: 'idle' }]);
+    await until(async () => (await toastCount('Claude finished in 15s · 1 read')) === 1, 6_000, 'the summary without a cost');
+    expect(await toastCount('Claude finished in 15s · 1 read · ≈')).toBe(0);
+    // too short, cut short, switched off: nothing
+    const quiet = async (t: object, what: string) => {
+      const n = await toastCount('Claude finished in');
+      await inject([{ ...t, state: 'working' }]);
+      await inject([{ ...t, state: 'idle', cost: { usd: 0.5, at: 99 } }]);
+      await sleep(600);
+      expect(await toastCount('Claude finished in'), what).toBe(n);
+    };
+    await quiet({ id: 'sum-3', turnStartedAtAgo: 5_000 }, 'a 5 s turn');
+    await quiet({ id: 'sum-4', turnStartedAtAgo: 60_000, cutShort: true }, 'a cut-short turn');
+    await cfgPatch({ claude: { turnSummary: false } });
+    await quiet({ id: 'sum-5', turnStartedAtAgo: 60_000 }, 'the switch off');
+    await cfgPatch({ claude: { turnSummary: true } });
+    await inject([]);
+  }, 40_000);
+
+  it('the cost chip: the live figure greyed while Claude works (only with both switches), the budget colours, and a hover card with today, the estimate and two sparklines', async () => {
+    await endClaude();
+    const chip = '[data-cost-chip]';
+    await inject([{ id: 'live-cost-1', state: 'working', turnStartedAtAgo: 5_000, live: { input: 1000, output: 2000, usd: 0.03, at: 1 } }]);
+    await until(async () => (await textOf(chip)) === '≈ $0.03 so far', 4_000, 'the live figure');
+    expect(await page.getAttribute(chip, 'data-live')).not.toBeNull();
+    await cfgPatch({ claude: { liveCost: false } });
+    await until(async () => (await page.locator(chip).count()) === 0, 4_000, 'no live figure with the live switch off');
+    await cfgPatch({ claude: { liveCost: true } });
+    await page.waitForSelector(chip);
+    // three turns finish, each with its cost: the sparklines have something to draw
+    for (const [i, usd] of [0.1, 0.4, 0.2].entries()) {
+      const t = { id: 'live-cost-1', turnStartedAtAgo: 4_000 + i * 1000 };
+      await inject([{ ...t, state: 'working', cost: i ? { usd: 0.1, at: 100 + i } : undefined }]);
+      await inject([{ ...t, state: 'idle', cost: { usd, at: 200 + i } }]);
+    }
+    await until(async () => (await textOf(chip)) === '≈ $0.20', 4_000, 'the last answer’s cost');
+    expect(await page.getAttribute(chip, 'data-live')).toBeNull();
+    // the budget: warn from 80 %, danger past it
+    await cfgPatch({ claude: { dailyBudgetUsd: 1 } });
+    await inject([{ id: 'live-cost-1', state: 'idle', cost: { usd: 0.2, at: 202 } }], { usd: 0.85, date: '2026-10-14' });
+    await until(async () => (await page.getAttribute(chip, 'class'))?.includes('warn') ?? false, 4_000, 'the warn colour');
+    const warn = await token('--warn');
+    await until(async () => (await page.$eval(chip, (el) => getComputedStyle(el).color)) === warn, 4_000, 'the chip in the warn colour'); // (after its flash)
+    await inject([{ id: 'live-cost-1', state: 'idle', cost: { usd: 0.2, at: 202 } }], { usd: 1.2, date: '2026-10-14' });
+    await until(async () => (await page.getAttribute(chip, 'class'))?.includes('danger') ?? false, 4_000, 'the danger colour');
+    // the hover card
+    await page.hover(chip);
+    await page.waitForSelector('.cost-pop', { state: 'visible' });
+    const pop = (await page.textContent('.cost-pop')) ?? '';
+    expect(pop).toMatch(/Today ≈ \$1\.20 of \$1\.00/);
+    expect(pop).toMatch(/an estimate at API list prices/i);
+    expect(pop).toMatch(/not billed per token/);
+    const paths = await page.$$eval('.cost-pop svg path', (els) => els.map((e) => e.getAttribute('d') ?? ''));
+    expect(paths.length).toBe(2);
+    for (const d of paths) expect(d).toMatch(/^M[\d.]+ [\d.]+( L[\d.]+ [\d.]+){2,}$/);
+    await shot('30-cost-card');
+    await page.mouse.move(10, 400);
+    // no budget: no colour
+    await cfgPatch({ claude: { dailyBudgetUsd: 0 } });
+    await until(async () => !/warn|danger/.test((await page.getAttribute(chip, 'class')) ?? ''), 4_000, 'no budget colour');
+    expect(await page.textContent('.cost-pop')).not.toMatch(/ of \$/);
+    // showCost off: no chip at all, live or not
+    await cfgPatch({ claude: { showCost: false } });
+    await inject([{ id: 'live-cost-2', state: 'working', turnStartedAtAgo: 5_000, live: { input: 1, output: 2, usd: 0.03, at: 1 } }]);
+    await sleep(300);
+    expect(await page.locator(chip).count()).toBe(0);
+    await cfgPatch({ claude: { showCost: true } });
+    await inject([]);
+  }, 40_000);
+
+  it('the window glow: a pulse while Claude needs you, steady while it works, one flash when a turn ends; none with the switch or Animations off', async () => {
+    await endClaude();
+    const glow = () => page.getAttribute('.stage', 'data-glow');
+    const t = { id: 'glow-1', turnStartedAtAgo: 5_000 };
+    expect(await glow()).toBeNull();
+    await inject([{ ...t, state: 'working' }]);
+    await until(async () => (await glow()) === 'work', 4_000, 'the working glow');
+    expect(await page.$eval('.stage', (el) => getComputedStyle(el, '::after').boxShadow)).not.toBe('none');
+    await inject([{ ...t, state: 'needs-you', tool: { name: 'Bash', id: 'g1' } }]);
+    await until(async () => (await glow()) === 'needs', 4_000, 'the needs-you glow');
+    expect(await page.$eval('.stage', (el) => getComputedStyle(el, '::after').animationName)).toContain('glow-pulse');
+    await inject([{ ...t, state: 'working' }]);
+    await inject([{ ...t, state: 'idle' }]);
+    await until(async () => (await glow()) === 'done', 4_000, 'the flash at the end of a turn');
+    await until(async () => (await glow()) === null, 4_000, 'the flash to end');
+    // Animations off, or the switch off: no glow
+    await cfgPatch({ appearance: { animations: false } });
+    await inject([{ ...t, state: 'working' }]);
+    await sleep(300);
+    expect(await glow()).toBeNull();
+    await cfgPatch({ appearance: { animations: true, glow: false } });
+    await sleep(300);
+    expect(await glow()).toBeNull();
+    await cfgPatch({ appearance: { glow: true } });
+    await until(async () => (await glow()) === 'work', 4_000, 'the glow back');
+    await inject([]);
+    await until(async () => (await glow()) === null, 4_000, 'no glow without Claude');
+  }, 30_000);
+
+  it('the folder pill slides to a new folder (not with Animations off), and shows the repository’s git counts after the branch', async () => {
+    const repo = path.join(env.userHome, 'git-pill');
+    fs.mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+    git('init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(repo, 'staged.txt'), 'a');
+    git('add', 'staged.txt');
+    fs.writeFileSync(path.join(repo, 'new.txt'), 'b');
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await page.keyboard.type(`cd ${repo}`, { delay: 4 });
+    await page.keyboard.press('Enter');
+    await until(async () => (await textOf('.session-pill .git-stat')) === '+1 ?1', 10_000, 'the git counts');
+    // the folder changed: the old name slid out and the new one in
+    expect(await page.$eval('.session-pill .cwd', (el) => getComputedStyle(el).animationName)).toContain('pill-in');
+    await shot('31-git-pill');
+    // the counts follow the next prompt
+    fs.writeFileSync(path.join(repo, 'another.txt'), 'c');
+    await page.keyboard.press('Enter');
+    await until(async () => (await textOf('.session-pill .git-stat')) === '+1 ?2', 10_000, 'the counts after the next prompt');
+    // out of the repository: gone; and with Animations off nothing slides
+    await cfgPatch({ appearance: { animations: false } });
+    await until(async () => (await page.evaluate(() => document.documentElement.dataset.motion)) === 'off', 8_000, 'motion to be off');
+    await page.keyboard.type('cd /tmp', { delay: 4 });
+    await page.keyboard.press('Enter');
+    await until(async () => (await page.locator('.session-pill .git-stat').count()) === 0, 10_000, 'the counts to leave');
+    expect(await page.locator('.session-pill .cwd-old').count()).toBe(0);
+    expect(await page.$eval('.session-pill .cwd', (el) => getComputedStyle(el).animationName)).toBe('none');
+    await cfgPatch({ appearance: { animations: true } });
+  }, 40_000);
+
+  it('system stats: small bars for CPU and memory (and battery, where there is one) in the title bar, only with the setting on', async () => {
+    const bars = '.titlebar .sys-stats';
+    await page.evaluate(() => (window as any).__stats?.(0.42, 0.95));
+    await sleep(200);
+    expect(await page.locator(bars).count()).toBe(0); // off by default
+    await cfgPatch({ appearance: { systemStats: true } });
+    await page.evaluate(() => (window as any).__stats(0.42, 0.95));
+    await page.waitForSelector(bars);
+    expect(await page.getAttribute(`${bars} [data-stat="cpu"]`, 'title')).toBe('CPU 42%');
+    expect(await page.getAttribute(`${bars} [data-stat="mem"]`, 'title')).toBe('Memory 95%');
+    expect(await page.getAttribute(`${bars} [data-stat="mem"]`, 'data-level')).toBe('danger');
+    expect(await page.getAttribute(`${bars} [data-stat="cpu"]`, 'data-level')).toBe('ok');
+    const bar = (await page.locator(`${bars} [data-stat="cpu"]`).boundingBox())!;
+    expect(bar.width).toBe(24);
+    expect(bar.height).toBe(4);
+    await shot('32-system-stats');
+    await cfgPatch({ appearance: { systemStats: false } });
+    await until(async () => (await page.locator(bars).count()) === 0, 4_000, 'the bars to go');
+  }, 20_000);
+
+  it('Settings: system stats and the window glow under Appearance; live cost, the daily budget, the tool strip and the turn summary under Claude Code', async () => {
+    const field = (label: string) => page.locator('label.field', { hasText: label });
+    const flip = async (label: string, key: (c: any) => unknown, want: unknown) => {
+      await field(label).locator('.switch').click();
+      await until(async () => key(await page.evaluate(() => window.jaffer.call('config.get'))) === want, 8_000, `${label} to be ${want}`);
+    };
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    try {
+      await flip('System stats in the title bar', (c) => c.appearance.systemStats, true);
+      await flip('System stats in the title bar', (c) => c.appearance.systemStats, false);
+      await flip('Window glow', (c) => c.appearance.glow, false);
+      await flip('Window glow', (c) => c.appearance.glow, true);
+      await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+      await flip('Live cost while Claude works', (c) => c.claude.liveCost, false);
+      await flip('Live cost while Claude works', (c) => c.claude.liveCost, true);
+      await flip('Tool strip', (c) => c.claude.toolStrip, false);
+      await flip('Tool strip', (c) => c.claude.toolStrip, true);
+      await flip('Turn summary', (c) => c.claude.turnSummary, false);
+      await flip('Turn summary', (c) => c.claude.turnSummary, true);
+      const budget = field('Daily budget').locator('input[type=number]');
+      await budget.fill('2.5');
+      await budget.press('Tab');
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.dailyBudgetUsd === 2.5, 8_000, 'the budget');
+      await budget.fill('-3');
+      await budget.press('Tab');
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).claude.dailyBudgetUsd === 0, 8_000, 'a negative budget to be none');
+      await shot('33-settings-claude');
+    } finally {
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    }
+  }, 40_000);
 
   it('Settings: no label wraps a button, focus goes into the dialog and back, Open at login tells the truth, the colour scheme follows the theme', async () => {
     const dialogFocused = () => page.evaluate(() => !!document.activeElement?.closest('.modal'));

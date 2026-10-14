@@ -99,9 +99,18 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     }
     if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[] }).sessions);
-    if (event === 'config.changed') appCfg = data as typeof appCfg;
+    if (event === 'config.changed') {
+      appCfg = data as typeof appCfg;
+      syncSystemStats();
+    }
   });
-  void c.call('config.get', {}).then((x) => (appCfg = x as typeof appCfg)).catch(() => undefined);
+  void c
+    .call('config.get', {})
+    .then((x) => {
+      appCfg = x as typeof appCfg;
+      syncSystemStats();
+    })
+    .catch(() => undefined);
   void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
   c.onClose.on(() => void onConnectionLost(o));
 }
@@ -219,7 +228,40 @@ async function prepareHomeBounded(): Promise<void> {
 let lastTerminalNotifyAt = 0;
 let prevClaude: ClaudeSession[] = [];
 /** The settings the main process acts on itself (kept current from the daemon's config.changed). */
-let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string } } = {};
+let appCfg: { notifications?: { claudeFinished?: boolean }; claude?: { showCost?: boolean }; terminal?: { editorUrl?: string }; appearance?: { systemStats?: boolean } } = {};
+
+// ---------------------------------------------------------------- system stats (Settings → Appearance → System stats, off by default)
+
+/** All cores' busy and total time so far: CPU use is the busy share of the time between two samples. */
+function cpuTimes(): { busy: number; total: number } {
+  let busy = 0;
+  let total = 0;
+  for (const { times: t } of os.cpus()) {
+    busy += t.user + t.nice + t.sys + t.irq;
+    total += t.user + t.nice + t.sys + t.irq + t.idle;
+  }
+  return { busy, total };
+}
+let statsTimer: NodeJS.Timeout | null = null;
+let lastCpu = cpuTimes();
+/** Sends CPU and memory in use every 5 s, only while the setting is on and the window exists. */
+function syncSystemStats(): void {
+  const on = appCfg.appearance?.systemStats === true && !!win && !win.isDestroyed();
+  if (on && !statsTimer) {
+    lastCpu = cpuTimes();
+    statsTimer = setInterval(() => {
+      if (!win || win.isDestroyed() || appCfg.appearance?.systemStats !== true) return syncSystemStats();
+      const now = cpuTimes();
+      const total = now.total - lastCpu.total;
+      const cpu = total > 0 ? Math.min(1, Math.max(0, (now.busy - lastCpu.busy) / total)) : 0;
+      lastCpu = now;
+      sendToRenderer('jaffer:system-stats', { cpu, mem: Math.min(1, Math.max(0, 1 - os.freemem() / os.totalmem())) });
+    }, 5000);
+  } else if (!on && statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+}
 
 /** "Claude finished", after a long turn, while you are looking elsewhere. */
 const finished = new FinishedNotifier({
@@ -418,6 +460,8 @@ function createWindow(): void {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
   });
   win.once('ready-to-show', () => win?.show());
+  win.on('closed', syncSystemStats);
+  syncSystemStats();
   const save = () => {
     if (win && !win.isDestroyed() && !win.isMinimized() && !win.isFullScreen()) writeJson(windowFile, win.getBounds());
   };

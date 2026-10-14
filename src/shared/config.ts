@@ -23,6 +23,10 @@ export interface JafferConfig {
     pet: boolean;
     /** Which one: the mole, or one of the scenes. Anything unknown is the mole. */
     companion: Companion;
+    /** Small bars for CPU, memory and battery at the right of the title bar (the app samples them every 5 s only while this is on). */
+    systemStats: boolean;
+    /** A soft glow on the window's edge: while Claude needs you, while it works, and once when a turn ends. Off with Animations off too. */
+    glow: boolean;
   };
   shell: { path: string; args: string[] };
   /** The person chose a plain terminal at first run. Claude stays on offer (Settings → Claude Code), nothing about it nags; connecting it clears this. */
@@ -36,6 +40,10 @@ export interface JafferConfig {
     dailyBudgetUsd: number;
     /** How long a turn of Claude typically takes (ms; the median of the last finished ones of 3 s or more), for the ring's progress. Kept by the daemon, not a setting; 0 is not known yet. */
     typicalTurnMs: number;
+    /** A 2 px strip under the title bar: this turn's tool calls, coloured by kind, as wide as they took. */
+    toolStrip: boolean;
+    /** When a turn of 10 s or more ends: a toast with how long it took, what Claude did, the files it edited (and the cost, with `showCost`). */
+    turnSummary: boolean;
   };
   terminal: {
     /** Command blocks: a mark beside every command's prompt (its exit, its times), jumping between prompts, the sticky command header, copying and saving a command's output. */
@@ -86,9 +94,11 @@ export const DEFAULT_CONFIG: JafferConfig = {
     animations: true,
     pet: true,
     companion: DEFAULT_COMPANION,
+    systemStats: false,
+    glow: true,
   },
   shell: { path: '', args: [] },
-  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0 },
+  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
   updates: { auto: true },
   notifications: { claudeFinished: true },

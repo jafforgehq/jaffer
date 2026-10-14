@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect } from '@preact/signals';
-import { activePane, cfg, openOverlay, overlay, ready, appVersion } from './state';
+import { activePane, cfg, currentClaude, openOverlay, overlay, ready, appVersion, turnDone } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
 import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
+import { ToolStrip } from './components/ToolStrip';
 import { FindBar, Onboarding, Palette, PasteBar, Pins, RecentCommands, Settings } from './components/Overlays';
 import { BlockMenu, StickyHeader } from './components/Blocks';
 import { cssVars, themeById } from './themes';
@@ -19,6 +20,14 @@ function applyTheme(): void {
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.style.colorScheme = th.dark ? 'dark' : 'light'; // native controls (scrollbars, selects, date pickers) follow the theme
   root.dataset.motion = c.appearance.animations === false ? 'off' : 'on';
+}
+
+/** The window's edge glows while Claude needs you or works, and flashes once when a turn ends (Settings → Appearance → Window glow; never with Animations off). */
+function glow(): string | undefined {
+  const a = cfg.value?.appearance;
+  if (!a || a.glow === false || a.animations === false) return undefined;
+  const s = currentClaude()?.state;
+  return s === 'needs-you' ? 'needs' : s === 'working' ? 'work' : turnDone.value ? 'done' : undefined;
 }
 
 export function App(): VNode | null {
@@ -47,8 +56,9 @@ export function App(): VNode | null {
   void appVersion.value;
   return (
     <div class="app">
-      <div class="stage">
+      <div class="stage" data-glow={glow()}>
         <TitleBar />
+        <ToolStrip />
         <DaemonBanner />
         <div class="workspace">
           <div class="terminal-area">

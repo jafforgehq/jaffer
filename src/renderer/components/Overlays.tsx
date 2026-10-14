@@ -504,6 +504,12 @@ export function Settings(): VNode {
                   );
                 })}
               </div>
+              <Field label="Window glow" hint="a soft light on the window's edge: a pulse while Claude needs you, steady while it works, a flash when it is done. Not with Animations off">
+                <Switch checked={c.appearance.glow !== false} onChange={(v) => set({ appearance: { glow: v } })} />
+              </Field>
+              <Field label="System stats in the title bar" hint="small bars for CPU, memory and battery, refreshed every 5 seconds while this is on">
+                <Switch checked={c.appearance.systemStats === true} onChange={(v) => set({ appearance: { systemStats: v } })} />
+              </Field>
               <Field label="GPU rendering" hint="turn off if text looks wrong (applies the next time you open Jaffer)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>
@@ -580,6 +586,18 @@ export function Settings(): VNode {
               </Field>
               <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
+              </Field>
+              <Field label="Live cost while Claude works" hint="the figure grows while Claude answers (greyed), read from the token counts every 2 seconds">
+                <Switch checked={c.claude?.liveCost !== false} disabled={c.claude?.showCost === false} onChange={(v) => set({ claude: { liveCost: v } })} />
+              </Field>
+              <Field label="Daily budget (USD, 0 = off)" hint="the figure turns yellow at 80 % of today's estimate and red past it; memory only, it starts again at midnight">
+                <input type="number" min={0} step={0.5} value={c.claude?.dailyBudgetUsd ?? 0} onChange={(e) => set({ claude: { dailyBudgetUsd: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) } })} />
+              </Field>
+              <Field label="Tool strip" hint="a thin line under the title bar: this turn's tool calls, coloured by kind, red when one failed">
+                <Switch checked={c.claude?.toolStrip !== false} onChange={(v) => set({ claude: { toolStrip: v } })} />
+              </Field>
+              <Field label="Turn summary" hint="when a turn of 10 seconds or more ends: how long it took, what Claude did and the files it edited (click one to show it in Finder)">
+                <Switch checked={c.claude?.turnSummary !== false} onChange={(v) => set({ claude: { turnSummary: v } })} />
               </Field>
             </>
           )}

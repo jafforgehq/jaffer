@@ -1,10 +1,14 @@
-import { batch, signal } from '@preact/signals';
+import { batch, effect, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { UpdateState } from '../shared/update-policy';
 import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
+import type { GitStatus } from '../core/session/git-status';
+import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
+
+export { fmtDuration };
 
 const jaffer = () => window.jaffer;
 
@@ -19,6 +23,8 @@ export interface SessionInfo {
   busySince?: number | null;
   version?: string;
   startedAt?: string;
+  /** The folder's repository, counted (after each prompt); absent outside one. */
+  git?: GitStatus;
 }
 
 export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent';
@@ -84,14 +90,6 @@ function remember(c: RecentCommand): void {
   commands.value = [c, ...commands.value.filter((x) => x.cmd !== c.cmd)].slice(0, 200);
 }
 
-/** `4m 12s`, `45s`, `1h 3m`. */
-export function fmtDuration(ms: number): string {
-  const s = Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : 0;
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-}
-
 /** Feature 9: the toast for long commands that finished while the window was away, the most recent first. */
 export function awayText(done: { cmd: string; exit: number | null; durMs: number }[]): string {
   const c = done[0]!;
@@ -108,11 +106,15 @@ export interface Toast {
   id: number;
   kind: 'info' | 'error';
   text: string;
+  /** Buttons under the text (the files a turn edited: a click reveals one). */
+  actions?: { label: string; run: () => void }[];
+  /** Plain text after the buttons ("+2 more"). */
+  note?: string;
 }
 export const toasts = signal<Toast[]>([]);
 let toastId = 1;
-/** Shows a toast for `ttl` ms (or until it is dismissed); returns its id, for `dismissToast`. */
-export function toast(t: Omit<Toast, 'id'>, ttl = 6000): number {
+/** Shows a toast for `ttl` ms (longer when it has buttons), or until it is dismissed; returns its id, for `dismissToast`. */
+export function toast(t: Omit<Toast, 'id'>, ttl = t.actions?.length ? 10_000 : 6000): number {
   const id = toastId++;
   toasts.value = [...toasts.value.slice(-3), { ...t, id }];
   setTimeout(() => dismissToast(id), ttl);
@@ -136,11 +138,95 @@ const claudeLive = signal<ClaudeSession[]>([]);
 export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
 async function loadClaudeState(): Promise<void> {
   try {
-    claudeLive.value = (await jaffer().call('claude.state', {})).sessions;
+    setClaude(await jaffer().call('claude.state', {}));
   } catch {
     /* the daemon is not there yet; its next push fills this in */
   }
 }
+
+// Everything below is memory only: it ends with the window.
+/** What the answers finished today cost (the daemon's estimate; it starts again at local midnight), for the daily budget. */
+export const claudeToday = signal<{ usd: number; date: string } | null>(null);
+/** The last 20 finished turns: how long each took and, once it is known, what it cost (the cost chip's sparklines). */
+export const turnHistory = signal<{ id: string; durMs: number; usd?: number }[]>([]);
+/** A turn just finished: the window's edge flashes once. */
+export const turnDone = signal(false);
+/** A clock that ticks every second, only while Claude works (the ring's progress, the running tool call's segment). */
+export const tick = signal(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
+effect(() => {
+  const on = currentClaude()?.state === 'working';
+  if (on && !ticker) {
+    tick.value = Date.now();
+    ticker = setInterval(() => (tick.value = Date.now()), 1000);
+  } else if (!on && ticker) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+});
+/** How many times a permission prompt was answered, per session and tool (`id \n tool`). */
+const answered = new Map<string, number>();
+export const timesAnswered = (sessionId: string, tool: string): number => answered.get(`${sessionId}\n${tool}`) ?? 0;
+
+let seen: ClaudeSession | null = null;
+let doneTimer: ReturnType<typeof setTimeout> | undefined;
+/** A finished turn's summary, waiting (up to 3 s) for the turn's cost. */
+let pending: { id: string; durMs: number; counts: Record<string, number>; files: string[]; timer: ReturnType<typeof setTimeout> } | null = null;
+
+/** A `claude.state` from the daemon (or a test: any field may be missing), and what its changes to the current session mean. */
+function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; date: string } } | null | undefined): void {
+  batch(() => {
+    claudeLive.value = Array.isArray(data?.sessions) ? data.sessions : [];
+    claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
+  });
+  const s = currentClaude();
+  const p = s && seen?.id === s.id ? seen : null;
+  seen = s;
+  if (!s) return;
+  if (s.compacting && !p?.compacting) toast({ kind: 'info', text: 'Claude is compacting its context' });
+  const asked = p?.tool?.name;
+  if (p?.state === 'needs-you' && s.state === 'working' && asked) answered.set(`${s.id}\n${asked}`, timesAnswered(s.id, asked) + 1);
+  const cost = s.cost && s.cost.at !== p?.cost?.at ? s.cost.last : undefined;
+  if (p?.state === 'working' && s.state === 'idle' && !s.cutShort) turnFinished(s, cost?.usd, !!cost);
+  else if (cost) {
+    const h = turnHistory.value;
+    const last = h[h.length - 1];
+    if (last?.id === s.id && last.usd === undefined) turnHistory.value = [...h.slice(0, -1), { ...last, usd: cost.usd }];
+    if (pending?.id === s.id) showSummary(cost.usd);
+  }
+}
+
+function turnFinished(s: ClaudeSession, usd: number | undefined, costKnown: boolean): void {
+  const durMs = typeof s.turnStartedAt === 'number' ? Math.max(0, s.since - s.turnStartedAt) : 0;
+  turnHistory.value = [...turnHistory.value, { id: s.id, durMs, usd }].slice(-20);
+  turnDone.value = true;
+  clearTimeout(doneTimer);
+  doneTimer = setTimeout(() => (turnDone.value = false), 1200);
+  if (pending) showSummary(undefined); // an earlier turn's summary still waiting: it goes as it is
+  if (cfg.value?.claude?.turnSummary === false || durMs < 10_000) return;
+  const counts = turnCounts(s.calls, s.turnStartedAt);
+  // (a turn without a prompt keeps the last prompt's files: only a turn that wrote lists them)
+  const files = counts.write && Array.isArray(s.files) ? s.files : [];
+  pending = { id: s.id, durMs, counts, files, timer: setTimeout(() => showSummary(undefined), 3000) };
+  if (costKnown || cfg.value?.claude?.showCost === false) showSummary(usd);
+}
+
+function showSummary(usd: number | undefined): void {
+  const p = pending;
+  if (!p) return;
+  pending = null;
+  clearTimeout(p.timer);
+  const shown = p.files.slice(0, 5);
+  toast({
+    kind: 'info',
+    text: turnSummaryText({ durMs: p.durMs, counts: p.counts, usd: cfg.value?.claude?.showCost === false ? undefined : usd }),
+    actions: shown.map((f) => ({ label: baseName(f), run: () => void jaffer().revealPath(f).catch(() => undefined) })),
+    note: p.files.length > shown.length ? `+${p.files.length - shown.length} more` : undefined,
+  });
+}
+
+/** CPU and memory in use (0..1), from the app every 5 s while Settings → Appearance → System stats is on. */
+export const systemStats = signal<{ cpu: number; mem: number } | null>(null);
 
 // ------------------------------------------------------------------ pty bus (consumed by terminal views)
 
@@ -153,7 +239,7 @@ async function refreshInfo(): Promise<void> {
     const i = await jaffer().call('session.info', {});
     batch(() => {
       const { recentCommands: _recent, panes: _panes, ...rest } = i as SessionInfo & { panes?: unknown; recentCommands?: unknown };
-      info.value = { ...info.value, project: undefined, branch: undefined, ...rest }; // (the answer leaves out what there is none of: outside a repository there is no branch, not the last one)
+      info.value = { ...info.value, project: undefined, branch: undefined, git: undefined, ...rest }; // (the answer leaves out what there is none of: outside a repository there is no branch, not the last one)
     });
   } catch {
     /* ignore */
@@ -182,8 +268,12 @@ export async function bootstrap(): Promise<void> {
       } else if (event === 'pty.cwd') {
         info.value = { ...info.value, cwd: data.cwd };
         void refreshInfoSoon();
+      } else if (event === 'pty.prompt' && data.pane === 'main') {
+        // the daemon counts the repository after each prompt (debounced, git takes up to a second): read it once that is done
+        if (gitTimer) clearTimeout(gitTimer);
+        gitTimer = setTimeout(() => void refreshInfo(), 1500);
       }
-    } else if (event === 'claude.state') claudeLive.value = data.sessions;
+    } else if (event === 'claude.state') setClaude(data);
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
@@ -202,6 +292,7 @@ export async function bootstrap(): Promise<void> {
       away = [];
     }
   });
+  j.onSystemStats?.((st) => (systemStats.value = st));
   const [config, app] = await Promise.all([j.call('config.get', {}), j.appInfo()]);
   batch(() => {
     cfg.value = config;
@@ -214,6 +305,7 @@ export async function bootstrap(): Promise<void> {
 }
 
 let infoTimer: ReturnType<typeof setTimeout> | null = null;
+let gitTimer: ReturnType<typeof setTimeout> | null = null;
 function refreshInfoSoon(): void {
   if (infoTimer) clearTimeout(infoTimer);
   infoTimer = setTimeout(() => void refreshInfo(), 120);

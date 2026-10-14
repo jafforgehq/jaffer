@@ -89,6 +89,26 @@ describe('claude.liveCost, claude.dailyBudgetUsd and claude.typicalTurnMs', () =
   });
 });
 
+describe('claude.toolStrip, claude.turnSummary, appearance.systemStats and appearance.glow', () => {
+  it('have their defaults (strip, summary and glow on; system stats off), also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.claude).toMatchObject({ toolStrip: true, turnSummary: true });
+    expect(DEFAULT_CONFIG.appearance).toMatchObject({ systemStats: false, glow: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { showCost: true }, appearance: { theme: 'jaffer-light' } }));
+    const cfg = new ConfigStore(env.paths).get();
+    expect(cfg.claude).toMatchObject({ toolStrip: true, turnSummary: true });
+    expect(cfg.appearance).toMatchObject({ systemStats: false, glow: true });
+  });
+
+  it('a choice is kept, and a value of the wrong kind leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ claude: { toolStrip: false, turnSummary: false }, appearance: { systemStats: true, glow: false } });
+    store.patch({ claude: { toolStrip: 'yes', turnSummary: 1 }, appearance: { systemStats: 'no', glow: null } } as never);
+    const cfg = new ConfigStore(env.paths).get();
+    expect(cfg.claude).toMatchObject({ toolStrip: false, turnSummary: false });
+    expect(cfg.appearance).toMatchObject({ systemStats: true, glow: false });
+  });
+});
+
 describe('terminal.blocks', () => {
   it('is on by default, also for a config file saved before the terminal section existed; a choice is kept, a value of the wrong kind is not', () => {
     expect(DEFAULT_CONFIG.terminal).toEqual(TERMINAL_DEFAULTS);

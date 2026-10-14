@@ -75,7 +75,26 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 
 /* ============================================================== layout */
 .app { display: flex; height: 100%; }
-.stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.stage { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+/* Settings → Appearance → Window glow: a soft light on the window's edge (data-glow is set only with Animations on; Reduce motion hides it) */
+.stage::after { content: ''; position: absolute; inset: 0; z-index: 30; pointer-events: none; border-radius: inherit; opacity: 0; transition: opacity 0.4s; }
+.stage[data-glow]::after { opacity: 1; }
+.stage[data-glow='work']::after { box-shadow: inset 0 0 22px color-mix(in srgb, var(--ok) 22%, transparent); }
+.stage[data-glow='needs']::after { box-shadow: inset 0 0 26px color-mix(in srgb, var(--warn) 45%, transparent); animation: glow-pulse 1.6s ease-in-out infinite; }
+.stage[data-glow='done']::after { box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent) 50%, transparent); animation: glow-flash 1.2s ease-out forwards; }
+@keyframes glow-pulse { 50% { opacity: 0.35; } }
+@keyframes glow-flash { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .stage[data-glow]::after { display: none; } }
+/* the 2 px tool strip under the title bar: this turn's tool calls (its height is kept while it is empty: nothing moves when it fills) */
+.tool-strip { flex: none; height: 2px; display: flex; gap: 1px; margin: 0 var(--gap); overflow: hidden; }
+.tool-strip .ts-seg { position: relative; flex: 1 1 0; min-width: 2px; border-radius: 1px; background: var(--faint); }
+.tool-strip .ts-seg::after { content: ''; position: absolute; inset: -3px 0 -2px; } /* (an easier target to hover than 2 px) */
+.tool-strip .ts-seg[data-cat='shell'] { background: var(--info); }
+.tool-strip .ts-seg[data-cat='read'] { background: var(--branch); }
+.tool-strip .ts-seg[data-cat='write'] { background: var(--accent); }
+.tool-strip .ts-seg[data-cat='web'] { background: var(--violet); }
+.tool-strip .ts-seg[data-cat='agent'] { background: var(--ok); }
+.tool-strip .ts-seg[data-failed] { background: var(--danger); }
 .workspace { flex: 1; min-height: 0; display: flex; gap: var(--gap); padding: 0 var(--gap) var(--gap) var(--gap); }
 .daemon-banner { background: var(--warn); color: #231a00; text-align: center; padding: 4px; font-size: 12px; font-weight: 600; }
 
@@ -86,9 +105,29 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .tb-left, .tb-right { display: flex; align-items: center; gap: 4px; flex: none; }
 /* the pill is centred on the window itself (not on what is left between the traffic lights and the buttons on the right); both sides reserve the same room */
 .titlebar { position: relative; }
-.tb-right { margin-left: auto; position: relative; z-index: 1; }
+.tb-right { margin-left: auto; position: relative; z-index: 35; } /* (above the card's find bar and the glow: the cost card drops over the terminal) */
 .cost-chip { font: 500 11px var(--font-ui, sans-serif); font-variant-numeric: tabular-nums; color: var(--muted); padding: 2px 7px; border-radius: 999px; white-space: nowrap; cursor: default; -webkit-app-region: no-drag; }
 :root:not([data-motion='off']) .cost-chip { animation: cost-flash 1.6s ease-out; }
+/* while Claude works: what the answer has cost so far, greyed, no flash */
+.cost-chip[data-live] { color: var(--faint); animation: none !important; }
+/* against the daily budget: from 80 %, and past it */
+.cost-chip.warn { color: var(--warn); }
+.cost-chip.danger { color: var(--danger); }
+/* hovering the figure: the session, today, what the figure is, and the last turns */
+.cost-wrap { position: relative; display: inline-flex; -webkit-app-region: no-drag; }
+.cost-pop {
+  display: none; position: absolute; top: calc(100% + 6px); right: 0; width: max-content; max-width: 340px; padding: 9px 11px; border: 1px solid var(--line-strong);
+  border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); color: var(--muted); font-size: 11.5px; line-height: 1.5; white-space: normal;
+}
+.cost-wrap:hover .cost-pop { display: block; }
+.cost-pop .spark-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; color: var(--faint); font-size: 10.5px; }
+.cost-pop .spark path { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+/* Settings → Appearance → System stats: CPU, memory, battery */
+.sys-stats { display: inline-flex; flex-direction: column; gap: 2px; margin-right: 6px; -webkit-app-region: no-drag; }
+.sys-stats .stat-bar { display: block; width: 24px; height: 4px; border-radius: 2px; background: var(--active); overflow: hidden; }
+.sys-stats .stat-bar i { display: block; height: 100%; background: var(--ok); }
+.sys-stats .stat-bar[data-level='warn'] i { background: var(--warn); }
+.sys-stats .stat-bar[data-level='danger'] i { background: var(--danger); }
 @keyframes cost-flash { 0% { color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { color: var(--muted); background: transparent; } }
 .tb-center { position: absolute; inset: 0 170px; display: flex; justify-content: center; align-items: center; min-width: 0; pointer-events: none; }
 .tb-center .session-pill { pointer-events: auto; }
@@ -96,7 +135,22 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
   display: inline-flex; align-items: center; gap: 9px; max-width: 100%; height: 28px; padding: 0 12px 0 10px; border-radius: 999px;
   background: var(--hover); border: 1px solid var(--line); color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
 }
-.session-pill .cwd { overflow: hidden; text-overflow: ellipsis; color: var(--text); font-family: var(--font-mono); font-size: 11.5px; }
+.session-pill .cwd, .session-pill .cwd-old { overflow: hidden; text-overflow: ellipsis; color: var(--text); font-family: var(--font-mono); font-size: 11.5px; }
+/* a new folder: the old name slides out, the new one in */
+.session-pill .cwd-box { position: relative; display: inline-flex; min-width: 0; overflow: hidden; }
+.session-pill .cwd-box .cwd { min-width: 0; }
+.session-pill .cwd-old { position: absolute; left: 0; top: 0; white-space: nowrap; }
+:root[data-motion='off'] .session-pill .cwd-old { display: none; }
+:root:not([data-motion='off']) .session-pill .cwd.morph { animation: pill-in 0.2s ease-out; }
+:root:not([data-motion='off']) .session-pill .cwd-old { animation: pill-out 0.2s ease-in forwards; }
+@keyframes pill-in { from { transform: translateY(70%); opacity: 0; } }
+@keyframes pill-out { to { transform: translateY(-70%); opacity: 0; } }
+.session-pill .git-stat { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+/* the file Claude is editing (a click shows it in Finder) and what Claude needs you for */
+.session-pill .edit-chip { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--accent); font: 500 11px var(--font-mono); cursor: pointer; }
+.session-pill .edit-chip:hover { background: var(--accent-soft); }
+.session-pill .needs-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--warn); font-size: 11.5px; }
+.session-pill .alert-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 .session-pill .branch { display: inline-flex; align-items: center; gap: 4px; color: var(--branch); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .running { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .sep { width: 1px; height: 12px; background: var(--line-strong); }
@@ -217,6 +271,11 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .run-dot { width: 7px; height: 7px; margin: 0 2.5px; border-radius: 50%; background: currentColor; opacity: 0.7; display: inline-block; flex: none; } /* a program that is running but not working: present, calm */
 :root[data-motion='off'] .spinner { animation: none; } /* a running ring that does not turn, when Animations are off */
 .spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--active); border-top-color: var(--accent); animation: spin 0.7s linear infinite; display: inline-block; flex: none; }
+/* Claude's turn against the typical one: the ring fills (--p, 0..1) instead of turning; full, it pulses; compacting, it is dotted */
+.spinner[data-progress] { animation: none; border-top-color: var(--active); background: conic-gradient(var(--accent) calc(var(--p, 0) * 360deg), transparent 0); }
+:root:not([data-motion='off']) .spinner[data-full] { animation: ring-pulse 1.4s ease-in-out infinite; }
+@keyframes ring-pulse { 50% { opacity: 0.45; } }
+.spinner[data-compacting] { border-style: dotted; border-color: var(--accent); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ============================================================== status bar */
@@ -227,6 +286,11 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .toast-ico { flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--hover); color: var(--muted); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong)); } .toast.error .toast-ico { background: var(--danger-soft); color: var(--danger); }
 .toast-text { flex: 1; min-width: 0; user-select: text; -webkit-user-select: text; }
+.toast:has(.toast-acts) { flex-wrap: wrap; }
+.toast-acts { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 32px; }
+.toast-act { border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 1px 7px; background: var(--hover); font: 11px var(--font-mono); cursor: pointer; }
+.toast-act:hover { background: var(--active); }
+.toast-note { color: var(--faint); font-size: 11px; }
 @keyframes rise { from { transform: translateY(10px) scale(0.98); opacity: 0; } }
 
 /* ============================================================== overlays */

@@ -36,6 +36,7 @@ const SHIM = `(() => {
     call: async (method, params) => { await ready; return new Promise((res, rej) => { const id = nextId++; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params })); }); },
     onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     onMenu: (cb) => { menu.add(cb); window.__menu = (id) => menu.forEach((f) => f(id)); return () => menu.delete(cb); },
+    onSystemStats: (cb) => { window.__stats = (cpu, mem) => cb({ cpu, mem }); return () => { window.__stats = undefined; }; }, // tests push numbers with window.__stats
     onFocus: (cb) => { const on = () => cb(true), off = () => cb(false); window.addEventListener('focus', on); window.addEventListener('blur', off); return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); }; },
     openExternal: async (u) => { window.__opened = u; }, reveal: async () => {},
     appInfo: async () => ({ version: ${JSON.stringify(VERSION)}, platform: 'darwin', dark: true, home: ${JSON.stringify(paths.home)}, packaged: false, openAtLogin: !!window.__loginItem }),
