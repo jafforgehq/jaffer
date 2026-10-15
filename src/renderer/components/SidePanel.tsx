@@ -4,6 +4,7 @@ import { activePane, cfg, claudeToday, clock, currentClaude, layoutHold, panelOp
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth } from '../panel';
 import { Conversations } from './Conversations';
+import { WhatsNew } from './WhatsNew';
 import { terminals } from './TerminalView';
 
 const SLIDE_MS = 180;
@@ -165,6 +166,7 @@ export function SidePanel(): VNode | null {
         onKeyDown={onKey}
         onBlur={settleKeys}
       />
+      <WhatsNew />
       <NowCard />
       <Conversations />
     </aside>

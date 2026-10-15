@@ -14,6 +14,8 @@ import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
+import { RELEASE_NOTES } from '../generated/release-notes';
+import { effectiveSeen, unseenNotes } from '../shared/whats-new';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -243,6 +245,8 @@ let appCfg: {
   terminal?: { editorUrl?: string };
   appearance?: { systemStats?: boolean; blur?: boolean };
   window?: { closeAction?: string; menuBar?: boolean; menuBarOnly?: boolean; menuBarTitle?: string; hintShown?: boolean };
+  onboarded?: boolean;
+  updates?: { seenVersion?: string };
 } = {};
 
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
@@ -706,6 +710,7 @@ function buildMenu(): void {
     {
       role: 'help',
       submenu: [
+        item('whats-new'),
         { label: 'Jaffer on GitHub', click: () => void shell.openExternal('https://github.com/jafforgehq/jaffer') },
         { label: 'Reveal Session Folder', click: () => void shell.openPath(paths.home) },
         { label: 'Show Log', click: () => void shell.openPath(paths.logFile) },
@@ -832,6 +837,9 @@ async function openTrayMenu(alt: boolean): Promise<void> {
   const template: MenuItemConstructorOptions[] = [
     ...trayMenuLines(prevClaude, Date.now(), { alt, showCost: appCfg.claude?.showCost !== false, git }).map((label) => ({ label, click: () => showWindow() })),
     { type: 'separator' },
+    ...(unseenNotes(RELEASE_NOTES, effectiveSeen({ seenVersion: appCfg.updates?.seenVersion, onboarded: appCfg.onboarded }, VERSION), VERSION).length
+      ? [{ label: `What's New in ${VERSION}`, click: () => { showWindow(); sendToRenderer('jaffer:menu', 'whats-new'); } } as MenuItemConstructorOptions]
+      : []),
     visible ? { label: 'Hide Jaffer', click: () => hideWindow() } : { label: 'Show Jaffer', click: () => showWindow() },
     {
       label: 'Recent Commands',

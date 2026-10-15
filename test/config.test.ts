@@ -56,6 +56,19 @@ describe('updates.auto', () => {
   });
 });
 
+describe('updates.seenVersion', () => {
+  it('is empty text by default (the window then decides what is unseen), also for a config file saved before the setting existed, and a number does not stick', () => {
+    expect(DEFAULT_CONFIG.updates.seenVersion).toBe('');
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, updates: { auto: false } }));
+    expect(new ConfigStore(env.paths).get().updates).toEqual({ auto: false, seenVersion: '' });
+    const store = new ConfigStore(env.paths);
+    store.patch({ updates: { seenVersion: '1.2.0' } });
+    expect(new ConfigStore(env.paths).get().updates.seenVersion).toBe('1.2.0');
+    store.patch({ updates: { seenVersion: 5 as unknown as string } });
+    expect(store.get().updates.seenVersion).toBe('1.2.0');
+  });
+});
+
 describe('claude.showCost', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.claude.showCost).toBe(true);

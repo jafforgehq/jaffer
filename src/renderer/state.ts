@@ -6,6 +6,8 @@ import { Emitter } from '../shared/emitter';
 import { isSensitiveCommand, redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { fmtAgo, tildeOf } from '../shared/history-label';
+import { RELEASE_NOTES } from '../generated/release-notes';
+import { effectiveSeen, unseenNotes, type ReleaseNote } from '../shared/whats-new';
 import type { GitStatus } from '../core/session/git-status';
 import type { Conversation } from '../core/claude/history';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
@@ -336,6 +338,8 @@ export async function bootstrap(): Promise<void> {
     appVersion.value = app.version;
     overlay.value = config.onboarded ? null : 'onboarding';
   });
+  // after an update: one toast (not on a first start, which has nothing unseen)
+  if (config.onboarded && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
   await Promise.all([refreshInfo(), loadClaudeState()]);
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   ready.value = true;
@@ -384,6 +388,36 @@ export function showConversations(): void {
   if (!panelOpen()) patchPanel({ open: true });
   panelFocusSearch.value++;
 }
+// ------------------------------------------------------------------ what is new
+
+/** The release notes of versions the person has not dismissed yet (none until the window knows the config and the version). */
+export function unseenReleaseNotes(): ReleaseNote[] {
+  const c = cfg.value;
+  const v = appVersion.value;
+  return c && v ? unseenNotes(RELEASE_NOTES, effectiveSeen({ seenVersion: c.updates?.seenVersion, onboarded: c.onboarded }, v), v) : [];
+}
+/** The What's New card was asked for (Help menu, palette, the toast, the menu bar item): it shows even with nothing unseen. */
+export const whatsNewOpen = signal(false);
+/** The card lists every version instead of the unseen notes. */
+export const whatsNewAll = signal(false);
+/** Help → What's New…: the panel opens (when closed) with the card at its top (the unseen notes, else the history). */
+export function showWhatsNew(): void {
+  if (overlay.value === 'onboarding') return; // (first run has to be answered first)
+  if (!panelOpen()) patchPanel({ open: true });
+  whatsNewAll.value = unseenReleaseNotes().length === 0;
+  whatsNewOpen.value = true;
+}
+/** Dismiss: the card goes, and this version's notes count as seen (`updates.seenVersion`). */
+export function dismissWhatsNew(): void {
+  whatsNewOpen.value = false;
+  whatsNewAll.value = false;
+  const c = cfg.value;
+  const v = appVersion.value;
+  if (!c || !v || c.updates?.seenVersion === v) return;
+  cfg.value = { ...c, updates: { ...c.updates, seenVersion: v } };
+  void patchConfig({ updates: { seenVersion: v } }).catch(() => undefined);
+}
+
 /** True while the panel's edge is dragged: the terminal keeps its size and fits once when it is let go (not a resize per pixel). */
 export const layoutHold = signal(false);
 

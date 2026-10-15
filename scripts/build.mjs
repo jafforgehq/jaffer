@@ -11,6 +11,7 @@ const watch = process.argv.includes('--watch');
 const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7);
 
 execFileSync(process.execPath, [path.join(root, 'scripts', 'gen-shell.mjs')], { stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(root, 'scripts', 'gen-release-notes.mjs')], { stdio: 'inherit' });
 
 const define = { __JAFFER_VERSION__: JSON.stringify(pkg.version) };
 const nodeCommon = {

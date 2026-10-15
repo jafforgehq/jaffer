@@ -897,11 +897,11 @@ export function Onboarding(): VNode {
     try {
       if (plain) {
         // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks
-        await patchConfig({ onboarded: true, claude: { skipped: true } });
+        await patchConfig({ onboarded: true, claude: { skipped: true }, updates: { seenVersion: appVersion.value } });
         overlay.value = null;
         return;
       }
-      await patchConfig({ onboarded: true });
+      await patchConfig({ onboarded: true, updates: { seenVersion: appVersion.value } }); // (a first start has no news)
       if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude
       overlay.value = null;
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen

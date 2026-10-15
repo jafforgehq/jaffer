@@ -65,8 +65,8 @@ export interface JafferConfig {
     /** A chip in the title bar for a local server the running command mentions (`localhost:5173`); a click opens it in the browser. */
     portLinks: boolean;
   };
-  /** Jaffer asks before updating itself; this only controls whether it looks in the background. */
-  updates: { auto: boolean };
+  /** Jaffer asks before updating itself; this only controls whether it looks in the background. `seenVersion`: the newest version whose release notes the person dismissed (empty: not yet; the window decides what that means). */
+  updates: { auto: boolean; seenVersion: string };
   /** What Jaffer may tell you while it is in the background. */
   notifications: {
     /** "Claude finished" when a turn that took half a minute or more ends. */
@@ -128,7 +128,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
-  updates: { auto: true },
+  updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false },

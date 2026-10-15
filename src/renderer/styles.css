@@ -235,6 +235,25 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-copy { flex: none; margin-right: 4px; color: var(--faint); opacity: 0; }
 .conv-item:hover .conv-copy, .conv-copy:focus-visible { opacity: 1; }
 
+/* what is new: the release notes of the versions not yet seen, above the Now card, until dismissed */
+.wn-card { flex: 0 1 auto; max-height: 55%; margin: 8px 8px 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--accent-line); display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); min-width: 0; min-height: 0; }
+.wn-head { flex: none; display: flex; align-items: baseline; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.wn-title { flex: 1; min-width: 0; }
+.wn-now { font-weight: 400; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.wn-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.wn-body { display: flex; flex-direction: column; gap: 6px; line-height: 1.45; overflow-wrap: anywhere; }
+.wn-body p, .wn-body ul { margin: 0; }
+.wn-body ul { padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.wn-body strong { color: var(--text); font-weight: 600; }
+.wn-body code { font-size: 11px; padding: 0 3px; border-radius: var(--r-xs); background: var(--hover); color: var(--text); }
+.wn-h { color: var(--text); font-weight: 600; margin-top: 2px; }
+.wn-h[data-level='3'] { font-weight: 550; color: var(--muted); font-size: 11.5px; }
+.wn-vlabel, .wn-ver > summary { color: var(--text); font-weight: 600; font-size: 12px; margin-bottom: 4px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.wn-ver > summary { margin-bottom: 0; }
+.wn-ver[open] > summary { margin-bottom: 4px; }
+.wn-actions { flex: none; display: flex; gap: 6px; }
+.wn-actions .btn { height: 26px; font-size: 12px; }
+
 .now-card { flex: none; margin: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
 .now-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 550; font-size: 12.5px; }
 .now-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
