@@ -1,0 +1,25 @@
+# 1.3.0: remove past conversations, and a bigger companion
+
+Date: 2026-10-15 · Status: owner's request in conversation ("for past conversations I want an option to remove them and whole sessions; the mole should be able to get bigger, or any other pet"; "no need to sign it now"). Built on main @ c0c31cb (1.2.0, merged, not signed: the signed release will be 1.3.0).
+
+## Rulings
+- **Removing is moving to the Trash, never a permanent delete.** Jaffer has been read-only on Claude Code's files; this is the one exception, and it is narrow: only the files of conversations the person picked, only after a native confirmation in the main process (the counting `dialog` wrapper; default button Cancel), only through `shell.trashItem`, so the person can put them back from the Trash.
+- **What moves:** for each id, `<claudeDir>/projects/<folder>/<id>.jsonl` and, when it exists, the sibling real directory `<id>/` of that folder (Claude Code keeps a conversation's subagent transcripts and tool results there). Nothing else. Paths come from `conversationFiles(claudeDir, ids)` (new, in `src/core/claude/history.ts`), never from the page: ids pass `isSessionId`, `realpath(<claudeDir>/projects)` is the root, only real folders and regular files count, a link is never followed or trashed, the real path must stay inside the root.
+- **A live conversation is refused**: if the daemon's watcher has a session with that id that is not ended, it is skipped with the reason "still running" (nothing is trashed for it).
+- **"Whole sessions"** = a bulk **Remove…** in the panel's conversations header: *This folder (N)* (when a folder chip is active) and *All listed (N)*; N counts what the list shows (at most 50 plus pinned), and the confirmation says exactly that number. Pinned conversations are included when listed.
+- After removing: the ids are dropped from `history.pinned` and `history.names` (config), the list is re-read, a toast says "Moved N conversations to the Trash" (and names any refused ones).
+- Companion size: `appearance.petSize` string in `{'small','normal','large','huge'}` (default 'normal'; factors 0.75, 1, 1.5, 2.25), a select in Settings → Appearance next to the companion picker, applied with CSS `scale` on the companion corner (mole and every scene), anchored at the bottom right, never taking pointer events, never changing the layout. An unknown value counts as 'normal' (conform keeps the kind; the renderer maps).
+- Docs: CLAUDE.md's "read-only" statements about transcripts get the one exception; the memory/disk lists get `appearance.petSize`; the IPC list gets `jaffer:trash-conversations`.
+
+## Features
+1. `conversationFiles(claudeDir, ids)` (pure fs, bounded: at most 200 ids, returns `{id, file, dir?}[]` for the ones found) with tests (link skipped, `subagents` subfolder skipped, `../` ids refused, sibling dir only when a real dir, a link named `<id>` skipped).
+2. `src/main/trash-conversations.ts`: `trashConversations(ids, deps)` with injected `{claudeDir, trashItem, confirm, liveIds}` → `{trashed: string[]; refused: {id; reason: 'running'|'not found'|'error'}[]; cancelled?: boolean}`: validate ids (≤200, `isSessionId`), drop live ones, resolve files, **ask `confirm(n)` once** (native dialog text: "Move N past conversations to the Trash?" detail "Claude Code can no longer resume them. You can put them back from the Trash."; buttons "Move to Trash" / "Cancel", Cancel default), trash each (file then dir), collect results. Unit tests with fakes (cancel trashes nothing; one failure doesn't stop others; live id refused; invalid id ignored).
+3. IPC `jaffer:trash-conversations` in main (checks `trusted(e)`; input `{ids}`; asks the daemon `claude.state` for live session ids; real `shell.trashItem`; the dialog through the counting wrapper); preload `trashConversations(ids)`; type in global.d.ts; dev bridge shim records it.
+4. Panel UI (`Conversations.tsx`): a trash button per row (visible on hover/focus like the star; label "Move to Trash"), a **Remove…** button in the header with a small menu (*This folder (N)* only with a chip active, *All listed (N)*), both call the IPC with the ids; on answer: unpin/unname the trashed ids, re-read the list, toast. Keyboard: `Delete`/`Backspace` on the selected row (not in an input) asks for removal of that one. Nothing is removed without the native dialog.
+5. Companion size: config key + Settings select + CSS; tests (config default kind; the select writes the key; the corner's computed `scale` per size; calm-window pet test still passes).
+
+## Testing
+Unit for 1, 2; UI e2e with the shim (the shim's `trashConversations` records ids and answers `{trashed: ids}` or `{cancelled:true}`): row trash, bulk menu with chip, cancel leaves everything, config cleanup of pins/names, toast text, Delete key, refused-live toast; pet size. THE PERSON'S REAL MAC: temp HOMEs only; tests never call the real `shell.trashItem`.
+
+## Release
+1.3.0 (minor), `docs/releases/v1.3.0.md` (card section before `<!-- card-end -->`, keep v1.2.0.md and v1.1.1.md). Not signed yet (notarization profile missing); stays on a branch/main until the owner says push.
