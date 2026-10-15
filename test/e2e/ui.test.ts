@@ -2329,6 +2329,153 @@ describe('Jaffer UI end to end', () => {
     for (const proj of ['-p12-alpha', '-p12-beta', '-p12-old']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
   }, 90_000);
 
+  it('past conversations, 1.2.0 review: ⇧⌘R reads the list first (a stale list never resumes an older one; a failed read uses the last list), the palette reads it at every open and names a row without a title by its folder, rows keep the keyboard across a refresh and a pin, Tab goes search → chips → rows, nothing overflows a 220 px panel', async () => {
+    await clipStub();
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const gamma = path.join(env.userHome, 'p12-gamma');
+    const delta = path.join(env.userHome, 'p12-delta');
+    fs.mkdirSync(gamma, { recursive: true });
+    fs.mkdirSync(delta, { recursive: true });
+    const plant = (n: number, proj: string, cwd: string, title: string | null, end: number, output = 500) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', proj);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(file, [line('user', end - 60_000, { message: { role: 'user', content: title ?? '<command-name>/clear</command-name>' } }), line('assistant', end, { message: { id: `g${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1000, output_tokens: output } } })].join('\n') + '\n');
+      fs.utimesSync(file, end / 1000, end / 1000);
+    };
+    const T = Date.now();
+    plant(95, '-p12-gamma', gamma, 'Gamma old', T - 300_000, 9_000_000); // (≈ $90: a wide figure for the cost table)
+    plant(99, '-p12-delta', delta, null, T - 400_000);
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const active = () => page.evaluate(() => { const a = document.activeElement as HTMLElement | null; return { cls: a?.className ?? '', id: a?.dataset.id ?? a?.closest('.conv-item')?.querySelector<HTMLElement>('.conv-row')?.dataset.id }; });
+    const groupOf = (n: number) => row(n).evaluate((x) => x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '');
+    const flat = () => page.evaluate(() => { const b = (window as any).__jaffer.terminals.get('main').term.buffer.active; let out = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i)!; out += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return out; });
+    const count = async (text: string) => (await flat()).split(text).length - 1;
+    const resumed = (n: number) => `RESUMED:${gamma}:--resume ${sid(n)}`;
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__revReal = w.jaffer.call;
+      w.__revReads = 0;
+      w.__revFail = false;
+      w.jaffer.call = (m: string, p: any) => (m === 'claude.history' ? (w.__revReads++, w.__revFail ? Promise.reject(new Error('history is away')) : w.__revReal(m, p)) : w.__revReal(m, p));
+    });
+    const reads = () => page.evaluate(() => (window as any).__revReads as number);
+
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await enter(`claude() { echo "RESUMED:$PWD:$*"; }`);
+    await enter(`cd '${gamma}'`);
+    await ended(`cd '${gamma}'`);
+    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await row(95).count()) === 1, 5_000, 'the gamma conversation');
+    // the panel closes: its list stays in the window's memory, and grows stale
+    await page.click('.term');
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.side-panel', { state: 'detached' });
+    plant(96, '-p12-gamma', gamma, 'Gamma new', T - 10_000);
+    let n = await reads();
+    await menu('resume-last');
+    await until(async () => (await count(resumed(96))) === 1, 5_000, 'the newest conversation (read just now) resumed');
+    expect(await reads()).toBe(n + 1);
+    expect(await count(resumed(95))).toBe(0);
+    await ended(`claude --resume ${sid(96)}`);
+    // the read fails: the last list is used, nothing breaks
+    plant(97, '-p12-gamma', gamma, 'Gamma unseen', T - 5_000);
+    await page.evaluate(() => void ((window as any).__revFail = true));
+    await menu('resume-last');
+    await until(async () => (await count(resumed(96))) === 2, 5_000, 'the last list used when the read fails');
+    await ended(`claude --resume ${sid(96)}`);
+    expect(await count(resumed(97))).toBe(0);
+    await page.evaluate(() => void ((window as any).__revFail = false));
+
+    // the palette reads the list at every open (the rows it had show meanwhile); a row without a name or title is its folder
+    n = await reads();
+    for (const k of [1, 2]) {
+      await page.keyboard.press('Meta+p');
+      await page.waitForSelector('.palette input');
+      await until(async () => (await reads()) === n + k, 3_000, `a read at open ${k}`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.palette', { state: 'detached' });
+    }
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('p12-delta');
+    await until(async () => /~\/user\/p12-delta$/.test((await page.locator('.pal-row .pal-title').first().textContent()) ?? ''), 3_000, 'the folder as the title');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.palette', { state: 'detached' });
+
+    // the panel again: Tab from the search reaches the first chip, then the rows
+    await page.click('.term');
+    await page.keyboard.press('Meta+b');
+    await page.waitForSelector('.side-panel .sp-convos .conv-search input');
+    await until(async () => (await row(97).count()) === 1 && (await page.locator('.sp-convos .conv-chip').count()) >= 3, 5_000, 'the list and its chips');
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.matches('.conv-chip') && document.activeElement.textContent)).toBe('All');
+    const chips = await page.locator('.sp-convos .conv-chip').count();
+    for (let k = 0; k < chips; k++) await page.keyboard.press('Tab'); // (the other chips, then Cost by folder)
+    expect((await active()).cls).toContain('conv-cost-toggle');
+    await page.keyboard.press('Tab');
+    expect((await active()).cls).toContain('conv-row');
+
+    // a refresh with a newer conversation above keeps the keyboard on the same row
+    await row(96).focus();
+    plant(98, '-p12-gamma', gamma, 'Gamma newest', T - 1_000);
+    await page.evaluate(() => (document.querySelector('.sp-convos .conv-refresh') as HTMLElement).click());
+    await until(async () => (await row(98).count()) === 1, 5_000, 'the newer one listed');
+    await sleep(200);
+    expect(await active()).toEqual({ cls: 'conv-row', id: sid(96) });
+    // pinning from the keyboard keeps it on the star, in the Pinned group and back
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    expect((await active()).cls).toContain('conv-pin');
+    await page.keyboard.press('Enter');
+    await until(async () => (await groupOf(96)) === 'Pinned', 3_000, 'pinned');
+    await sleep(200);
+    expect(await active()).toMatchObject({ id: sid(96) });
+    expect((await active()).cls).toContain('conv-pin');
+    await page.keyboard.press('Enter');
+    await until(async () => (await groupOf(96)) !== 'Pinned', 3_000, 'unpinned');
+    await sleep(200);
+    expect((await active()).cls).toContain('conv-pin');
+    expect((await active()).id).toBe(sid(96));
+
+    // a 220 px panel: nothing overflows, the cost figures are whole, the hidden row buttons leave the row its width
+    await patch({ panel: { width: 220 } });
+    await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) <= 222, 3_000, 'the narrow panel');
+    await page.click('.sp-convos .conv-cost-toggle');
+    await page.waitForSelector('.sp-convos .conv-costs');
+    await until(async () => ((await page.textContent('.sp-convos .conv-costs')) ?? '').includes('≈ $90'), 3_000, 'the wide figure');
+    const fit = await page.evaluate(() => {
+      const box = document.querySelector('.sp-convos')!;
+      const costs = document.querySelector('.conv-costs')!.getBoundingClientRect();
+      const cells = [...document.querySelectorAll<HTMLElement>('.conv-costs [data-usd]')];
+      const item = document.querySelector('.conv-item')!.getBoundingClientRect();
+      const r = document.querySelector('.conv-item .conv-row')!.getBoundingClientRect();
+      return {
+        overflow: box.scrollWidth - box.clientWidth,
+        cells: cells.length,
+        clipped: cells.filter((c) => c.scrollWidth > c.clientWidth || c.getBoundingClientRect().right > costs.right + 0.5).map((c) => c.textContent),
+        rowShare: r.width / item.width,
+      };
+    });
+    expect(fit.overflow).toBeLessThanOrEqual(0);
+    expect(fit.cells).toBeGreaterThan(0);
+    expect(fit.clipped).toEqual([]);
+    expect(fit.rowShare).toBeGreaterThan(0.9);
+    await page.click('.sp-convos .conv-cost-toggle');
+    await patch({ panel: { width: 300 } });
+
+    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__revReal; });
+    await page.click('.term');
+    await enter('unset -f claude');
+    for (const proj of ['-p12-gamma', '-p12-delta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+  }, 90_000);
+
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
     const errors: string[] = [];
     const onErr = (e: Error) => errors.push(e.message);

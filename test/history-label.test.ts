@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationName, conversationRow, costByFolder, filterByFolder, fmtAgo, groupByDay, groupConversations, historyMenuItems, lastConversation, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
+import { conversationName, conversationRow, costByFolder, filterByFolder, fmtAgo, freshList, groupByDay, groupConversations, historyMenuItems, lastConversation, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
 
 const id = (n: number) => `0000000${n}`.slice(-8) + '-1111-4222-8333-444455556666';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -212,5 +212,42 @@ describe('past conversations, 1.2.0: names, pins, folder chips, cost by folder, 
     expect(paletteConversations(items, 'proj-3', HOME, names).map((c) => c.id)).toEqual([id(4)]);
     expect(paletteConversations(items, 'title', HOME, names)).toHaveLength(5);
     expect(paletteConversations(null, 'title', HOME, names)).toEqual([]);
+  });
+});
+
+describe('past conversations, 1.2.0 review fixes: a fresh list for ⇧⌘R, unique rows, chips that tell folders apart, palette titles', () => {
+  const at = (d: number, h: number) => new Date(2026, 9, d, h).getTime();
+
+  it('freshList: the list just read, whatever was cached (none, or an older one); a failed read falls back to the cached list, else says why', async () => {
+    const older = [{ id: id(1), endedAt: at(14, 9) }];
+    const newer = [{ id: id(2), endedAt: at(14, 11) }, ...older];
+    expect(await freshList(async () => newer, null)).toEqual({ items: newer });
+    expect(await freshList(async () => newer, older)).toEqual({ items: newer });
+    expect(await freshList(async () => Promise.reject(new Error('daemon away')), older)).toEqual({ items: older, error: 'daemon away' });
+    expect(await freshList(async () => Promise.reject(new Error('daemon away')), null)).toEqual({ items: null, error: 'daemon away' });
+    expect(await freshList(async () => Promise.reject('odd'), null)).toEqual({ items: null, error: 'Could not read the past conversations.' });
+  });
+
+  it('groupConversations shows a conversation once, even when the list has it twice (pinned or not)', () => {
+    const items = [{ id: id(1), endedAt: at(14, 9) }, { id: id(1), endedAt: at(13, 9) }, { id: id(2), endedAt: at(14, 8) }, { id: id(2), endedAt: at(14, 7) }];
+    const ids = (pinned: string[]) => groupConversations(items, at(14, 12), pinned).flatMap((g) => g.items.map((c) => c.id));
+    expect(ids([])).toEqual([id(1), id(2)]);
+    expect(ids([id(1)])).toEqual([id(1), id(2)]);
+  });
+
+  it('topFolders: two folders with the same short name show their ~ paths instead', () => {
+    const items = [
+      { id: id(1), cwd: '/Users/maya/a/api', endedAt: at(14, 9) },
+      { id: id(2), cwd: '/Users/maya/b/api', endedAt: at(14, 8) },
+      { id: id(3), cwd: '/srv/web', endedAt: at(14, 7) },
+    ];
+    expect(topFolders(items, '/Users/maya').map((f) => f.label)).toEqual(['~/a/api', '~/b/api', 'web']);
+  });
+
+  it('conversationName with a home: no name and no title gives the folder (as shown, with ~), then "Conversation"', () => {
+    expect(conversationName({ id: id(1), cwd: '/Users/maya/code/api' }, new Map(), '/Users/maya')).toBe('~/code/api');
+    expect(conversationName({ id: id(1), cwd: '/Users/maya/code/api', title: 'T' }, new Map(), '/Users/maya')).toBe('T');
+    expect(conversationName({ id: id(1) }, new Map(), '/Users/maya')).toBe('Conversation');
+    expect(conversationName({ id: id(1), cwd: '/x' })).toBe('Conversation'); // (the panel's rows show the folder on their own line)
   });
 });

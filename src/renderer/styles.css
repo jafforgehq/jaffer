@@ -232,9 +232,13 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-name { grid-column: 1 / -1; color: var(--text); font-size: 12px; font-weight: 600; }
 .conv-dir { font-family: var(--font-mono); color: var(--faint); }
 .conv-meta { text-align: right; font-variant-numeric: tabular-nums; color: var(--faint); }
-.conv-copy, .conv-name-btn, .conv-pin { flex: none; color: var(--faint); opacity: 0; }
-.conv-pin { margin-right: 4px; }
-.conv-item:hover :is(.conv-copy, .conv-name-btn, .conv-pin), :is(.conv-copy, .conv-name-btn, .conv-pin):focus-visible, .conv-pin[aria-pressed='true'] { opacity: 1; }
+.conv-item { position: relative; }
+/* the row's buttons lie over its right end, shown on hover and with the keyboard (hidden, they take none of the row's width) */
+.conv-acts { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); display: flex; padding-left: 4px; border-radius: var(--r-sm); background: var(--surface); opacity: 0; }
+.conv-item:hover .conv-acts { background: linear-gradient(var(--hover), var(--hover)), var(--surface); }
+.sp-convos:focus-within .conv-item:has(.conv-row[data-sel]) .conv-acts { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface); }
+.conv-item:hover .conv-acts, .conv-item:focus-within .conv-acts { opacity: 1; }
+.conv-copy, .conv-name-btn, .conv-pin { flex: none; color: var(--faint); }
 .conv-pin[aria-pressed='true'] { color: var(--accent); }
 .conv-pin[aria-pressed='true'] svg { fill: currentColor; }
 /* 1.2.0: naming a row in place, the folder chips, cost by folder */
@@ -247,13 +251,15 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-cost-toggle::before { content: '▸ '; }
 .conv-cost-toggle[aria-expanded='true']::before { content: '▾ '; }
 .conv-cost-toggle:hover { color: var(--text); }
-.conv-costs { flex: none; margin: 0 4px 8px; font-size: 11px; color: var(--muted); }
-.conv-cost-row { display: grid; grid-template-columns: minmax(0, 1fr) 58px 66px; column-gap: 10px; padding: 1px 0; }
-.conv-cost-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.conv-costs { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content; column-gap: 8px; margin: 0 4px 8px; font-size: 11px; color: var(--muted); }
+/* one grid for the whole table: the figures' columns are as wide as their widest figure, the folder takes what is left (cut with …) */
+.conv-cost-row { display: contents; }
+.conv-cost-row > * { padding: 1px 0; white-space: nowrap; }
+.conv-cost-row > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
 .conv-cost-row > :not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
-.conv-cost-head { color: var(--faint); }
+.conv-cost-head > * { color: var(--faint); }
 .conv-cost-head > :first-child { font-family: inherit; }
-.conv-cost-none, .conv-cost-note { color: var(--faint); padding-top: 3px; }
+.conv-cost-none, .conv-cost-note { grid-column: 1 / -1; color: var(--faint); padding-top: 3px; }
 
 /* what is new: the release notes of the versions not yet seen, above the Now card, until dismissed */
 .wn-card { flex: 0 1 auto; max-height: 55%; margin: 8px 8px 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--accent-line); display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); min-width: 0; min-height: 0; }

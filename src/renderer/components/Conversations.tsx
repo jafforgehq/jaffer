@@ -45,8 +45,8 @@ export function Conversations(): VNode {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
-  /** The row that takes the keyboard back after a rename (Enter or Esc; not after a click elsewhere). */
-  const refocus = useRef<string | null>(null);
+  /** What takes the keyboard back once the rows are drawn again: the row after a rename (Enter or Esc; not after a click elsewhere), its star after a pin (the row moves to or from the Pinned group). */
+  const refocus = useRef<{ id: string; what: '.conv-row' | '.conv-pin' } | null>(null);
   const items = historyItems.value;
   const showCost = cfg.value?.claude?.showCost !== false;
   const names = useMemo(() => parseNames(cfg.value?.history?.names), [cfg.value?.history?.names]);
@@ -91,10 +91,10 @@ export function Conversations(): VNode {
   // (a layout effect: the keys typed right after F2 or the pencil must already land in the name)
   useLayoutEffect(() => {
     if (editing) return void (nameInput.current?.focus(), nameInput.current?.select());
-    const id = refocus.current;
+    const to = refocus.current;
     refocus.current = null;
-    if (id) list.current?.querySelector<HTMLElement>(`.conv-row[data-id="${CSS.escape(id)}"]`)?.focus();
-  }, [editing]);
+    if (to) list.current?.querySelector(`.conv-row[data-id="${CSS.escape(to.id)}"]`)?.closest('.conv-item')?.querySelector<HTMLElement>(to.what)?.focus();
+  }, [editing, pinned]);
 
   const home = homeDir();
   const chips = useMemo(() => topFolders(items ?? [], home), [items, home]);
@@ -122,12 +122,13 @@ export function Conversations(): VNode {
   const startEdit = (id: string) => (setDraft(names.get(id) ?? ''), setEditing(id)); // (only the person's own name: a title is never written as one)
   const saveName = (id: string, name: string) => {
     patchHistory({ names: setName(cfg.value?.history?.names, id, name) });
-    refocus.current = id;
+    refocus.current = { id, what: '.conv-row' };
     setEditing(null);
   };
   const pin = (id: string) => {
     const next = togglePin(cfg.value?.history?.pinned, id);
     if (!next) return void toast({ kind: 'info', text: 'At most 50 conversations can be pinned.' }, 3500);
+    if (document.activeElement?.matches('.conv-pin')) refocus.current = { id, what: '.conv-pin' };
     patchHistory({ pinned: next });
   };
   const onKey = (e: KeyboardEvent) => {
@@ -149,7 +150,7 @@ export function Conversations(): VNode {
   const onNameKey = (e: KeyboardEvent, id: string) => {
     e.stopPropagation();
     if (e.key === 'Enter' && !e.isComposing) (e.preventDefault(), saveName(id, draft));
-    else if (e.key === 'Escape') (e.preventDefault(), (refocus.current = id), setEditing(null));
+    else if (e.key === 'Escape') (e.preventDefault(), (refocus.current = { id, what: '.conv-row' }), setEditing(null));
   };
 
   let i = 0;
@@ -194,8 +195,8 @@ export function Conversations(): VNode {
               {costs.map((f) => (
                 <div key={f.cwd} class="conv-cost-row">
                   <span title={f.dir}>{f.dir}</span>
-                  <span>≈ {formatUsd(f.today)}</span>
-                  <span>≈ {formatUsd(f.week)}</span>
+                  <span data-usd>≈ {formatUsd(f.today)}</span>
+                  <span data-usd>≈ {formatUsd(f.week)}</span>
                 </div>
               ))}
             </>
@@ -218,7 +219,7 @@ export function Conversations(): VNode {
               const isPinned = pinned.includes(c.id);
               const name = conversationName(c, names);
               return (
-                <div key={`${n}-${c.id}`} class="conv-item">
+                <div key={c.id} class="conv-item">
                   {editing === c.id ? (
                     <input
                       ref={nameInput}
@@ -239,15 +240,18 @@ export function Conversations(): VNode {
                       <span class="conv-meta">{[r.time, r.dur, ...(r.cost === null ? [] : [r.cost])].join(' · ')}</span>
                     </button>
                   )}
-                  <button class="icon-btn sm conv-copy" title="Copy the resume command" aria-label="Copy the resume command" onClick={() => copyLine(c)}>
-                    <IconCopy size={12} />
-                  </button>
-                  <button class="icon-btn sm conv-name-btn" title="Name it (F2)" aria-label="Name this conversation" onMouseDown={(e) => e.preventDefault()} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c.id))}>
-                    <IconPencil size={12} />
-                  </button>
-                  <button class="icon-btn sm conv-pin" title={isPinned ? 'Unpin' : 'Pin'} aria-label={isPinned ? 'Unpin this conversation' : 'Pin this conversation'} aria-pressed={isPinned} onClick={() => pin(c.id)}>
-                    <IconStar size={12} />
-                  </button>
+                  {/* the row's buttons sit over its right end and show on hover or with the keyboard: hidden, they take none of a narrow panel's width */}
+                  <span class="conv-acts">
+                    <button class="icon-btn sm conv-copy" title="Copy the resume command" aria-label="Copy the resume command" onClick={() => copyLine(c)}>
+                      <IconCopy size={12} />
+                    </button>
+                    <button class="icon-btn sm conv-name-btn" title="Name it (F2)" aria-label="Name this conversation" onMouseDown={(e) => e.preventDefault()} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c.id))}>
+                      <IconPencil size={12} />
+                    </button>
+                    <button class="icon-btn sm conv-pin" title={isPinned ? 'Unpin' : 'Pin'} aria-label={isPinned ? 'Unpin this conversation' : 'Pin this conversation'} aria-pressed={isPinned} onClick={() => pin(c.id)}>
+                      <IconStar size={12} />
+                    </button>
+                  </span>
                 </div>
               );
             })}

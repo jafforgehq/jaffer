@@ -92,8 +92,8 @@ export function Palette(): VNode {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => input.current?.focus(), []); // before paint, so the first keystrokes land here
-  // the past conversations it can find: read once when the window has none yet
-  useEffect(() => void (historyItems.value === null && readHistory().then((r) => void (historyItems.value ??= r), () => undefined)), []);
+  // the past conversations it can find: read at every open (the list the window has shows meanwhile)
+  useEffect(() => void readHistory().then((r) => void (historyItems.value = r), () => undefined), []);
   const items = historyItems.value;
   const namesList = cfg.value?.history?.names;
   const results = useMemo<Action[]>(() => {
@@ -101,7 +101,7 @@ export function Palette(): VNode {
     if (!t) return [...actions].sort((a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section));
     const names = parseNames(namesList);
     // with two characters or more, up to 5 past conversations by name, title or folder: Enter resumes one as a click in the panel does
-    const convs = paletteConversations(items, q, homeDir(), names).map<Action>((c) => ({ id: `conv:${c.id}`, title: conversationName(c, names), section: 'Conversation', run: () => resumeConversation(c) }));
+    const convs = paletteConversations(items, q, homeDir(), names).map<Action>((c) => ({ id: `conv:${c.id}`, title: conversationName(c, names, homeDir()), section: 'Conversation', run: () => resumeConversation(c) }));
     return actions
       .map((a) => {
         const hay = `${a.title} ${a.section} ${a.keywords ?? ''}`.toLowerCase();

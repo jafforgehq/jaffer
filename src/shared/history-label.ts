@@ -24,9 +24,18 @@ export function fmtAgo(ts: number | string, now = Date.now()): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/** What a conversation is called: the person's own name (`history.names`, 1.2.0), else its title, else "Conversation". */
-export function conversationName(c: Pick<Conversation, 'id' | 'title'>, names?: Map<string, string>): string {
-  return names?.get(c.id) || (typeof c.title === 'string' && c.title ? c.title : 'Conversation');
+/** What a conversation is called: the person's own name (`history.names`, 1.2.0), else its title, else (given the home) its folder with ~, else "Conversation". */
+export function conversationName(c: Pick<Conversation, 'id' | 'title' | 'cwd'>, names?: Map<string, string>, home?: string): string {
+  return names?.get(c.id) || (typeof c.title === 'string' && c.title ? c.title : home !== undefined && c.cwd ? tildeOf(c.cwd, home) : 'Conversation');
+}
+
+/** ⇧⌘R (1.2.0): the list read just now; when the read fails, the last one the window had (null: none), and why. */
+export async function freshList<T>(read: () => Promise<T[]>, cached: T[] | null): Promise<{ items: T[] | null; error?: string }> {
+  try {
+    return { items: await read() };
+  } catch (e) {
+    return { items: cached, error: e instanceof Error ? e.message : 'Could not read the past conversations.' };
+  }
 }
 
 /** The menu bar's Past Conversations: the 5 newest with a valid id, `<name, title or folder> · <how long ago>` on one line (the name clipped to 40). */
@@ -83,15 +92,17 @@ export function filterByFolder<T extends Pick<Conversation, 'id' | 'cwd' | 'titl
 /** The pinned conversations (newest first) as a "Pinned" group above the days; a pinned one is not in its day again. */
 export function groupConversations<T extends Pick<Conversation, 'id' | 'endedAt'>>(items: T[], now: number, pinned: string[]): { label: string; items: T[] }[] {
   const pin = new Set(pinned);
-  const top = items.filter((c) => pin.has(c.id));
-  const days = groupByDay(items.filter((c) => !pin.has(c.id)), now);
+  const seen = new Set<string>();
+  const once = items.filter((c) => !seen.has(c.id) && !!seen.add(c.id)); // (one row per id: rows are keyed by it)
+  const top = once.filter((c) => pin.has(c.id));
+  const days = groupByDay(once.filter((c) => !pin.has(c.id)), now);
   return top.length ? [{ label: 'Pinned', items: groupByDay(top, now).flatMap((g) => g.items) }, ...days] : days;
 }
 
 const folderName = (cwd: string, home: string) => (tildeOf(cwd, home) === '~' ? '~' : cwd.split('/').filter(Boolean).pop() || '/');
 const endOf = (c: Pick<Conversation, 'endedAt'>) => (typeof c.endedAt === 'number' && Number.isFinite(c.endedAt) ? c.endedAt : -Infinity);
 
-/** The folder chips (1.2.0): the 5 folders with the most conversations (a tie: the one used last first), its short name and its ~ path. */
+/** The folder chips (1.2.0): the 5 folders with the most conversations (a tie: the one used last first), its short name (its ~ path when two share it) and its ~ path. */
 export function topFolders(items: Pick<Conversation, 'cwd' | 'endedAt'>[], home: string): { cwd: string; label: string; dir: string }[] {
   if (!Array.isArray(items)) return [];
   const by = new Map<string, { n: number; last: number }>();
@@ -100,10 +111,11 @@ export function topFolders(items: Pick<Conversation, 'cwd' | 'endedAt'>[], home:
     const f = by.get(c.cwd) ?? { n: 0, last: -Infinity };
     by.set(c.cwd, { n: f.n + 1, last: Math.max(f.last, endOf(c)) });
   }
-  return [...by]
+  const top = [...by]
     .sort(([, a], [, b]) => b.n - a.n || b.last - a.last)
     .slice(0, 5)
     .map(([cwd]) => ({ cwd, label: folderName(cwd, home), dir: tildeOf(cwd, home) }));
+  return top.map((f) => (top.filter((g) => g.label === f.label).length > 1 ? { ...f, label: f.dir } : f));
 }
 
 /**
