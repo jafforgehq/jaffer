@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, Tray, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog as electronDialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, Tray, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
-import { appearanceChanged, isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
+import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { RpcClient } from '../core/rpc';
@@ -72,6 +72,20 @@ let quitConfirmed = false;
 /** Set by the menu's Quit Jaffer (⌘Q) for the quit it starts: only that quit may ask. A quit the system starts never does. */
 let askOnQuit = false;
 let askingToQuit = false;
+/** How many of our dialogs are open: in drop-down mode a window that loses focus to one of them must not hide. */
+let dialogsOpen = 0;
+const counted = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (...a: A): Promise<R> => {
+  dialogsOpen++;
+  try {
+    return await f(...a);
+  } finally {
+    dialogsOpen--;
+  }
+};
+const dialog = {
+  showMessageBox: counted(electronDialog.showMessageBox.bind(electronDialog)) as typeof electronDialog.showMessageBox,
+  showSaveDialog: counted(electronDialog.showSaveDialog.bind(electronDialog)) as typeof electronDialog.showSaveDialog,
+};
 /** The child was ended for the quit (or did not end in time and was killed): the quit goes on. */
 let childStopped = false;
 let restarting = false;
@@ -245,7 +259,7 @@ let appCfg: {
   claude?: { showCost?: boolean };
   terminal?: { editorUrl?: string };
   appearance?: { systemStats?: boolean; blur?: boolean };
-  window?: { closeAction?: string; menuBar?: boolean; menuBarOnly?: boolean; menuBarTitle?: string; hintShown?: boolean };
+  window?: { closeAction?: string; menuBar?: boolean; menuBarOnly?: boolean; menuBarTitle?: string; hintShown?: boolean; dropdown?: boolean };
   onboarded?: boolean;
   updates?: { seenVersion?: string };
   history?: { names?: string[] };
@@ -254,7 +268,9 @@ let appCfg: {
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
 function applyConfig(next: typeof appCfg): void {
   const changed = appearanceChanged(appCfg, next);
+  const dropdownWas = dropdownOn();
   appCfg = next;
+  if (dropdownWas && !dropdownOn()) restoreBounds();
   if (changed.systemStats) syncSystemStats();
   if (changed.blur) syncVibrancy();
   syncMenuBar();
@@ -523,12 +539,16 @@ function createWindow(): void {
   win.webContents.on('did-finish-load', () => void focus.release());
   syncSystemStats();
   const save = () => {
-    if (win && !win.isDestroyed() && !win.isMinimized() && !win.isFullScreen()) writeJson(windowFile, win.getBounds());
+    if (win && !win.isDestroyed() && !win.isMinimized() && !win.isFullScreen() && !dropdownOn()) writeJson(windowFile, win.getBounds());
   };
   win.on('resize', debounce(save, 400));
   win.on('move', debounce(save, 400));
   win.on('focus', () => sendToRenderer('jaffer:focus', true));
-  win.on('blur', () => sendToRenderer('jaffer:focus', false));
+  win.on('blur', () => {
+    sendToRenderer('jaffer:focus', false);
+    // drop-down mode: a click elsewhere puts the window away (not while a dialog of ours is open, nor in full screen)
+    if (dropdownOn() && dialogsOpen === 0 && win && !win.isDestroyed() && !win.isFullScreen()) hideWindow();
+  });
   // Closing the window (the red ✕, ⌘W) does what Settings say (`closeWindow`): by default it hides, and the terminal runs on while the
   // app does; the menu bar icon, the hotkey and the Dock bring it back, and Quit Jaffer is the way out.
   win.on('close', (e) => {
@@ -567,6 +587,25 @@ function showWindow(): void {
 function toggleWindow(): void {
   if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) hideWindow();
   else showWindow();
+}
+
+const dropdownOn = (): boolean => appCfg.window?.dropdown === true;
+
+/** The hotkey: as `toggleWindow`, but in drop-down mode the window first slides to the top of the display under the cursor (not one in full screen). */
+function hotkeyToggle(): void {
+  if (!dropdownOn() || win?.isFullScreen()) return toggleWindow();
+  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) return hideWindow();
+  if (!win || win.isDestroyed()) createWindow();
+  win?.setBounds(dropdownBounds(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea), false);
+  showWindow();
+}
+
+/** Drop-down mode turned off: the window goes back to the bounds it had (window.json was not touched meanwhile; none saved: it stays). */
+function restoreBounds(): void {
+  const b = loadBounds();
+  if (!b || !win || win.isDestroyed() || win.isFullScreen()) return;
+  if (typeof b.x === 'number' && typeof b.y === 'number') win.setBounds(b, false);
+  else win.setSize(b.width, b.height, false);
 }
 
 /** A hide that waits for the window to leave full screen; showing the window again calls it off. */
@@ -640,7 +679,7 @@ async function syncHotkey(): Promise<void> {
     if (want === hotkey) return;
     if (hotkey) globalShortcut.unregister(hotkey);
     hotkey = '';
-    if (want && globalShortcut.register(want, toggleWindow)) hotkey = want;
+    if (want && globalShortcut.register(want, hotkeyToggle)) hotkey = want;
   } catch {
     /* hotkey is optional */
   }

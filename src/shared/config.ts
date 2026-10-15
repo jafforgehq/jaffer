@@ -90,6 +90,8 @@ export interface JafferConfig {
     menuBarTitle: 'off' | 'cost' | 'time' | 'today';
     /** The one notification that says Jaffer is still running in the menu bar, the first time the window hides, was shown. */
     hintShown: boolean;
+    /** The hotkey slides the window down from the top of the display under the cursor, and it hides when it loses focus (the saved bounds are left alone). */
+    dropdown: boolean;
   };
   /** The side panel at the right of the terminal (⌘B): the live Claude status and past conversations. */
   panel: {
@@ -139,7 +141,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },
-  window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false },
+  window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false, dropdown: false },
   panel: { open: true, width: 300 },
   history: { names: [], pinned: [] },
   hotkey: 'Control+`',

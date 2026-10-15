@@ -42,3 +42,10 @@ type AppearanceCfg = { appearance?: { blur?: boolean; systemStats?: boolean }; [
 export function appearanceChanged(prev: AppearanceCfg, next: AppearanceCfg): { blur: boolean; systemStats: boolean } {
   return { blur: vibrancyFor(prev) !== vibrancyFor(next), systemStats: (prev.appearance?.systemStats === true) !== (next.appearance?.systemStats === true) };
 }
+
+export interface Rect { x: number; y: number; width: number; height: number }
+/** Drop-down mode: the whole width of the display's work area, 45% of its height (at least 320, never more than the area), at its top edge. */
+export function dropdownBounds(workArea: Rect): Rect {
+  const height = Math.min(workArea.height, Math.max(320, Math.round(workArea.height * 0.45)));
+  return { x: workArea.x, y: workArea.y, width: workArea.width, height };
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appearanceChanged, isAppUrl, isWebUrl, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
+import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
 
 const INDEX = 'file:///Applications/Jaffer.app/Contents/Resources/app/dist/renderer/index.html';
 
@@ -87,5 +87,18 @@ describe('appearanceChanged: what the main process does again after a config cha
     expect(appearanceChanged(cfg(false, false), cfg(false, true))).toEqual({ blur: false, systemStats: true });
     expect(appearanceChanged({}, cfg(true, false))).toEqual({ blur: false, systemStats: false }); // (not known yet is the default: blur on, stats off)
     expect(appearanceChanged({}, cfg(false, true))).toEqual({ blur: true, systemStats: true });
+  });
+});
+
+describe('dropdownBounds: the drop-down window under the top edge of a work area', () => {
+  it('is the full width and 45% of the height, at the top edge', () => {
+    expect(dropdownBounds({ x: 0, y: 25, width: 1440, height: 875 })).toEqual({ x: 0, y: 25, width: 1440, height: 394 });
+  });
+  it('keeps the work area origin, also a display to the left (negative x) or above', () => {
+    expect(dropdownBounds({ x: -1920, y: -200, width: 1920, height: 1000 })).toEqual({ x: -1920, y: -200, width: 1920, height: 450 });
+  });
+  it('is at least 320 high, but never higher than the work area', () => {
+    expect(dropdownBounds({ x: 0, y: 0, width: 800, height: 600 }).height).toBe(320);
+    expect(dropdownBounds({ x: 0, y: 0, width: 800, height: 300 }).height).toBe(300);
   });
 });

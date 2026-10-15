@@ -1318,7 +1318,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
     try {
-      expect(await win()).toEqual({ closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false });
+      expect(await win()).toEqual({ closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false, dropdown: false });
       const close = field('When I close the window').locator('select');
       expect(await close.inputValue()).toBe('menubar');
       expect(await close.locator('option').allTextContents()).toEqual(['Hide to the menu bar', 'Quit Jaffer', 'Ask']);
@@ -1353,6 +1353,13 @@ describe('Jaffer UI end to end', () => {
       await only.locator('.switch').click();
       await until(async () => (await win()).menuBarOnly === false, 5_000, 'menu bar only off');
       expect((await win()).hintShown).toBe(false); // (the main process sets it, the first time the window hides)
+
+      const dropdown = field('Drop-down mode');
+      expect(await dropdown.locator('input').isChecked()).toBe(false);
+      await dropdown.locator('.switch').click();
+      await until(async () => (await win()).dropdown === true, 5_000, 'drop-down mode on');
+      await dropdown.locator('.switch').click();
+      await until(async () => (await win()).dropdown === false, 5_000, 'drop-down mode off');
     } finally {
       await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
