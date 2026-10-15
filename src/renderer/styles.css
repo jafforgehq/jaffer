@@ -290,6 +290,10 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .now-today { display: flex; flex-direction: column; gap: 4px; }
 .now-today[data-level='warn'] { color: var(--warn); } .now-today[data-level='warn'] .now-budget i { background: var(--warn); }
 .now-today[data-level='danger'] { color: var(--danger); } .now-today[data-level='danger'] .now-budget i { background: var(--danger); }
+.now-worked { font-variant-numeric: tabular-nums; }
+.now-turns { display: block; max-width: 100%; height: auto; }
+.now-turns rect { fill: var(--faint); }
+.now-turns rect[data-level='low'] { fill: var(--ok); } .now-turns rect[data-level='mid'] { fill: var(--warn); } .now-turns rect[data-level='high'] { fill: var(--danger); }
 .now-agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
 .now-files { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .now-files button { border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 1px 7px; background: var(--hover); font: 11px var(--font-mono); color: var(--text); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -678,6 +682,22 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
    The base style of everything is a still pose per [data-mood]; motion is added only under :root:not([data-motion='off']),
    and macOS Reduce motion (the rule near the top of this file) ends every animation at once, back at the still pose. */
 .pet-corner[data-companion]:not([data-companion='mole']) { right: 16px; }
+/* Seasonal touches (Settings → Appearance → Seasonal touches): the mole's accessory and a few drifting dots in a scene, by [data-season]. */
+.pet[data-tool='agent'] .pet-season, .pet[data-mood='dig'][data-effort='3'] .pet-season { display: none; } /* (the hard hat takes the head) */
+.pet-season .ps-a { fill: var(--accent); }
+.pet-season .ps-line { fill: none; stroke: color-mix(in srgb, var(--accent) 55%, #000); stroke-width: 0.9; stroke-linecap: round; }
+.pet-season .ps-stem { fill: none; stroke: var(--ok); stroke-width: 1.8; stroke-linecap: round; }
+.pet-season[data-season='winter'] .ps-a { fill: var(--danger); }
+.pet-season[data-season='winter'] .ps-c { fill: color-mix(in srgb, var(--text) 82%, var(--bg-solid)); }
+.pet-season[data-season='valentine'] .ps-a { fill: color-mix(in srgb, var(--danger) 80%, var(--violet)); }
+.sc-flake { fill: var(--accent); opacity: 0.55; transform-box: fill-box; }
+.scene[data-season='winter'] .sc-flake { fill: color-mix(in srgb, var(--text) 80%, var(--bg-solid)); opacity: 0.7; }
+.scene[data-season='halloween'] .sc-flake:nth-child(2n) { fill: var(--violet); }
+.scene[data-season='valentine'] .sc-flake { fill: var(--danger); }
+@keyframes sc-fall { from { transform: translateY(-10px); opacity: 0; } 20%, 80% { opacity: 0.7; } to { transform: translateY(16px); opacity: 0; } }
+@keyframes sc-rise { from { transform: translateY(10px); opacity: 0; } 20%, 80% { opacity: 0.6; } to { transform: translateY(-14px); opacity: 0; } }
+:root:not([data-motion='off']) .scene[data-season='winter'] .sc-flake { animation: sc-fall 7s linear infinite; }
+:root:not([data-motion='off']) .scene[data-season='halloween'] .sc-flake, :root:not([data-motion='off']) .scene[data-season='valentine'] .sc-flake { animation: sc-rise 6s ease-out infinite; }
 .scene { width: 240px; height: 80px; flex: none; overflow: visible; font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   --c: var(--ok); --a0: var(--info); --a1: var(--violet); --a2: var(--accent); --m: 1; }
 .scene[data-mood='alert'] { --c: var(--warn); }

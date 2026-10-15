@@ -10,6 +10,7 @@ import { ensureDaemon, tryConnect } from '../../src/core/daemon-client';
 import { findClaude } from '../../src/core/integrations/claude';
 import { RELEASE_NOTES } from '../../src/generated/release-notes';
 import { parseMd } from '../../src/shared/mini-md';
+import { seasonOf } from '../../src/shared/season';
 import { unseenNotes } from '../../src/shared/whats-new';
 
 /**
@@ -2881,6 +2882,95 @@ describe('Jaffer UI end to end', () => {
       await inject([]);
     }
   }, 40_000);
+
+  it('the Now card’s turn bars (two finished turns, a title of time and cost each, none of the cost with showCost off) and "Claude worked … today" (live while it works, hidden for none)', async () => {
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // (a window of its own: no turns yet)
+    await page.waitForSelector('.term .xterm');
+    await endClaude();
+    await inject([]);
+    await page.waitForSelector('.now-card[data-state="off"]');
+    expect(await page.locator('.now-turns, .now-worked').count()).toBe(0);
+    try {
+      // a turn finishes: one bar is no chart
+      const finish = async (ago: number, usd: number, at: number) => {
+        await inject([{ id: 'bars-1', state: 'working', turnStartedAtAgo: ago }]);
+        await inject([{ id: 'bars-1', state: 'idle', turnStartedAtAgo: ago, cost: { usd, at } }]);
+      };
+      await finish(72_000, 0.04, 11);
+      await page.waitForSelector('.now-card[data-state="idle"]');
+      expect(await page.locator('.now-turns').count()).toBe(0);
+      await finish(30_000, 0.01, 12);
+      await page.waitForSelector('.now-turns');
+      expect(await page.$$eval('.now-turns rect > title', (els) => els.map((e) => e.textContent))).toEqual(['1m 12s · ≈ $0.04', '30s · ≈ $0.01']);
+      expect(await page.getAttribute('.now-turns', 'role')).toBe('img');
+      expect(await page.getAttribute('.now-turns', 'aria-label')).toBe('Last 2 turns: the latest took 30s, the longest 1m 12s');
+      const hs = await page.$$eval('.now-turns rect', (els) => els.map((e) => Number(e.getAttribute('height'))));
+      expect(hs[0]).toBe(28); // the longest fills the chart, the other is shorter
+      expect(hs[1]).toBeLessThan(hs[0]!);
+      expect(await page.$$eval('.now-turns rect', (els) => els.map((e) => e.getAttribute('data-level')))).toEqual(['high', 'low']);
+      const fills = await page.$$eval('.now-turns rect', (els) => els.map((e) => getComputedStyle(e).fill));
+      expect(fills[0]).not.toBe(fills[1]); // a cost tint of its own
+      expect(await page.locator('.side-panel > *').evaluateAll((els) => els.map((e) => e.className.split(' ')[0]))).not.toContain('now-turns'); // (inside the Now card)
+      await shot('19c-turn-bars');
+      // showCost off: the titles say the time only
+      await cfgPatch({ claude: { showCost: false } });
+      await until(async () => (await page.$$eval('.now-turns rect > title', (els) => els.map((e) => e.textContent))).join() === '1m 12s,30s', 5_000, 'no cost in the titles');
+      // time worked today: the day's total (also without the cost), and while it works the running turn too; none for none
+      await inject([{ id: 'bars-1', state: 'idle' }], { usd: 1, date: 'today', workMs: 4_320_000 });
+      await until(async () => (await textOf('.now-worked')) === 'Claude worked 1h 12m today', 5_000, 'the day’s time');
+      await inject([{ id: 'bars-1', state: 'working', turnStartedAtAgo: 30_000 }], { usd: 1, date: 'today', workMs: 60_000 });
+      await until(async () => /^Claude worked 1m 3\ds today$/.test((await textOf('.now-worked')) ?? ''), 5_000, 'the day’s time and the running turn');
+      await inject([{ id: 'bars-1', state: 'idle' }], { usd: 1, date: 'today' });
+      await until(async () => (await page.locator('.now-worked').count()) === 0, 5_000, 'no line for no time');
+    } finally {
+      await cfgPatch({ claude: { showCost: true } });
+      await inject([]);
+    }
+  }, 40_000);
+
+  it('seasonal touches: the mole and the scenes dress by data-season (a fake season only with ?debug), off with the setting, none outside the dates', async () => {
+    const page_ = (q: string) => page.goto(`${url}?${q}&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`).then(() => page.waitForSelector('.term .xterm'));
+    try {
+      await page_('debug=1&season=winter');
+      await page.waitForSelector('.pet[data-season="winter"]');
+      expect(await page.locator('.pet[data-role="main"] .pet-season[data-season="winter"]').count()).toBe(1);
+      expect(await page.locator('.pet-helper[data-season]').count()).toBe(0);
+      await shot('19d-season-winter');
+      await page_('debug=1&season=halloween');
+      await page.waitForSelector('.pet[data-season="halloween"] .pet-season[data-season="halloween"]');
+      await page_('debug=1&season=valentine');
+      await page.waitForSelector('.pet[data-season="valentine"] .pet-season[data-season="valentine"]');
+      // the scenes: the attribute and a few dots, drifting only with motion on
+      await cfgPatch({ appearance: { companion: 'matrix' } });
+      await page.waitForSelector('.scene[data-season="valentine"] .sc-flake');
+      expect(await page.locator('.scene .sc-flake').count()).toBe(9);
+      const anim = () => page.$eval('.scene .sc-flake', (el) => getComputedStyle(el).animationName);
+      expect(await anim()).toBe('sc-rise');
+      await cfgPatch({ appearance: { animations: false } });
+      await until(async () => (await anim()) === 'none', 5_000, 'the dots to stand still with Animations off');
+      await cfgPatch({ appearance: { animations: true } });
+      // the setting off: no attribute, no accessory, no dots
+      await cfgPatch({ appearance: { seasonal: false } });
+      await until(async () => (await page.locator('.scene[data-season], .sc-flake').count()) === 0, 5_000, 'no season with the setting off');
+      await cfgPatch({ appearance: { companion: 'mole' } });
+      await page.waitForSelector('.pet[data-role="main"]');
+      expect(await page.locator('.pet[data-season], .pet-season').count()).toBe(0);
+      await cfgPatch({ appearance: { seasonal: true } });
+      await page.waitForSelector('.pet[data-season="valentine"]');
+      // `season=none`: nothing, whatever the date is
+      await page_('debug=1&season=none');
+      await page.waitForSelector('.pet[data-role="main"]');
+      expect(await page.locator('.pet[data-season]').count()).toBe(0);
+      // without ?debug the query is ignored: the date decides
+      const fake = (['halloween', 'winter', 'valentine'] as const).find((x) => x !== seasonOf(new Date()))!;
+      await page_(`season=${fake}`);
+      await page.waitForSelector('.pet[data-role="main"]');
+      expect(await page.getAttribute('.pet[data-role="main"]', 'data-season')).toBe(seasonOf(new Date()));
+    } finally {
+      await cfgPatch({ appearance: { companion: 'mole', seasonal: true, animations: true } });
+      await page_('debug=1');
+    }
+  }, 60_000);
 
   it("What's New: after an update the card shows the notes not seen yet at the top of the side panel and a toast opens it; Dismiss keeps updates.seenVersion; All versions lists the history; the menu id opens it any time; never HTML", async () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));

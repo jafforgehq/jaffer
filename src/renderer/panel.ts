@@ -1,7 +1,7 @@
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { JafferConfig } from '../shared/config';
 import { formatUsd } from '../shared/claude-cost';
-import { baseName, budgetLevel, costFigure, countsText, fmtDuration, progressFraction, turnCounts, turnSummaryText } from './claude-ui';
+import { baseName, budgetLevel, costFigure, countsText, fmtDuration, progressFraction, turnBars, turnCounts, turnSummaryText } from './claude-ui';
 
 /** The side panel's pure pieces: its width, and what its Now card says (built from what the window already has, nothing new). */
 
@@ -29,6 +29,10 @@ export interface NowCardModel {
   cost?: { text: string; live: boolean };
   /** Today's cost against the daily budget (only with `showCost`; `fraction` only with a budget). */
   today?: { text: string; level: 'off' | 'ok' | 'warn' | 'danger'; fraction: number | null };
+  /** The last turns as bars (needs two turns; titles carry the cost only with `showCost`). */
+  bars?: NonNullable<ReturnType<typeof turnBars>>;
+  /** "Claude worked 1h 12m today": the day's finished turns and, while one runs, its time so far (hidden for none; not tied to `showCost`). */
+  worked?: string;
   /** The running background agents, numbered (their ids are opaque: never shown). */
   agents: string[];
   /** This turn's calls by kind, while the turn goes on ('' for none). */
@@ -42,7 +46,7 @@ export interface NowCardModel {
 
 export function nowCardModel(
   s: ClaudeSession | null,
-  { now, cfg, today, typicalTurnMs }: { now: number; cfg?: Partial<JafferConfig['claude']>; today?: { usd: number } | null; typicalTurnMs?: number },
+  { now, cfg, today, typicalTurnMs, turns }: { now: number; cfg?: Partial<JafferConfig['claude']>; today?: { usd: number; workMs?: number } | null; typicalTurnMs?: number; turns?: { durMs: number; usd?: number }[] },
 ): NowCardModel {
   const showCost = cfg?.showCost !== false;
   const budget = cfg?.dailyBudgetUsd ?? 0;
@@ -58,9 +62,12 @@ export function nowCardModel(
     moreFiles: 0,
     today: t === undefined ? undefined : { text: `Today ≈ ${formatUsd(t)}${budget > 0 ? ` of ${formatUsd(budget)}` : ''}`, level: budgetLevel(t, budget), fraction: budget > 0 ? Math.min(1, t / budget) : null },
   };
+  m.bars = (turns && turnBars(turns, showCost)) || undefined;
+  const busy = !!s && (s.state === 'working' || s.state === 'needs-you');
+  const started = typeof s?.turnStartedAt === 'number' ? s.turnStartedAt : undefined;
+  const worked = (Number.isFinite(today?.workMs) ? today!.workMs! : 0) + (busy && started !== undefined ? Math.max(0, now - started) : 0);
+  if (worked >= 1000) m.worked = `Claude worked ${fmtDuration(worked)} today`;
   if (!s) return m;
-  const busy = s.state === 'working' || s.state === 'needs-you';
-  const started = typeof s.turnStartedAt === 'number' ? s.turnStartedAt : undefined;
   m.state = s.state === 'working' || s.state === 'needs-you' ? s.state : 'idle';
   m.label = s.state === 'working' ? 'Claude is working' : s.state === 'needs-you' ? 'Claude needs you' : 'Claude is idle';
   m.hint = s.state === 'needs-you' ? 'Answer it in the terminal.' : undefined;

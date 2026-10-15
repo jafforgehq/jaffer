@@ -5,6 +5,7 @@ import type { CrewMood } from '../../shared/pet-crew';
 import type { Effort } from '../../shared/pet-effort';
 import type { PetMood } from '../../shared/pet-mood';
 import type { ToolCategory } from '../../shared/tool-category';
+import { currentSeason } from '../season';
 import {
   AGENT_HUB,
   AGENT_LETTERS,
@@ -57,11 +58,15 @@ let sceneCount = 0;
 
 const px = (n: number): string => n.toFixed(1);
 
+/** The seasonal touch of a scene: a few dots (snow, embers or pink motes, by the season in CSS) that drift when motion is on. */
+const FLAKES = Array.from({ length: 9 }, (_, i) => ({ x: 14 + i * 26.5, y: 8 + ((i * 37) % 60), r: 1 + (i % 3) * 0.45, d: -(i * 0.85) }));
+
 /**
  * The frame every scene shares: a dark panel in the corner of the terminal. Everything about how it moves is CSS keyed on
  * `data-mood`, `data-effort` and `data-density`, as the mole's is, so it stands still under Animations off and Reduce motion.
  */
 function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNode {
+  const season = currentSeason();
   return (
     <svg
       class="scene"
@@ -73,6 +78,7 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
       data-tool={p.tool ?? undefined}
       data-idle={p.dozing ? 'doze' : undefined}
       data-flinch={p.flinch ? '1' : undefined}
+      data-season={season ?? undefined}
       style={{ '--t': `${sceneTempo(p.effort) * toolTempo(p.tool)}s` } as never}
       viewBox={`0 0 ${SCENE_W} ${SCENE_H}`}
       role="img"
@@ -94,6 +100,13 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
       <rect class="scene-bg" x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />
       <g class="scene-art" clip-path={`url(#${p.uid}-clip)`}>
         {children}
+        {season && (
+          <g class="sc-season" aria-hidden="true">
+            {FLAKES.map((f, i) => (
+              <circle key={i} class="sc-flake" cx={f.x} cy={f.y} r={f.r} style={{ animationDelay: `${f.d}s` }} />
+            ))}
+          </g>
+        )}
         <rect class="scene-scan" x="0" y="0" width={SCENE_W} height={SCENE_H} fill={`url(#${p.uid}-scan)`} />
       </g>
       <rect class="scene-edge" x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />

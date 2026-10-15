@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { baseName, budgetLevel, gitText, hookHealthWarning, ordinal, progressFraction, sessionClockText, sparkPath, turnCounts, turnSummaryText } from '../src/renderer/claude-ui';
+import { baseName, budgetLevel, gitText, hookHealthWarning, ordinal, progressFraction, sessionClockText, sparkPath, turnBars, turnCounts, turnSummaryText } from '../src/renderer/claude-ui';
 
 describe('the title bar’s Claude helpers (pure)', () => {
   it('progressFraction: elapsed against the typical turn, 0 without one, never past 1, nothing odd from odd input', () => {
@@ -95,5 +95,39 @@ describe('hookHealthWarning (pure)', () => {
     expect(hookHealthWarning(ev({ SessionStart: now - 2 * H }), now, true)).toBeNull(); // a session is working: Stop is not due
     expect(hookHealthWarning({}, now, false)).toBeNull();
     expect(hookHealthWarning(ev({ SessionStart: Number.NaN }), now, false)).toBeNull();
+  });
+});
+
+describe('turnBars: the Now card’s bars for the last turns (pure geometry)', () => {
+  it('a bar a turn: height by length against the longest, a cost level against the costliest, a title of time and cost', () => {
+    const r = turnBars([{ durMs: 60_000, usd: 0.04 }, { durMs: 30_000, usd: 0.01 }, { durMs: 72_000, usd: 0.02 }], true)!;
+    expect([r.w, r.h]).toEqual([22, 28]);
+    expect(r.bars).toEqual([
+      { x: 0, y: 5, w: 6, h: 23, level: 'high', title: '1m 0s · ≈ $0.04' },
+      { x: 8, y: 16, w: 6, h: 12, level: 'low', title: '30s · ≈ $0.01' },
+      { x: 16, y: 0, w: 6, h: 28, level: 'mid', title: '1m 12s · ≈ $0.02' },
+    ]);
+    expect(r.label).toBe('Last 3 turns: the latest took 1m 12s, the longest 1m 12s');
+  });
+
+  it('without showCost no cost anywhere; a turn whose cost is not known has none either; equal costs are all low', () => {
+    const r = turnBars([{ durMs: 60_000, usd: 0.04 }, { durMs: 30_000, usd: 0.01 }], false)!;
+    expect(r.bars.map((b) => [b.level, b.title])).toEqual([['none', '1m 0s'], ['none', '30s']]);
+    expect(JSON.stringify(r)).not.toContain('$');
+    expect(turnBars([{ durMs: 5000 }, { durMs: 5000, usd: 0.5 }], true)!.bars.map((b) => [b.level, b.title])).toEqual([['none', '5s'], ['low', '5s · ≈ $0.50']]);
+    expect(turnBars([{ durMs: 5000, usd: 0.1 }, { durMs: 5000, usd: 0.1 }], true)!.bars.map((b) => b.level)).toEqual(['low', 'low']);
+  });
+
+  it('nothing for fewer than two turns; at most the last 20; odd lengths are small bars, never NaN', () => {
+    expect(turnBars([], true)).toBeNull();
+    expect(turnBars([{ durMs: 1000 }], true)).toBeNull();
+    const many = Array.from({ length: 25 }, (_, i) => ({ durMs: (i + 1) * 1000 }));
+    const r = turnBars(many, true)!;
+    expect(r.bars.length).toBe(20);
+    expect(r.bars[0]!.title).toBe('6s'); // the 6th of 25 is the first of the last 20
+    expect(r.w).toBe(20 * 8 - 2);
+    const odd = turnBars([{ durMs: Number.NaN }, { durMs: -4 }, { durMs: 0 }], true)!;
+    expect(odd.bars.map((b) => b.h)).toEqual([2, 2, 2]);
+    expect(JSON.stringify(odd)).not.toContain('null');
   });
 });

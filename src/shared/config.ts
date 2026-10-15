@@ -27,6 +27,8 @@ export interface JafferConfig {
     pet: boolean;
     /** Which one: the mole, or one of the scenes. Anything unknown is the mole. */
     companion: Companion;
+    /** A small seasonal touch for the companion on a few days of the year (a hat, a heart, a little snow). */
+    seasonal: boolean;
     /** Small bars for CPU, memory and battery at the right of the title bar (the app samples them every 5 s only while this is on). */
     systemStats: boolean;
     /** A soft glow on the window's edge: while Claude needs you, while it works, and once when a turn ends. Off with Animations off too. */
@@ -126,6 +128,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     animations: true,
     pet: true,
     companion: DEFAULT_COMPANION,
+    seasonal: true,
     systemStats: false,
     glow: true,
     blur: true,

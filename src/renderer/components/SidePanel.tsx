@@ -1,6 +1,6 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { activePane, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick } from '../state';
+import { activePane, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick, turnHistory } from '../state';
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth } from '../panel';
 import { Conversations } from './Conversations';
@@ -19,7 +19,7 @@ export function NowCard(): VNode {
   const c = cfg.value?.claude;
   // (the second clock only runs while Claude works; otherwise the slow one keeps the agents' times roughly current)
   const now = s?.state === 'working' ? tick.value : (void clock.value, Date.now());
-  const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0 });
+  const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0, turns: turnHistory.value });
   return (
     <section class="now-card" data-state={m.state} aria-label="Now">
       <div class="now-head">
@@ -48,6 +48,16 @@ export function NowCard(): VNode {
             </span>
           )}
         </div>
+      )}
+      {m.worked && <div class="now-worked">{m.worked}</div>}
+      {m.bars && (
+        <svg class="now-turns" viewBox={`0 0 ${m.bars.w} ${m.bars.h}`} width={m.bars.w} height={m.bars.h} role="img" aria-label={m.bars.label}>
+          {m.bars.bars.map((b, i) => (
+            <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="1.5" data-level={b.level}>
+              <title>{b.title}</title>
+            </rect>
+          ))}
+        </svg>
       )}
       {m.agents.length > 0 && (
         <ul class="now-agents">

@@ -158,17 +158,20 @@ export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
   return out;
 }
 
-/** What the answers finished on one local day (`YYYY-MM-DD`) cost, in estimated dollars. */
+/** What the answers finished on one local day (`YYYY-MM-DD`) cost, in estimated dollars, and how long Claude worked on them. */
 export interface DayTotal {
   usd: number;
   date: string;
+  /** The time of the turns finished that day (only once one was; turns under a second are not counted). */
+  workMs?: number;
 }
 
-/** `prev` with `usd` more at the time `now`: a new local day starts again from nothing. */
-export function dayTotal(prev: DayTotal | undefined, now: number, usd = 0): DayTotal {
+/** `prev` with `usd` and `workMs` more at the time `now`: a new local day starts again from nothing. */
+export function dayTotal(prev: DayTotal | undefined, now: number, usd = 0, workMs = 0): DayTotal {
   const d = new Date(now);
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return { usd: (prev?.date === date ? prev.usd : 0) + usd, date };
+  const work = (prev?.date === date ? prev.workMs ?? 0 : 0) + (Number.isFinite(workMs) && workMs >= 1000 ? workMs : 0);
+  return { usd: (prev?.date === date ? prev.usd : 0) + usd, date, ...(work > 0 ? { workMs: work } : {}) };
 }
 
 /** `$0.04`, `$1.84`, `<$0.01`, `$120`. */

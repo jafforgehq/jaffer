@@ -67,6 +67,42 @@ export function sparkPath(values: number[], w: number, h: number): string {
   return values.map((v, i) => `${i ? 'L' : 'M'}${r((i * w) / (values.length - 1))} ${r(span ? h - ((v - min) / span) * h : h / 2)}`).join(' ');
 }
 
+export interface TurnBar {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** The cost against the costliest of the bars ('none': no cost shown or known). */
+  level: 'none' | 'low' | 'mid' | 'high';
+  title: string;
+}
+
+const BAR_W = 6;
+const BAR_GAP = 2;
+const BAR_H = 28;
+
+/**
+ * The Now card's bars for the last turns (at most 20, oldest first): a bar's height is how long the turn took against the longest, its
+ * level how much it cost against the costliest (only with `showCost`), its title "1m 12s · ≈ $0.04". Null for fewer than two turns.
+ */
+export function turnBars(turns: { durMs: number; usd?: number }[], showCost: boolean): { w: number; h: number; bars: TurnBar[]; label: string } | null {
+  const last = turns.slice(-20);
+  if (last.length < 2) return null;
+  const dur = last.map((t) => (Number.isFinite(t.durMs) && t.durMs > 0 ? t.durMs : 0));
+  const usd = last.map((t) => (showCost && typeof t.usd === 'number' && Number.isFinite(t.usd) && t.usd >= 0 ? t.usd : undefined));
+  const longest = Math.max(...dur);
+  const known = usd.filter((u): u is number => u !== undefined);
+  const costliest = Math.max(0, ...known);
+  const spread = known.length > 0 && costliest > Math.min(...known);
+  const bars = last.map((_, i): TurnBar => {
+    const h = Math.max(2, longest ? Math.round((dur[i]! / longest) * BAR_H) : 0);
+    const u = usd[i];
+    const level = u === undefined ? 'none' : !spread ? 'low' : u / costliest >= 0.75 ? 'high' : u / costliest >= 0.35 ? 'mid' : 'low';
+    return { x: i * (BAR_W + BAR_GAP), y: BAR_H - h, w: BAR_W, h, level, title: [fmtDuration(dur[i]!), u !== undefined ? `≈ ${formatUsd(u)}` : ''].filter(Boolean).join(' · ') };
+  });
+  return { w: last.length * (BAR_W + BAR_GAP) - BAR_GAP, h: BAR_H, bars, label: `Last ${last.length} turns: the latest took ${fmtDuration(dur[dur.length - 1]!)}, the longest ${fmtDuration(longest)}` };
+}
+
 /**
  * Settings → Claude Code → Hook health: `events` is when each hook event was last heard (ms since epoch, null: not yet). A session began
  * over an hour ago and no `Stop` has come since while nothing works means the hooks are probably not reaching Jaffer; null otherwise.

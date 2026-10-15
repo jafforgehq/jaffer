@@ -136,4 +136,27 @@ describe('the side panel (pure)', () => {
     const m = nowCardModel(odd, opts({ typicalTurnMs: 60_000 }));
     expect([m.state, m.elapsed, m.progress, m.counts, m.files, m.agents]).toEqual(['working', undefined, null, '', [], []]);
   });
+
+  it('turn bars: only with two turns (the last 20), with the cost in their titles only with showCost', () => {
+    const turns = [{ id: 's1', durMs: 60_000, usd: 0.04 }, { id: 's1', durMs: 30_000, usd: 0.01 }];
+    expect(nowCardModel(session(), opts({ turns: [turns[0]] })).bars).toBeUndefined();
+    expect(nowCardModel(session(), opts()).bars).toBeUndefined();
+    expect(nowCardModel(session(), opts({ turns })).bars?.bars.map((b) => b.title)).toEqual(['1m 0s · ≈ $0.04', '30s · ≈ $0.01']);
+    expect(nowCardModel(session(), opts({ turns, cfg: { showCost: false } })).bars?.bars.map((b) => b.title)).toEqual(['1m 0s', '30s']);
+    expect(nowCardModel(null, opts({ turns })).bars?.bars.length).toBe(2); // (the history belongs to the window, not to a session)
+  });
+
+  it('time worked today: from the day’s total, plus the running turn while Claude works; nothing for none; not tied to the cost switch', () => {
+    const today = { usd: 1, workMs: 4_320_000 };
+    expect(nowCardModel(session(), opts({ today })).worked).toBe('Claude worked 1h 12m today');
+    expect(nowCardModel(session({ state: 'working', turnStartedAt: NOW - 30_000 }), opts({ today: { usd: 0, workMs: 60_000 } })).worked).toBe('Claude worked 1m 30s today');
+    expect(nowCardModel(session({ state: 'needs-you', turnStartedAt: NOW - 30_000 }), opts({ today: { usd: 0, workMs: 60_000 } })).worked).toBe('Claude worked 1m 30s today');
+    expect(nowCardModel(session(), opts({ today, cfg: { showCost: false } })).worked).toBe('Claude worked 1h 12m today');
+    expect(nowCardModel(null, opts({ today })).worked).toBe('Claude worked 1h 12m today');
+    expect(nowCardModel(session(), opts({ today: { usd: 1, workMs: 0 } })).worked).toBeUndefined();
+    expect(nowCardModel(session(), opts({ today: { usd: 1 } })).worked).toBeUndefined();
+    expect(nowCardModel(session(), opts({ today: null })).worked).toBeUndefined();
+    expect(nowCardModel(session({ state: 'working', turnStartedAt: NOW - 400 }), opts({ today: { usd: 0, workMs: 0 } })).worked).toBeUndefined(); // under a second in all
+    expect(nowCardModel(session(), opts({ today: { usd: 1, workMs: Number.NaN } })).worked).toBeUndefined();
+  });
 });

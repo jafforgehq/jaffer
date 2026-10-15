@@ -66,7 +66,7 @@ export class JafferService {
   private costTimers = new Set<NodeJS.Timeout>();
   /** Where the answer whose cost was counted last began, per session: a Stop heard twice is still one answer. */
   private counted = new Map<string, number>();
-  /** What the answers finished today cost, in memory only: it starts again at local midnight and when the app quits. */
+  /** What the answers finished today cost and how long they took, in memory only: it starts again at local midnight and when the app quits. */
   private today: DayTotal = dayTotal(undefined, Date.now());
   /** Reads the answers being written every 2 s while a session works; the transcript's size at the last read, so an unchanged one is not read again. */
   private liveTimer: NodeJS.Timeout | null = null;
@@ -298,6 +298,7 @@ export class JafferService {
       const prev = this.config.get().claude.typicalTurnMs;
       const typical = nextTypicalTurnMs(prev, ms, this.recentTurns);
       if (typical !== prev) this.config.patch({ claude: { typicalTurnMs: typical } });
+      this.today = dayTotal(this.today, Date.now(), 0, ms); // (before the Stop's own push: the window hears it with the state)
     });
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);

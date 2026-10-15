@@ -832,6 +832,38 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect(pushed[pushed.length - 1].today).toEqual(after);
   });
 
+  it('adds the time of every finished turn to today\'s worked time (turns under a second left out), with or without the cost switch', async (ctx) => {
+    const now = new Date();
+    if (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() < 60_000) return ctx.skip();
+    const base = { session_id: 'sess-work' };
+    const worked = async () => (await c.call('claude.state', {})).today.workMs ?? 0;
+    const w0 = await worked();
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'one' }));
+    await sleep(1_200);
+    await c.call('claude.event', ev('Stop', base));
+    await c.call('claude.event', ev('Stop', base)); // heard twice: one turn
+    const w1 = await worked();
+    expect(w1 - w0).toBeGreaterThanOrEqual(1_150);
+    expect(w1 - w0).toBeLessThan(5_000);
+    await c.call('config.patch', { claude: { showCost: false } });
+    try {
+      await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'two' }));
+      await sleep(1_200);
+      await c.call('claude.event', ev('Stop', base));
+    } finally {
+      await c.call('config.patch', { claude: { showCost: true } });
+    }
+    const w2 = await worked();
+    expect(w2 - w1).toBeGreaterThanOrEqual(1_150);
+    expect(w2 - w1).toBeLessThan(5_000);
+    // a turn under a second: not counted
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'quick' }));
+    await sleep(200);
+    await c.call('claude.event', ev('Stop', base));
+    expect(await worked()).toBe(w2);
+    await c.call('claude.event', ev('SessionEnd', base));
+  }, 20_000);
+
   it('the live figure follows the switches: nothing is read with the cost or its live part off', async () => {
     const transcript = path.join(env3.root, 'sess-nolive.jsonl');
     const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 1, output_tokens: 10 } } })}\n`;

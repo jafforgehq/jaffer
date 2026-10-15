@@ -139,3 +139,26 @@ describe('dayTotal: what the answers finished today cost (the daily budget is me
     expect(dayTotal(undefined, new Date(2027, 0, 1, 12, 0).getTime()).date).toBe('2027-01-01');
   });
 });
+
+describe('dayTotal.workMs: the time of the turns finished today (Claude worked ...)', () => {
+  const at = (h: number, m: number, s = 0, day = 13) => new Date(2026, 9, day, h, m, s).getTime();
+
+  it('adds the turns of the local day, ignores one under a second, and starts again at local midnight with the cost', () => {
+    let today = dayTotal(undefined, at(9, 0));
+    expect(today.workMs ?? 0).toBe(0);
+    today = dayTotal(today, at(9, 5), 0.25, 60_000);
+    today = dayTotal(today, at(9, 6), 0, 999); // under a second: not a turn worth counting
+    today = dayTotal(today, at(9, 7), 0.5, 1000);
+    expect(today).toEqual({ usd: 0.75, date: '2026-10-13', workMs: 61_000 });
+    expect(dayTotal(today, at(9, 8)).workMs).toBe(61_000); // a read of it changes nothing
+    expect(dayTotal(today, at(0, 0, 1, 14))).toEqual({ usd: 0, date: '2026-10-14' }); // (no time, no key: the totals of before stay as they were)
+    expect(dayTotal(today, at(0, 0, 1, 14), 0.1, 5_000)).toEqual({ usd: 0.1, date: '2026-10-14', workMs: 5_000 });
+  });
+
+  it('takes nothing odd as a time', () => {
+    const t = dayTotal(undefined, at(9, 0), 0, 2000);
+    expect(dayTotal(t, at(9, 1), 0, Number.NaN).workMs).toBe(2000);
+    expect(dayTotal(t, at(9, 1), 0, -5000).workMs).toBe(2000);
+    expect(dayTotal(t, at(9, 1), 0, Infinity).workMs).toBe(2000);
+  });
+});

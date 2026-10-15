@@ -7,6 +7,8 @@ import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
 import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
 import { COMPANIONS, companionOf, type Companion } from '../../shared/companions';
+import { currentSeason } from '../season';
+import type { Season } from '../../shared/season';
 import { Scene } from './Scenes';
 
 /** What a scene says for itself (the mole's lines are about digging). */
@@ -26,6 +28,29 @@ const SAYS: Record<PetMood, string> = {
   cheer: 'Done!',
 };
 
+/** The main mole's seasonal touch, on its head: a pumpkin, a Santa hat, a heart. */
+function Accessory({ season }: { season: Season }): VNode {
+  return (
+    <g class="pet-season" data-season={season}>
+      {season === 'halloween' && (
+        <>
+          <ellipse class="ps-a" cx="60" cy="25" rx="9.5" ry="7" />
+          <path class="ps-line" d="M55.6 18.6q-2.6 6.2 0 12.4M64.4 18.6q2.6 6.2 0 12.4" />
+          <path class="ps-stem" d="M59.2 18.2q.2-3.6 3.4-4.8" />
+        </>
+      )}
+      {season === 'winter' && (
+        <>
+          <path class="ps-a" d="M47.5 29.6Q50 14 66 12.6Q64.5 21 72.5 29.6z" />
+          <rect class="ps-c" x="45.5" y="27.6" width="29" height="4.4" rx="2.2" />
+          <circle class="ps-c" cx="66.6" cy="12.2" r="3" />
+        </>
+      )}
+      {season === 'valentine' && <path class="ps-a" d="M60 31C50 24 51 15 56.5 15 58.5 15 60 16.4 60 18 60 16.4 61.5 15 63.5 15 69 15 70 24 60 31z" />}
+    </g>
+  );
+}
+
 let moleCount = 0;
 /** How long the "Fixed it!" burst and the bell's flinch last. */
 const BURST_MS = 1400;
@@ -36,6 +61,7 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
   const id = useRef(0);
   if (!id.current) id.current = ++moleCount;
   const clip = `pet-clip-${id.current}`; // one page can show nine moles: an id may be used once
+  const season = helper === undefined ? currentSeason() : null; // (only the main mole dresses up)
   return (
     <svg
       class={helper === undefined ? 'pet' : 'pet pet-helper'}
@@ -45,6 +71,7 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
       data-tool={tool ?? undefined}
       data-idle={dozing ? 'doze' : undefined}
       data-flinch={flinch ? '1' : undefined}
+      data-season={season ?? undefined}
       style={helper === undefined ? undefined : ({ '--i': helper + 1 } as never)}
       viewBox="0 0 120 72"
       role="img"
@@ -69,6 +96,7 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
             <circle class="pet-eye" cx="68" cy="38" r="2" />
           </g>
           <path class="pet-lids" d="M49.4 38.4q2.6 2.6 5.2 0M65.4 38.4q2.6 2.6 5.2 0" />
+          {season && <Accessory season={season} />}
           <path class="pet-sweat" d="M73.5 28.5q-3.2 4.4-3.2 6.6a3.2 3.2 0 0 0 6.4 0q0-2.2-3.2-6.6z" />
           <g class="pet-hat">
             <path d="M46.5 30.4q13.5-17 27 0z" />

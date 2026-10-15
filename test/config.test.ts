@@ -136,6 +136,18 @@ describe('claude.toolStrip, claude.turnSummary, appearance.systemStats and appea
   });
 });
 
+describe('appearance.seasonal', () => {
+  it('is on by default, also for a config file saved before it existed; a choice is kept, a value of the wrong kind is not', () => {
+    expect(DEFAULT_CONFIG.appearance.seasonal).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'jaffer-light' } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().appearance.seasonal).toBe(true);
+    store.patch({ appearance: { seasonal: false } });
+    store.patch({ appearance: { seasonal: 'yes' } } as never);
+    expect(new ConfigStore(env.paths).get().appearance.seasonal).toBe(false);
+  });
+});
+
 describe('terminal.blocks', () => {
   it('is on by default, also for a config file saved before the terminal section existed; a choice is kept, a value of the wrong kind is not', () => {
     expect(DEFAULT_CONFIG.terminal).toEqual(TERMINAL_DEFAULTS);

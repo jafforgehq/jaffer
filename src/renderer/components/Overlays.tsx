@@ -554,6 +554,9 @@ export function Settings(): VNode {
                   );
                 })}
               </div>
+              <Field label="Seasonal touches" hint="a small hat or heart on the mole, and a few drifting dots in the scenes, around Halloween, the winter holidays and Valentine's Day">
+                <Switch checked={c.appearance.seasonal !== false} onChange={(v) => set({ appearance: { seasonal: v } })} />
+              </Field>
               <Field label="GPU rendering" hint="turn off if text looks wrong (applies the next time you open Jaffer)">
                 <Switch checked={c.appearance.renderer !== 'dom'} onChange={(v) => set({ appearance: { renderer: v ? 'webgl' : 'dom' } })} />
               </Field>

@@ -173,8 +173,8 @@ async function loadClaudeState(): Promise<void> {
 }
 
 // Everything below is memory only: it ends with the window.
-/** What the answers finished today cost (the daemon's estimate; it starts again at local midnight), for the daily budget. */
-export const claudeToday = signal<{ usd: number; date: string } | null>(null);
+/** What the answers finished today cost (the daemon's estimate; it starts again at local midnight), for the daily budget, and how long they took. */
+export const claudeToday = signal<{ usd: number; date: string; workMs?: number } | null>(null);
 /** The last 20 finished turns: how long each took and, once it is known, what it cost (the cost chip's sparklines). */
 export const turnHistory = signal<{ id: string; durMs: number; usd?: number }[]>([]);
 /** A turn just finished: the window's edge flashes once. */
@@ -202,7 +202,7 @@ let doneTimer: ReturnType<typeof setTimeout> | undefined;
 let pending: { id: string; durMs: number; counts: Record<string, number>; files: string[]; timer: ReturnType<typeof setTimeout> } | null = null;
 
 /** A `claude.state` from the daemon (or a test: any field may be missing), and what its changes to the current session mean. */
-function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; date: string } } | null | undefined): void {
+function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; date: string; workMs?: number } } | null | undefined): void {
   batch(() => {
     claudeLive.value = Array.isArray(data?.sessions) ? data.sessions : [];
     claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
