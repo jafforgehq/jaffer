@@ -1,42 +1,64 @@
 import type { VNode } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
-import { activePane, cfg, clock, currentClaude, historyItems, homeDir, info, panelFocusSearch, toast } from '../state';
-import { conversationRow, filterByFolder, groupByDay } from '../../shared/history-label';
-import { resumeAction, resumeLine } from '../../shared/resume-action';
+import { activePane, cfg, clock, currentClaude, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast } from '../state';
+import { conversationName, conversationRow, costByFolder, filterByFolder, groupConversations, topFolders } from '../../shared/history-label';
+import { parseNames, pinnedIds, setName, togglePin } from '../../shared/history-names';
+import { formatUsd } from '../../shared/claude-cost';
+import { resumeLine } from '../../shared/resume-action';
+import { copyToTerminal, readHistory, resumeConversation } from '../resume';
 import { terminals } from './TerminalView';
-import { IconCopy, IconReset, IconSearch } from './icons';
+import { IconCopy, IconPencil, IconReset, IconSearch, IconStar } from './icons';
 
 /** The ⇧⌘O bump the search last took (module wide: a panel that opens again must not take the keyboard for an old bump). */
 let focusedFor = 0;
 /** Only the newest `claude.history` answer counts (a refresh while one is under way). */
 let asked = 0;
-/** When a click last typed a resume line: a double click or a repeated Enter must not type a second one before the shell starts the first (cleared by the next command's start, else after 2 s). */
-let typedAt = 0;
+
+/** A change to `history.names` or `history.pinned`: shown at once, then kept in the config. */
+function patchHistory(p: { names?: string[]; pinned?: string[] }): void {
+  const c = cfg.value;
+  if (!c) return;
+  cfg.value = { ...c, history: { ...c.history, ...p } };
+  void patchConfig({ history: p }).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }));
+}
 
 /**
- * Past conversations, below the Now card: Claude Code's 50 newest (the daemon's `claude.history`: ids, folders, times, token costs and,
- * for the 30 newest, a redacted title line), by day, filtered by title or folder. A click or Enter resumes one (`resumeAction`: typed
- * only at an idle prompt, else copied and a toast says why); the row's copy button copies the same line. Nothing is kept.
- * Read when the panel opens, after a turn ends and on the refresh button; closed, the panel is not there, so nothing is read.
+ * Past conversations, below the Now card: Claude Code's 50 newest and the pinned ones (the daemon's `claude.history`: ids, folders, times,
+ * token costs and, for the 30 newest, a redacted title line), the pinned first, then by day, filtered by name, title or folder and by the
+ * folder chips. A click or Enter resumes one (`resumeConversation`: typed only at an idle prompt, else copied and a toast says why); the
+ * row's copy button copies the same line; the pencil (or F2) names it, the star pins it (`history.names`, `history.pinned`: the person's
+ * own text and ids, nothing of the transcript). Read when the panel opens, after a turn ends and on the refresh button; closed, the panel
+ * is not there, so nothing is read.
  */
 export function Conversations(): VNode {
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The row being named (its id). */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  /** The folder chip chosen (memory only), null: all. */
+  const [folder, setFolder] = useState<string | null>(null);
+  const [costsOpen, setCostsOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  /** The row that takes the keyboard back after a rename (Enter or Esc; not after a click elsewhere). */
+  const refocus = useRef<string | null>(null);
   const items = historyItems.value;
   const showCost = cfg.value?.claude?.showCost !== false;
+  const names = useMemo(() => parseNames(cfg.value?.history?.names), [cfg.value?.history?.names]);
+  const pinned = useMemo(() => pinnedIds(cfg.value?.history?.pinned), [cfg.value?.history?.pinned]);
 
   const load = () => {
     const n = ++asked;
     setLoading(true);
-    window.jaffer.call<{ items?: unknown }>('claude.history', {}).then(
+    readHistory().then(
       (r) => {
         if (n !== asked) return;
-        historyItems.value = Array.isArray(r?.items) ? (r.items as NonNullable<typeof items>) : [];
+        historyItems.value = r;
         setError(null);
         setLoading(false);
       },
@@ -58,8 +80,7 @@ export function Conversations(): VNode {
       if (was === 'working' && s === 'idle') load();
       was = s;
     });
-    const offTyped = effect(() => void (info.value.busy && (typedAt = 0)));
-    return () => (off(), offTyped(), void asked++); // (an answer that comes after the panel closed is dropped)
+    return () => (off(), void asked++); // (an answer that comes after the panel closed is dropped)
   }, []);
   useEffect(() => {
     if (panelFocusSearch.value === focusedFor) return;
@@ -67,40 +88,47 @@ export function Conversations(): VNode {
     input.current?.focus();
     input.current?.select();
   }, [panelFocusSearch.value]);
+  // (a layout effect: the keys typed right after F2 or the pencil must already land in the name)
+  useLayoutEffect(() => {
+    if (editing) return void (nameInput.current?.focus(), nameInput.current?.select());
+    const id = refocus.current;
+    refocus.current = null;
+    if (id) list.current?.querySelector<HTMLElement>(`.conv-row[data-id="${CSS.escape(id)}"]`)?.focus();
+  }, [editing]);
 
   const home = homeDir();
-  const shown = useMemo(() => filterByFolder(items ?? [], q, home), [items, q, home]);
-  const groups = useMemo(() => groupByDay(shown, clock.value), [shown, clock.value]);
+  const chips = useMemo(() => topFolders(items ?? [], home), [items, home]);
+  const active = chips.some((f) => f.cwd === folder) ? folder : null; // (a chip gone after a refresh is All again)
+  const shown = useMemo(() => filterByFolder(items ?? [], q, home, names).filter((c) => !active || c.cwd === active), [items, q, home, names, active]);
+  const groups = useMemo(() => groupConversations(shown, clock.value, pinned), [shown, clock.value, pinned]);
   const flat = groups.flatMap((g) => g.items); // (the order the rows show in)
+  const costs = useMemo(() => (showCost && costsOpen ? costByFolder(items ?? [], clock.value, home) : []), [showCost, costsOpen, items, clock.value, home]);
   useEffect(() => {
     list.current?.querySelector('.conv-row[data-sel]')?.scrollIntoView({ block: 'nearest' });
   }, [sel]);
 
   const toTerminal = () => terminals.get(activePane.value)?.focus();
-  const copy = (text: string, said: string) =>
-    void navigator.clipboard.writeText(text).then(
-      () => (toast({ kind: 'info', text: said }, 3500), toTerminal()), // (so ⌘V lands in the terminal, not the search)
-      () => toast({ kind: 'error', text: 'Could not copy to the clipboard.' }),
-    );
   const pick = (i: number) => {
     const c = flat[i];
     if (!c) return;
     setSel(i);
-    const a = resumeAction(info.value, c);
-    if (a.kind === 'none') return void toast({ kind: 'error', text: a.why });
-    if (a.kind === 'copy') return copy(a.text, a.why);
-    const t = terminals.get(activePane.value);
-    if (!t) return;
-    if (Date.now() - typedAt < 2000) return void toast({ kind: 'info', text: 'Already resuming…' }, 2500);
-    typedAt = Date.now();
-    t.type(a.text); // (Ctrl-E Ctrl-U Ctrl-X Ctrl-K, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
-    toast({ kind: 'info', text: 'Resuming…' }, 2500);
-    t.focus();
+    resumeConversation(c);
   };
   const copyLine = (c: (typeof flat)[number]) => {
     const line = resumeLine(info.value, c);
     if (!line) return void toast({ kind: 'error', text: 'That conversation has no valid id.' });
-    copy(line, 'Copied. Paste it in the terminal.');
+    copyToTerminal(line, 'Copied. Paste it in the terminal.');
+  };
+  const startEdit = (id: string) => (setDraft(names.get(id) ?? ''), setEditing(id)); // (only the person's own name: a title is never written as one)
+  const saveName = (id: string, name: string) => {
+    patchHistory({ names: setName(cfg.value?.history?.names, id, name) });
+    refocus.current = id;
+    setEditing(null);
+  };
+  const pin = (id: string) => {
+    const next = togglePin(cfg.value?.history?.pinned, id);
+    if (!next) return void toast({ kind: 'info', text: 'At most 50 conversations can be pinned.' }, 3500);
+    patchHistory({ pinned: next });
   };
   const onKey = (e: KeyboardEvent) => {
     const n = Math.max(1, flat.length);
@@ -114,7 +142,14 @@ export function Conversations(): VNode {
     }
     // Enter in the search resumes the selected row (not an Enter that commits an input method's text); rows and the refresh button take Enter themselves
     else if (e.key === 'Enter' && t === input.current && !e.isComposing) (e.preventDefault(), pick(sel));
+    else if (e.key === 'F2' && flat[sel]) (e.preventDefault(), startEdit(flat[sel]!.id));
     else if (e.key === 'Escape') (e.preventDefault(), toTerminal());
+  };
+  // the name's own keys stay with it (the arrows, Enter and Esc of the list must not act on the rows while it is typed in)
+  const onNameKey = (e: KeyboardEvent, id: string) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && !e.isComposing) (e.preventDefault(), saveName(id, draft));
+    else if (e.key === 'Escape') (e.preventDefault(), (refocus.current = id), setEditing(null));
   };
 
   let i = 0;
@@ -130,6 +165,46 @@ export function Conversations(): VNode {
         <IconSearch size={13} />
         <input ref={input} placeholder="Search titles and folders" value={q} spellcheck={false} onInput={(e) => (setQ((e.target as HTMLInputElement).value), setSel(0))} />
       </label>
+      {chips.length >= 2 && (
+        <div class="conv-chips" role="group" aria-label="Folders">
+          <button class="conv-chip" aria-pressed={active === null} onClick={() => (setFolder(null), setSel(0))}>
+            All
+          </button>
+          {chips.map((f) => (
+            <button key={f.cwd} class="conv-chip" aria-pressed={active === f.cwd} title={f.dir} data-cwd={f.cwd} onClick={() => (setFolder(f.cwd), setSel(0))}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {showCost && (
+        <button class="conv-cost-toggle" aria-expanded={costsOpen} onClick={() => setCostsOpen(!costsOpen)}>
+          Cost by folder
+        </button>
+      )}
+      {showCost && costsOpen && (
+        <div class="conv-costs">
+          {costs.length ? (
+            <>
+              <div class="conv-cost-row conv-cost-head">
+                <span>Folder</span>
+                <span>Today</span>
+                <span>This week</span>
+              </div>
+              {costs.map((f) => (
+                <div key={f.cwd} class="conv-cost-row">
+                  <span title={f.dir}>{f.dir}</span>
+                  <span>≈ {formatUsd(f.today)}</span>
+                  <span>≈ {formatUsd(f.week)}</span>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div class="conv-cost-none">No costs in the last 7 days.</div>
+          )}
+          <div class="conv-cost-note">An estimate at API list prices, from the 30 newest conversations (this week: the last 7 days).</div>
+        </div>
+      )}
       <div class="conv-list" ref={list}>
         {items === null && loading && <div class="conv-note">Loading…</div>}
         {error && <div class="conv-note">{error}</div>}
@@ -140,15 +215,38 @@ export function Conversations(): VNode {
             {g.items.map((c) => {
               const n = i++;
               const r = conversationRow(c, home, showCost);
+              const isPinned = pinned.includes(c.id);
+              const name = conversationName(c, names);
               return (
                 <div key={`${n}-${c.id}`} class="conv-item">
-                  <button class="conv-row" data-id={c.id} data-sel={n === sel ? '' : undefined} title={r.dir || undefined} onFocus={() => setSel(n)} onMouseEnter={() => setSel(n)} onClick={() => pick(n)}>
-                    <b class="conv-name">{typeof c.title === 'string' && c.title ? c.title : 'Conversation'}</b>
-                    <span class="conv-dir">{r.dir || r.name}</span>
-                    <span class="conv-meta">{[r.time, r.dur, ...(r.cost === null ? [] : [r.cost])].join(' · ')}</span>
-                  </button>
+                  {editing === c.id ? (
+                    <input
+                      ref={nameInput}
+                      class="conv-rename"
+                      value={draft}
+                      placeholder={typeof c.title === 'string' && c.title ? c.title : 'Name this conversation'}
+                      aria-label="Name this conversation (Enter saves, Esc cancels, empty removes the name)"
+                      maxLength={80}
+                      spellcheck={false}
+                      onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+                      onKeyDown={(e) => onNameKey(e, c.id)}
+                      onBlur={() => editing === c.id && setEditing(null)}
+                    />
+                  ) : (
+                    <button class="conv-row" data-id={c.id} data-sel={n === sel ? '' : undefined} title={r.dir || undefined} onFocus={() => setSel(n)} onMouseEnter={() => setSel(n)} onClick={() => pick(n)}>
+                      <b class="conv-name">{name}</b>
+                      <span class="conv-dir">{r.dir || r.name}</span>
+                      <span class="conv-meta">{[r.time, r.dur, ...(r.cost === null ? [] : [r.cost])].join(' · ')}</span>
+                    </button>
+                  )}
                   <button class="icon-btn sm conv-copy" title="Copy the resume command" aria-label="Copy the resume command" onClick={() => copyLine(c)}>
                     <IconCopy size={12} />
+                  </button>
+                  <button class="icon-btn sm conv-name-btn" title="Name it (F2)" aria-label="Name this conversation" onMouseDown={(e) => e.preventDefault()} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c.id))}>
+                    <IconPencil size={12} />
+                  </button>
+                  <button class="icon-btn sm conv-pin" title={isPinned ? 'Unpin' : 'Pin'} aria-label={isPinned ? 'Unpin this conversation' : 'Pin this conversation'} aria-pressed={isPinned} onClick={() => pin(c.id)}>
+                    <IconStar size={12} />
                   </button>
                 </div>
               );

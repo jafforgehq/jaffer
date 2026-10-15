@@ -64,6 +64,20 @@ describe('listConversations', () => {
     expect((await listConversations({ claudeDir, limit: 2 })).map((c) => c.id)).toEqual([uuid(6), uuid(5)]);
   });
 
+  it('include (1.2.0, the pinned ones): listed even when older than the newest `limit`, with a title, a cost only within the 30 newest; bad ids ignored, 50 looked at at most', async () => {
+    for (let i = 1; i <= 34; i++) write(uuid(i), [user(`q${i}`, '/a', T0 + i), reply(`m${i}`, 'a', T0 + i + 1)], T0 + i * 1000);
+    const items = await listConversations({ claudeDir, limit: 31, withCost: true, include: [uuid(1), uuid(34), 'x; rm -rf ~', 42, `../${uuid(2)}`, `${uuid(3)}\n`] as never });
+    expect(items.map((c) => c.id)).toEqual([...Array.from({ length: 31 }, (_, i) => uuid(34 - i)), uuid(1)]);
+    expect(items.at(-1)).toEqual({ id: uuid(1), cwd: '/a', startedAt: T0 + 1, endedAt: T0 + 2, durMs: 1, title: 'q1' }); // (no cost: not one of the 30 newest)
+    expect(typeof items[29]!.usd).toBe('number');
+    expect(items[30]).not.toHaveProperty('usd');
+    expect(items[30]).not.toHaveProperty('title'); // (titles stay for the 30 newest, and the included ones)
+    // only the first 50 entries are looked at; no include, no extra
+    expect((await listConversations({ claudeDir, limit: 31, include: [...Array<string>(50).fill('junk'), uuid(2)] })).map((c) => c.id)).not.toContain(uuid(2));
+    expect((await listConversations({ claudeDir, limit: 31 })).map((c) => c.id)).not.toContain(uuid(1));
+    expect(await listConversations({ claudeDir, limit: 31, include: 'nope' as never })).toHaveLength(31);
+  });
+
   it('a transcript without timestamps ends when the file was last written, and has no duration', async () => {
     write(uuid(1), [summary('nothing dated')], T0);
     expect(await listConversations({ claudeDir })).toEqual([{ id: uuid(1), endedAt: T0, title: 'nothing dated' }]);

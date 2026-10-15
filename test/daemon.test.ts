@@ -421,6 +421,33 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
       await c.call('config.patch', { claude: { showCost: true } });
     }
   });
+
+  it('claude.history takes include (1.2.0, the pinned ones): a conversation older than the 50 newest is listed too, with its title and no cost; bad ids are ignored', async () => {
+    const c = await connect();
+    const dir = path.join(env.userHome, '.claude', 'projects', '-history-include');
+    fs.mkdirSync(dir, { recursive: true });
+    const id = (n: number) => `${String(n).padStart(8, '0')}-cccc-4ddd-8eee-ffff00001111`;
+    const plant = (n: number, at: number) => {
+      const lines = [
+        { type: 'user', cwd: '/include/folder', timestamp: new Date(at).toISOString(), message: { role: 'user', content: `Pinned question ${n}` } },
+        { type: 'assistant', cwd: '/include/folder', timestamp: new Date(at + 1000).toISOString(), message: { id: `i${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 1000 } } },
+      ];
+      const file = path.join(dir, `${id(n)}.jsonl`);
+      fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      fs.utimesSync(file, at / 1000, at / 1000);
+    };
+    plant(0, Date.parse('2020-01-01T10:00:00Z')); // older than everything else
+    for (let n = 1; n <= 50; n++) plant(n, Date.now() - n * 1000);
+    const plain = (await c.call('claude.history', {})).items as { id: string }[];
+    expect(plain).toHaveLength(50);
+    expect(plain.some((x) => x.id === id(0))).toBe(false);
+    const withPinned = (await c.call('claude.history', { include: ['x; rm -rf ~', id(0), 7, id(1)] })).items as { id: string }[];
+    expect(withPinned).toHaveLength(51);
+    expect(withPinned.at(-1)).toEqual({ id: id(0), cwd: '/include/folder', startedAt: Date.parse('2020-01-01T10:00:00Z'), endedAt: Date.parse('2020-01-01T10:00:01Z'), durMs: 1000, title: 'Pinned question 0' });
+    expect(JSON.stringify(withPinned)).not.toContain('SECRET');
+    expect(((await c.call('claude.history', { include: 'nope' })).items as unknown[]).length).toBe(50);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {

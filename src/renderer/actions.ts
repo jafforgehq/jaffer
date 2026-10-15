@@ -4,6 +4,7 @@ import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
 import { FIND_OPTS, terminals } from './components/TerminalView';
 import { THEMES } from './themes';
+import { resumeLast } from './resume';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -77,6 +78,7 @@ export const actions: Action[] = [
   { id: 'recent-commands', title: 'Recent commands', section: 'Terminal', keys: '⌘R', keywords: 'history copy clipboard', run: () => openOverlay('recent') },
   { id: 'whats-new', title: "What's new", section: 'App', keywords: 'release notes changelog version update news', run: showWhatsNew },
   { id: 'history', title: 'Past Claude conversations…', section: 'App', keys: '⇧⌘O', keywords: 'resume claude history copy clipboard', run: showConversations },
+  { id: 'resume-last', title: 'Resume last conversation', section: 'App', keys: '⇧⌘R', keywords: 'continue past history newest folder', run: resumeLast },
   { id: 'pin-selection', title: 'Pin selection', section: 'Terminal', keys: '⇧⌘L', keywords: 'pin line keep', run: pinSelection },
   { id: 'prompt-prev', title: 'Previous prompt', section: 'Terminal', keys: '⌘↑', keywords: 'jump command block scroll up', run: () => term()?.blocks.jump(-1) },
   { id: 'prompt-next', title: 'Next prompt', section: 'Terminal', keys: '⌘↓', keywords: 'jump command block scroll down', run: () => term()?.blocks.jump(1) },

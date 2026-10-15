@@ -22,7 +22,7 @@ export interface Conversation {
   durMs?: number;
   /** An estimate at API list prices (see `shared/claude-cost.ts`): only with `withCost`, for the 30 newest up to 24 MB. */
   usd?: number;
-  /** For the 30 newest: Claude's summary or title, else the first user message's first line; redacted, at most 80 characters. */
+  /** For the 30 newest (and the included ones): Claude's summary or title, else the first user message's first line; redacted, at most 80 characters. */
   title?: string;
 }
 
@@ -43,7 +43,11 @@ interface Seen {
 const cache = new Map<string, Seen>();
 const CACHE_MAX = 500;
 
-export async function listConversations(opts: { claudeDir: string; limit?: number; withCost?: boolean }): Promise<Conversation[]> {
+/**
+ * The newest `limit` conversations, newest first, and (1.2.0) those of `include` (the pinned ones: session ids only, the first 50 entries
+ * looked at) even when they are older: listed after the others, with their title, a cost only when they are among the 30 newest.
+ */
+export async function listConversations(opts: { claudeDir: string; limit?: number; withCost?: boolean; include?: unknown }): Promise<Conversation[]> {
   let root: string;
   try {
     root = await fs.promises.realpath(path.join(opts.claudeDir, 'projects'));
@@ -63,9 +67,12 @@ export async function listConversations(opts: { claudeDir: string; limit?: numbe
     }
   }
   found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const limit = opts.limit ?? 50;
+  const include = new Set(Array.isArray(opts.include) ? opts.include.slice(0, 50).filter((x): x is string => typeof x === 'string' && isSessionId(x)) : []);
   const out: Conversation[] = [];
-  for (const f of found.slice(0, opts.limit ?? 50)) {
-    const conv = await readOne(root, f.file, f.id, out.length < COSTED, opts.withCost === true);
+  for (const [i, f] of found.entries()) {
+    if (i >= limit && !include.has(f.id)) continue;
+    const conv = await readOne(root, f.file, f.id, i < limit && out.length < COSTED, opts.withCost === true, i < limit ? out.length < COSTED : true);
     if (conv) out.push(conv);
   }
   return out;
@@ -75,7 +82,7 @@ async function names(dir: string): Promise<string[]> {
   return fs.promises.readdir(dir).catch(() => []);
 }
 
-async function readOne(root: string, file: string, id: string, newest: boolean, wantCost: boolean): Promise<Conversation | undefined> {
+async function readOne(root: string, file: string, id: string, newest: boolean, wantCost: boolean, titled: boolean): Promise<Conversation | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
     // confined to the projects folder: the real path stays inside it, and the file is opened without following a link swapped in since
@@ -94,10 +101,10 @@ async function readOne(root: string, file: string, id: string, newest: boolean, 
     }
     const withCost = wantCost && newest;
     if (withCost && seen.usd === undefined) seen.usd = st.size <= MAX_READ ? (summarizeLines(lines(await readAt(fh, 0, st.size), true, true))?.usd ?? null) : null;
-    if (newest && seen.title === undefined) seen.title = (await readTitle(fh, st.size)) ?? null;
+    if (titled && seen.title === undefined) seen.title = (await readTitle(fh, st.size)) ?? null;
     const usd = withCost ? seen.usd : undefined;
     const conv: Conversation = typeof usd === 'number' ? { ...seen.conv, usd } : { ...seen.conv };
-    if (newest && seen.title) conv.title = seen.title;
+    if (titled && seen.title) conv.title = seen.title;
     return conv;
   } catch {
     return undefined;

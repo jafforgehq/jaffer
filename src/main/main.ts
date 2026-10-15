@@ -30,6 +30,7 @@ import { FocusHold, type HoldKind } from '../shared/focus-hold';
 import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
 import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
+import { parseNames } from '../shared/history-names';
 import type { Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
@@ -247,6 +248,7 @@ let appCfg: {
   window?: { closeAction?: string; menuBar?: boolean; menuBarOnly?: boolean; menuBarTitle?: string; hintShown?: boolean };
   onboarded?: boolean;
   updates?: { seenVersion?: string };
+  history?: { names?: string[] };
 } = {};
 
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
@@ -684,6 +686,7 @@ function buildMenu(): void {
         item('prompt-next'),
         item('recent-commands'),
         item('history'),
+        item('resume-last'),
         item('pin-selection'),
         item('focus-mode'),
         { type: 'separator' },
@@ -833,7 +836,7 @@ async function openTrayMenu(alt: boolean): Promise<void> {
   if (!tray) return;
   const visible = !!win && !win.isDestroyed() && win.isVisible();
   const recent = recentCommands.list();
-  const past = historyMenuItems(pastConversations, os.homedir(), Date.now());
+  const past = historyMenuItems(pastConversations, os.homedir(), Date.now(), parseNames(appCfg.history?.names));
   const template: MenuItemConstructorOptions[] = [
     ...trayMenuLines(prevClaude, Date.now(), { alt, showCost: appCfg.claude?.showCost !== false, git }).map((label) => ({ label, click: () => showWindow() })),
     { type: 'separator' },

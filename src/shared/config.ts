@@ -95,6 +95,11 @@ export interface JafferConfig {
     /** Its width in px (the window keeps it to 220..480). */
     width: number;
   };
+  /** Past conversations (1.2.0): the person's own names for them (`"<session id> <name>"`, newest first, at most 200) and the pinned ones' ids (at most 50); see `history-names.ts`. */
+  history: {
+    names: string[];
+    pinned: string[];
+  };
   hotkey: string;
   /**
    * The one-time clean-up of a Mac an older Jaffer ran on (`core/migrate.ts`) has run (1). It runs at the app's start while this is 0, and
@@ -133,6 +138,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   session: { stayAwake: true },
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false },
   panel: { open: true, width: 300 },
+  history: { names: [], pinned: [] },
   hotkey: 'Control+`',
   migrated: 0,
 };

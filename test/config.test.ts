@@ -69,6 +69,20 @@ describe('updates.seenVersion', () => {
   });
 });
 
+describe('history.names and history.pinned (1.2.0)', () => {
+  const ID = '0f8b2c1e-9a7d-4c3b-8e2f-1a2b3c4d5e6f';
+  it('are empty lists by default, also for a config file saved before they existed; a list of text is kept, anything else is not', () => {
+    expect(DEFAULT_CONFIG.history).toEqual({ names: [], pinned: [] });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [], pinned: [] });
+    const store = new ConfigStore(env.paths);
+    store.patch({ history: { names: [`${ID} My name`], pinned: [ID] } });
+    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [`${ID} My name`], pinned: [ID] });
+    store.patch({ history: { names: { [ID]: 'x' } as never, pinned: [5] as never } });
+    expect(store.get().history).toEqual({ names: [`${ID} My name`], pinned: [ID] });
+  });
+});
+
 describe('claude.showCost', () => {
   it('is on by default, also for a config file saved before the setting existed', () => {
     expect(DEFAULT_CONFIG.claude.showCost).toBe(true);

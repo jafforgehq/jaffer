@@ -1902,13 +1902,17 @@ describe('Jaffer UI end to end', () => {
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
     expect(await focused()).toBe('terminal');
-    // Tab to a row (past the first row and its copy button): Enter resumes THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and types nothing
+    // Tab to a row (past the first row and its copy, name and pin buttons; 1.2.0: the folder chips sit between the search and the rows):
+    // Enter resumes THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and types nothing
     await page.fill('.sp-convos .conv-search input', 'hist-proj');
     await until(async () => (await mine()).length === 3, 3_000, 'the three for Tab');
-    await page.focus('.sp-convos .conv-search input');
-    await page.keyboard.press('Tab');
+    await page.focus(`.sp-convos .conv-row[data-id="${sid(71)}"]`);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-copy'))).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-name-btn'))).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-pin'))).toBe(true);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(72));
     expect((await mine()).map((r) => r.sel)).toEqual([false, true, false]);
@@ -2141,6 +2145,188 @@ describe('Jaffer UI end to end', () => {
     await until(async () => !(await blocks()).some((b) => b.cmd === lineFor(81, here) && b.endedAt === undefined), 10_000, 'the stand-in to end');
     await enter('unset -f claude');
   }, 60_000);
+
+  it('past conversations, 1.2.0: a name (pencil, F2) kept in history.names wins in the rows and the search, a pin (the Pinned group, an older one read through include), folder chips, cost by folder, ⇧⌘R resumes the newest of the folder, the palette finds one by its name and Enter resumes it; a running command gets nothing typed', async () => {
+    await clipStub();
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const alpha = path.join(env.userHome, 'p12-alpha');
+    const beta = path.join(env.userHome, 'p12-beta');
+    fs.mkdirSync(alpha, { recursive: true });
+    fs.mkdirSync(beta, { recursive: true });
+    const plant = (n: number, proj: string, cwd: string, title: string, end: number) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', proj);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(file, [line('user', end - 60_000, { message: { role: 'user', content: title } }), line('user', end - 30_000, { message: { role: 'user', content: 'SECRET-WORDS' } }), line('assistant', end, { message: { id: `p${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 1000, output_tokens: 500 } } })].join('\n') + '\n');
+      fs.utimesSync(file, end / 1000, end / 1000);
+    };
+    const T = Date.now();
+    plant(91, '-p12-alpha', alpha, 'Alpha first', T - 120_000);
+    plant(92, '-p12-alpha', alpha, 'Alpha second', T - 60_000);
+    plant(93, '-p12-beta', beta, 'Beta only', T - 30_000);
+    plant(94, '-p12-old', beta, 'Old beta', Date.parse('2020-01-02T10:00:00Z')); // older than the 50 newest once the fillers are there
+    const fill = path.join(env.userHome, '.claude', 'projects', '-p12-fill');
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const item = (n: number) => page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(n)}"])`);
+    const nameOf = (n: number) => row(n).locator('.conv-name').textContent();
+    const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
+    const refresh = async (what: string, ok: () => Promise<boolean>) => (await page.click('.sp-convos .conv-refresh'), until(ok, 5_000, what));
+    const groupOf = (n: number) => row(n).evaluate((x) => x.closest('.conv-day')?.querySelector('.conv-day-label')?.textContent ?? '');
+    const flat = () => page.evaluate(() => { const b = (window as any).__jaffer.terminals.get('main').term.buffer.active; let out = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i)!; out += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return out; });
+    const count = async (text: string) => (await flat()).split(text).length - 1;
+    const resumed = (dir: string, n: number) => `RESUMED:${dir}:--resume ${sid(n)}`;
+    const resumeBlocks = async () => (await blocks()).filter((b) => b.cmd?.includes('--resume')).length;
+    const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1));
+
+    // a `claude` that only says where it ran and with what (never the real one), the shell in the alpha folder
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await enter(`claude() { echo "RESUMED:$PWD:$*"; }`);
+    await enter(`cd '${alpha}'`);
+    await ended(`cd '${alpha}'`);
+    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await refresh('the planted conversations', async () => (await row(91).count()) === 1 && (await row(92).count()) === 1 && (await row(93).count()) === 1);
+
+    // the pencil names a row in place: empty at first (the title is only the placeholder, never written as a name); Enter keeps it
+    await item(92).hover();
+    await item(92).locator('.conv-name-btn').click();
+    await page.waitForSelector('.sp-convos .conv-rename');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-rename'))).toBe(true);
+    expect(await page.inputValue('.sp-convos .conv-rename')).toBe('');
+    expect(await page.getAttribute('.sp-convos .conv-rename', 'placeholder')).toBe('Alpha second');
+    await page.keyboard.type('  Deploy   fix  ');
+    await page.keyboard.press('Enter');
+    await until(async () => (await nameOf(92)) === 'Deploy fix', 3_000, 'the new name in the row');
+    expect((await cfgNow()).history).toEqual({ names: [`${sid(92)} Deploy fix`], pinned: [] });
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(92)); // (the keyboard back on the row)
+    // on disk: the person's own name and nothing of the transcript
+    const onDisk = fs.readFileSync(env.paths.config, 'utf8');
+    expect(onDisk).toContain('Deploy fix');
+    expect(onDisk).not.toMatch(/Alpha second|SECRET|Beta only/);
+    // the search finds it by the name, and by the title it had
+    await page.fill('.sp-convos .conv-search input', 'deploy');
+    await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 1 && (await row(92).count()) === 1, 3_000, 'the name found');
+    await page.fill('.sp-convos .conv-search input', 'alpha second');
+    await until(async () => (await page.locator('.sp-convos .conv-row').count()) === 1 && (await row(92).count()) === 1, 3_000, 'the title still found');
+    await page.fill('.sp-convos .conv-search input', '');
+    // F2 on the selected row; Esc cancels (nothing kept), the keyboard back on the row
+    await row(93).focus();
+    await page.keyboard.press('F2');
+    await page.waitForSelector('.sp-convos .conv-rename');
+    await page.keyboard.type('Not kept');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.sp-convos .conv-rename', { state: 'detached' });
+    expect(await nameOf(93)).toBe('Beta only');
+    expect((await cfgNow()).history.names).toEqual([`${sid(92)} Deploy fix`]);
+    expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(93));
+    // an empty name removes it; then named again
+    await row(92).focus();
+    await page.keyboard.press('F2');
+    expect(await page.inputValue('.sp-convos .conv-rename')).toBe('Deploy fix');
+    await page.fill('.sp-convos .conv-rename', '');
+    await page.keyboard.press('Enter');
+    await until(async () => (await nameOf(92)) === 'Alpha second', 3_000, 'the title back');
+    expect((await cfgNow()).history.names).toEqual([]);
+    await row(92).focus();
+    await page.keyboard.press('F2');
+    await page.keyboard.type('Deploy fix');
+    await page.keyboard.press('Enter');
+    await until(async () => (await nameOf(92)) === 'Deploy fix', 3_000, 'named again');
+
+    // the star pins: a "Pinned" group above the days, kept in history.pinned
+    await item(91).hover();
+    await item(91).locator('.conv-pin').click();
+    await until(async () => (await groupOf(91)) === 'Pinned', 3_000, 'the Pinned group');
+    expect(await page.locator('.sp-convos .conv-day-label').first().textContent()).toBe('Pinned');
+    expect(await item(91).locator('.conv-pin').getAttribute('aria-pressed')).toBe('true');
+    expect((await cfgNow()).history.pinned).toEqual([sid(91)]);
+    // a pinned conversation older than the 50 newest is read too (include), with its title
+    fs.mkdirSync(fill, { recursive: true });
+    for (let k = 0; k < 50; k++) {
+      const f = path.join(fill, `${String(k).padStart(8, '0')}-ffff-4fff-8fff-ffffffffffff.jsonl`);
+      fs.writeFileSync(f, JSON.stringify({ type: 'user', cwd: '/p12/fill', timestamp: new Date(T - 600_000).toISOString(), message: { role: 'user', content: 'filler' } }) + '\n');
+      fs.utimesSync(f, (T - 600_000 + k) / 1000, (T - 600_000 + k) / 1000);
+    }
+    await refresh('the old one out of the 50 newest', async () => (await row(94).count()) === 0 && (await page.locator('.sp-convos .conv-row[data-id$="-ffff-4fff-8fff-ffffffffffff"]').count()) > 0);
+    await patch({ history: { pinned: [sid(94), sid(91)] } });
+    await refresh('the pinned old one listed', async () => (await row(94).count()) === 1);
+    expect(await groupOf(94)).toBe('Pinned');
+    expect(await nameOf(94)).toBe('Old beta');
+    expect(await page.$$eval('.sp-convos .conv-day:first-child .conv-row', (r) => r.map((x) => (x as HTMLElement).dataset.id))).toEqual([sid(91), sid(94)]); // (newest first)
+    await item(94).hover();
+    await item(94).locator('.conv-pin').click();
+    await until(async () => JSON.stringify((await cfgNow()).history.pinned) === JSON.stringify([sid(91)]), 3_000, 'unpinned');
+    fs.rmSync(fill, { recursive: true, force: true });
+    await refresh('the fillers gone', async () => (await page.locator('.sp-convos .conv-row[data-id$="-ffff-4fff-8fff-ffffffffffff"]').count()) === 0 && (await row(94).count()) === 1);
+
+    // the folder chips: All and the most used folders; one filters the list (memory only)
+    expect(await page.getAttribute('.sp-convos .conv-chip >> nth=0', 'aria-pressed')).toBe('true');
+    expect(await page.textContent('.sp-convos .conv-chip >> nth=0')).toBe('All');
+    await page.click(`.sp-convos .conv-chip[data-cwd="${beta}"]`);
+    await until(async () => (await page.getAttribute(`.sp-convos .conv-chip[data-cwd="${beta}"]`, 'aria-pressed')) === 'true', 3_000, 'the beta chip');
+    expect(await page.textContent(`.sp-convos .conv-chip[data-cwd="${beta}"]`)).toBe('p12-beta');
+    expect((await page.$$eval('.sp-convos .conv-row', (r) => r.map((x) => (x as HTMLElement).dataset.id))).sort()).toEqual([sid(93), sid(94)]);
+    await page.click('.sp-convos .conv-chip >> nth=0');
+    await until(async () => (await row(92).count()) === 1, 3_000, 'All again');
+
+    // cost by folder: today and this week, from the 30 newest; only with the cost switch
+    await page.click('.sp-convos .conv-cost-toggle');
+    await page.waitForSelector('.sp-convos .conv-costs');
+    const costs = (await page.textContent('.sp-convos .conv-costs')) ?? '';
+    expect(costs).toMatch(/Folder\s*Today\s*This week/);
+    expect(costs).toMatch(/p12-alpha\s*≈ \$0\.\d\d\s*≈ \$0\.\d\d/);
+    expect(costs).toContain('from the 30 newest conversations');
+    await patch({ claude: { showCost: false } });
+    await until(async () => (await page.locator('.sp-convos .conv-cost-toggle, .sp-convos .conv-costs').count()) === 0, 3_000, 'cost by folder gone');
+    await patch({ claude: { showCost: true } });
+
+    // ⇧⌘R at an idle prompt: exactly one resume line, the newest conversation of the shell's folder (no cd: the same folder)
+    const typedBefore = await resumeBlocks();
+    await menu('resume-last');
+    await until(async () => (await count(resumed(alpha, 92))) === 1, 5_000, 'the last alpha conversation resumed');
+    await toastSaid('Resuming…');
+    await ended(`claude --resume ${sid(92)}`);
+    await sleep(1500);
+    expect(await count(resumed(alpha, 92))).toBe(1);
+    expect(await resumeBlocks()).toBe(typedBefore + 1);
+    // a command runs: nothing typed, the line copied and why
+    await page.click('.term');
+    await enter('sleep 31');
+    await until(async () => (await blocks()).find((b) => b.cmd === 'sleep 31' && b.endedAt === undefined), 10_000, 'sleep 31 to run');
+    const screen = await termText();
+    await menu('resume-last');
+    await until(async () => (await clipLast()) === `claude --resume ${sid(92)}`, 3_000, 'the copy while busy');
+    await toastSaid('sleep 31 is running: command copied');
+    await sleep(400);
+    expect(await termText()).toBe(screen);
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await ended('sleep 31');
+
+    // the palette: one character finds no conversation; its name finds it, Enter resumes it as a click would (the folder differs: cd first)
+    await enter(`cd '${beta}'`);
+    await ended(`cd '${beta}'`);
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('d');
+    expect(await page.locator('.pal-row', { hasText: 'Deploy fix' }).count()).toBe(0);
+    await page.keyboard.type('eploy fix');
+    await until(async () => (await page.locator('.pal-row').first().textContent())?.includes('Deploy fix'), 3_000, 'the conversation in the palette');
+    expect(await page.locator('.pal-row').first().textContent()).toContain('Conversation');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.palette', { state: 'detached' });
+    await until(async () => (await count(resumed(alpha, 92))) === 2, 5_000, 'the palette to resume it');
+    await ended(`cd '${alpha}' && claude --resume ${sid(92)}`);
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true);
+    expect(await resumeBlocks()).toBe(typedBefore + 2);
+
+    await page.click('.term');
+    await enter('unset -f claude');
+    await patch({ history: { names: [], pinned: [] } });
+    for (const proj of ['-p12-alpha', '-p12-beta', '-p12-old']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+  }, 90_000);
 
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
     const errors: string[] = [];

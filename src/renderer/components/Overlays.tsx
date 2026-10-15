@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, historyItems, homeDir, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
+import { conversationName, paletteConversations } from '../../shared/history-label';
+import { parseNames } from '../../shared/history-names';
+import { readHistory, resumeConversation } from '../resume';
 import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
@@ -67,6 +70,7 @@ const SECTION_ICON: Record<string, (p: { size: number }) => VNode> = {
   Integrations: IconPlug,
   Appearance: IconPalette,
   App: IconGear,
+  Conversation: IconAgent,
 };
 
 function highlight(text: string, q: string): VNode | string {
@@ -88,9 +92,16 @@ export function Palette(): VNode {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => input.current?.focus(), []); // before paint, so the first keystrokes land here
+  // the past conversations it can find: read once when the window has none yet
+  useEffect(() => void (historyItems.value === null && readHistory().then((r) => void (historyItems.value ??= r), () => undefined)), []);
+  const items = historyItems.value;
+  const namesList = cfg.value?.history?.names;
   const results = useMemo<Action[]>(() => {
     const t = q.trim().toLowerCase();
     if (!t) return [...actions].sort((a, b) => SECTION_ORDER.indexOf(a.section) - SECTION_ORDER.indexOf(b.section));
+    const names = parseNames(namesList);
+    // with two characters or more, up to 5 past conversations by name, title or folder: Enter resumes one as a click in the panel does
+    const convs = paletteConversations(items, q, homeDir(), names).map<Action>((c) => ({ id: `conv:${c.id}`, title: conversationName(c, names), section: 'Conversation', run: () => resumeConversation(c) }));
     return actions
       .map((a) => {
         const hay = `${a.title} ${a.section} ${a.keywords ?? ''}`.toLowerCase();
@@ -101,8 +112,10 @@ export function Palette(): VNode {
       })
       .filter((x) => x.s > 0)
       .sort((x, y) => y.s - x.s)
-      .map((x) => x.a);
-  }, [q]);
+      .map((x) => x.a)
+      .slice(0, 55)
+      .concat(convs);
+  }, [q, items, namesList]);
   const total = results.length;
   useEffect(() => setSel(0), [q]);
   useEffect(() => {

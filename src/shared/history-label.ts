@@ -24,15 +24,21 @@ export function fmtAgo(ts: number | string, now = Date.now()): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/** The menu bar's Past Conversations: the 5 newest with a valid id, `<title or folder> · <how long ago>` on one line (the title clipped to 40). */
-export function historyMenuItems(items: Pick<Conversation, 'id' | 'cwd' | 'endedAt' | 'title'>[], home: string, now: number): { id: string; label: string }[] {
+/** What a conversation is called: the person's own name (`history.names`, 1.2.0), else its title, else "Conversation". */
+export function conversationName(c: Pick<Conversation, 'id' | 'title'>, names?: Map<string, string>): string {
+  return names?.get(c.id) || (typeof c.title === 'string' && c.title ? c.title : 'Conversation');
+}
+
+/** The menu bar's Past Conversations: the 5 newest with a valid id, `<name, title or folder> · <how long ago>` on one line (the name clipped to 40). */
+export function historyMenuItems(items: Pick<Conversation, 'id' | 'cwd' | 'endedAt' | 'title'>[], home: string, now: number, names?: Map<string, string>): { id: string; label: string }[] {
   if (!Array.isArray(items)) return [];
   return items
     .filter((c) => c && isSessionId(c.id))
     .slice(0, 5)
     .map((c) => {
       const folder = c.cwd ? (tildeOf(c.cwd, home) === '~' ? '~' : c.cwd.split('/').filter(Boolean).pop() || '/') : 'Conversation';
-      const name = typeof c.title === 'string' && c.title ? clipLabel(c.title, 40) : folder;
+      const own = names?.get(c.id) || (typeof c.title === 'string' ? c.title : '');
+      const name = own ? clipLabel(own, 40) : folder;
       return { id: c.id, label: clipLabel(`${name} · ${fmtAgo(c.endedAt, now)}`) };
     });
 }
@@ -67,11 +73,69 @@ export function groupByDay<T extends Pick<Conversation, 'endedAt'>>(items: T[], 
   return groups;
 }
 
-/** The conversations whose title or folder (as shown, with ~) holds the text, in any case. */
-export function filterByFolder<T extends Pick<Conversation, 'cwd' | 'title'>>(items: T[], q: string, home: string): T[] {
+/** The conversations whose name, title or folder (as shown, with ~) holds the text, in any case. */
+export function filterByFolder<T extends Pick<Conversation, 'id' | 'cwd' | 'title'>>(items: T[], q: string, home: string, names?: Map<string, string>): T[] {
   const t = q.trim().toLowerCase();
   const has = (s: unknown) => typeof s === 'string' && s.toLowerCase().includes(t);
-  return t ? items.filter((c) => has(c.title) || (!!c.cwd && has(tildeOf(c.cwd, home)))) : items;
+  return t ? items.filter((c) => has(names?.get(c.id)) || has(c.title) || (!!c.cwd && has(tildeOf(c.cwd, home)))) : items;
+}
+
+/** The pinned conversations (newest first) as a "Pinned" group above the days; a pinned one is not in its day again. */
+export function groupConversations<T extends Pick<Conversation, 'id' | 'endedAt'>>(items: T[], now: number, pinned: string[]): { label: string; items: T[] }[] {
+  const pin = new Set(pinned);
+  const top = items.filter((c) => pin.has(c.id));
+  const days = groupByDay(items.filter((c) => !pin.has(c.id)), now);
+  return top.length ? [{ label: 'Pinned', items: groupByDay(top, now).flatMap((g) => g.items) }, ...days] : days;
+}
+
+const folderName = (cwd: string, home: string) => (tildeOf(cwd, home) === '~' ? '~' : cwd.split('/').filter(Boolean).pop() || '/');
+const endOf = (c: Pick<Conversation, 'endedAt'>) => (typeof c.endedAt === 'number' && Number.isFinite(c.endedAt) ? c.endedAt : -Infinity);
+
+/** The folder chips (1.2.0): the 5 folders with the most conversations (a tie: the one used last first), its short name and its ~ path. */
+export function topFolders(items: Pick<Conversation, 'cwd' | 'endedAt'>[], home: string): { cwd: string; label: string; dir: string }[] {
+  if (!Array.isArray(items)) return [];
+  const by = new Map<string, { n: number; last: number }>();
+  for (const c of items) {
+    if (!c?.cwd) continue;
+    const f = by.get(c.cwd) ?? { n: 0, last: -Infinity };
+    by.set(c.cwd, { n: f.n + 1, last: Math.max(f.last, endOf(c)) });
+  }
+  return [...by]
+    .sort(([, a], [, b]) => b.n - a.n || b.last - a.last)
+    .slice(0, 5)
+    .map(([cwd]) => ({ cwd, label: folderName(cwd, home), dir: tildeOf(cwd, home) }));
+}
+
+/**
+ * Cost by folder (1.2.0): of the conversations with a cost (the daemon prices the 30 newest), what each folder's cost today (since local
+ * midnight) and this week (the last 7 days, up to now); the 5 folders with the most this week.
+ */
+export function costByFolder(items: Pick<Conversation, 'cwd' | 'endedAt' | 'usd'>[], now: number, home: string): { cwd: string; dir: string; today: number; week: number }[] {
+  if (!Array.isArray(items)) return [];
+  const d = new Date(now);
+  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const by = new Map<string, { today: number; week: number }>();
+  for (const c of items) {
+    const t = c ? endOf(c) : -Infinity;
+    if (!c?.cwd || typeof c.usd !== 'number' || !Number.isFinite(c.usd) || t > now || t <= now - 7 * 86_400_000) continue;
+    const f = by.get(c.cwd) ?? { today: 0, week: 0 };
+    by.set(c.cwd, { today: f.today + (t >= midnight ? c.usd : 0), week: f.week + c.usd });
+  }
+  return [...by]
+    .sort(([, a], [, b]) => b.week - a.week || b.today - a.today)
+    .slice(0, 5)
+    .map(([cwd, f]) => ({ cwd, dir: tildeOf(cwd, home), ...f }));
+}
+
+/** Resume Last Conversation (⇧⌘R): the newest conversation in the shell's folder, else the newest of all (a valid id only). */
+export function lastConversation<T extends Pick<Conversation, 'id' | 'cwd' | 'endedAt'>>(items: T[], cwd: string): T | undefined {
+  const ok = (Array.isArray(items) ? items : []).filter((c) => c && isSessionId(c.id)).sort((a, b) => endOf(b) - endOf(a));
+  return (cwd ? ok.find((c) => c.cwd === cwd) : undefined) ?? ok[0];
+}
+
+/** The palette's conversations: with 2 typed characters or more, at most 5 whose name, title or folder match. */
+export function paletteConversations<T extends Pick<Conversation, 'id' | 'cwd' | 'title'>>(items: T[] | null, q: string, home: string, names?: Map<string, string>): T[] {
+  return Array.isArray(items) && q.trim().length >= 2 ? filterByFolder(items, q, home, names).slice(0, 5) : [];
 }
 
 /** One row of the list: the folder's name, its `~/…` path, the time of day it ended (HH:MM), how long it went, and the cost (null: not shown). */
