@@ -32,6 +32,7 @@ import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
 import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
 import { parseNames } from '../shared/history-names';
+import { trashAsk, trashConversations } from './trash-conversations';
 import type { Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
@@ -1059,6 +1060,28 @@ ipcMain.handle('jaffer:save-text', async (e, text: unknown, name: unknown) => {
   if (r.canceled || !r.filePath) return { saved: false };
   await fs.promises.writeFile(r.filePath, text, { mode: 0o600 }); // (the mode applies to a new file; a file the person chose to replace keeps its own)
   return { saved: true };
+});
+
+// (1.3.0) Past conversations to the Trash: the page names ids only; the files come from `conversationFiles`, the person is asked here
+// (a native dialog, Cancel the default), a conversation still running is refused, and nothing is ever deleted outright.
+ipcMain.handle('jaffer:trash-conversations', async (e, p: unknown) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  const ids = (p as { ids?: unknown } | null)?.ids;
+  if (!Array.isArray(ids) || ids.length > 200 || !ids.every((x) => typeof x === 'string')) throw new Error('Not a list of conversations.');
+  return trashConversations(ids, {
+    claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), // (as the daemon reads the list)
+    trashItem: (f) => shell.trashItem(f),
+    confirm: async (n) => {
+      const ask = trashAsk(n);
+      const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+      return r.response === 0;
+    },
+    liveIds: async () => {
+      if (!client || !client.connected) throw new Error('The terminal is not running.');
+      const s = await client.call<{ sessions: ClaudeSession[] }>('claude.state', {}, 10_000);
+      return s.sessions.filter((x) => x.state !== 'ended').map((x) => x.id);
+    },
+  });
 });
 
 /** A path the page names, as an absolute path that exists (a printed path is untrusted: it is only ever revealed, or handed to an editor). */

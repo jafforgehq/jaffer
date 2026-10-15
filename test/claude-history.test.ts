@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listConversations } from '../src/core/claude/history';
+import { conversationFiles, listConversations } from '../src/core/claude/history';
 import { isSessionId } from '../src/shared/session-id';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -297,5 +297,79 @@ describe('listConversations', () => {
     expect(items).toHaveLength(1);
     expect(ticked).toBe(true);
     for (const spy of sync) expect(spy, spy.getMockName()).not.toHaveBeenCalled();
+  });
+});
+
+describe('conversationFiles (1.3.0: what moving a conversation to the Trash may touch)', () => {
+  it('finds a conversation\'s transcript and, when it is a real folder, its sibling folder of the same name; ids not found are left out', async () => {
+    const f1 = write(uuid(1), [user('a', '/a', T0)], T0);
+    const f2 = write(uuid(2), [user('b', '/b', T0)], T0, '-Users-me-other');
+    const d2 = path.join(projects, '-Users-me-other', uuid(2));
+    fs.mkdirSync(path.join(d2, 'subagents'), { recursive: true });
+    expect(await conversationFiles(claudeDir, [uuid(2), uuid(1), uuid(3)])).toEqual([
+      { id: uuid(2), file: f2, dir: d2 },
+      { id: uuid(1), file: f1 },
+    ]);
+  });
+
+  it('takes only session ids (no `../`, no other name), each once, and looks at 200 at most', async () => {
+    write(uuid(1), [user('a', '/a', T0)], T0);
+    const bad = ['../' + uuid(1), `-Users-me-code/${uuid(1)}`, `${uuid(1)}.jsonl`, '', 'notes', 42, null, { id: uuid(1) }];
+    expect(await conversationFiles(claudeDir, bad as never)).toEqual([]);
+    expect(await conversationFiles(claudeDir, [uuid(1), uuid(1)])).toHaveLength(1);
+    expect(await conversationFiles(claudeDir, [...Array.from({ length: 200 }, (_, i) => uuid(i + 100)), uuid(1)])).toEqual([]); // (the 201st is not looked at)
+    expect(await conversationFiles(claudeDir, 'nope' as never)).toEqual([]);
+  });
+
+  it('never follows a link: a linked transcript, a linked sibling folder, a project folder that links out, a file where the folder would be', async () => {
+    const dir = path.join(projects, '-Users-me-code');
+    write(uuid(1), [user('a', '/a', T0)], T0);
+    const outside = path.join(env.root, 'outside');
+    fs.mkdirSync(path.join(outside, uuid(1)), { recursive: true });
+    fs.writeFileSync(path.join(outside, `${uuid(2)}.jsonl`), user('outside', '/x', T0) + '\n');
+    fs.writeFileSync(path.join(outside, `${uuid(3)}.jsonl`), user('outside', '/x', T0) + '\n');
+    fs.symlinkSync(path.join(outside, uuid(1)), path.join(dir, uuid(1))); // the sibling folder is a link: the transcript only
+    fs.symlinkSync(path.join(outside, `${uuid(2)}.jsonl`), path.join(dir, `${uuid(2)}.jsonl`));
+    fs.symlinkSync(outside, path.join(projects, '-linked-project')); // holds uuid(3).jsonl, outside the root
+    write(uuid(4), [user('d', '/d', T0)], T0);
+    fs.writeFileSync(path.join(dir, uuid(4)), 'a file, not a folder');
+    expect(await conversationFiles(claudeDir, [uuid(1), uuid(2), uuid(3), uuid(4)])).toEqual([
+      { id: uuid(1), file: path.join(dir, `${uuid(1)}.jsonl`) },
+      { id: uuid(4), file: path.join(dir, `${uuid(4)}.jsonl`) },
+    ]);
+    // a link named like an id to a folder, in place of the transcript
+    fs.mkdirSync(path.join(outside, 'x.jsonl'));
+    fs.symlinkSync(path.join(outside, 'x.jsonl'), path.join(dir, `${uuid(5)}.jsonl`));
+    expect(await conversationFiles(claudeDir, [uuid(5)])).toEqual([]);
+  });
+
+  it('looks only at the top of each project folder: a transcript in a subagents folder or loose in the projects folder is not one', async () => {
+    const dir = path.join(projects, '-Users-me-code');
+    write(uuid(1), [user('a', '/a', T0)], T0);
+    fs.mkdirSync(path.join(dir, uuid(1), 'subagents'), { recursive: true });
+    fs.writeFileSync(path.join(dir, uuid(1), 'subagents', `${uuid(2)}.jsonl`), user('sub', '/x', T0) + '\n');
+    fs.writeFileSync(path.join(projects, `${uuid(3)}.jsonl`), user('loose', '/x', T0) + '\n');
+    fs.mkdirSync(path.join(dir, `${uuid(4)}.jsonl`)); // a folder named like a transcript
+    expect(await conversationFiles(claudeDir, [uuid(2), uuid(3), uuid(4)])).toEqual([]);
+  });
+
+  it('the projects folder may itself be a link (as for the list); everything found is inside its real path', async () => {
+    const real = path.join(env.root, 'real-claude');
+    fs.mkdirSync(path.join(real, 'projects', '-p'), { recursive: true });
+    fs.writeFileSync(path.join(real, 'projects', '-p', `${uuid(1)}.jsonl`), user('a', '/a', T0) + '\n');
+    const linked = path.join(env.root, 'linked-claude');
+    fs.mkdirSync(linked);
+    fs.symlinkSync(path.join(real, 'projects'), path.join(linked, 'projects'));
+    expect(await conversationFiles(linked, [uuid(1)])).toEqual([{ id: uuid(1), file: path.join(real, 'projects', '-p', `${uuid(1)}.jsonl`) }]);
+    expect(await conversationFiles(path.join(env.root, 'nowhere'), [uuid(1)])).toEqual([]);
+  });
+
+  it('changes nothing on disk', async () => {
+    write(uuid(1), [user('a', '/a', T0)], T0);
+    fs.mkdirSync(path.join(projects, '-Users-me-code', uuid(1)));
+    const list = () => fs.readdirSync(projects, { recursive: true }).sort();
+    const before = list();
+    await conversationFiles(claudeDir, [uuid(1)]);
+    expect(list()).toEqual(before);
   });
 });

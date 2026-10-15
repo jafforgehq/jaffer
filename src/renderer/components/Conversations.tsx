@@ -3,12 +3,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { effect } from '@preact/signals';
 import { activePane, cfg, clock, currentClaude, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast } from '../state';
 import { conversationName, conversationRow, costByFolder, filterByFolder, groupConversations, topFolders } from '../../shared/history-label';
-import { parseNames, pinnedIds, setName, togglePin } from '../../shared/history-names';
+import { parseNames, pinnedIds, removeName, setName, togglePin } from '../../shared/history-names';
+import type { TrashResult } from '../../main/trash-conversations';
 import { formatUsd } from '../../shared/claude-cost';
 import { resumeLine } from '../../shared/resume-action';
 import { copyToTerminal, loadHistory, resumeConversation } from '../resume';
 import { terminals } from './TerminalView';
-import { IconCopy, IconPencil, IconReset, IconSearch, IconStar } from './icons';
+import { IconCopy, IconPencil, IconReset, IconSearch, IconStar, IconTrash } from './icons';
+import { Menu } from './Blocks';
 
 /** The ⇧⌘O bump the search last took (module wide: a panel that opens again must not take the keyboard for an old bump). */
 let focusedFor = 0;
@@ -23,13 +25,28 @@ function patchHistory(p: { names?: string[]; pinned?: string[] }): void {
   void patchConfig({ history: p }).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }));
 }
 
+/** The toast after a removal: how many went to the Trash, and why any did not. */
+function trashSaid(r: TrashResult): string {
+  const n = r.trashed.length;
+  const of = (reason: string) => r.refused.filter((x) => x.reason === reason).length;
+  const [running, gone, failed] = [of('running'), of('not found'), of('error')];
+  const why = [
+    running && `${running} ${running === 1 ? 'is' : 'are'} still running`,
+    gone && `${gone} ${gone === 1 ? 'was' : 'were'} not found`,
+    failed && `${failed} could not be moved`,
+  ].filter(Boolean);
+  const head = n ? `Moved ${n} conversation${n === 1 ? '' : 's'} to the Trash` : 'Nothing moved to the Trash';
+  return why.length ? `${head}${n ? ';' : ':'} ${why.join(', ')}` : head;
+}
+
 /**
  * Past conversations, below the Now card: Claude Code's 50 newest and the pinned ones (the daemon's `claude.history`: ids, folders, times,
  * token costs and, for the 30 newest, a redacted title line), the pinned first, then by day, filtered by name, title or folder and by the
  * folder chips. A click or Enter resumes one (`resumeConversation`: typed only at an idle prompt, else copied and a toast says why); the
  * row's copy button copies the same line; the pencil (or F2) names it, the star pins it (`history.names`, `history.pinned`: the person's
- * own text and ids, nothing of the transcript). Read when the panel opens, after a turn ends and on the refresh button; closed, the panel
- * is not there, so nothing is read.
+ * own text and ids, nothing of the transcript). The trash button (or Delete on a row) and the header's Remove… (this folder, all
+ * listed) move conversations to the Trash: main asks first (a native dialog) and refuses a running one; the page only names ids. Read when
+ * the panel opens, after a turn ends and on the refresh button; closed, the panel is not there, so nothing is read.
  */
 export function Conversations(): VNode {
   const [q, setQ] = useState('');
@@ -42,6 +59,10 @@ export function Conversations(): VNode {
   /** The folder chip chosen (memory only), null: all. */
   const [folder, setFolder] = useState<string | null>(null);
   const [costsOpen, setCostsOpen] = useState(false);
+  /** Where the Remove… menu shows, null: closed. */
+  const [removeAt, setRemoveAt] = useState<{ x: number; y: number } | null>(null);
+  const removeBtn = useRef<HTMLButtonElement>(null);
+  const removing = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
@@ -100,6 +121,8 @@ export function Conversations(): VNode {
   const active = chips.some((f) => f.cwd === folder) ? folder : null; // (a chip gone after a refresh is All again)
   const shown = useMemo(() => filterByFolder(items ?? [], q, home, names).filter((c) => !active || c.cwd === active), [items, q, home, names, active]);
   const groups = useMemo(() => groupConversations(shown, clock.value, pinned), [shown, clock.value, pinned]);
+  /** All listed: what the list shows without the folder chip (the search still applies: never a row the person cannot see under All). */
+  const listed = useMemo(() => (active ? filterByFolder(items ?? [], q, home, names) : shown), [active, items, q, home, names, shown]);
   const flat = groups.flatMap((g) => g.items); // (the order the rows show in)
   const costs = useMemo(() => (showCost && costsOpen ? costByFolder(items ?? [], clock.value, home) : []), [showCost, costsOpen, items, clock.value, home]);
   useEffect(() => {
@@ -130,9 +153,44 @@ export function Conversations(): VNode {
     if (document.activeElement?.matches('.conv-pin')) refocus.current = { id, what: '.conv-pin' };
     patchHistory({ pinned: next });
   };
+  /** Asks main to move these to the Trash (it asks the person); then their names and pins go, the list is read again, and a toast says what happened. */
+  const remove = async (ids: string[], row?: number) => {
+    if (!ids.length || removing.current) return;
+    removing.current = true;
+    let r: TrashResult;
+    try {
+      r = await window.jaffer.trashConversations(ids);
+    } catch (e) {
+      return void toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      removing.current = false;
+    }
+    if (r.cancelled) return;
+    const gone = new Set(r.trashed ?? []);
+    if (gone.size) {
+      const h = cfg.value?.history;
+      patchHistory({ pinned: pinnedIds(h?.pinned).filter((id) => !gone.has(id)), names: [...gone].reduce<unknown>((l, id) => removeName(l, id), h?.names) as string[] });
+      historyItems.value = historyItems.value?.filter((c) => !gone.has(c.id)) ?? null; // (at once; the read below has the last word)
+    }
+    load();
+    toast({ kind: r.refused?.some((x) => x.reason === 'error') ? 'error' : 'info', text: trashSaid({ trashed: [...gone], refused: r.refused ?? [] }) });
+    // a row removed from the keyboard: the keyboard goes on to the row that took its place
+    if (row !== undefined)
+      setTimeout(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        const rows = list.current?.querySelectorAll<HTMLElement>('.conv-row');
+        (rows?.[Math.min(row, rows.length - 1)] ?? input.current)?.focus();
+      });
+  };
+  const toggleRemove = () => {
+    if (removeAt) return setRemoveAt(null);
+    const b = removeBtn.current!.getBoundingClientRect();
+    setRemoveAt({ x: b.left, y: b.bottom + 4 });
+  };
   const onKey = (e: KeyboardEvent) => {
     const n = Math.max(1, flat.length);
     const t = e.target as HTMLElement;
+    if (t.closest('.ctx-menu')) return; // (the Remove… menu's keys are its own)
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const next = (sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
@@ -143,6 +201,13 @@ export function Conversations(): VNode {
     // Enter in the search resumes the selected row (not an Enter that commits an input method's text); rows and the refresh button take Enter themselves
     else if (e.key === 'Enter' && t === input.current && !e.isComposing) (e.preventDefault(), pick(sel));
     else if (e.key === 'F2' && flat[sel]) (e.preventDefault(), startEdit(flat[sel]!.id));
+    // Delete on a row (or one of its buttons) removes that row: the one with the keyboard, not the one under the mouse
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && !(t instanceof HTMLInputElement) && t.closest('.conv-item')) {
+      e.preventDefault();
+      const id = t.closest('.conv-item')!.querySelector<HTMLElement>('.conv-row')?.dataset.id;
+      const at = flat.findIndex((c) => c.id === id);
+      if (id) void remove([id], at);
+    }
     else if (e.key === 'Escape') (e.preventDefault(), toTerminal());
   };
   // the name's own keys stay with it (the arrows, Enter and Esc of the list must not act on the rows while it is typed in)
@@ -157,10 +222,34 @@ export function Conversations(): VNode {
     <section class="sp-convos" data-slot="conversations" aria-label="Past conversations" onKeyDown={onKey}>
       <div class="conv-head">
         <span>Past conversations</span>
-        <button class="icon-btn sm conv-refresh" title="Refresh" aria-label="Refresh the past conversations" data-busy={loading ? '' : undefined} onClick={load}>
-          <IconReset size={13} />
-        </button>
+        <span class="conv-head-acts">
+          <button
+            ref={removeBtn}
+            class="conv-remove"
+            aria-haspopup="menu"
+            aria-expanded={!!removeAt}
+            disabled={!listed.length}
+            onClick={toggleRemove}
+          >
+            Remove…
+          </button>
+          <button class="icon-btn sm conv-refresh" title="Refresh" aria-label="Refresh the past conversations" data-busy={loading ? '' : undefined} onClick={load}>
+            <IconReset size={13} />
+          </button>
+        </span>
       </div>
+      {removeAt && (
+        <Menu
+          x={removeAt.x}
+          y={removeAt.y}
+          items={[
+            ...(active ? [{ label: `This folder (${shown.length})`, run: () => void remove(shown.map((c) => c.id)) }] : []),
+            { label: `All listed (${listed.length})`, run: () => void remove(listed.map((c) => c.id)) },
+          ]}
+          anchor={removeBtn.current}
+          done={() => (setRemoveAt(null), removeBtn.current?.focus())}
+        />
+      )}
       <label class="conv-search">
         <IconSearch size={13} />
         <input ref={input} placeholder="Search titles and folders" value={q} spellcheck={false} onInput={(e) => (setQ((e.target as HTMLInputElement).value), setSel(0))} />
@@ -249,6 +338,9 @@ export function Conversations(): VNode {
                     </button>
                     <button class="icon-btn sm conv-pin" title={isPinned ? 'Unpin' : 'Pin'} aria-label={isPinned ? 'Unpin this conversation' : 'Pin this conversation'} aria-pressed={isPinned} onClick={() => pin(c.id)}>
                       <IconStar size={12} />
+                    </button>
+                    <button class="icon-btn sm conv-trash" title="Move to Trash" aria-label="Move to Trash" onClick={() => void remove([c.id], n)}>
+                      <IconTrash size={12} />
                     </button>
                   </span>
                 </div>

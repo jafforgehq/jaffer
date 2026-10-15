@@ -227,6 +227,10 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .sp-convos { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 8px 8px; font-size: 12px; color: var(--muted); }
 /* past conversations: a heading with the refresh button, the search, then the list with its own scroll */
 .conv-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; color: var(--text); font-weight: 550; font-size: 12px; }
+.conv-head-acts { display: flex; align-items: center; gap: 2px; }
+.conv-remove { padding: 0 4px; border: 0; background: none; color: var(--faint); font-size: 11px; font-weight: 400; cursor: pointer; }
+.conv-remove:hover:not([disabled]), .conv-remove[aria-expanded='true'] { color: var(--text); }
+.conv-remove[disabled] { opacity: 0.4; cursor: default; }
 :root:not([data-motion='off']) .conv-refresh[data-busy] svg { animation: spin 0.7s linear infinite; }
 .conv-search { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; margin-bottom: 6px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--hover); color: var(--faint); }
 .conv-search:focus-within { border-color: var(--accent-line); }
@@ -251,7 +255,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-item:hover .conv-acts { background: linear-gradient(var(--hover), var(--hover)), var(--surface); }
 .sp-convos:focus-within .conv-item:has(.conv-row[data-sel]) .conv-acts { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface); }
 .conv-item:hover .conv-acts, .conv-item:focus-within .conv-acts { opacity: 1; }
-.conv-copy, .conv-name-btn, .conv-pin { flex: none; color: var(--faint); }
+.conv-copy, .conv-name-btn, .conv-pin, .conv-trash { flex: none; color: var(--faint); }
 .conv-pin[aria-pressed='true'] { color: var(--accent); }
 .conv-pin[aria-pressed='true'] svg { fill: currentColor; }
 /* 1.2.0: naming a row in place, the folder chips, cost by folder */

@@ -78,6 +78,49 @@ export async function listConversations(opts: { claudeDir: string; limit?: numbe
   return out;
 }
 
+/** What moving a conversation to the Trash takes: its transcript and, when there is one, its folder of the same name beside it. */
+export interface ConversationFiles {
+  id: string;
+  file: string;
+  /** Claude Code's subagent transcripts and tool results for this conversation. */
+  dir?: string;
+}
+
+/** The most ids `conversationFiles` looks at (one removal: a folder's list, or all of it, is fewer). */
+export const MAX_REMOVE = 200;
+
+/**
+ * (1.3.0) The files of these conversations (session ids only, the first 200 looked at), in the order of `ids`: `<folder>/<id>.jsonl` at the
+ * top of a project folder and its sibling folder `<folder>/<id>/`. Only a real folder and a regular file count, a link is never followed,
+ * and each real path is inside `realpath(<claudeDir>/projects)`. Reads names only, changes nothing; the paths are what main may trash.
+ */
+export async function conversationFiles(claudeDir: string, ids: unknown): Promise<ConversationFiles[]> {
+  const want = new Set(Array.isArray(ids) ? ids.slice(0, MAX_REMOVE).filter((x): x is string => typeof x === 'string' && isSessionId(x)) : []);
+  if (!want.size) return [];
+  let root: string;
+  try {
+    root = await fs.promises.realpath(path.join(claudeDir, 'projects'));
+  } catch {
+    return [];
+  }
+  const inside = async (p: string) => (await fs.promises.realpath(p).catch(() => '')) === p && p.startsWith(root + path.sep);
+  const found = new Map<string, ConversationFiles[]>();
+  for (const folder of (await names(root)).sort()) {
+    const d = path.join(root, folder);
+    if (!(await fs.promises.lstat(d).catch(() => null))?.isDirectory()) continue; // a link is not followed, wherever it leads
+    const here = new Set(await names(d));
+    for (const id of want) {
+      const file = path.join(d, `${id}.jsonl`);
+      if (!here.has(`${id}.jsonl`) || !(await fs.promises.lstat(file).catch(() => null))?.isFile() || !(await inside(file))) continue;
+      const entry: ConversationFiles = { id, file };
+      const dir = path.join(d, id);
+      if (here.has(id) && (await fs.promises.lstat(dir).catch(() => null))?.isDirectory() && (await inside(dir))) entry.dir = dir;
+      found.set(id, [...(found.get(id) ?? []), entry]);
+    }
+  }
+  return [...want].flatMap((id) => found.get(id) ?? []);
+}
+
 async function names(dir: string): Promise<string[]> {
   return fs.promises.readdir(dir).catch(() => []);
 }

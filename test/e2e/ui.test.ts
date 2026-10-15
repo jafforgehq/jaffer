@@ -2194,7 +2194,7 @@ describe('Jaffer UI end to end', () => {
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
     expect(await focused()).toBe('terminal');
-    // Tab to a row (past the first row and its copy, name and pin buttons; 1.2.0: the folder chips sit between the search and the rows):
+    // Tab to a row (past the first row and its copy, name, pin and (1.3.0) trash buttons; 1.2.0: the folder chips sit between the search and the rows):
     // Enter resumes THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and types nothing
     await page.fill('.sp-convos .conv-search input', 'hist-proj');
     await until(async () => (await mine()).length === 3, 3_000, 'the three for Tab');
@@ -2205,6 +2205,8 @@ describe('Jaffer UI end to end', () => {
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-name-btn'))).toBe(true);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-pin'))).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-trash'))).toBe(true);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(72));
     expect((await mine()).map((r) => r.sel)).toEqual([false, true, false]);
@@ -2769,6 +2771,138 @@ describe('Jaffer UI end to end', () => {
     await enter('unset -f claude');
     for (const proj of ['-p12-gamma', '-p12-delta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
   }, 90_000);
+
+  it('past conversations, 1.3.0: the trash button, Delete on a row and Remove… (this folder, all listed) ask the app to move them to the Trash; pins and names go, the list is read again, a toast says what happened; Cancel leaves everything; a running one is refused', async () => {
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const eps = path.join(env.userHome, 'p13-eps');
+    const zeta = path.join(env.userHome, 'p13-zeta');
+    const files = new Map<number, string>();
+    const plant = (n: number, proj: string, cwd: string, end: number) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', proj);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(file, [line('user', end - 60_000, { message: { role: 'user', content: `Talk ${n}` } }), line('assistant', end, { message: { id: `t${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 10, output_tokens: 5 } } })].join('\n') + '\n');
+      fs.utimesSync(file, end / 1000, end / 1000);
+      files.set(n, file);
+    };
+    // the Trash is not the page's to empty: the bridge's stand-in records the ids and moves nothing, so a test moves the files away itself
+    const binned = (...ns: number[]) => ns.forEach((n) => fs.rmSync(files.get(n)!, { force: true }));
+    const T = Date.now();
+    plant(101, '-p13-eps', eps, T - 50_000);
+    plant(102, '-p13-eps', eps, T - 40_000);
+    for (const n of [103, 104, 105, 106]) plant(n, '-p13-zeta', zeta, T - 200_000 + n); // (the most used folder: it gets a chip)
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const item = (n: number) => page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(n)}"])`);
+    const ids = () => page.$$eval('.sp-convos .conv-row', (r) => r.map((x) => (x as HTMLElement).dataset.id!));
+    const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
+    const trashed = () => page.evaluate(() => ((window as any).__trashed ?? []) as string[][]);
+    const answer = (a: object | null) => page.evaluate((x) => void ((window as any).__trashAnswer = x ?? undefined), a);
+    const trashRow = async (n: number) => (await item(n).hover(), await item(n).locator('.conv-trash').click());
+    const menuItems = () => page.$$eval('.ctx-menu [role="menuitem"]', (b) => b.map((x) => x.textContent));
+    await patch({ history: { pinned: [sid(101), sid(103)], names: [`${sid(101)} Eps named`, `${sid(103)} Zeta named`] } });
+    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.fill('.sp-convos .conv-search input', 'p13-');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await ids()).length === 6, 5_000, 'the planted conversations');
+    expect(await item(101).locator('.conv-trash').getAttribute('aria-label')).toBe('Move to Trash');
+    let calls = (await trashed()).length;
+
+    // Cancel in the app's question: nothing changes, no toast
+    await answer({ cancelled: true });
+    await trashRow(102);
+    await until(async () => (await trashed()).length === calls + 1, 3_000, 'the ask');
+    expect((await trashed()).at(-1)).toEqual([sid(102)]);
+    calls++;
+    await sleep(400);
+    expect((await ids()).sort()).toEqual([101, 102, 103, 104, 105, 106].map(sid).sort());
+    expect((await cfgNow()).history.pinned).toEqual([sid(101), sid(103)]);
+    expect(await page.locator('.toast-text', { hasText: 'Trash' }).count()).toBe(0);
+    await answer(null);
+
+    // the row's trash button: the id asked for, its pin and name gone from the config, the list read again (a new one shows), a toast
+    binned(101);
+    plant(107, '-p13-eps', eps, T - 30_000);
+    await trashRow(101);
+    await until(async () => (await row(101).count()) === 0 && (await row(107).count()) === 1, 5_000, 'the list without it, read again');
+    expect((await trashed()).at(-1)).toEqual([sid(101)]);
+    calls++;
+    await toastSaid('Moved 1 conversation to the Trash');
+    const h = (await cfgNow()).history;
+    expect(h.pinned).toEqual([sid(103)]);
+    expect(h.names).toEqual([`${sid(103)} Zeta named`]);
+
+    // still running: refused, the row stays, the toast says why
+    await answer({ trashed: [], refused: [{ id: sid(102), reason: 'running' }] });
+    await trashRow(102);
+    await toastSaid('Nothing moved to the Trash: 1 is still running');
+    calls++;
+    expect(await row(102).count()).toBe(1);
+    await answer(null);
+
+    // Delete on the row with the keyboard: that row; the keyboard goes on to the row in its place. Delete or Backspace elsewhere asks nothing
+    await page.focus('.sp-convos .conv-search input');
+    await page.keyboard.press('Backspace'); // (the search loses its last character: "p13")
+    await page.focus(`.sp-convos .conv-chip >> nth=0`);
+    await page.keyboard.press('Delete');
+    await sleep(300);
+    expect((await trashed()).length).toBe(calls);
+    expect(await page.inputValue('.sp-convos .conv-search input')).toBe('p13');
+    binned(102);
+    await row(102).focus();
+    await page.keyboard.press('Delete');
+    await until(async () => (await row(102).count()) === 0, 5_000, 'the row removed with Delete');
+    expect((await trashed()).at(-1)).toEqual([sid(102)]);
+    calls++;
+    await until(() => page.evaluate(() => document.activeElement?.classList.contains('conv-row')), 3_000, 'the keyboard on the next row');
+
+    // Remove…: with a folder chip, This folder (N) and All listed (N), the counts of what the list shows; a press again closes it
+    await page.fill('.sp-convos .conv-search input', 'p13-');
+    await page.click(`.sp-convos .conv-chip[data-cwd="${zeta}"]`);
+    await until(async () => (await ids()).length === 4, 3_000, 'the zeta chip');
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu');
+    expect(await menuItems()).toEqual(['This folder (4)', 'All listed (5)']);
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    // from the keyboard: Enter opens it on its first item, Esc closes it back to the button
+    await page.focus('.sp-convos .conv-remove');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.ctx-menu');
+    expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('This folder (4)');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-remove'))).toBe(true);
+    expect((await trashed()).length).toBe(calls);
+    // This folder: one of them still running
+    binned(103, 104, 105);
+    await answer({ trashed: [sid(103), sid(104), sid(105)], refused: [{ id: sid(106), reason: 'running' }] });
+    await page.click('.sp-convos .conv-remove');
+    await page.click('.ctx-menu [role="menuitem"] >> text=This folder (4)');
+    await toastSaid('Moved 3 conversations to the Trash; 1 is still running');
+    expect([...(await trashed()).at(-1)!].sort()).toEqual([103, 104, 105, 106].map(sid));
+    calls++;
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify([sid(106)]), 5_000, 'only the running one left');
+    expect((await cfgNow()).history).toEqual({ pinned: [], names: [] });
+    await answer(null);
+
+    // All listed, without a chip: only that item, every row the list shows
+    await page.click('.sp-convos .conv-chip >> nth=0');
+    await until(async () => (await ids()).length === 2, 3_000, 'All again');
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu');
+    expect(await menuItems()).toEqual(['All listed (2)']);
+    binned(106, 107);
+    await page.click('.ctx-menu [role="menuitem"] >> text=All listed (2)');
+    await toastSaid('Moved 2 conversations to the Trash');
+    expect([...(await trashed()).at(-1)!].sort()).toEqual([sid(106), sid(107)]);
+    await until(async () => (await ids()).length === 0, 5_000, 'nothing listed');
+    expect(await page.locator('.sp-convos .conv-remove').isDisabled()).toBe(true);
+
+    await page.fill('.sp-convos .conv-search input', '');
+    for (const proj of ['-p13-eps', '-p13-zeta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+  }, 60_000);
 
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
     const errors: string[] = [];

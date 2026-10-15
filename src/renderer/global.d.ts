@@ -1,4 +1,5 @@
 import type { UpdateState } from '../shared/update-policy';
+import type { TrashResult } from '../main/trash-conversations';
 
 export interface JafferBridge {
   call<T = any>(method: string, params?: unknown): Promise<T>;
@@ -20,6 +21,8 @@ export interface JafferBridge {
   openPath(p: { path: string; line?: number; col?: number }): Promise<{ opened: boolean; editorFailed?: boolean }>;
   /** Selects an existing file in Finder (never opens it). */
   revealPath(path: string): Promise<{ revealed: boolean }>;
+  /** Moves these past conversations to the Trash, after the app's own question (at most 200; a running one is refused). */
+  trashConversations(ids: string[]): Promise<TrashResult>;
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */
   reset(): Promise<{ cancelled: boolean }>;

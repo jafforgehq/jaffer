@@ -423,7 +423,8 @@ export function StickyHeader(): VNode | null {
   );
 }
 
-function Menu({ x, y, items, done }: { x: number; y: number; items: MenuItem[]; done(): void }): VNode {
+/** A small menu of the window's own at (x, y): the gutter mark's, and (1.3.0) the past conversations' Remove…. Esc or a click elsewhere closes it. */
+export function Menu({ x, y, items, done, anchor }: { x: number; y: number; items: MenuItem[]; done(): void; anchor?: HTMLElement | null }): VNode {
   const ref = useRef<HTMLDivElement>(null);
   const close = () => {
     ctxMenu.value = null;
@@ -433,7 +434,7 @@ function Menu({ x, y, items, done }: { x: number; y: number; items: MenuItem[]; 
   useLayoutEffect(() => {
     ref.current?.querySelector('button')?.focus();
     const key = (e: KeyboardEvent) => e.key === 'Escape' && (e.preventDefault(), close());
-    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && close();
+    const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !anchor?.contains(e.target as Node) && close(); // (the button that opened it closes it itself)
     window.addEventListener('keydown', key, true);
     window.addEventListener('mousedown', away, true);
     return () => {

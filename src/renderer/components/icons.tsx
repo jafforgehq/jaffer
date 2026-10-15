@@ -99,6 +99,12 @@ export const IconStar = ({ size, class: c }: P): VNode => (
     <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5z" />
   </svg>
 );
+export const IconTrash = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M4 7h16M10 4h4M6 7l1 13h10l1-13" />
+    <path d="M10 11v5M14 11v5" />
+  </svg>
+);
 export const IconSidebar = ({ size, class: c }: P): VNode => (
   <svg {...base(size)} class={c}>
     <rect x="3" y="4" width="18" height="16" rx="2" />

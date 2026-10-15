@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('jaffer', {
   saveText: (text: string, name: string) => ipcRenderer.invoke('jaffer:save-text', text, name),
   openPath: (p: { path: string; line?: number; col?: number }) => ipcRenderer.invoke('jaffer:open-path', p),
   revealPath: (p: string) => ipcRenderer.invoke('jaffer:reveal-path', p),
+  trashConversations: (ids: string[]) => ipcRenderer.invoke('jaffer:trash-conversations', { ids }),
   reset: () => ipcRenderer.invoke('jaffer:reset'),
   updates: {
     state: () => ipcRenderer.invoke('jaffer:update-state'),
