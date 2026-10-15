@@ -38,6 +38,24 @@ export async function freshList<T>(read: () => Promise<T[]>, cached: T[] | null)
   }
 }
 
+/**
+ * Reads whose answers replace one list (the panel's, the palette's at every open, ⇧⌘R's): each read is numbered, and its answer is the
+ * newest only when no read began after it. An older answer is not to be kept; an older failure is not an error any more.
+ */
+export function newestOnly(): <T>(read: () => Promise<T>) => Promise<{ value?: T; newest: boolean }> {
+  let last = 0;
+  return async (read) => {
+    const n = ++last;
+    try {
+      const value = await read();
+      return { value, newest: n === last };
+    } catch (e) {
+      if (n === last) throw e;
+      return { newest: false };
+    }
+  };
+}
+
 /** The menu bar's Past Conversations: the 5 newest with a valid id, `<name, title or folder> · <how long ago>` on one line (the name clipped to 40). */
 export function historyMenuItems(items: Pick<Conversation, 'id' | 'cwd' | 'endedAt' | 'title'>[], home: string, now: number, names?: Map<string, string>): { id: string; label: string }[] {
   if (!Array.isArray(items)) return [];

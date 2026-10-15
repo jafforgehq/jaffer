@@ -6,7 +6,7 @@ import { conversationName, conversationRow, costByFolder, filterByFolder, groupC
 import { parseNames, pinnedIds, setName, togglePin } from '../../shared/history-names';
 import { formatUsd } from '../../shared/claude-cost';
 import { resumeLine } from '../../shared/resume-action';
-import { copyToTerminal, readHistory, resumeConversation } from '../resume';
+import { copyToTerminal, loadHistory, resumeConversation } from '../resume';
 import { terminals } from './TerminalView';
 import { IconCopy, IconPencil, IconReset, IconSearch, IconStar } from './icons';
 
@@ -55,10 +55,9 @@ export function Conversations(): VNode {
   const load = () => {
     const n = ++asked;
     setLoading(true);
-    readHistory().then(
-      (r) => {
+    loadHistory().then(
+      () => {
         if (n !== asked) return;
-        historyItems.value = r;
         setError(null);
         setLoading(false);
       },

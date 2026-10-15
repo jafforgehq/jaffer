@@ -9,7 +9,7 @@ import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
-import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, MIN_WINDOW_HEIGHT, vibrancyFor } from '../shared/window-policy';
+import { appearanceChanged, dropdownBounds, isAppUrl, keepsBounds, isWebUrl, MIN_WINDOW_HEIGHT, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { ApprovalView } from '../core/claude/approvals';
@@ -387,10 +387,9 @@ function notify(title: string, body: string, kind?: HoldKind): void {
 
 /**
  * Approvals (1.2.0, `claude.approvals`, off by default): a permission prompt waits for a click. Each new one gets a notification, while the
- * window is not in front and focus mode does not hold it, with Show, Deny and (only for a request whose line is the whole request,
- * `allowable`) Allow. Only a click on Allow answers allow, and only one on Deny answers deny. Show brings the window back and lets the hook
- * go ('ask': Claude Code's own prompt appears at once); a click on the notification itself only brings the window back (the hook waits out
- * its time). A notification whose prompt no longer waits is closed. Ids seen while the window was in front get none later.
+ * window is not in front and focus mode does not hold it, with Show and Deny. It never offers Allow: that is only in the window's Now
+ * card, next to the whole request. Only a click on Deny answers deny. Show brings the window back and lets the hook go ('ask': Claude
+ * Code's own prompt appears at once); a click on the notification itself only brings the window back (the hook waits out its time). A notification whose prompt no longer waits is closed. Ids seen while the window was in front get none later.
  */
 const approvalNotes = new Map<string, Notification | null>();
 function onApprovals(items: unknown): void {
@@ -405,18 +404,19 @@ function onApprovals(items: unknown): void {
     if (approvalNotes.has(a.id)) continue;
     approvalNotes.set(a.id, null);
     if (win?.isFocused() || focus.hold('needs-you') || !Notification.isSupported()) continue; // (in front: the title bar and the panel ask)
-    const allowable = a.allowable === true;
     const note = new Notification({
       title: `Claude asks to use ${String(a.tool).slice(0, 64) || 'a tool'}`,
       body: String(a.detail ?? '').slice(0, 120),
-      actions: [{ type: 'button', text: 'Show' }, { type: 'button', text: 'Deny' }, ...(allowable ? [{ type: 'button' as const, text: 'Allow' }] : [])],
+      actions: [
+        { type: 'button', text: 'Show' },
+        { type: 'button', text: 'Deny' },
+      ],
     });
-    const answer = (decision: 'allow' | 'deny' | 'ask') => void client?.call('claude.approval.answer', { id: a.id, decision }).catch(() => undefined);
+    const answer = (decision: 'deny' | 'ask') => void client?.call('claude.approval.answer', { id: a.id, decision }).catch(() => undefined);
     note.on('click', () => showWindow());
     note.on('action', (e, index) => {
       const i = typeof (e as { actionIndex?: unknown })?.actionIndex === 'number' ? (e as { actionIndex: number }).actionIndex : index;
       if (i === 1) answer('deny');
-      else if (i === 2 && allowable) answer('allow');
       else {
         answer('ask');
         showWindow();
@@ -586,7 +586,7 @@ function createWindow(): void {
   win.webContents.on('did-finish-load', () => void focus.release());
   syncSystemStats();
   const save = () => {
-    if (win && !win.isDestroyed() && !win.isMinimized() && !win.isFullScreen() && !dropdownOn()) writeJson(windowFile, win.getBounds());
+    if (win && !win.isDestroyed() && keepsBounds({ minimized: win.isMinimized(), fullScreen: win.isFullScreen(), dropdown: dropdownOn(), hotkey: !!hotkey })) writeJson(windowFile, win.getBounds());
   };
   win.on('resize', debounce(save, 400));
   win.on('move', debounce(save, 400));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, MIN_WINDOW_HEIGHT, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
+import { appearanceChanged, dropdownBounds, keepsBounds, isAppUrl, isWebUrl, MIN_WINDOW_HEIGHT, osc52Provider, vibrancyFor } from '../src/shared/window-policy';
 
 const INDEX = 'file:///Applications/Jaffer.app/Contents/Resources/app/dist/renderer/index.html';
 
@@ -102,5 +102,17 @@ describe('dropdownBounds: the drop-down window under the top edge of a work area
     expect(dropdownBounds({ x: 0, y: 25, width: 1440, height: 875 }).height).toBe(420); // (45% of a 14-inch work area is 394)
     expect(dropdownBounds({ x: 0, y: 0, width: 800, height: 600 }).height).toBe(420);
     expect(dropdownBounds({ x: 0, y: 0, width: 800, height: 300 }).height).toBe(300);
+  });
+});
+
+describe('keepsBounds: when the window\'s place is kept in window.json', () => {
+  it('not minimized, not in full screen, and not while drop-down mode places it; drop-down without a registered hotkey does not count', () => {
+    const w = { minimized: false, fullScreen: false, dropdown: false, hotkey: false };
+    expect(keepsBounds(w)).toBe(true);
+    expect(keepsBounds({ ...w, minimized: true })).toBe(false);
+    expect(keepsBounds({ ...w, fullScreen: true })).toBe(false);
+    expect(keepsBounds({ ...w, dropdown: true, hotkey: true })).toBe(false);
+    expect(keepsBounds({ ...w, dropdown: true, hotkey: false })).toBe(true); // (the switch is on, but nothing brings the window down)
+    expect(keepsBounds({ ...w, hotkey: true })).toBe(true);
   });
 });

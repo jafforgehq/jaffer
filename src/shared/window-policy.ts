@@ -52,3 +52,8 @@ export function dropdownBounds(workArea: Rect): Rect {
   const height = Math.min(workArea.height, Math.max(MIN_WINDOW_HEIGHT, Math.round(workArea.height * 0.45)));
   return { x: workArea.x, y: workArea.y, width: workArea.width, height };
 }
+
+/** Whether the window's place is kept in window.json: not minimized, not in full screen, and not where drop-down mode put it (drop-down works only while its hotkey is registered: without one the switch changes nothing). */
+export function keepsBounds(w: { minimized: boolean; fullScreen: boolean; dropdown: boolean; hotkey: boolean }): boolean {
+  return !w.minimized && !w.fullScreen && !(w.dropdown && w.hotkey);
+}

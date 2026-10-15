@@ -150,6 +150,17 @@ describe('Jaffer UI end to end', () => {
       }
     }
     await page.setViewportSize({ width: 1360, height: 860 });
+    // ⇧⌘R does nothing while this screen is up (as What's New): it reads no list and resumes nothing
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__obReads = 0;
+      w.__obReal = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.history' && w.__obReads++, w.__obReal(m, p));
+    });
+    await page.evaluate(() => (window as any).__menu('resume-last'));
+    await sleep(400);
+    expect(await page.evaluate(() => (window as any).__obReads)).toBe(0);
+    await page.evaluate(() => ((window as any).jaffer.call = (window as any).__obReal));
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
 
@@ -2478,8 +2489,11 @@ describe('Jaffer UI end to end', () => {
     expect(await page.inputValue('.sp-convos .conv-rename')).toBe('');
     expect(await page.getAttribute('.sp-convos .conv-rename', 'placeholder')).toBe('Alpha second');
     await page.keyboard.type('  Deploy   fix  ');
+    const renameBefore = await termText();
     await page.keyboard.press('Enter');
     await until(async () => (await nameOf(92)) === 'Deploy fix', 3_000, 'the new name in the row');
+    await sleep(300);
+    expect(await termText()).toBe(renameBefore); // Enter in the name field names the row: nothing is typed into the terminal (no resume)
     expect((await cfgNow()).history).toEqual({ names: [`${sid(92)} Deploy fix`], pinned: [] });
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(92)); // (the keyboard back on the row)
     // on disk: the person's own name and nothing of the transcript
@@ -2951,6 +2965,10 @@ describe('Jaffer UI end to end', () => {
     await page.fill('.palette input', '');
     await page.keyboard.type('tokyo');
     await shot('06-palette');
+    // an Enter that ends an IME composition (Japanese, Chinese, ...) runs nothing: the palette stays open
+    await page.$eval('.palette input', (el) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
+    await sleep(200);
+    expect(await page.locator('.palette input').count()).toBe(1);
     await page.keyboard.press('Enter');
     await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).appearance.theme === 'tokyo-night', 8000, 'theme change');
     const bg = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-solid').trim());
@@ -3319,7 +3337,8 @@ describe('Jaffer UI end to end', () => {
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // (a window of its own: no turns yet)
     await page.waitForSelector('.term .xterm');
     await endClaude();
-    await inject([]);
+    // (today's figures are the test's own, not what the daemon added up over the tests before this one)
+    await inject([], { usd: 0, date: 'today', workMs: 0 });
     await page.waitForSelector('.now-card[data-state="off"]');
     expect(await page.locator('.now-turns, .now-worked').count()).toBe(0);
     try {
@@ -3423,65 +3442,71 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.side-panel');
     expect(await page.locator('.wn-card').count()).toBe(0);
 
-    // an update: the notes after 1.0.0 are unseen (the newest ones up to this version, at most five)
-    const unseen = unseenNotes(RELEASE_NOTES, '1.0.0', version);
-    expect(unseen.length).toBeGreaterThan(0);
-    await cfgPatch({ updates: { seenVersion: '1.0.0' }, panel: { open: false } });
-    await page.waitForSelector('.side-panel', { state: 'detached' });
-    await reload();
-    // the toast says so, and its button opens the panel with the card
-    await toastSaid(`Jaffer updated to ${version}`);
-    expect(await page.locator('.side-panel').count()).toBe(0);
-    await page.locator('.toast', { hasText: `Jaffer updated to ${version}` }).locator('.toast-act', { hasText: "What's new" }).click();
-    await page.waitForSelector('.side-panel > .wn-card');
-    expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'sp-convos']); // the card is the one new child, above Now
-    expect(await page.locator('.sp-convos, .now-card').count()).toBe(2);
-    const text = (await page.textContent('.wn-card')) ?? '';
-    expect(text).toContain(`What's new in ${unseen[0]!.version}`);
-    for (const n of unseen) expect(text.replace(/\s+/g, ' ')).toContain(firstText(n.md));
-    expect(text).not.toMatch(/\*\*|`/); // (marks are rendered, never shown)
-    expect(text).not.toContain('Updating from 0.2.x'); // the standard last line is not in the notes
-    expect(await page.locator('.wn-card details').count()).toBe(0);
-    expect(await page.locator('.wn-card button', { hasText: 'Dismiss' }).count()).toBe(1);
-    await shot('02e-whats-new');
+    // (whatever happens below, the seen version and the panel are as they were for the tests after this one)
+    const panelWas = (await cfgOf()).panel.open;
+    try {
+      // an update: the notes after 1.0.0 are unseen (the newest ones up to this version, at most five)
+      const unseen = unseenNotes(RELEASE_NOTES, '1.0.0', version);
+      expect(unseen.length).toBeGreaterThan(0);
+      await cfgPatch({ updates: { seenVersion: '1.0.0' }, panel: { open: false } });
+      await page.waitForSelector('.side-panel', { state: 'detached' });
+      await reload();
+      // the toast says so, and its button opens the panel with the card
+      await toastSaid(`Jaffer updated to ${version}`);
+      expect(await page.locator('.side-panel').count()).toBe(0);
+      await page.locator('.toast', { hasText: `Jaffer updated to ${version}` }).locator('.toast-act', { hasText: "What's new" }).click();
+      await page.waitForSelector('.side-panel > .wn-card');
+      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'sp-convos']); // the card is the one new child, above Now
+      expect(await page.locator('.sp-convos, .now-card').count()).toBe(2);
+      const text = (await page.textContent('.wn-card')) ?? '';
+      expect(text).toContain(`What's new in ${unseen[0]!.version}`);
+      for (const n of unseen) expect(text.replace(/\s+/g, ' ')).toContain(firstText(n.md));
+      expect(text).not.toMatch(/\*\*|`/); // (marks are rendered, never shown)
+      expect(text).not.toContain('Updating from 0.2.x'); // the standard last line is not in the notes
+      expect(await page.locator('.wn-card details').count()).toBe(0);
+      expect(await page.locator('.wn-card button', { hasText: 'Dismiss' }).count()).toBe(1);
+      await shot('02e-whats-new');
 
-    // All versions: every bundled version, the newest open
-    await page.click('.wn-card button:has-text("All versions")');
-    await page.waitForSelector('.wn-card details');
-    expect(await page.locator('.wn-card details').count()).toBe(RELEASE_NOTES.length);
-    expect(await page.$$eval('.wn-card details', (els) => els.map((e) => (e as HTMLDetailsElement).open))).toEqual(RELEASE_NOTES.map((_, i) => i === 0));
-    expect(await page.textContent('.wn-card .wn-title')).toBe('All versions');
-    expect(await page.locator('.wn-card button', { hasText: 'All versions' }).count()).toBe(0);
+      // All versions: every bundled version, the newest open
+      await page.click('.wn-card button:has-text("All versions")');
+      await page.waitForSelector('.wn-card details');
+      expect(await page.locator('.wn-card details').count()).toBe(RELEASE_NOTES.length);
+      expect(await page.$$eval('.wn-card details', (els) => els.map((e) => (e as HTMLDetailsElement).open))).toEqual(RELEASE_NOTES.map((_, i) => i === 0));
+      expect(await page.textContent('.wn-card .wn-title')).toBe('All versions');
+      expect(await page.locator('.wn-card button', { hasText: 'All versions' }).count()).toBe(0);
 
-    // the panel already open after an update: the card is there, so no toast
-    await reload();
-    await page.waitForSelector('.side-panel > .wn-card');
-    await frames(2); // (the toast is set before the first render, so it would be in this one)
-    expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
+      // the panel already open after an update: the card is there, so no toast
+      await reload();
+      await page.waitForSelector('.side-panel > .wn-card');
+      await frames(2); // (the toast is set before the first render, so it would be in this one)
+      expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
 
-    // Dismiss: the card goes, this version counts as seen, and a reload shows neither card nor toast
-    await page.click('.wn-card button:has-text("Dismiss")');
-    await page.waitForSelector('.wn-card', { state: 'detached' });
-    await until(async () => (await cfgOf()).updates.seenVersion === version, 5_000, 'updates.seenVersion written');
-    expect(await page.locator('.side-panel').count()).toBe(1);
-    await cfgPatch({ panel: { open: true } });
-    await reload();
-    await page.waitForSelector('.side-panel');
-    await frames(2);
-    expect(await page.locator('.wn-card').count()).toBe(0);
-    expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
+      // Dismiss: the card goes, this version counts as seen, and a reload shows neither card nor toast
+      await page.click('.wn-card button:has-text("Dismiss")');
+      await page.waitForSelector('.wn-card', { state: 'detached' });
+      await until(async () => (await cfgOf()).updates.seenVersion === version, 5_000, 'updates.seenVersion written');
+      expect(await page.locator('.side-panel').count()).toBe(1);
+      await cfgPatch({ panel: { open: true } });
+      await reload();
+      await page.waitForSelector('.side-panel');
+      await frames(2);
+      expect(await page.locator('.wn-card').count()).toBe(0);
+      expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
 
-    // Help → What's New… (the menu id) opens it any time, even with the panel closed: the history, and Close leaves the seen version alone
-    await cfgPatch({ panel: { open: false } });
-    await page.waitForSelector('.side-panel', { state: 'detached' });
-    await menu('whats-new');
-    await page.waitForSelector('.side-panel > .wn-card');
-    expect(await page.textContent('.wn-card .wn-title')).toBe('All versions');
-    await page.click('.wn-card button:has-text("Close")');
-    await page.waitForSelector('.wn-card', { state: 'detached' });
-    expect((await cfgOf()).updates.seenVersion).toBe(version);
-    expect(await page.locator('.side-panel').count()).toBe(1);
-    await page.click('.term');
+      // Help → What's New… (the menu id) opens it any time, even with the panel closed: the history, and Close leaves the seen version alone
+      await cfgPatch({ panel: { open: false } });
+      await page.waitForSelector('.side-panel', { state: 'detached' });
+      await menu('whats-new');
+      await page.waitForSelector('.side-panel > .wn-card');
+      expect(await page.textContent('.wn-card .wn-title')).toBe('All versions');
+      await page.click('.wn-card button:has-text("Close")');
+      await page.waitForSelector('.wn-card', { state: 'detached' });
+      expect((await cfgOf()).updates.seenVersion).toBe(version);
+      expect(await page.locator('.side-panel').count()).toBe(1);
+      await page.click('.term');
+    } finally {
+      await cfgPatch({ updates: { seenVersion: version }, panel: { open: panelWas } });
+    }
   }, 60_000);
 
   it('the layout lines up at any window size: the pill is centred in the title bar and on the window, the card has even margins, the mole sits inside, nothing overflows', async () => {
@@ -4018,6 +4043,23 @@ describe('Jaffer UI end to end', () => {
     expect(await (await markOf('echo after-reset-93')).getAttribute('data-state')).toBe('ok'); // and blocks go on from there
   }, 40_000);
 
+  // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
+  // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
+  it('the run leaves nothing of the 1.2.0 tests behind: no approval waits, no stand-in for the window\'s calls, the seen version, the switches and the panel as a first start leaves them', async () => {
+    const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
+    expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });
+    expect(await page.locator('.ap-ask, .modal, .palette').count()).toBe(0);
+    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob)Real/); // (every wrapper restored)
+    const c = await page.evaluate(() => window.jaffer.call('config.get'));
+    expect(c.claude.approvals).toBe(false);
+    expect(c.updates.seenVersion).toBe(version);
+    expect(c.panel.open).toBe(true);
+    // and the window, loaded again, starts from nothing of it
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+    await sleep(300);
+    expect(await page.locator('.ap-ask, .wn-card, .toast').count()).toBe(0);
+  }, 30_000);
 });
 
 void ensureDaemon;

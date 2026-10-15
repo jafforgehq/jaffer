@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationName, conversationRow, costByFolder, filterByFolder, fmtAgo, freshList, groupByDay, groupConversations, historyMenuItems, lastConversation, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
+import { conversationName, conversationRow, costByFolder, filterByFolder, fmtAgo, freshList, groupByDay, groupConversations, historyMenuItems, lastConversation, newestOnly, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
 
 const id = (n: number) => `0000000${n}`.slice(-8) + '-1111-4222-8333-444455556666';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -249,5 +249,22 @@ describe('past conversations, 1.2.0 review fixes: a fresh list for ⇧⌘R, uniq
     expect(conversationName({ id: id(1), cwd: '/Users/maya/code/api', title: 'T' }, new Map(), '/Users/maya')).toBe('T');
     expect(conversationName({ id: id(1) }, new Map(), '/Users/maya')).toBe('Conversation');
     expect(conversationName({ id: id(1), cwd: '/x' })).toBe('Conversation'); // (the panel's rows show the folder on their own line)
+  });
+
+  it('newestOnly (1.2.0 final): of reads that replace one list, only the newest one\'s answer counts; an older answer, or an older failure, does not', async () => {
+    const newest = newestOnly();
+    let release!: (v: string) => void;
+    const slow = newest(() => new Promise<string>((r) => (release = r)));
+    const fast = newest(async () => 'new');
+    expect(await fast).toEqual({ value: 'new', newest: true });
+    release('old');
+    expect(await slow).toEqual({ value: 'old', newest: false });
+    let fail!: (e: Error) => void;
+    const staleFail = newest(() => new Promise<string>((_r, j) => (fail = j)));
+    const ok = newest(async () => 'ok');
+    fail(new Error('away'));
+    expect(await staleFail).toEqual({ newest: false });
+    expect(await ok).toEqual({ value: 'ok', newest: true });
+    await expect(newest(async () => Promise.reject(new Error('down')))).rejects.toThrow('down');
   });
 });

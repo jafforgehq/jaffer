@@ -5,7 +5,7 @@ import { conversationName, paletteConversations } from '../../shared/history-lab
 import { groupByFolder } from '../../shared/recent-commands';
 import { SECTION_ORDER, filterShortcuts, shortcutGroups } from '../../shared/shortcuts';
 import { parseNames } from '../../shared/history-names';
-import { readHistory, resumeConversation } from '../resume';
+import { loadHistory, resumeConversation } from '../resume';
 import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
 import type { UpdateState } from '../../shared/update-policy';
 import { InstallCommand } from './ClaudeInstall';
@@ -94,7 +94,7 @@ export function Palette(): VNode {
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => input.current?.focus(), []); // before paint, so the first keystrokes land here
   // the past conversations it can find: read at every open (the list the window has shows meanwhile)
-  useEffect(() => void readHistory().then((r) => void (historyItems.value = r), () => undefined), []);
+  useEffect(() => void loadHistory().catch(() => undefined), []); // (an answer older than the newest read is not kept)
   const items = historyItems.value;
   const namesList = cfg.value?.history?.names;
   const results = useMemo<Action[]>(() => {
@@ -118,7 +118,7 @@ export function Palette(): VNode {
       .concat(convs);
   }, [q, items, namesList]);
   const total = results.length;
-  useEffect(() => setSel(0), [q]);
+  useEffect(() => setSel(0), [q, items]); // (a list read again moves the rows: the selection starts over)
   useEffect(() => {
     list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
   }, [sel]);
@@ -163,7 +163,7 @@ export function Palette(): VNode {
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') (e.preventDefault(), setSel((sel + 1) % Math.max(1, total)));
               else if (e.key === 'ArrowUp') (e.preventDefault(), setSel((sel - 1 + total) % Math.max(1, total)));
-              else if (e.key === 'Enter') (e.preventDefault(), total && run(sel));
+              else if (e.key === 'Enter' && !e.isComposing) (e.preventDefault(), total && run(sel)); // (Enter that ends an IME composition runs nothing)
             }}
           />
         </div>

@@ -33,10 +33,11 @@ const MAX_TOOL = 64;
 /** Room for the cut marker `… (+N chars)` (N has at most 9 digits). */
 const CUT_ROOM = 21;
 /**
- * Control characters, and the invisible ones that turn, hide or pad text (bidi marks and overrides, zero widths, the soft hyphen, the
- * combining grapheme joiner, the Hangul fillers, the tag characters): a notification must show what it says.
+ * What a notification must not hide: format and control characters (bidi marks and overrides, zero widths, the soft hyphen, the tag
+ * characters, ...), line and paragraph separators, the combining grapheme joiner, variation selectors, the Mongolian free variation
+ * selectors, the Khmer inherent vowels and the Hangul fillers. Each run shows as one placeholder, and the line is then not the request.
  */
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufeff\uffa0\u{e0000}-\u{e007f}]+/gu;
+const HIDDEN = /[\p{Cf}\p{Cc}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180d\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]+/gu;
 const NONE: ApprovalDetail = { text: '', complete: false };
 
 /** What Claude Code reads from the hook's stdout: allow, or deny with a message; anything else than exactly 'allow' is a deny. */
@@ -85,14 +86,15 @@ function filePath(p: string, where: { cwd?: string; home?: string }): ApprovalDe
   if (isSensitivePath(q)) return { text: 'a key or credential file', complete: false };
   const cwd = (where.cwd ?? '').slice(0, 4096).replace(/\/+$/, '');
   const home = (where.home ?? '').slice(0, 4096).replace(/\/+$/, '');
-  const rel = where.cwd && q.startsWith(`${cwd}/`) ? q.slice(cwd.length + 1) : home && q.startsWith(`${home}/`) ? `~/${q.slice(home.length + 1)}` : q;
+  // (relative only inside a real folder: at the root, `etc/hosts` would read as a path in some other folder)
+  const rel = cwd && q.startsWith(`${cwd}/`) ? q.slice(cwd.length + 1) : home && q.startsWith(`${home}/`) ? `~/${q.slice(home.length + 1)}` : q;
   return redactedHead(rel, 4097);
 }
 
 /**
  * The line under "Claude asks to use <tool>", and whether it is the whole request as it is (Allow is offered only then): the command for
- * Bash (redacted; a sensitive one not at all), the path for the file tools, the url for WebFetch, and nothing for any other tool (never
- * complete). At most 120 characters; the input is cut before it is read.
+ * Bash (redacted; a sensitive one not at all), the path for the file tools (never complete for the ones that write), the url for
+ * WebFetch, and nothing for any other tool (never complete). At most 120 characters; the input is cut before it is read.
  */
 export function approvalDetail(tool: string, input: unknown, where: { cwd?: string; home?: string } = {}): ApprovalDetail {
   switch (tool) {
@@ -101,13 +103,16 @@ export function approvalDetail(tool: string, input: unknown, where: { cwd?: stri
       if (cmd && isSensitiveCommand(cmd.slice(0, COMMAND_HEAD))) return { text: 'a sensitive command (not shown)', complete: false };
       return redactedHead(cmd, COMMAND_HEAD);
     }
+    case 'Read':
+      return filePath(field(input, 'file_path'), where);
+    // the tools that write: the path shows, never complete (what they would write is not shown, and a settings, rc or hook file can widen
+    // what Claude may do): Deny or "Answer in terminal" only
     case 'Edit':
     case 'Write':
     case 'MultiEdit':
-    case 'Read':
-      return filePath(field(input, 'file_path'), where);
+      return { ...filePath(field(input, 'file_path'), where), complete: false };
     case 'NotebookEdit':
-      return filePath(field(input, 'notebook_path'), where);
+      return { ...filePath(field(input, 'notebook_path'), where), complete: false };
     case 'WebFetch':
       return redactedHead(field(input, 'url'), 4096);
   }

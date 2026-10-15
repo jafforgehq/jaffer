@@ -1,6 +1,6 @@
 import { effect } from '@preact/signals';
-import { activePane, cfg, historyItems, info, toast } from './state';
-import { freshList, lastConversation } from '../shared/history-label';
+import { activePane, cfg, historyItems, info, overlay, toast } from './state';
+import { freshList, lastConversation, newestOnly } from '../shared/history-label';
 import { pinnedIds } from '../shared/history-names';
 import { resumeAction } from '../shared/resume-action';
 import type { Conversation } from '../core/claude/history';
@@ -44,14 +44,26 @@ export async function readHistory(): Promise<Conversation[]> {
   return Array.isArray(r?.items) ? (r.items as Conversation[]) : [];
 }
 
+/** One sequence for every read that replaces `historyItems`: an answer older than the newest read never overwrites it. */
+const newest = newestOnly();
+
+/** Reads the past conversations into `historyItems` (unless a newer read began meanwhile); false when its answer was not the newest. */
+export async function loadHistory(): Promise<boolean> {
+  const r = await newest(readHistory);
+  if (r.newest) historyItems.value = r.value!;
+  return r.newest;
+}
+
 /**
  * ⇧⌘R: the newest conversation in the shell's folder, else the newest. The list is always read first (one RPC: a list the window kept
  * may be hours old, and an older conversation must not be resumed); when the read fails, the last list is used.
  */
 export async function resumeLast(): Promise<void> {
-  const r = await freshList(readHistory, historyItems.value);
+  if (overlay.value === 'onboarding') return; // (first run first, as for What's New)
+  const read = await newest(() => freshList(readHistory, historyItems.value)); // (freshList never fails)
+  const r = read.value!;
   if (!r.items) return void toast({ kind: 'error', text: r.error ?? 'Could not read the past conversations.' });
-  if (!r.error) historyItems.value = r.items;
+  if (!r.error && read.newest) historyItems.value = r.items;
   const c = lastConversation(r.items, info.value.cwd);
   if (!c) return void toast({ kind: 'info', text: 'No past conversations found' }, 3500);
   resumeConversation(c);

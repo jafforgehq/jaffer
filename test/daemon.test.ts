@@ -1045,7 +1045,7 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
     const ask = nextAsk();
     const run = hookCli(request({ tool_name: 'Write', tool_input: { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' }, cwd: '/work/app' }));
     const a = await ask;
-    expect(a).toMatchObject({ tool: 'Write', detail: 'src/a.ts', allowable: true }); // (the path from the folder Claude works in)
+    expect(a).toMatchObject({ tool: 'Write', detail: 'src/a.ts', allowable: false }); // (the path from the folder Claude works in; a write is never allowable)
     await app.call('claude.approval.answer', { id: a.id, decision: 'deny' });
     expect(await run).toMatchObject({ status: 0, stdout: DENY, stderr: '' });
   });
@@ -1067,7 +1067,7 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
   });
 
   it('Allow is refused for a request that is not shown whole (redacted, cut, a tool with no line): only Deny or "Answer in terminal" work', async () => {
-    for (const over of [{ tool_input: { command: 'mysql -pSECRET;rm -rf ~' } }, { tool_input: { command: `echo ${'x'.repeat(300)}` } }, { tool_name: 'mcp__srv__tool', tool_input: { q: 'x' } }]) {
+    for (const over of [{ tool_input: { command: 'mysql -pSECRET;rm -rf ~' } }, { tool_input: { command: `echo ${'x'.repeat(300)}` } }, { tool_name: 'mcp__srv__tool', tool_input: { q: 'x' } }, { tool_name: 'Write', tool_input: { file_path: '/work/app/a.ts', content: 'x' }, cwd: '/work/app' }]) {
       const ask = nextAsk();
       const pending = app.call('claude.approval', request(over), 10_000);
       const a = await ask;

@@ -77,16 +77,25 @@ describe('approvals: what Claude Code reads back, and what the notification says
 
   it('a file tool shows the path (relative to the folder, or with ~), never a sensitive one', () => {
     const where = { cwd: '/work/app', home: '/Users/me' };
-    for (const tool of ['Edit', 'Write', 'MultiEdit', 'Read']) expect(approvalDetail(tool, { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' }, where), tool).toEqual({ text: 'src/a.ts', complete: true });
-    expect(approvalDetail('Write', { file_path: '/Users/me/notes/b.md' }, where)).toEqual({ text: '~/notes/b.md', complete: true });
-    expect(approvalDetail('Write', { file_path: '/etc/hosts' }, where)).toEqual({ text: '/etc/hosts', complete: true });
-    expect(approvalDetail('Write', { file_path: '/work/application/x.ts' }, where)).toEqual({ text: '/work/application/x.ts', complete: true }); // (not inside /work/app)
-    expect(approvalDetail('NotebookEdit', { notebook_path: '/work/app/nb.ipynb' }, where)).toEqual({ text: 'nb.ipynb', complete: true });
-    for (const p of ['/Users/me/.ssh/authorized_keys', '/work/app/.env.local', `/work/${'d/'.repeat(3000)}x.ts`]) expect(approvalDetail('Write', { file_path: p }, where), p.slice(0, 40)).toEqual({ text: 'a key or credential file', complete: false });
-    const deep = approvalDetail('Write', { file_path: `/work/app/${'deep/'.repeat(40)}x.ts` }, where);
+    // the tools that write are never allowable: what they would write is not shown (a settings, rc or hook file can widen permissions)
+    for (const tool of ['Edit', 'Write', 'MultiEdit']) expect(approvalDetail(tool, { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' }, where), tool).toEqual({ text: 'src/a.ts', complete: false });
+    expect(approvalDetail('Read', { file_path: '/work/app/src/a.ts' }, where)).toEqual({ text: 'src/a.ts', complete: true });
+    expect(approvalDetail('Read', { file_path: '/Users/me/notes/b.md' }, where)).toEqual({ text: '~/notes/b.md', complete: true });
+    expect(approvalDetail('Write', { file_path: '/Users/me/notes/b.md' }, where)).toEqual({ text: '~/notes/b.md', complete: false });
+    expect(approvalDetail('Write', { file_path: '/etc/hosts' }, where)).toEqual({ text: '/etc/hosts', complete: false });
+    expect(approvalDetail('Read', { file_path: '/work/application/x.ts' }, where)).toEqual({ text: '/work/application/x.ts', complete: true }); // (not inside /work/app)
+    expect(approvalDetail('NotebookEdit', { notebook_path: '/work/app/nb.ipynb' }, where)).toEqual({ text: 'nb.ipynb', complete: false });
+    // Claude working at the root: a path stays absolute (`etc/hosts` would read as a relative path)
+    expect(approvalDetail('Read', { file_path: '/etc/hosts' }, { cwd: '/', home: '/Users/me' })).toEqual({ text: '/etc/hosts', complete: true });
+    expect(approvalDetail('Read', { file_path: '/etc/hosts' }, { cwd: '//', home: '/Users/me' }).text).toBe('/etc/hosts');
+    for (const p of ['/Users/me/.ssh/authorized_keys', '/work/app/.env.local', `/work/${'d/'.repeat(3000)}x.ts`]) {
+      expect(approvalDetail('Write', { file_path: p }, where), p.slice(0, 40)).toEqual({ text: 'a key or credential file', complete: false });
+      expect(approvalDetail('Read', { file_path: p }, where), p.slice(0, 40)).toEqual({ text: 'a key or credential file', complete: false });
+    }
+    const deep = approvalDetail('Read', { file_path: `/work/app/${'deep/'.repeat(40)}x.ts` }, where);
     expect(deep.complete).toBe(false);
     expect(deep.text).toMatch(/… \(\+\d+ chars\)$/);
-    expect(approvalDetail('Write', { file_path: '/work/app/a\nb.ts' }, where).complete).toBe(false);
+    expect(approvalDetail('Read', { file_path: '/work/app/a\nb.ts' }, where).complete).toBe(false);
   });
 
   it('WebFetch shows the url; other tools show nothing of their input, so they are never complete', () => {
@@ -105,6 +114,14 @@ describe('approvals: what Claude Code reads back, and what the notification says
     const d = bash('echo \u202eevil\u202c \u200bok\u0007\u001b[31m\u061c\u180e\u034f\u115f\u1160\uffa0\u{e007f}');
     expect(d.text).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufeff\uffa0]|[\u{e0000}-\u{e007f}]/u);
     expect(d.complete).toBe(false);
+    // the whole class: format and control characters, line and paragraph separators, variation selectors, Mongolian free variation
+    // selectors, Khmer inherent vowels, the Hangul fillers; each makes the line incomplete and shows as a placeholder
+    for (const ch of ['\u2066', '\u00ad', '\u0085', '\u2028', '\u2029', '\ufe0f', '\u{e0100}', '\u{e01ef}', '\u180b', '\u180d', '\u17b4', '\u17b5', '\u115f', '\u1160', '\u3164', '\uffa0', '\u{e0041}', '\u{110bd}']) {
+      const h = bash(`ls${ch}-la`);
+      expect(h.complete, ch.codePointAt(0)!.toString(16)).toBe(false);
+      expect(h.text, ch.codePointAt(0)!.toString(16)).toBe('ls\ufffd-la');
+    }
+    expect(bash('ls -la été 日本').complete).toBe(true); // (letters of any script are not hidden)
     expect(approvalTool('Ba\u0000sh\n\u202e')).toBe('Bash');
     expect(approvalTool(42)).toBe('');
     expect(approvalTool(undefined)).toBe('');
