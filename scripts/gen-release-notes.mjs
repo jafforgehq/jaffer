@@ -1,5 +1,5 @@
 // Bundles docs/releases/v*.md into a TS module (newest version first), so the app shows its release notes with nothing new to package.
-// Each note loses its page title (the card has its own) and the standard last line about updating. `--check` fails when the committed
+// Each note loses its page title (the card has its own) and the standard last line about updating, and ends at a `<!-- card-end -->` line when it has one. `--check` fails when the committed
 // file differs (a unit test runs it).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +18,8 @@ const newestFirst = (a, b) => {
 /** A release note's text for the card. */
 export function clean(raw) {
   const lines = raw.replace(/\r\n/g, '\n').trim().split('\n');
+  const end = lines.findIndex((l) => l.trim() === '<!-- card-end -->'); // (the card shows what comes before it; GitHub shows all of it)
+  if (end >= 0) lines.length = end;
   while (lines.length && /^#{1,2} /.test(lines[0])) lines.shift(); // (the page title)
   while (lines.length && (!lines[lines.length - 1].trim() || /^Updating from 0\.2\.x/.test(lines[lines.length - 1]))) lines.pop();
   return lines.join('\n').trim();
