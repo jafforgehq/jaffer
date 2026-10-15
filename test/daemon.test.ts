@@ -1029,8 +1029,8 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
     const ask = nextAsk();
     const run = hookCli(request());
     const a = await ask;
-    expect(Object.keys(a).sort()).toEqual(['detail', 'expiresAt', 'id', 'sessionId', 'tool']);
-    expect(a).toMatchObject({ sessionId: 'sess-a', tool: 'Bash', detail: 'rm -rf build INPUT-SECRET-WORDS' });
+    expect(Object.keys(a).sort()).toEqual(['allowable', 'detail', 'expiresAt', 'id', 'sessionId', 'tool']);
+    expect(a).toMatchObject({ sessionId: 'sess-a', tool: 'Bash', detail: 'rm -rf build INPUT-SECRET-WORDS', allowable: true });
     expect(a.expiresAt).toBeGreaterThan(Date.now());
     expect(JSON.stringify(await app.call('claude.approvals', {}))).toContain(a.id); // a window that just opened reads the list
     expect(await app.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: true });
@@ -1043,9 +1043,9 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
 
   it('a click on Deny prints exactly the deny JSON', async () => {
     const ask = nextAsk();
-    const run = hookCli(request({ tool_name: 'Write', tool_input: { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' } }));
+    const run = hookCli(request({ tool_name: 'Write', tool_input: { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' }, cwd: '/work/app' }));
     const a = await ask;
-    expect(a).toMatchObject({ tool: 'Write', detail: 'a.ts' });
+    expect(a).toMatchObject({ tool: 'Write', detail: 'src/a.ts', allowable: true }); // (the path from the folder Claude works in)
     await app.call('claude.approval.answer', { id: a.id, decision: 'deny' });
     expect(await run).toMatchObject({ status: 0, stdout: DENY, stderr: '' });
   });
@@ -1055,7 +1055,7 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
     const pending = app.call('claude.approval', request(), 10_000);
     const a = await ask;
     const other = await tryConnect(env5.paths);
-    for (const bad of [{ id: a.id, decision: 'yes' }, { id: a.id, decision: 'ALLOW' }, { id: a.id }, { id: 'no-such-id', decision: 'allow' }, { id: [a.id], decision: 'allow' }, null]) {
+    for (const bad of [{ id: a.id, decision: 'yes' }, { id: a.id, decision: 'ALLOW' }, { id: a.id, decision: 'ASK' }, { id: a.id }, { id: 'no-such-id', decision: 'allow' }, { id: [a.id], decision: 'allow' }, null]) {
       expect(await app.call('claude.approval.answer', bad), JSON.stringify(bad)).toEqual({ ok: false });
     }
     expect(await other!.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: false }); // (not the app's own connection)
@@ -1064,6 +1064,32 @@ describe('answering a permission prompt from the notification (1.2.0, claude.app
     expect(await app.call('claude.approval.answer', { id: a.id, decision: 'deny' })).toEqual({ ok: true });
     expect(await app.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: false }); // answered already
     expect(await pending).toEqual({ decision: 'deny' });
+  });
+
+  it('Allow is refused for a request that is not shown whole (redacted, cut, a tool with no line): only Deny or "Answer in terminal" work', async () => {
+    for (const over of [{ tool_input: { command: 'mysql -pSECRET;rm -rf ~' } }, { tool_input: { command: `echo ${'x'.repeat(300)}` } }, { tool_name: 'mcp__srv__tool', tool_input: { q: 'x' } }]) {
+      const ask = nextAsk();
+      const pending = app.call('claude.approval', request(over), 10_000);
+      const a = await ask;
+      expect(a.allowable, JSON.stringify(over).slice(0, 40)).toBe(false);
+      expect(await app.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: false });
+      expect((await app.call('claude.approvals', {})).items.map((x: any) => x.id)).toEqual([a.id]); // still waiting
+      expect(await app.call('claude.approval.answer', { id: a.id, decision: 'deny' })).toEqual({ ok: true });
+      expect(await pending).toEqual({ decision: 'deny' });
+    }
+  });
+
+  it('"Answer in terminal" (ask) lets the hook go at once: it prints nothing, Claude Code\'s own prompt follows, and the request is gone', async () => {
+    const ask = nextAsk();
+    const run = hookCli(request());
+    const a = await ask;
+    const t0 = Date.now();
+    expect(await app.call('claude.approval.answer', { id: a.id, decision: 'ask' })).toEqual({ ok: true });
+    const r = await run;
+    expect(r).toMatchObject({ status: 0, stdout: '', stderr: '' });
+    expect(Date.now() - t0).toBeLessThan(WAIT / 2);
+    expect((await app.call('claude.approvals', {})).items).toEqual([]);
+    expect(await app.call('claude.approval.answer', { id: a.id, decision: 'deny' })).toEqual({ ok: false }); // gone
   });
 
   it('no click within the wait: the hook prints nothing, exits 0, and the request is gone', async () => {

@@ -24,10 +24,13 @@ const flag = (name: string, def?: string): string | undefined => parsed.flags.ge
 /** The terminal runs only while the Jaffer app does: nothing here starts it (a session started from here would have no app to end it). */
 const NOT_RUNNING = 'Jaffer is not running. Open Jaffer and run this again.';
 
-/** What Claude Code wrote on stdin (`max`: more than that many characters is no payload at all). */
+/**
+ * What Claude Code wrote on stdin (`max`: more than that many characters is no payload at all). Stdin is let go once it is read: one Claude
+ * Code keeps open must not keep the hook running after its answer.
+ */
 async function readStdin(max = Infinity): Promise<string> {
   if (process.stdin.isTTY) return '';
-  return new Promise((resolve) => {
+  const s = await new Promise<string>((resolve) => {
     let s = '';
     const t = setTimeout(() => resolve(s), 400);
     process.stdin.setEncoding('utf8');
@@ -35,7 +38,6 @@ async function readStdin(max = Infinity): Promise<string> {
       s += d;
       if (s.length > max) {
         clearTimeout(t);
-        process.stdin.destroy();
         resolve('');
       }
     });
@@ -44,6 +46,8 @@ async function readStdin(max = Infinity): Promise<string> {
       resolve(s);
     });
   });
+  process.stdin.destroy();
+  return s;
 }
 
 /**
@@ -58,7 +62,7 @@ async function askApproval(): Promise<void> {
     const client = await tryConnect(paths, 600);
     if (!client) return;
     try {
-      const r = await client.call('claude.approval', { session_id: p.session_id, tool_name: p.tool_name, tool_input: p.tool_input }, APPROVAL_WAIT_MS + 1000).catch(() => null);
+      const r = await client.call('claude.approval', { session_id: p.session_id, tool_name: p.tool_name, tool_input: p.tool_input, cwd: p.cwd }, APPROVAL_WAIT_MS + 1000).catch(() => null);
       const d = r && typeof r === 'object' ? (r as { decision?: unknown }).decision : undefined;
       if (d === 'allow' || d === 'deny') process.stdout.write(decisionOutput(d));
     } finally {
@@ -129,7 +133,8 @@ async function main(): Promise<void> {
         running?.close();
         throw new Error(running ? `${wrapper} is missing. Quit Jaffer and open it again: it writes it when it starts.` : NOT_RUNNING);
       }
-      const res = flag('remove') ? await teardownClaude() : await setupClaude(wrapper);
+      // (with the approvals hook while that setting is on: connecting again must not take it away)
+      const res = flag('remove') ? await teardownClaude() : await setupClaude(wrapper, { approvals: new ConfigStore(paths).get().claude.approvals });
       for (const m of res.messages) console.log(m);
       console.log(dim(`claude: ${res.status.claudeInstalled ? res.status.claudePath : 'not found'} · hooks: ${res.status.hooks ? 'on' : 'off'}`));
       if (!flag('remove')) console.log(dim('A Claude Code started in Jaffer’s terminal is followed by the companion, the notifications and the cost figure.'));

@@ -942,40 +942,49 @@ describe('Jaffer UI end to end', () => {
     const calls = () => page.evaluate(() => (window as any).__apCalls as { id: string; decision: string }[]);
     const push = (d: object) => page.evaluate((x) => (window as any).__event('claude.approvals', x), d);
     const chip = '.session-pill .needs-chip[data-approval]';
+    const card = '.now-card';
     try {
-      const a = { id: 'ap-1', sessionId: 'ap-sess', tool: 'Bash', detail: 'npm test', expiresAt: Date.now() + 15_000 };
+      const a = { id: 'ap-1', sessionId: 'ap-sess', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 15_000 };
       await push({ items: [a] });
       await page.waitForSelector(chip);
       expect(await page.locator(`${chip} .alert-dot`).count()).toBe(1);
       expect(await textOf(`${chip} .ap-text`)).toMatch(/^Bash · Waiting for your answer \(1[45] s\)$/);
       expect(await page.getAttribute(chip, 'title')).toBe('Claude asks to use Bash: npm test');
-      await page.waitForSelector('.now-card[data-state="needs-you"] .ap-ask[data-id="ap-1"]');
-      expect(await textOf('.now-card .ap-detail')).toBe('npm test');
-      expect(await page.locator('.now-card .now-hint').count()).toBe(0); // (no prompt in the terminal to answer yet)
+      // the chip offers Deny and "Answer in terminal" only: Allow lives in the card, next to the whole request
+      expect(await page.$$eval(`${chip} button`, (els) => els.map((e) => e.textContent))).toEqual(['Deny', 'Answer in terminal']);
+      await page.waitForSelector(`${card}[data-state="needs-you"] .ap-ask[data-id="ap-1"]`);
+      expect(await textOf(`${card} .ap-detail`)).toBe('npm test');
+      expect(await page.$$eval(`${card} .ap-btns button`, (els) => els.map((e) => e.textContent))).toEqual(['Deny', 'Allow', 'Answer in terminal']);
+      expect(await page.locator(`${card} .now-hint`).count()).toBe(0); // (no prompt in the terminal to answer yet)
       await until(async () => /\(1[23] s\)/.test((await textOf(`${chip} .ap-text`)) ?? ''), 5_000, 'the countdown');
       await shot('28b-approval');
       // nothing answers without a click: Enter and Space on a focused Allow, a click a script makes
-      for (const where of [chip, '.now-card']) {
-        await page.focus(`${where} .ap-allow`);
-        await page.keyboard.press('Enter');
-        await page.keyboard.press('Space');
-        await page.$eval(`${where} .ap-allow`, (b) => (b as HTMLButtonElement).click());
-        await page.$eval(`${where} .ap-allow`, (b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
-      }
+      await page.focus(`${card} .ap-allow`);
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Space');
+      await page.$eval(`${card} .ap-allow`, (b) => (b as HTMLButtonElement).click());
+      await page.$eval(`${card} .ap-allow`, (b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+      expect(await page.getAttribute(`${card} .ap-allow`, 'tabindex')).toBe('-1'); // (not in the keyboard's way)
       await sleep(400);
       expect(await calls()).toEqual([]);
-      // a click on Allow (the title bar) answers allow for that id; the terminal keeps the keyboard
+      // a click on Allow answers allow for that id; the terminal keeps the keyboard
       await page.click('.term');
-      await page.click(`${chip} .ap-allow`);
+      await page.click(`${card} .ap-allow`);
       await until(async () => (await calls()).length === 1, 3_000, 'the allow');
       expect(await calls()).toEqual([{ id: 'ap-1', decision: 'allow' }]);
       expect(await page.evaluate(() => !!document.activeElement?.closest('.term'))).toBe(true);
-      // the next one: Deny on the Now card
-      await push({ items: [{ ...a, id: 'ap-2', tool: 'Write', detail: 'a.ts' }], answered: { sessionId: 'ap-sess', tool: 'Bash' } });
-      await page.waitForSelector('.now-card .ap-ask[data-id="ap-2"]');
-      await page.click('.now-card .ap-deny');
+      // the next one: Deny in the title bar
+      await push({ items: [{ ...a, id: 'ap-2', tool: 'Write', detail: 'src/a.ts' }], answered: { sessionId: 'ap-sess', tool: 'Bash' } });
+      await page.waitForSelector(`${chip} .ap-ask[data-id="ap-2"]`);
+      await page.click(`${chip} .ap-deny`);
       await until(async () => (await calls()).length === 2, 3_000, 'the deny');
       expect((await calls())[1]).toEqual({ id: 'ap-2', decision: 'deny' });
+      // "Answer in terminal": the hook lets go (ask), Claude Code's own prompt follows
+      await push({ items: [{ ...a, id: 'ap-3' }] });
+      await page.waitForSelector(`${chip} .ap-ask[data-id="ap-3"]`);
+      await page.click(`${chip} .ap-term`);
+      await until(async () => (await calls()).length === 3, 3_000, 'the ask');
+      expect((await calls())[2]).toEqual({ id: 'ap-3', decision: 'ask' });
       // answered or timed out, the daemon's list empties: the buttons go, and the chip is the plain one again
       await push({ items: [], answered: { sessionId: 'ap-sess', tool: 'Write' } });
       await until(async () => (await page.locator('.ap-ask').count()) === 0, 3_000, 'the buttons to go');
@@ -984,7 +993,7 @@ describe('Jaffer UI end to end', () => {
       await inject([{ id: 'ap-sess', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 't9' } }]);
       await until(async () => /Bash.*· 2nd time/.test((await page.textContent('.session-pill .needs-chip')) ?? ''), 4_000, 'the 2nd time');
       expect(await page.locator('.ap-ask').count()).toBe(0);
-      expect((await calls()).length).toBe(2); // nothing else was ever answered
+      expect((await calls()).length).toBe(3); // nothing else was ever answered
     } finally {
       await page.evaluate(() => {
         const w = window as any;
@@ -992,6 +1001,69 @@ describe('Jaffer UI end to end', () => {
       });
       await push({ items: [] });
       await inject([]);
+    }
+  }, 30_000);
+
+  it('approvals: Allow arms 750 ms after its request shows (a double-click allows only the first of two), and is not offered for a request that is not shown whole', async () => {
+    await endClaude();
+    await inject([]);
+    await cfgPatch({ panel: { open: true } });
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__apCalls = [];
+      w.__apReal = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.approval.answer' ? (w.__apCalls.push(p), Promise.resolve({ ok: true })) : w.__apReal(m, p));
+    });
+    const calls = () => page.evaluate(() => (window as any).__apCalls as { id: string; decision: string }[]);
+    const push = (d: object) => page.evaluate((x) => (window as any).__event('claude.approvals', x), d);
+    const allow = '.now-card .ap-allow';
+    try {
+      const a1 = { id: 'arm-1', sessionId: 'arm-sess', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 15_000 };
+      const a2 = { ...a1, id: 'arm-2', detail: 'rm -rf build' };
+      await push({ items: [a1, a2] });
+      await page.waitForSelector(`${allow}[aria-disabled="true"]`); // not armed yet: it looks so
+      expect(await page.$eval(allow, (el) => Number(getComputedStyle(el).opacity))).toBeLessThan(1);
+      // a real click at once (page.click itself waits for the element to settle, longer than the delay)
+      const clickNow = async () => {
+        const b = await page.$eval(allow, (el) => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+        await page.mouse.click(b.x, b.y);
+      };
+      await clickNow(); // inside the arming delay: nothing
+      await sleep(200);
+      expect(await calls()).toEqual([]);
+      await page.waitForSelector(`${allow}:not([aria-disabled])`, { timeout: 2_000 });
+      // a double-click: only the first click counts, for the first request; the second stays waiting
+      const b = await page.$eval(allow, (el) => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+      await page.mouse.dblclick(b.x, b.y);
+      await sleep(300);
+      expect(await calls()).toEqual([{ id: 'arm-1', decision: 'allow' }]);
+      // the daemon takes the first away: the second shows, and its Allow arms afresh
+      await push({ items: [a2] });
+      await page.waitForSelector(`.now-card .ap-ask[data-id="arm-2"] .ap-allow[aria-disabled="true"]`);
+      await clickNow();
+      await sleep(200);
+      expect(await calls()).toHaveLength(1);
+      await page.waitForSelector(`${allow}:not([aria-disabled])`, { timeout: 2_000 });
+      await page.click(allow);
+      await until(async () => (await calls()).length === 2, 3_000, 'the second allow');
+      expect((await calls())[1]).toEqual({ id: 'arm-2', decision: 'allow' });
+      // a request that is not shown whole: no Allow anywhere, a word on why, Deny and "Answer in terminal" stay
+      await push({ items: [{ ...a1, id: 'arm-3', detail: 'echo xxxxx… (+250 chars)', allowable: false }] });
+      await page.waitForSelector('.now-card .ap-ask[data-id="arm-3"]');
+      await sleep(900);
+      expect(await page.locator('.ap-allow').count()).toBe(0);
+      expect(await textOf('.now-card .ap-why')).toMatch(/terminal/);
+      expect(await page.$$eval('.now-card .ap-btns button', (els) => els.map((e) => e.textContent))).toEqual(['Deny', 'Answer in terminal']);
+      // the whole line wraps in the card: nothing of it is hidden
+      await push({ items: [{ ...a1, id: 'arm-4', detail: `echo ${'word '.repeat(22)}`.trim() }] });
+      await page.waitForSelector('.now-card .ap-ask[data-id="arm-4"]');
+      expect(await page.$eval('.now-card .ap-detail', (el) => el.scrollWidth <= el.clientWidth && getComputedStyle(el).whiteSpace !== 'nowrap')).toBe(true);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__apReal;
+      });
+      await push({ items: [] });
     }
   }, 30_000);
 

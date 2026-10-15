@@ -387,9 +387,10 @@ function notify(title: string, body: string, kind?: HoldKind): void {
 
 /**
  * Approvals (1.2.0, `claude.approvals`, off by default): a permission prompt waits for a click. Each new one gets a notification, while the
- * window is not in front and focus mode does not hold it, with Allow, Deny and Show. Only a click on Allow answers allow and only one on
- * Deny answers deny; Show and a click on the notification bring the window back and answer nothing (Claude Code's own prompt follows when
- * the time is up). A notification whose prompt no longer waits is closed. Ids seen while the window was in front get none later.
+ * window is not in front and focus mode does not hold it, with Show, Deny and (only for a request whose line is the whole request,
+ * `allowable`) Allow. Only a click on Allow answers allow, and only one on Deny answers deny. Show brings the window back and lets the hook
+ * go ('ask': Claude Code's own prompt appears at once); a click on the notification itself only brings the window back (the hook waits out
+ * its time). A notification whose prompt no longer waits is closed. Ids seen while the window was in front get none later.
  */
 const approvalNotes = new Map<string, Notification | null>();
 function onApprovals(items: unknown): void {
@@ -404,20 +405,22 @@ function onApprovals(items: unknown): void {
     if (approvalNotes.has(a.id)) continue;
     approvalNotes.set(a.id, null);
     if (win?.isFocused() || focus.hold('needs-you') || !Notification.isSupported()) continue; // (in front: the title bar and the panel ask)
+    const allowable = a.allowable === true;
     const note = new Notification({
       title: `Claude asks to use ${String(a.tool).slice(0, 64) || 'a tool'}`,
       body: String(a.detail ?? '').slice(0, 120),
-      actions: [
-        { type: 'button', text: 'Allow' },
-        { type: 'button', text: 'Deny' },
-        { type: 'button', text: 'Show' },
-      ],
+      actions: [{ type: 'button', text: 'Show' }, { type: 'button', text: 'Deny' }, ...(allowable ? [{ type: 'button' as const, text: 'Allow' }] : [])],
     });
+    const answer = (decision: 'allow' | 'deny' | 'ask') => void client?.call('claude.approval.answer', { id: a.id, decision }).catch(() => undefined);
     note.on('click', () => showWindow());
     note.on('action', (e, index) => {
       const i = typeof (e as { actionIndex?: unknown })?.actionIndex === 'number' ? (e as { actionIndex: number }).actionIndex : index;
-      if (i === 0 || i === 1) void client?.call('claude.approval.answer', { id: a.id, decision: i === 0 ? 'allow' : 'deny' }).catch(() => undefined);
-      else showWindow();
+      if (i === 1) answer('deny');
+      else if (i === 2 && allowable) answer('allow');
+      else {
+        answer('ask');
+        showWindow();
+      }
     });
     approvalNotes.set(a.id, note);
     note.show();

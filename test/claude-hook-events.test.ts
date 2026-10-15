@@ -54,8 +54,8 @@ async function fakeDaemon(answer: (method: string) => unknown = () => ({ ok: tru
   await new Promise<void>((r) => server!.listen(env.paths.socket, () => r()));
 }
 
-/** Async on purpose: the stand-in daemon lives in this process and must be able to answer while the hook runs. */
-function hook(arg: string, input: string, extra: NodeJS.ProcessEnv = {}): Promise<{ status: number | null; stdout: string; ms: number }> {
+/** Async on purpose: the stand-in daemon lives in this process and must be able to answer while the hook runs. (`keepOpen`: stdin is never closed.) */
+function hook(arg: string, input: string, extra: NodeJS.ProcessEnv = {}, keepOpen = false): Promise<{ status: number | null; stdout: string; ms: number }> {
   return new Promise((resolve) => {
     const t0 = Date.now();
     const child = spawn(process.execPath, [cli, 'hook', arg], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, HOME: env.userHome, JAFFER_HOME: env.home, JAFFER_SESSION: '', JAFFER_NO_HOOKS: '', ...extra } });
@@ -64,7 +64,8 @@ function hook(arg: string, input: string, extra: NodeJS.ProcessEnv = {}): Promis
     const guard = setTimeout(() => child.kill('SIGKILL'), 15_000);
     child.on('close', (status) => (clearTimeout(guard), resolve({ status, stdout, ms: Date.now() - t0 })));
     child.stdin.on('error', () => undefined);
-    child.stdin.end(input);
+    if (keepOpen) child.stdin.write(input);
+    else child.stdin.end(input);
   });
 }
 
@@ -150,6 +151,13 @@ describe('jaffer hook <event>', () => {
     expect(received.filter((m) => m.method === 'claude.approval')).toEqual([]);
   });
 
+  it('permission-request exits as soon as it has answered, also when Claude Code keeps its stdin open', async () => {
+    await fakeDaemon((m) => (m === 'claude.approval' ? { decision: 'deny' } : { ok: true }));
+    const r = await hook('permission-request', REQUEST, { JAFFER_SESSION: '1' }, true);
+    expect(r).toMatchObject({ status: 0, stdout: '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Jaffer"}}}' });
+    expect(r.ms).toBeLessThan(5_000);
+  });
+
   it('session-start only reports too: whatever the daemon answers, nothing is printed for Claude Code to read', async () => {
     await fakeDaemon(() => 'something a daemon could say');
     const r = await hook('session-start', JSON.stringify({ session_id: 'sess-1', hook_event_name: 'SessionStart', cwd: env.userHome, source: 'startup' }), { JAFFER_SESSION: '1' });
@@ -157,4 +165,21 @@ describe('jaffer hook <event>', () => {
     expect(received.map((m) => m.method)).toEqual(['claude.event']);
     expect(received[0]!.params).toMatchObject({ hook_event_name: 'SessionStart' });
   });
+});
+
+describe('jaffer setup claude', () => {
+  it('keeps the approvals hook while claude.approvals is on (it reads the config), and leaves it out while it is off', async () => {
+    fs.mkdirSync(env.paths.binDir, { recursive: true });
+    fs.writeFileSync(path.join(env.paths.binDir, 'jaffer'), '#!/bin/sh\n', { mode: 0o755 });
+    const settings = path.join(env.userHome, '.claude', 'settings.json');
+    const ours = () => ((JSON.parse(fs.readFileSync(settings, 'utf8')).hooks?.PermissionRequest ?? []) as any[]).filter((e) => e.hooks.some((h: any) => String(h.command).includes('# jaffer-managed')));
+    const setup = () => execFileSync(process.execPath, [cli, 'setup', 'claude'], { env: { ...process.env, HOME: env.userHome, JAFFER_HOME: env.home, JAFFER_SESSION: '' }, timeout: 30_000 });
+    env.config.patch({ claude: { approvals: true } });
+    setup();
+    expect(ours()).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(settings, 'utf8')).hooks.Stop).toBeDefined(); // (and the eleven)
+    env.config.patch({ claude: { approvals: false } });
+    setup();
+    expect(ours()).toHaveLength(0);
+  }, 40_000);
 });

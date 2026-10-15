@@ -510,7 +510,8 @@ export class JafferService {
     if (this.stopping || !this.config.get().claude.approvals || this.approvals.size >= MAX_APPROVALS || ![...this.rpc.conns].some(this.isApp)) return Promise.resolve({ decision: null });
     const tool = approvalTool(o.tool_name);
     const wait = Math.min(APPROVAL_WAIT_MS, Number(process.env.JAFFER_TEST_APPROVAL_WAIT_MS) || APPROVAL_WAIT_MS); // (a test hook, inert unless set)
-    const view: ApprovalView = { id: randomUUID(), sessionId: typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '', tool, detail: approvalDetail(tool, o.tool_input), expiresAt: Date.now() + wait };
+    const detail = approvalDetail(tool, o.tool_input, { cwd: typeof o.cwd === 'string' ? o.cwd : undefined, home: this.userHome });
+    const view: ApprovalView = { id: randomUUID(), sessionId: typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '', tool, detail: detail.text, allowable: detail.complete, expiresAt: Date.now() + wait };
     return new Promise((resolve) => {
       const timer = setTimeout(() => done(null), wait);
       timer.unref?.();
@@ -591,12 +592,14 @@ export class JafferService {
       return { ok: true };
     });
     r.handle('claude.state', () => this.claudeState());
-    // Approvals (1.2.0, opt-in): a waiting hook asks, the app's click answers (strictly 'allow' or 'deny', for an id that waits; else ignored)
+    // Approvals (1.2.0, opt-in): a waiting hook asks, the app's click answers (strictly 'allow', 'deny' or 'ask', for an id that waits; else ignored)
     r.handle('claude.approval', (p: unknown, conn) => this.askApproval(p, conn));
+    // ('ask': "Answer in terminal", Show: the hook lets go now and Claude Code's own prompt appears; 'allow' only for a request shown whole)
     r.handle('claude.approval.answer', (p: { id?: unknown; decision?: unknown } | null, conn) => {
       const a = typeof p?.id === 'string' ? this.approvals.get(p.id) : undefined;
-      if (!a || !this.isApp(conn) || (p!.decision !== 'allow' && p!.decision !== 'deny')) return { ok: false };
-      a.done(p!.decision);
+      const d = p?.decision;
+      if (!a || !this.isApp(conn) || (d !== 'allow' && d !== 'deny' && d !== 'ask') || (d === 'allow' && !a.view.allowable)) return { ok: false };
+      a.done(d === 'ask' ? null : d);
       return { ok: true };
     });
     r.handle('claude.approvals', () => ({ items: [...this.approvals.values()].map((a) => a.view) }));

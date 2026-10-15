@@ -32,7 +32,7 @@ export function NowCard(): VNode {
         {m.elapsed && <span class="now-elapsed">{m.elapsed}</span>}
       </div>
       {m.tool && <div class="now-tool">{m.tool}</div>}
-      {ap && <ApprovalAsk a={ap} detail />}
+      {ap && <ApprovalAsk key={ap.id} a={ap} place="card" />}
       {m.hint && <div class="now-hint">{m.hint}</div>}
       {m.progress !== null && (
         <div class="now-progress" title="This turn against a typical one">

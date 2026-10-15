@@ -207,7 +207,7 @@ const answered = new Map<string, number>();
 
 function setApprovals(data: { items?: unknown; answered?: { sessionId?: unknown; tool?: unknown } } | null | undefined): void {
   const items = Array.isArray(data?.items) ? data.items : [];
-  approvals.value = items.filter((a): a is ApprovalView => !!a && typeof a.id === 'string' && typeof a.tool === 'string' && typeof a.detail === 'string' && typeof a.expiresAt === 'number');
+  approvals.value = items.filter((a): a is ApprovalView => !!a && typeof a.id === 'string' && typeof a.tool === 'string' && typeof a.detail === 'string' && typeof a.allowable === 'boolean' && typeof a.expiresAt === 'number');
   const a = data?.answered;
   if (a && typeof a.sessionId === 'string' && typeof a.tool === 'string' && a.tool) answered.set(`${a.sessionId}\n${a.tool}`, timesAnswered(a.sessionId, a.tool) + 1);
 }
@@ -218,8 +218,8 @@ async function loadApprovals(): Promise<void> {
     /* the daemon's next push fills this in */
   }
 }
-/** The person clicked Allow or Deny (the daemon takes it only for a prompt that still waits). */
-export function answerApproval(id: string, decision: 'allow' | 'deny'): void {
+/** The person clicked Allow, Deny or "Answer in terminal" (`ask`; the daemon takes it only for a prompt that still waits, and Allow only for one shown whole). */
+export function answerApproval(id: string, decision: 'allow' | 'deny' | 'ask'): void {
   void jaffer().call('claude.approval.answer', { id, decision }).catch(() => undefined);
 }
 export const timesAnswered = (sessionId: string, tool: string): number => answered.get(`${sessionId}\n${tool}`) ?? 0;

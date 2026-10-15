@@ -150,29 +150,47 @@ function SystemStats(): VNode | null {
   );
 }
 
+/** Allow takes no click for this long after its request first shows: a double-click, or a click meant for the one before, never allows it. */
+const ARM_MS = 750;
+
 /**
- * A permission prompt that waits for a click (1.2.0, approvals): the seconds left, Allow and Deny. Only a real click answers: a button
- * pressed from the keyboard, or a click a script makes, does nothing on Allow (no default button, no key for it). A press keeps the
- * terminal's focus, so the keys typed next go to the shell.
+ * A permission prompt that waits for a click (1.2.0, approvals): the seconds left, Deny, Allow and "Answer in terminal" (the hook lets go
+ * and Claude Code's own prompt appears at once). Render it keyed by the request's id. Allow is offered only in the Now card (`place`
+ * 'card'), next to the whole request, and only when that line is the request as it is (`allowable`). It answers only a real single click
+ * (no keyboard: out of the tab order, a press from the keyboard or a click a script makes does nothing), once it has armed. A press keeps
+ * the terminal's focus, so the keys typed next go to the shell.
  */
-export function ApprovalAsk({ a, detail }: { a: ApprovalView; detail?: boolean }): VNode {
+export function ApprovalAsk({ a, place }: { a: ApprovalView; place: 'chip' | 'card' }): VNode {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setArmed(true), ARM_MS);
+    return () => clearTimeout(t);
+  }, []);
   const secs = Math.max(0, Math.ceil((a.expiresAt - tick.value) / 1000));
-  const click = (decision: 'allow' | 'deny') => (e: MouseEvent) => {
-    if (decision === 'allow' && (!e.isTrusted || e.detail < 1)) return;
-    answerApproval(a.id, decision);
+  const card = place === 'card';
+  const keep = (e: MouseEvent) => e.preventDefault();
+  const allow = (e: MouseEvent) => {
+    if (!armed || !e.isTrusted || e.detail !== 1) return;
+    answerApproval(a.id, 'allow');
   };
   return (
     <span class="ap-ask" data-id={a.id}>
       <span class="ap-text">
         {a.tool} · Waiting for your answer ({secs} s)
       </span>
-      {detail && a.detail && <span class="ap-detail">{a.detail}</span>}
+      {card && a.detail && <span class="ap-detail">{a.detail}</span>}
+      {card && !a.allowable && <span class="ap-why">Not the whole request here: answer it in the terminal to see it, or deny it.</span>}
       <span class="ap-btns">
-        <button type="button" class="ap-allow" onMouseDown={(e) => e.preventDefault()} onClick={click('allow')}>
-          Allow
-        </button>
-        <button type="button" class="ap-deny" onMouseDown={(e) => e.preventDefault()} onClick={click('deny')}>
+        <button type="button" class="ap-deny" onMouseDown={keep} onClick={() => answerApproval(a.id, 'deny')}>
           Deny
+        </button>
+        {card && a.allowable && (
+          <button type="button" class="ap-allow" tabIndex={-1} aria-disabled={armed ? undefined : 'true'} onMouseDown={keep} onClick={allow}>
+            Allow
+          </button>
+        )}
+        <button type="button" class="ap-term" onMouseDown={keep} onClick={() => answerApproval(a.id, 'ask')}>
+          Answer in terminal
         </button>
       </span>
     </span>
@@ -249,7 +267,7 @@ export function TitleBar(): VNode {
           {ap ? (
             <span class="needs-chip" data-approval="" title={ap.detail ? `Claude asks to use ${ap.tool}: ${ap.detail}` : `Claude asks to use ${ap.tool}`}>
               <span class="alert-dot" />
-              <ApprovalAsk a={ap} />
+              <ApprovalAsk key={ap.id} a={ap} place="chip" />
             </span>
           ) : claude?.state === 'needs-you' && (
             <span class="needs-chip" title="Claude needs you: answer it in the terminal">
