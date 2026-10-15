@@ -28,6 +28,7 @@ function patchHistory(p: { names?: string[]; pinned?: string[] }): void {
 /** The toast after a removal: how many went to the Trash, and why any did not. */
 function trashSaid(r: TrashResult): string {
   const n = r.trashed.length;
+  if (r.refused.some((x) => x.reason === 'unknown')) return 'Jaffer could not check whether Claude is running, so nothing was moved';
   const of = (reason: string) => r.refused.filter((x) => x.reason === reason).length;
   const [running, gone, failed] = [of('running'), of('not found'), of('error')];
   const why = [
@@ -173,7 +174,7 @@ export function Conversations(): VNode {
       historyItems.value = historyItems.value?.filter((c) => !gone.has(c.id)) ?? null; // (at once; the read below has the last word)
     }
     load();
-    toast({ kind: r.refused?.some((x) => x.reason === 'error') ? 'error' : 'info', text: trashSaid({ trashed: [...gone], refused: r.refused ?? [] }) });
+    toast({ kind: r.refused?.some((x) => x.reason === 'error' || x.reason === 'unknown') ? 'error' : 'info', text: trashSaid({ trashed: [...gone], refused: r.refused ?? [] }) });
     // a row removed from the keyboard: the keyboard goes on to the row that took its place
     if (row !== undefined)
       setTimeout(() => {

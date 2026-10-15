@@ -16,7 +16,8 @@ export interface TrashDeps {
   liveIds(): Promise<string[]>;
 }
 
-export type TrashRefusal = 'running' | 'not found' | 'error';
+/** `unknown`: the running sessions could not be looked up, so nothing was touched (never a guess). */
+export type TrashRefusal = 'running' | 'not found' | 'error' | 'unknown';
 export interface TrashResult {
   trashed: string[];
   refused: { id: string; reason: TrashRefusal }[];
@@ -50,7 +51,7 @@ export async function trashConversations(ids: unknown, deps: TrashDeps): Promise
     try {
       live = new Set(await deps.liveIds());
     } catch {
-      for (const id of pick) why.set(id, 'error');
+      for (const id of pick) why.set(id, 'unknown');
       return new Map();
     }
     for (const id of pick) if (live.has(id)) why.set(id, 'running');

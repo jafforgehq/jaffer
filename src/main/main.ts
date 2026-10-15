@@ -33,7 +33,7 @@ import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
 import { parseNames } from '../shared/history-names';
 import { trashAsk, trashConversations } from './trash-conversations';
-import type { Conversation } from '../core/claude/history';
+import { MAX_REMOVE, type Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
 import type { GitStatus } from '../core/session/git-status';
@@ -1009,7 +1009,7 @@ ipcMain.handle('jaffer:reset', async (e) => {
     defaultId: 0,
     cancelId: 0,
   };
-  const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
+  const r = win && !win.isDestroyed() && win.isVisible() ? await dialog.showMessageBox(win, ask) : await dialog.showMessageBox(ask);
   if (r.response === 0) return { cancelled: true };
   quitting = true; // from here the app is on its way out: the end of its terminal is expected
   quitConfirmed = true;
@@ -1067,7 +1067,7 @@ ipcMain.handle('jaffer:save-text', async (e, text: unknown, name: unknown) => {
 ipcMain.handle('jaffer:trash-conversations', async (e, p: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   const ids = (p as { ids?: unknown } | null)?.ids;
-  if (!Array.isArray(ids) || ids.length > 200 || !ids.every((x) => typeof x === 'string')) throw new Error('Not a list of conversations.');
+  if (!Array.isArray(ids) || ids.length > MAX_REMOVE || !ids.every((x) => typeof x === 'string')) throw new Error('Not a list of conversations.');
   return trashConversations(ids, {
     claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), // (as the daemon reads the list)
     trashItem: (f) => shell.trashItem(f),

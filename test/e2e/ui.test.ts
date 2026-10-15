@@ -2886,6 +2886,12 @@ describe('Jaffer UI end to end', () => {
     await toastSaid('Nothing moved to the Trash: 1 is still running');
     calls++;
     expect(await row(102).count()).toBe(1);
+    // the running sessions could not be looked up: says why, nothing moved
+    await answer({ trashed: [], refused: [{ id: sid(102), reason: 'unknown' }] });
+    await trashRow(102);
+    await toastSaid('Jaffer could not check whether Claude is running, so nothing was moved');
+    calls++;
+    expect(await row(102).count()).toBe(1);
     await answer(null);
 
     // Delete on the row with the keyboard: that row; the keyboard goes on to the row in its place. Delete or Backspace elsewhere asks nothing

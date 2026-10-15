@@ -89,7 +89,7 @@ describe('trashConversations (1.3.0): past conversations to the Trash, after one
   it('when the running ones cannot be known, nothing is trashed and nothing asked (never a guess)', async () => {
     plant(1);
     const { d, trashed } = deps({ liveIds: vi.fn(async () => Promise.reject(new Error('the terminal is not running'))) });
-    expect(await trashConversations([uuid(1)], d)).toEqual({ trashed: [], refused: [{ id: uuid(1), reason: 'error' }] });
+    expect(await trashConversations([uuid(1)], d)).toEqual({ trashed: [], refused: [{ id: uuid(1), reason: 'unknown' }] });
     expect(d.confirm).not.toHaveBeenCalled();
     expect(trashed).toEqual([]);
   });
