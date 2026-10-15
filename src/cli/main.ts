@@ -7,6 +7,7 @@ import { VERSION } from '../core/version';
 import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { resetJaffer } from '../core/reset';
+import { APPROVAL_WAIT_MS, decisionOutput } from '../core/claude/approvals';
 
 const paths = makePaths();
 const args = process.argv.slice(2);
@@ -23,18 +24,49 @@ const flag = (name: string, def?: string): string | undefined => parsed.flags.ge
 /** The terminal runs only while the Jaffer app does: nothing here starts it (a session started from here would have no app to end it). */
 const NOT_RUNNING = 'Jaffer is not running. Open Jaffer and run this again.';
 
-async function readStdin(): Promise<string> {
+/** What Claude Code wrote on stdin (`max`: more than that many characters is no payload at all). */
+async function readStdin(max = Infinity): Promise<string> {
   if (process.stdin.isTTY) return '';
   return new Promise((resolve) => {
     let s = '';
     const t = setTimeout(() => resolve(s), 400);
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (d) => (s += d));
+    process.stdin.on('data', (d) => {
+      s += d;
+      if (s.length > max) {
+        clearTimeout(t);
+        process.stdin.destroy();
+        resolve('');
+      }
+    });
     process.stdin.on('end', () => {
       clearTimeout(t);
       resolve(s);
     });
   });
+}
+
+/**
+ * `jaffer hook permission-request` (installed only with `claude.approvals` on, and the one hook Claude Code waits for): asks the window for
+ * a click on Allow or Deny and prints Claude Code's decision for it. Anything else (no click in time, the setting off, no daemon, an error,
+ * a bad payload) prints nothing, and Claude Code's own prompt appears. Exits 0 on every path and never prints anything else.
+ */
+async function askApproval(): Promise<void> {
+  try {
+    const p = JSON.parse((await readStdin(1024 * 1024)) || 'null');
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return;
+    const client = await tryConnect(paths, 600);
+    if (!client) return;
+    try {
+      const r = await client.call('claude.approval', { session_id: p.session_id, tool_name: p.tool_name, tool_input: p.tool_input }, APPROVAL_WAIT_MS + 1000).catch(() => null);
+      const d = r && typeof r === 'object' ? (r as { decision?: unknown }).decision : undefined;
+      if (d === 'allow' || d === 'deny') process.stdout.write(decisionOutput(d));
+    } finally {
+      client.close();
+    }
+  } catch {
+    /* Claude Code's own prompt */
+  }
 }
 
 const HELP = `${bold('jaffer')} ${VERSION} — the command line for your Jaffer session
@@ -63,6 +95,7 @@ async function main(): Promise<void> {
       if (process.env.JAFFER_NO_HOOKS) return; // a `claude` the daemon itself runs (`claude auth ...`) is not the terminal's
       // Only a claude running inside Jaffer's terminal reports (the companion, the notification and the cost figure follow it).
       if (process.env.JAFFER_SESSION !== '1') return;
+      if (args[1] === 'permission-request') return void (await askApproval());
       const input = await readStdin();
       let payload: Record<string, unknown> = {};
       try {

@@ -12,6 +12,7 @@ import { commandNotification, needsYouNotification, shouldBounce } from '../shar
 import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
+import type { ApprovalView } from '../core/claude/approvals';
 import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { RELEASE_NOTES } from '../generated/release-notes';
@@ -129,13 +130,17 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[]; today?: DayTotal }).sessions, (data as { today?: DayTotal }).today);
     if (event === 'config.changed') applyConfig(data as typeof appCfg);
+    if (event === 'claude.approvals') onApprovals((data as { items?: unknown } | null)?.items);
   });
   void c
     .call('config.get', {})
     .then((x) => applyConfig(x as typeof appCfg))
     .catch(() => undefined);
   void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
-  c.onClose.on(() => void onConnectionLost(o));
+  c.onClose.on(() => {
+    onApprovals([]); // (no answer can reach the terminal any more)
+    void onConnectionLost(o);
+  });
 }
 
 /** Start the app's own terminal host and connect to it. */
@@ -378,6 +383,45 @@ function notify(title: string, body: string, kind?: HoldKind): void {
   note.on('click', () => showWindow());
   if (withShow) note.on('action', () => showWindow());
   note.show();
+}
+
+/**
+ * Approvals (1.2.0, `claude.approvals`, off by default): a permission prompt waits for a click. Each new one gets a notification, while the
+ * window is not in front and focus mode does not hold it, with Allow, Deny and Show. Only a click on Allow answers allow and only one on
+ * Deny answers deny; Show and a click on the notification bring the window back and answer nothing (Claude Code's own prompt follows when
+ * the time is up). A notification whose prompt no longer waits is closed. Ids seen while the window was in front get none later.
+ */
+const approvalNotes = new Map<string, Notification | null>();
+function onApprovals(items: unknown): void {
+  const list = (Array.isArray(items) ? items : []).filter((a): a is ApprovalView => !!a && typeof (a as ApprovalView).id === 'string');
+  const ids = new Set(list.map((a) => a.id));
+  for (const [id, note] of approvalNotes) {
+    if (ids.has(id)) continue;
+    note?.close();
+    approvalNotes.delete(id);
+  }
+  for (const a of list) {
+    if (approvalNotes.has(a.id)) continue;
+    approvalNotes.set(a.id, null);
+    if (win?.isFocused() || focus.hold('needs-you') || !Notification.isSupported()) continue; // (in front: the title bar and the panel ask)
+    const note = new Notification({
+      title: `Claude asks to use ${String(a.tool).slice(0, 64) || 'a tool'}`,
+      body: String(a.detail ?? '').slice(0, 120),
+      actions: [
+        { type: 'button', text: 'Allow' },
+        { type: 'button', text: 'Deny' },
+        { type: 'button', text: 'Show' },
+      ],
+    });
+    note.on('click', () => showWindow());
+    note.on('action', (e, index) => {
+      const i = typeof (e as { actionIndex?: unknown })?.actionIndex === 'number' ? (e as { actionIndex: number }).actionIndex : index;
+      if (i === 0 || i === 1) void client?.call('claude.approval.answer', { id: a.id, decision: i === 0 ? 'allow' : 'deny' }).catch(() => undefined);
+      else showWindow();
+    });
+    approvalNotes.set(a.id, note);
+    note.show();
+  }
 }
 
 // ---------------------------------------------------------------- updates

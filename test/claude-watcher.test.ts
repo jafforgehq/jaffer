@@ -331,7 +331,7 @@ describe('ClaudeWatcher', () => {
   // redacted and never a sensitive one, with the names, counts, timings and failures of its tool calls. Nothing else of a payload is.
   it('keeps nothing the person wrote or Claude answered: no prompt, command, reply, folder or tool argument; only tool names, counts, timings, failures and the paths it edits (never a sensitive one)', () => {
     const home = '/home/me/secret-project';
-    const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', '.ssh', 'id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist', 'heist-description', 'OLD-TEXT', 'NEW-TEXT', 'FILE-CONTENT', 'read-only.ts', 'ERROR-TEXT'];
+    const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', '.ssh', 'id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist', 'heist-description', 'OLD-TEXT', 'NEW-TEXT', 'FILE-CONTENT', 'read-only.ts', 'ERROR-TEXT', 'PERMISSION-SECRET-COMMAND', 'SUGGESTION-SECRET', 'PermissionRequest'];
     w.handle(fx('SessionStart', { cwd: home, model: 'claude-opus-5-5' }));
     w.handle(fx('UserPromptSubmit', { prompt: `PROMPT-SECRET-WORDS ${TOKEN}`, cwd: home }));
     w.handle(fx('PreToolUse', bash('cat /home/me/.ssh/id_rsa')));
@@ -348,6 +348,9 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('PostToolUse', key));
     w.handle(fx('PreToolUse', { tool_name: 'Agent', tool_input: { description: 'heist-description', prompt: 'plan-the-heist', subagent_type: 'plan-the-heist' }, tool_use_id: 'toolu_g' }));
     w.handle(fx('SubagentStart', { agent_id: 'bg-1', agent_type: 'plan-the-heist' }));
+    // 1.2.0: a PermissionRequest (the approvals hook asks the daemon with `claude.approval`, never the watcher) is not kept either
+    // (its shape from Claude Code's docs: no captured payload in the fixtures)
+    w.handle({ session_id: 'sess-1', transcript_path: '/home/user/.claude/projects/-work-app/sess-1.jsonl', cwd: home, permission_mode: 'default', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'PERMISSION-SECRET-COMMAND' }, permission_suggestions: [{ type: 'addRules', rules: ['SUGGESTION-SECRET'] }] });
     w.handle(fx('Stop', { last_assistant_message: `REPLY-SECRET-WORDS ${TOKEN}` }));
     const state = JSON.stringify(w.sessions());
     for (const word of words) expect(state, word).not.toContain(word);

@@ -1,9 +1,10 @@
 import type { VNode } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { cfg, claudeToday, currentClaude, daemonUp, dismissToast, info, panelOpen, port, safeCommand, systemStats, tick, tildePath, timesAnswered, toasts, togglePanel, turnHistory } from '../state';
+import { answerApproval, approvals, cfg, claudeToday, currentClaude, daemonUp, dismissToast, info, panelOpen, port, safeCommand, systemStats, tick, tildePath, timesAnswered, toasts, togglePanel, turnHistory } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { formatTokens, formatUsd } from '../../shared/claude-cost';
 import type { ClaudeSession } from '../../core/claude/watcher';
+import type { ApprovalView } from '../../core/claude/approvals';
 import { baseName, budgetLevel, COST_ESTIMATE, costFigure, fmtDuration, gitText, ordinal, progressFraction, sessionClockText, sparkPath } from '../claude-ui';
 import { IconBranch, IconInfo, IconPencil, IconSidebar, IconX } from './icons';
 
@@ -149,6 +150,35 @@ function SystemStats(): VNode | null {
   );
 }
 
+/**
+ * A permission prompt that waits for a click (1.2.0, approvals): the seconds left, Allow and Deny. Only a real click answers: a button
+ * pressed from the keyboard, or a click a script makes, does nothing on Allow (no default button, no key for it). A press keeps the
+ * terminal's focus, so the keys typed next go to the shell.
+ */
+export function ApprovalAsk({ a, detail }: { a: ApprovalView; detail?: boolean }): VNode {
+  const secs = Math.max(0, Math.ceil((a.expiresAt - tick.value) / 1000));
+  const click = (decision: 'allow' | 'deny') => (e: MouseEvent) => {
+    if (decision === 'allow' && (!e.isTrusted || e.detail < 1)) return;
+    answerApproval(a.id, decision);
+  };
+  return (
+    <span class="ap-ask" data-id={a.id}>
+      <span class="ap-text">
+        {a.tool} · Waiting for your answer ({secs} s)
+      </span>
+      {detail && a.detail && <span class="ap-detail">{a.detail}</span>}
+      <span class="ap-btns">
+        <button type="button" class="ap-allow" onMouseDown={(e) => e.preventDefault()} onClick={click('allow')}>
+          Allow
+        </button>
+        <button type="button" class="ap-deny" onMouseDown={(e) => e.preventDefault()} onClick={click('deny')}>
+          Deny
+        </button>
+      </span>
+    </span>
+  );
+}
+
 export function TitleBar(): VNode {
   const i = info.value;
   const c = cfg.value;
@@ -168,6 +198,8 @@ export function TitleBar(): VNode {
   const asked = claude?.state === 'needs-you' ? claude.tool?.name : undefined;
   const times = claude && asked ? timesAnswered(claude.id, asked) : 0;
   const notice = claude?.state === 'needs-you' && typeof claude.notice === 'string' ? claude.notice.slice(0, 60) : '';
+  // a permission prompt waiting for a click (approvals): the chip asks it, whatever the session's state
+  const ap = approvals.value[0];
   return (
     <div class="titlebar">
       <div class="tb-left" />
@@ -214,7 +246,12 @@ export function TitleBar(): VNode {
               {baseName(file)}
             </button>
           )}
-          {claude?.state === 'needs-you' && (
+          {ap ? (
+            <span class="needs-chip" data-approval="" title={ap.detail ? `Claude asks to use ${ap.tool}: ${ap.detail}` : `Claude asks to use ${ap.tool}`}>
+              <span class="alert-dot" />
+              <ApprovalAsk a={ap} />
+            </span>
+          ) : claude?.state === 'needs-you' && (
             <span class="needs-chip" title="Claude needs you: answer it in the terminal">
               <span class="alert-dot" />
               {[asked, notice, times ? `${ordinal(times + 1)} time` : ''].filter(Boolean).join(' · ')}

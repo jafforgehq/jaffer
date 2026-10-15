@@ -928,6 +928,73 @@ describe('Jaffer UI end to end', () => {
     await inject([]);
   }, 30_000);
 
+  it('approvals (1.2.0): a prompt that waits for a click asks in the title bar and the Now card with a countdown; only a click answers (Allow or Deny, with its id); the buttons go with it', async () => {
+    await endClaude();
+    await inject([]);
+    await cfgPatch({ panel: { open: true } });
+    // the answers are recorded here, not sent (the daemon has no such prompt)
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__apCalls = [];
+      w.__apReal = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'claude.approval.answer' ? (w.__apCalls.push(p), Promise.resolve({ ok: true })) : w.__apReal(m, p));
+    });
+    const calls = () => page.evaluate(() => (window as any).__apCalls as { id: string; decision: string }[]);
+    const push = (d: object) => page.evaluate((x) => (window as any).__event('claude.approvals', x), d);
+    const chip = '.session-pill .needs-chip[data-approval]';
+    try {
+      const a = { id: 'ap-1', sessionId: 'ap-sess', tool: 'Bash', detail: 'npm test', expiresAt: Date.now() + 15_000 };
+      await push({ items: [a] });
+      await page.waitForSelector(chip);
+      expect(await page.locator(`${chip} .alert-dot`).count()).toBe(1);
+      expect(await textOf(`${chip} .ap-text`)).toMatch(/^Bash · Waiting for your answer \(1[45] s\)$/);
+      expect(await page.getAttribute(chip, 'title')).toBe('Claude asks to use Bash: npm test');
+      await page.waitForSelector('.now-card[data-state="needs-you"] .ap-ask[data-id="ap-1"]');
+      expect(await textOf('.now-card .ap-detail')).toBe('npm test');
+      expect(await page.locator('.now-card .now-hint').count()).toBe(0); // (no prompt in the terminal to answer yet)
+      await until(async () => /\(1[23] s\)/.test((await textOf(`${chip} .ap-text`)) ?? ''), 5_000, 'the countdown');
+      await shot('28b-approval');
+      // nothing answers without a click: Enter and Space on a focused Allow, a click a script makes
+      for (const where of [chip, '.now-card']) {
+        await page.focus(`${where} .ap-allow`);
+        await page.keyboard.press('Enter');
+        await page.keyboard.press('Space');
+        await page.$eval(`${where} .ap-allow`, (b) => (b as HTMLButtonElement).click());
+        await page.$eval(`${where} .ap-allow`, (b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+      }
+      await sleep(400);
+      expect(await calls()).toEqual([]);
+      // a click on Allow (the title bar) answers allow for that id; the terminal keeps the keyboard
+      await page.click('.term');
+      await page.click(`${chip} .ap-allow`);
+      await until(async () => (await calls()).length === 1, 3_000, 'the allow');
+      expect(await calls()).toEqual([{ id: 'ap-1', decision: 'allow' }]);
+      expect(await page.evaluate(() => !!document.activeElement?.closest('.term'))).toBe(true);
+      // the next one: Deny on the Now card
+      await push({ items: [{ ...a, id: 'ap-2', tool: 'Write', detail: 'a.ts' }], answered: { sessionId: 'ap-sess', tool: 'Bash' } });
+      await page.waitForSelector('.now-card .ap-ask[data-id="ap-2"]');
+      await page.click('.now-card .ap-deny');
+      await until(async () => (await calls()).length === 2, 3_000, 'the deny');
+      expect((await calls())[1]).toEqual({ id: 'ap-2', decision: 'deny' });
+      // answered or timed out, the daemon's list empties: the buttons go, and the chip is the plain one again
+      await push({ items: [], answered: { sessionId: 'ap-sess', tool: 'Write' } });
+      await until(async () => (await page.locator('.ap-ask').count()) === 0, 3_000, 'the buttons to go');
+      expect(await page.locator('.session-pill .needs-chip').count()).toBe(0);
+      // an answer from here counts as an answered prompt: the next time Bash asks in the terminal it is the 2nd
+      await inject([{ id: 'ap-sess', state: 'needs-you', turnStartedAtAgo: 5_000, tool: { name: 'Bash', id: 't9' } }]);
+      await until(async () => /Bash.*· 2nd time/.test((await page.textContent('.session-pill .needs-chip')) ?? ''), 4_000, 'the 2nd time');
+      expect(await page.locator('.ap-ask').count()).toBe(0);
+      expect((await calls()).length).toBe(2); // nothing else was ever answered
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.jaffer.call = w.__apReal;
+      });
+      await push({ items: [] });
+      await inject([]);
+    }
+  }, 30_000);
+
   it('the editing chip: the file Claude is writing, beside the ring; a click shows it in Finder', async () => {
     await endClaude();
     await page.evaluate(() => ((window as any).__revealed = []));
@@ -2813,6 +2880,11 @@ describe('Jaffer UI end to end', () => {
     await page.click('.settings-nav button:has-text("Claude Code")');
     expect((await page.textContent('.settings')) ?? '').toMatch(/Claude Code is installed/); // install and sign-in help live here now
     expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(|Approvals|Run commands|Always-allowed/);
+    // 1.2.0: answering permission prompts from the notification is one switch here, experimental and off by default (its words avoid the above)
+    const approvalsField = page.locator('.settings .field', { hasText: 'Answer permission prompts from the notification' });
+    expect(await approvalsField.count()).toBe(1);
+    expect(await approvalsField.textContent()).toMatch(/Experimental\. Claude Code waits up to 20 s .* its own prompt appears as usual/);
+    expect(await approvalsField.locator('input[type="checkbox"]').isChecked()).toBe(false);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.settings', { state: 'detached' });
   });

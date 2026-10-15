@@ -162,6 +162,14 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .session-pill .edit-chip { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--accent); font: 500 11px var(--font-mono); cursor: pointer; }
 .session-pill .edit-chip:hover { background: var(--accent-soft); }
 .session-pill .needs-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--warn); font-size: 11.5px; }
+/* approvals (1.2.0): a permission prompt waiting for a click, in the needs-you chip and the Now card */
+.ap-ask { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ap-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ap-detail { flex-basis: 100%; font: 11px var(--font-mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-btns { display: inline-flex; gap: 4px; -webkit-app-region: no-drag; }
+.ap-allow, .ap-deny { border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 7px; background: var(--hover); color: var(--text); font: 500 11px var(--font-ui, sans-serif); line-height: 18px; cursor: pointer; }
+.ap-allow:hover { background: var(--accent-soft); color: var(--accent); }
+.ap-deny:hover { background: var(--danger-soft); color: var(--danger); }
 .session-pill .alert-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 .session-pill .branch { display: inline-flex; align-items: center; gap: 4px; color: var(--branch); font-family: var(--font-mono); font-size: 11px; }
 .session-pill .running { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-family: var(--font-mono); font-size: 11px; }

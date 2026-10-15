@@ -1,11 +1,12 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { activePane, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick, turnHistory } from '../state';
+import { activePane, approvals, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick, turnHistory } from '../state';
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth } from '../panel';
 import { Conversations } from './Conversations';
 import { WhatsNew } from './WhatsNew';
 import { terminals } from './TerminalView';
+import { ApprovalAsk } from './Chrome';
 
 const SLIDE_MS = 180;
 /** The arrow keys on the edge write `panel.width` (and fit the terminal) once they stop for this long. */
@@ -20,14 +21,18 @@ export function NowCard(): VNode {
   // (the second clock only runs while Claude works; otherwise the slow one keeps the agents' times roughly current)
   const now = s?.state === 'working' ? tick.value : (void clock.value, Date.now());
   const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0, turns: turnHistory.value });
+  // a permission prompt waiting for a click (approvals): asked here too, and the terminal has no prompt to answer yet
+  const ap = approvals.value[0];
+  if (ap) m.hint = undefined;
   return (
-    <section class="now-card" data-state={m.state} aria-label="Now">
+    <section class="now-card" data-state={ap ? 'needs-you' : m.state} aria-label="Now">
       <div class="now-head">
         <span class="now-dot" />
         <span class="now-label">{m.label}</span>
         {m.elapsed && <span class="now-elapsed">{m.elapsed}</span>}
       </div>
       {m.tool && <div class="now-tool">{m.tool}</div>}
+      {ap && <ApprovalAsk a={ap} detail />}
       {m.hint && <div class="now-hint">{m.hint}</div>}
       {m.progress !== null && (
         <div class="now-progress" title="This turn against a typical one">

@@ -50,6 +50,13 @@ export const HOOK_EVENTS: readonly string[] = EVENTS.map((e) => e.event);
 /** How long Claude Code lets one of them run (it does not wait for them: they are `async`). */
 const HOOK_TIMEOUT = 5;
 
+/**
+ * The twelfth (1.2.0), only while `claude.approvals` is on: `PermissionRequest`, the one hook Claude Code waits for (not `async`). It asks
+ * the window for a click on Allow or Deny for up to 20 s and prints nothing otherwise; Claude Code gives it 25 s.
+ */
+const APPROVAL = { event: 'PermissionRequest', arg: 'hook permission-request' };
+const APPROVAL_TIMEOUT = 25;
+
 /** The hooks run for every Claude Code on the machine: this keeps them from starting the Jaffer binary at all outside a Jaffer session. */
 const GUARD = '[ "$JAFFER_SESSION" = 1 ] || exit 0; ';
 
@@ -83,7 +90,7 @@ function isOurs(h: HookEntry): boolean {
 }
 
 /** Add (or refresh) Jaffer's hooks in ~/.claude/settings.json, preserving everything else. */
-export function installHooks(cliPath: string, home: string = os.homedir()): { changed: boolean; error?: string } {
+export function installHooks(cliPath: string, home: string = os.homedir(), opts: { approvals?: boolean } = {}): { changed: boolean; error?: string } {
   const file = settingsPath(home);
   const { data, ok, error } = readSettings(file);
   if (!ok) return { changed: false, error };
@@ -95,6 +102,12 @@ export function installHooks(cliPath: string, home: string = os.homedir()): { ch
     rest.push({ hooks: [{ type: 'command', command: `${GUARD}${shellQuote(cliPath)} ${ev.arg} # ${MARK}`, timeout: HOOK_TIMEOUT, async: true }] });
     data.hooks[ev.event] = rest;
   }
+  // the approvals hook: there while the setting is on, gone (with its key, when nothing of the user's is left there) while it is off
+  const list: HookEntry[] = Array.isArray(data.hooks[APPROVAL.event]) ? data.hooks[APPROVAL.event] : [];
+  const rest = list.filter((h) => !isOurs(h));
+  if (opts.approvals) rest.push({ hooks: [{ type: 'command', command: `${GUARD}${shellQuote(cliPath)} ${APPROVAL.arg} # ${MARK}`, timeout: APPROVAL_TIMEOUT }] });
+  if (rest.length) data.hooks[APPROVAL.event] = rest;
+  else delete data.hooks[APPROVAL.event];
   if (JSON.stringify(data) === before) return { changed: false };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeFileAtomic(file, JSON.stringify(data, null, 2) + '\n', 0o644, { preserve: true });
@@ -107,7 +120,7 @@ export function removeHooks(home: string = os.homedir()): { changed: boolean; er
   if (!ok) return { changed: false, error };
   if (!data.hooks) return { changed: false };
   let changed = false;
-  for (const ev of EVENTS) {
+  for (const ev of [...EVENTS, APPROVAL]) {
     const list: HookEntry[] = Array.isArray(data.hooks[ev.event]) ? data.hooks[ev.event] : [];
     const rest = list.filter((h) => !isOurs(h));
     if (rest.length !== list.length) {
@@ -201,9 +214,9 @@ export async function claudeStatus(home: string = os.homedir(), env: NodeJS.Proc
 }
 
 /** Connects Claude Code: installs (or refreshes) Jaffer's hooks, and nothing else. */
-export async function setupClaude(cliPath: string, opts: { home?: string; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: ClaudeStatus; messages: string[] }> {
+export async function setupClaude(cliPath: string, opts: { home?: string; env?: NodeJS.ProcessEnv; approvals?: boolean } = {}): Promise<{ status: ClaudeStatus; messages: string[] }> {
   const home = opts.home ?? os.homedir();
-  const h = installHooks(cliPath, home);
+  const h = installHooks(cliPath, home, { approvals: opts.approvals });
   const messages = [h.error ? `Hooks: ${h.error}` : h.changed ? 'Installed Jaffer’s hooks in ~/.claude/settings.json.' : 'Hooks already installed.'];
   return { status: await claudeStatus(home, opts.env ?? process.env), messages };
 }

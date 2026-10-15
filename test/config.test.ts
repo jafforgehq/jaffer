@@ -116,6 +116,20 @@ describe('claude.liveCost, claude.dailyBudgetUsd and claude.typicalTurnMs', () =
   });
 });
 
+describe('claude.approvals (1.2.0)', () => {
+  it('is off by default, also for a config file saved before it existed, and only true or false is kept', () => {
+    expect(DEFAULT_CONFIG.claude.approvals).toBe(false);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { showCost: true } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().claude.approvals).toBe(false);
+    store.patch({ claude: { approvals: 'yes' } } as never);
+    expect(store.get().claude.approvals).toBe(false);
+    store.patch({ claude: { approvals: true } });
+    store.patch({ claude: { approvals: 1 } } as never);
+    expect(new ConfigStore(env.paths).get().claude.approvals).toBe(true);
+  });
+});
+
 describe('claude.toolStrip, claude.turnSummary, appearance.systemStats and appearance.glow', () => {
   it('have their defaults (strip, summary and glow on; system stats off), also for a config file saved before they existed', () => {
     expect(DEFAULT_CONFIG.claude).toMatchObject({ toolStrip: true, turnSummary: true });

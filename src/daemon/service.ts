@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import { SessionHost } from '../core/session/host';
 import { resolveProject } from '../core/session/project';
 import { claudeStatus, findClaude, HOOK_EVENTS, hooksPointAt, installHooks, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { ClaudeWatcher } from '../core/claude/watcher';
+import { approvalDetail, approvalTool, APPROVAL_WAIT_MS, type ApprovalView } from '../core/claude/approvals';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
 import { StayAwake, type Work } from '../core/session/stay-awake';
 import { caffeinateHold } from '../core/session/caffeinate';
@@ -41,6 +43,9 @@ const STAY_AWAKE_TICK_MS = 5000;
 
 /** While Claude works, what its answer has cost so far is read this often. */
 const LIVE_COST_MS = 2000;
+
+/** At most this many permission prompts wait for a click at once; one more gets no answer (Claude Code's own prompt). */
+const MAX_APPROVALS = 5;
 
 /** The shell can draw its prompt more than once in a row: the repository is looked at once it settles. */
 const GIT_DEBOUNCE_MS = 300;
@@ -77,6 +82,8 @@ export class JafferService {
   private git: { root: string; status: GitStatus } | undefined;
   private gitTimer: NodeJS.Timeout | null = null;
   private gitSeq = 0;
+  /** Permission prompts waiting for a click on Allow or Deny (`claude.approvals`), in memory only: what is shown of each, never its input. */
+  private approvals = new Map<string, { view: ApprovalView; done: (decision: 'allow' | 'deny' | null) => void }>();
   private claudePushTimer: NodeJS.Timeout | null = null;
   private claudePushPending = false;
   private stopping = false;
@@ -120,7 +127,8 @@ export class JafferService {
       // Jaffer's hooks as this version writes them (idempotent, only Jaffer's own entries): an install from before gets the events it
       // lacks, and its SessionStart and Stop (which fed the memory) become async and guarded like the rest. Only when they already run
       // THIS daemon's wrapper: another Jaffer home's hooks are not ours to rewrite.
-      if (hooksPointAt(this.cliWrapper, this.userHome)) installHooks(this.cliWrapper, this.userHome);
+      // (and the approvals hook while that setting is on)
+      if (hooksPointAt(this.cliWrapper, this.userHome)) installHooks(this.cliWrapper, this.userHome, { approvals: this.config.get().claude.approvals });
     } catch {
       /* the user's settings are theirs: never fail startup over them */
     }
@@ -151,6 +159,7 @@ export class JafferService {
     if (this.stopping) return;
     this.stopping = true;
     this.stopStayAwake(); // first: nothing below may keep the Mac awake
+    this.endApprovals();
     for (const t of this.timers) clearInterval(t);
     for (const stop of this.rejectionWatches.values()) stop();
     this.rejectionWatches.clear();
@@ -300,8 +309,18 @@ export class JafferService {
       if (typical !== prev) this.config.patch({ claude: { typicalTurnMs: typical } });
       this.today = dayTotal(this.today, Date.now(), 0, ms); // (before the Stop's own push: the window hears it with the state)
     });
+    let approvals = this.config.get().claude.approvals;
     this.config.onChange.on((c) => {
       this.rpc.broadcast('config.changed', c);
+      if (c.claude.approvals !== approvals) {
+        approvals = c.claude.approvals;
+        if (!approvals) this.endApprovals(); // (Claude Code's own prompts again, at once)
+        try {
+          if (hooksPointAt(this.cliWrapper, this.userHome)) installHooks(this.cliWrapper, this.userHome, { approvals });
+        } catch {
+          /* the user's settings are theirs */
+        }
+      }
       this.refreshStayAwake(); // (the switch for staying awake)
       this.refreshLive(); // (the switches for the cost)
     });
@@ -471,6 +490,48 @@ export class JafferService {
     }
   }
 
+  // ------------------------------------------------------------------ approvals
+
+  /** The app's own connection (its `hello` said so): the one that shows the notification, and the only one whose answer counts. */
+  private isApp = (c: ServerConn) => c.meta.app === true && c.alive;
+
+  private pushApprovals(answered?: { sessionId: string; tool: string }): void {
+    this.rpc.broadcast('claude.approvals', { items: [...this.approvals.values()].map((a) => a.view), ...(answered ? { answered } : {}) });
+  }
+
+  /**
+   * A permission prompt from the blocking hook (`jaffer hook permission-request`): waits up to 20 s for a click on Allow or Deny in the app.
+   * Null (Claude Code shows its own prompt) when the setting is off, no app is there to ask, five already wait, the time runs out, the app's
+   * connection goes, the hook's own goes (Claude Code gave up on it) or the daemon stops. The payload's input is read for the one line
+   * shown and dropped; the watcher never sees it.
+   */
+  private askApproval(p: unknown, from: ServerConn): Promise<{ decision: 'allow' | 'deny' | null }> {
+    const o = p && typeof p === 'object' && !Array.isArray(p) ? (p as Record<string, unknown>) : {};
+    if (this.stopping || !this.config.get().claude.approvals || this.approvals.size >= MAX_APPROVALS || ![...this.rpc.conns].some(this.isApp)) return Promise.resolve({ decision: null });
+    const tool = approvalTool(o.tool_name);
+    const wait = Math.min(APPROVAL_WAIT_MS, Number(process.env.JAFFER_TEST_APPROVAL_WAIT_MS) || APPROVAL_WAIT_MS); // (a test hook, inert unless set)
+    const view: ApprovalView = { id: randomUUID(), sessionId: typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '', tool, detail: approvalDetail(tool, o.tool_input), expiresAt: Date.now() + wait };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => done(null), wait);
+      timer.unref?.();
+      const off = from.closed.on(() => done(null));
+      const done = (decision: 'allow' | 'deny' | null) => {
+        if (!this.approvals.delete(view.id)) return;
+        clearTimeout(timer);
+        off();
+        resolve({ decision });
+        this.pushApprovals(decision ? { sessionId: view.sessionId, tool: view.tool } : undefined);
+      };
+      this.approvals.set(view.id, { view, done });
+      this.pushApprovals();
+    });
+  }
+
+  /** Every waiting prompt goes back to Claude Code's own. */
+  private endApprovals(): void {
+    for (const a of [...this.approvals.values()]) a.done(null);
+  }
+
   // ------------------------------------------------------------------ rpc
 
   private registerMethods(): void {
@@ -481,7 +542,14 @@ export class JafferService {
       return s;
     };
 
-    r.handle('hello', (p: { client?: string; protocol?: number }) => ({ version: this.version, protocol: PROTOCOL, pid: process.pid, startedAt: this.startedAt, home: this.paths.home, platform: process.platform, client: p?.client }));
+    r.handle('hello', (p: { client?: string; protocol?: number }, conn) => {
+      if (p?.client === 'app' && !conn.meta.app) {
+        conn.meta.app = true;
+        // the app is gone: no click can come any more
+        conn.closed.on(() => ![...this.rpc.conns].some(this.isApp) && this.endApprovals());
+      }
+      return { version: this.version, protocol: PROTOCOL, pid: process.pid, startedAt: this.startedAt, home: this.paths.home, platform: process.platform, client: p?.client };
+    });
 
     // ---- terminal
     r.handle('session.attach', async (p: { cols?: number; rows?: number; pane?: string }, conn) => {
@@ -523,6 +591,15 @@ export class JafferService {
       return { ok: true };
     });
     r.handle('claude.state', () => this.claudeState());
+    // Approvals (1.2.0, opt-in): a waiting hook asks, the app's click answers (strictly 'allow' or 'deny', for an id that waits; else ignored)
+    r.handle('claude.approval', (p: unknown, conn) => this.askApproval(p, conn));
+    r.handle('claude.approval.answer', (p: { id?: unknown; decision?: unknown } | null, conn) => {
+      const a = typeof p?.id === 'string' ? this.approvals.get(p.id) : undefined;
+      if (!a || !this.isApp(conn) || (p!.decision !== 'allow' && p!.decision !== 'deny')) return { ok: false };
+      a.done(p!.decision);
+      return { ok: true };
+    });
+    r.handle('claude.approvals', () => ({ items: [...this.approvals.values()].map((a) => a.view) }));
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
     // Past conversations, from Claude Code's own transcripts: ids, folders, times, titles for the 30 newest (redacted) and (with showCost) token counts, read on request, kept nowhere;
     // `include`: the pinned ones' ids (checked there), listed even when older than the 50 newest
@@ -564,7 +641,7 @@ export class JafferService {
     });
     // Connects Claude Code: its hooks, so the companion, the notification and the cost figure follow it (the first run, and Settings).
     r.handle('setup.claude.install', async () => {
-      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv() });
+      const res = await setupClaude(this.cliWrapper, { home: this.userHome, env: this.userEnv(), approvals: this.config.get().claude.approvals });
       this.config.patch({ claude: { skipped: false } });
       return res;
     });

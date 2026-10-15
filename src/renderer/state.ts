@@ -10,6 +10,7 @@ import { RELEASE_NOTES } from '../generated/release-notes';
 import { effectiveSeen, unseenNotes, type ReleaseNote } from '../shared/whats-new';
 import type { GitStatus } from '../core/session/git-status';
 import type { Conversation } from '../core/claude/history';
+import type { ApprovalView } from '../core/claude/approvals';
 import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
 import { FailTracker } from './fail-tracker';
 import { resolveTheme, type JafferTheme } from './themes';
@@ -182,11 +183,17 @@ export const claudeToday = signal<{ usd: number; date: string; workMs?: number }
 export const turnHistory = signal<{ id: string; durMs: number; usd?: number }[]>([]);
 /** A turn just finished: the window's edge flashes once. */
 export const turnDone = signal(false);
+/**
+ * Permission prompts waiting for a click on Allow or Deny (1.2.0, `claude.approvals`, opt-in), as the daemon lists them: what is shown of
+ * each and when it stops waiting. Memory only. The title bar's chip and the Now card ask with them; an answer from here or from the
+ * notification counts as an answered prompt.
+ */
+export const approvals = signal<ApprovalView[]>([]);
 /** A clock that ticks every second, only while Claude works (the ring's progress, the running tool call's segment). */
 export const tick = signal(Date.now());
 let ticker: ReturnType<typeof setInterval> | null = null;
 effect(() => {
-  const on = currentClaude()?.state === 'working';
+  const on = currentClaude()?.state === 'working' || approvals.value.length > 0; // (and the countdown of a prompt that waits)
   if (on && !ticker) {
     tick.value = Date.now();
     ticker = setInterval(() => (tick.value = Date.now()), 1000);
@@ -197,6 +204,24 @@ effect(() => {
 });
 /** How many times a permission prompt was answered, per session and tool (`id \n tool`). */
 const answered = new Map<string, number>();
+
+function setApprovals(data: { items?: unknown; answered?: { sessionId?: unknown; tool?: unknown } } | null | undefined): void {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  approvals.value = items.filter((a): a is ApprovalView => !!a && typeof a.id === 'string' && typeof a.tool === 'string' && typeof a.detail === 'string' && typeof a.expiresAt === 'number');
+  const a = data?.answered;
+  if (a && typeof a.sessionId === 'string' && typeof a.tool === 'string' && a.tool) answered.set(`${a.sessionId}\n${a.tool}`, timesAnswered(a.sessionId, a.tool) + 1);
+}
+async function loadApprovals(): Promise<void> {
+  try {
+    setApprovals(await jaffer().call('claude.approvals', {}));
+  } catch {
+    /* the daemon's next push fills this in */
+  }
+}
+/** The person clicked Allow or Deny (the daemon takes it only for a prompt that still waits). */
+export function answerApproval(id: string, decision: 'allow' | 'deny'): void {
+  void jaffer().call('claude.approval.answer', { id, decision }).catch(() => undefined);
+}
 export const timesAnswered = (sessionId: string, tool: string): number => answered.get(`${sessionId}\n${tool}`) ?? 0;
 
 let seen: ClaudeSession | null = null;
@@ -316,14 +341,19 @@ export async function bootstrap(): Promise<void> {
         gitTimer = setTimeout(() => void refreshInfo(), 1500);
       }
     } else if (event === 'claude.state') setClaude(data);
+    else if (event === 'claude.approvals') setApprovals(data);
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle') void refreshInfo();
-    else if (event === 'daemon.down') daemonUp.value = false;
+    else if (event === 'daemon.down') {
+      daemonUp.value = false;
+      approvals.value = []; // (no answer can reach it)
+    }
     else if (event === 'daemon.up') {
       daemonUp.value = true;
       void refreshInfo();
       void loadClaudeState();
+      void loadApprovals();
       ptyBus.emit({ event: 'daemon.up', data: {} });
     }
   });
@@ -343,7 +373,7 @@ export async function bootstrap(): Promise<void> {
   });
   // after an update: one toast (not on a first start, which has nothing unseen)
   if (config.onboarded && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
-  await Promise.all([refreshInfo(), loadClaudeState()]);
+  await Promise.all([refreshInfo(), loadClaudeState(), loadApprovals()]);
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   ready.value = true;
 }

@@ -719,6 +719,9 @@ export function Settings(): VNode {
               <Field label="Turn summary" hint="when a turn of 10 seconds or more ends: how long it took, what Claude did and the files it edited (click one to show it in Finder)">
                 <Switch checked={c.claude?.turnSummary !== false} onChange={(v) => set({ claude: { turnSummary: v } })} />
               </Field>
+              <Field label="Answer permission prompts from the notification" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
+                <Switch checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
+              </Field>
               <HookHealth />
             </>
           )}

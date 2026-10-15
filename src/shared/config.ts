@@ -52,6 +52,8 @@ export interface JafferConfig {
     toolStrip: boolean;
     /** When a turn of 10 s or more ends: a toast with how long it took, what Claude did, the files it edited (and the cost, with `showCost`). */
     turnSummary: boolean;
+    /** Answer Claude Code's permission prompts from the notification (Allow / Deny): a twelfth hook, blocking, installed only while this is on. Off by default. */
+    approvals: boolean;
   };
   terminal: {
     /** Command blocks: a mark beside every command's prompt (its exit, its times), jumping between prompts, the sticky command header, copying and saving a command's output. */
@@ -136,7 +138,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
     blur: true,
   },
   shell: { path: '', args: [] },
-  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true },
+  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
   updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true },

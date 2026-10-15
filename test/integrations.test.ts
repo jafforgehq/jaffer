@@ -123,6 +123,45 @@ describe('Claude Code hooks', () => {
     expect(Object.keys(readSettings().hooks)).toHaveLength(11);
   });
 
+  it('PermissionRequest (1.2.0, approvals) is the twelfth: installed only while approvals are on, blocking (no async) with 25 s, guarded and marked; off takes it away, the user\'s own stay', () => {
+    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+    const mine = { type: 'command', command: 'echo my own permission hook' };
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { PermissionRequest: [{ matcher: 'Bash', hooks: [mine] }] } }));
+    installHooks('/x/jaffer', env.userHome);
+    expect(readSettings().hooks.PermissionRequest).toEqual([{ matcher: 'Bash', hooks: [mine] }]); // off by default: nothing of ours
+    expect(installHooks('/x/jaffer', env.userHome, { approvals: true }).changed).toBe(true);
+    expect(installHooks('/x/jaffer', env.userHome, { approvals: true }).changed).toBe(false); // idempotent
+    const list = readSettings().hooks.PermissionRequest as any[];
+    expect(list[0]).toEqual({ matcher: 'Bash', hooks: [mine] });
+    expect(list[1]).toEqual({ hooks: [{ type: 'command', command: `[ "$JAFFER_SESSION" = 1 ] || exit 0; '/x/jaffer' hook permission-request # jaffer-managed`, timeout: 25 }] });
+    expect(list).toHaveLength(2);
+    expect(hooksInstalled(env.userHome)).toBe(true);
+    expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(true);
+    expect(installHooks('/x/jaffer', env.userHome, { approvals: false }).changed).toBe(true);
+    expect(readSettings().hooks.PermissionRequest).toEqual([{ matcher: 'Bash', hooks: [mine] }]);
+    expect(Object.keys(readSettings().hooks)).toHaveLength(12); // the eleven, and the user's own PermissionRequest
+    installHooks('/x/jaffer', env.userHome, { approvals: true });
+    expect(removeHooks(env.userHome).changed).toBe(true);
+    expect(readSettings()).toEqual({ hooks: { PermissionRequest: [{ matcher: 'Bash', hooks: [mine] }] } });
+    // alone (no hook of the user's), it goes with its key
+    installHooks('/x/jaffer', env.userHome, { approvals: true });
+    fs.writeFileSync(settingsFile(), JSON.stringify({ hooks: { ...readSettings().hooks, PermissionRequest: readSettings().hooks.PermissionRequest.slice(1) } }));
+    installHooks('/x/jaffer', env.userHome, { approvals: false });
+    expect(readSettings().hooks.PermissionRequest).toBeUndefined();
+  });
+
+  it('the PermissionRequest hook starts nothing outside a Jaffer session either', () => {
+    const marker = path.join(env.root, 'ran');
+    const wrapper = path.join(env.root, 'wrapper');
+    fs.writeFileSync(wrapper, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    installHooks(wrapper, env.userHome, { approvals: true });
+    const command = (readSettings().hooks.PermissionRequest as any[])[0].hooks[0].command;
+    expect(spawnSync('sh', ['-c', command], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, timeout: 10_000 }).status).toBe(0);
+    expect(fs.existsSync(marker)).toBe(false);
+    spawnSync('sh', ['-c', command], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', JAFFER_SESSION: '1' }, timeout: 10_000 });
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+
   it('hooksPointAt: true only when every Jaffer hook already runs this wrapper (another Jaffer home\'s hooks are not ours to rewrite)', () => {
     expect(hooksPointAt('/x/jaffer', env.userHome)).toBe(false); // nothing installed: nothing to migrate
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });

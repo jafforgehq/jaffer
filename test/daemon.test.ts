@@ -8,7 +8,7 @@ import { MockAnthropic } from './helpers/mock-anthropic';
 import { ensureDaemon, tryConnect, type Launcher } from '../src/core/daemon-client';
 import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
-import { findClaude } from '../src/core/integrations/claude';
+import { findClaude, installHooks } from '../src/core/integrations/claude';
 import { STOP_AFTER_END_GRACE_MS } from '../src/core/claude/cost';
 import type { ClaudeSession } from '../src/core/claude/watcher';
 
@@ -961,6 +961,182 @@ function standInClaude(dir: string) {
   fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/bash\necho "STAND-IN CLAUDE: $*"\nexit "$(cat '${code}')"\n`, { mode: 0o755 });
   return { dir, exitWith: (n: number) => fs.writeFileSync(code, String(n)) };
 }
+
+describe('answering a permission prompt from the notification (1.2.0, claude.approvals; bundled daemon and the real jaffer CLI)', () => {
+  let env5: TestEnv;
+  let app: RpcClient;
+  const WAIT = 2_000; // JAFFER_TEST_APPROVAL_WAIT_MS: the 20 s wait, short for the tests
+  const settings = () => path.join(env5.userHome, '.claude', 'settings.json');
+  const ours = () => ((JSON.parse(fs.readFileSync(settings(), 'utf8')).hooks?.PermissionRequest ?? []) as any[]).filter((e) => e.hooks.some((h: any) => String(h.command).includes('# jaffer-managed')));
+  const ALLOW = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}';
+  const DENY = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Jaffer"}}}';
+  const request = (over: object = {}) => ({ session_id: 'sess-a', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf build INPUT-SECRET-WORDS' }, permission_suggestions: [{ type: 'addRules', rules: ['SUGGESTION-SECRET'] }], ...over });
+
+  /** `jaffer hook permission-request` as Claude Code runs it: what it printed, how it ended, how long it took. */
+  const hookCli = (payload: object, extra: NodeJS.ProcessEnv = {}) =>
+    new Promise<{ status: number | null; stdout: string; stderr: string; ms: number }>((resolve) => {
+      const t0 = Date.now();
+      const child = spawn(process.execPath, [path.join(root, 'dist/cli/jaffer.cjs'), 'hook', 'permission-request'], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: env5.userHome, JAFFER_HOME: env5.home, JAFFER_SESSION: '1', JAFFER_NO_HOOKS: '', ...extra } });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => (stdout += d));
+      child.stderr.on('data', (d) => (stderr += d));
+      child.on('close', (status) => resolve({ status, stdout, stderr, ms: Date.now() - t0 }));
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(JSON.stringify(payload));
+    });
+  /** The next list of pending requests the app hears that has one in it. */
+  const nextAsk = () => new Promise<any>((resolve) => {
+    const off = app.on('claude.approvals', (d: any) => {
+      if (d?.items?.length) (off(), resolve(d.items[d.items.length - 1]));
+    });
+  });
+
+  beforeAll(async () => {
+    env5 = makeEnv();
+    // Claude Code connected (the eleven hooks run this home's wrapper), and the setting on
+    installHooks(path.join(env5.paths.binDir, 'jaffer'), env5.userHome);
+    env5.config.patch({ claude: { approvals: true } });
+    app = await ensureDaemon(env5.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env5.userHome, SHELL: '/bin/bash', PS1: '$ ', JAFFER_TEST_APPROVAL_WAIT_MS: String(WAIT) },
+    });
+    await app.call('hello', { client: 'app', protocol: 1 }); // the app's own connection: only it may answer
+  }, 30_000);
+
+  afterAll(async () => {
+    app?.close();
+    const last = await tryConnect(env5.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env5.cleanup();
+  });
+
+  it('installs the blocking PermissionRequest hook at start while the setting is on, and takes it away and back as it changes', async () => {
+    expect(ours()).toHaveLength(1);
+    expect(ours()[0].hooks[0]).toEqual({ type: 'command', command: `[ "$JAFFER_SESSION" = 1 ] || exit 0; '${env5.paths.binDir}/jaffer' hook permission-request # jaffer-managed`, timeout: 25 });
+    await app.call('config.patch', { claude: { approvals: false } });
+    await waitUntil(() => ours().length === 0);
+    await app.call('config.patch', { claude: { approvals: true } });
+    await waitUntil(() => ours().length === 1);
+  });
+
+  it('a click on Allow answers the waiting hook: it prints exactly the allow JSON, exits 0, and the app hears the list empty again', async () => {
+    const lists: any[] = [];
+    app.on('claude.approvals', (d: any) => lists.push(d));
+    const ask = nextAsk();
+    const run = hookCli(request());
+    const a = await ask;
+    expect(Object.keys(a).sort()).toEqual(['detail', 'expiresAt', 'id', 'sessionId', 'tool']);
+    expect(a).toMatchObject({ sessionId: 'sess-a', tool: 'Bash', detail: 'rm -rf build INPUT-SECRET-WORDS' });
+    expect(a.expiresAt).toBeGreaterThan(Date.now());
+    expect(JSON.stringify(await app.call('claude.approvals', {}))).toContain(a.id); // a window that just opened reads the list
+    expect(await app.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: true });
+    const r = await run;
+    expect(r).toMatchObject({ status: 0, stdout: ALLOW, stderr: '' });
+    await waitUntil(() => lists.length > 0 && lists[lists.length - 1].items.length === 0);
+    expect(lists[lists.length - 1].answered).toEqual({ sessionId: 'sess-a', tool: 'Bash' }); // (the window counts it as answered)
+    expect((await app.call('claude.approvals', {})).items).toEqual([]);
+  });
+
+  it('a click on Deny prints exactly the deny JSON', async () => {
+    const ask = nextAsk();
+    const run = hookCli(request({ tool_name: 'Write', tool_input: { file_path: '/work/app/src/a.ts', content: 'FILE-CONTENT' } }));
+    const a = await ask;
+    expect(a).toMatchObject({ tool: 'Write', detail: 'a.ts' });
+    await app.call('claude.approval.answer', { id: a.id, decision: 'deny' });
+    expect(await run).toMatchObject({ status: 0, stdout: DENY, stderr: '' });
+  });
+
+  it('a decision other than allow or deny, an unknown id, or an answer from another connection is ignored; only the first answer counts', async () => {
+    const ask = nextAsk();
+    const pending = app.call('claude.approval', request(), 10_000);
+    const a = await ask;
+    const other = await tryConnect(env5.paths);
+    for (const bad of [{ id: a.id, decision: 'yes' }, { id: a.id, decision: 'ALLOW' }, { id: a.id }, { id: 'no-such-id', decision: 'allow' }, { id: [a.id], decision: 'allow' }, null]) {
+      expect(await app.call('claude.approval.answer', bad), JSON.stringify(bad)).toEqual({ ok: false });
+    }
+    expect(await other!.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: false }); // (not the app's own connection)
+    other!.close();
+    expect((await app.call('claude.approvals', {})).items.map((x: any) => x.id)).toEqual([a.id]); // still waiting
+    expect(await app.call('claude.approval.answer', { id: a.id, decision: 'deny' })).toEqual({ ok: true });
+    expect(await app.call('claude.approval.answer', { id: a.id, decision: 'allow' })).toEqual({ ok: false }); // answered already
+    expect(await pending).toEqual({ decision: 'deny' });
+  });
+
+  it('no click within the wait: the hook prints nothing, exits 0, and the request is gone', async () => {
+    const r = await hookCli(request());
+    expect(r).toMatchObject({ status: 0, stdout: '', stderr: '' });
+    expect(r.ms).toBeGreaterThanOrEqual(WAIT - 200);
+    expect((await app.call('claude.approvals', {})).items).toEqual([]);
+  });
+
+  it('a sixth request while five wait is refused at once, and nothing of a request is kept by the watcher', async () => {
+    const before = JSON.stringify((await app.call('claude.state', {})).sessions);
+    const five = Array.from({ length: 5 }, (_, i) => app.call('claude.approval', request({ session_id: `s${i}` }), 10_000));
+    await waitUntil(async () => (await app.call('claude.approvals', {})).items.length === 5);
+    const t0 = Date.now();
+    expect(await app.call('claude.approval', request({ session_id: 's6' }), 10_000)).toEqual({ decision: null });
+    expect(Date.now() - t0).toBeLessThan(WAIT / 2);
+    const list = JSON.stringify(await app.call('claude.approvals', {}));
+    for (const word of ['SUGGESTION-SECRET', 'permission_suggestions', 'tool_input', 'hook_event_name']) expect(list, word).not.toContain(word); // (the command shows, as its detail)
+    expect(JSON.stringify((await app.call('claude.state', {})).sessions)).toBe(before); // the payload is not the watcher's
+    expect(await Promise.all(five)).toEqual(Array(5).fill({ decision: null })); // (they wait out their time)
+  });
+
+  it('the setting off: null at once, and the hook prints nothing', async () => {
+    await app.call('config.patch', { claude: { approvals: false } });
+    try {
+      const t0 = Date.now();
+      expect(await app.call('claude.approval', request(), 10_000)).toEqual({ decision: null });
+      expect(Date.now() - t0).toBeLessThan(WAIT / 2);
+      const r = await hookCli(request());
+      expect(r).toMatchObject({ status: 0, stdout: '' });
+      expect(r.ms).toBeLessThan(WAIT);
+    } finally {
+      await app.call('config.patch', { claude: { approvals: true } });
+    }
+  });
+
+  it('turning the setting off while one waits lets it go at once', async () => {
+    const ask = nextAsk();
+    const pending = app.call('claude.approval', request(), 10_000);
+    await ask;
+    const t0 = Date.now();
+    await app.call('config.patch', { claude: { approvals: false } });
+    expect(await pending).toEqual({ decision: null });
+    expect(Date.now() - t0).toBeLessThan(WAIT / 2);
+    await app.call('config.patch', { claude: { approvals: true } });
+  });
+
+  it('Claude Code giving up on the hook (its connection goes) takes the request away: no buttons are left for it', async () => {
+    const asker = await tryConnect(env5.paths);
+    const ask = nextAsk();
+    void asker!.call('claude.approval', request(), 10_000).catch(() => undefined);
+    await ask;
+    asker!.close();
+    await waitUntil(async () => (await app.call('claude.approvals', {})).items.length === 0, WAIT / 2);
+  });
+
+  it('without the app (no connection said it is the app), or when its connection goes, the answer is null at once', async () => {
+    const other = await tryConnect(env5.paths);
+    const ask = nextAsk();
+    const pending = other!.call('claude.approval', request(), 10_000);
+    await ask;
+    const t0 = Date.now();
+    app.close();
+    expect(await pending).toEqual({ decision: null });
+    expect(Date.now() - t0).toBeLessThan(WAIT / 2);
+    // no app connected now: nobody to click, so nothing waits
+    expect(await other!.call('claude.approval', request(), 10_000)).toEqual({ decision: null });
+    expect(await other!.call('claude.approvals', {})).toEqual({ items: [] });
+    other!.close();
+    app = (await tryConnect(env5.paths))!;
+    await app.call('hello', { client: 'app', protocol: 1 });
+  });
+});
 
 describe('a daemon does not claim hooks that belong to another Jaffer home (bundled daemon)', () => {
   it('leaves hooks that point at a different wrapper exactly as they were', async () => {

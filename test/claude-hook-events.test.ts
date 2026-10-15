@@ -114,6 +114,42 @@ describe('jaffer hook <event>', () => {
     expect(received.map((m) => m.method)).toEqual(['claude.event']);
   });
 
+  // 1.2.0: the one hook whose output Claude Code reads (installed only with claude.approvals on)
+  const REQUEST = JSON.stringify({ session_id: 'sess-1', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' } });
+  it('permission-request asks the daemon (claude.approval, not claude.event) and prints exactly the decision Claude Code reads', async () => {
+    let decision: unknown = 'allow';
+    await fakeDaemon((m) => (m === 'claude.approval' ? { decision } : { ok: true }));
+    expect(await hook('permission-request', REQUEST, { JAFFER_SESSION: '1' })).toMatchObject({ status: 0, stdout: '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}' });
+    decision = 'deny';
+    expect(await hook('permission-request', REQUEST, { JAFFER_SESSION: '1' })).toMatchObject({ status: 0, stdout: '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Jaffer"}}}' });
+    expect(received.map((m) => m.method)).toEqual(['claude.approval', 'claude.approval']);
+    expect(received[0]!.params).toEqual({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'npm test' } });
+  });
+
+  it('permission-request prints nothing for any other answer: null, a bad decision, text, an error', async () => {
+    const answers: unknown[] = [{ decision: null }, { decision: 'ALLOW' }, { decision: 'yes' }, { decision: ['allow'] }, 'allow', null, { ok: true }];
+    for (const a of answers) {
+      await fakeDaemon(() => a);
+      const r = await hook('permission-request', REQUEST, { JAFFER_SESSION: '1' });
+      expect(r, JSON.stringify(a)).toMatchObject({ status: 0, stdout: '' });
+      await new Promise((r) => server!.close(() => r(null)));
+      server = null;
+    }
+  });
+
+  it('permission-request with no daemon, outside a session, for the helper claude, or with garbage or more than 1 MB on stdin: silent, exit 0, nothing asked', async () => {
+    const down = await hook('permission-request', REQUEST, { JAFFER_SESSION: '1' });
+    expect(down).toMatchObject({ status: 0, stdout: '' });
+    expect(down.ms).toBeLessThan(3_000);
+    await fakeDaemon(() => ({ decision: 'allow' }));
+    expect(await hook('permission-request', REQUEST)).toMatchObject({ status: 0, stdout: '' });
+    expect(await hook('permission-request', REQUEST, { JAFFER_SESSION: '1', JAFFER_NO_HOOKS: '1' })).toMatchObject({ status: 0, stdout: '' });
+    for (const input of ['not json', '', '[]', 'null', JSON.stringify({ ...JSON.parse(REQUEST), tool_input: { command: 'x'.repeat(1024 * 1024 + 10) } })]) {
+      expect(await hook('permission-request', input, { JAFFER_SESSION: '1' }), input.slice(0, 20)).toMatchObject({ status: 0, stdout: '' });
+    }
+    expect(received.filter((m) => m.method === 'claude.approval')).toEqual([]);
+  });
+
   it('session-start only reports too: whatever the daemon answers, nothing is printed for Claude Code to read', async () => {
     await fakeDaemon(() => 'something a daemon could say');
     const r = await hook('session-start', JSON.stringify({ session_id: 'sess-1', hook_event_name: 'SessionStart', cwd: env.userHome, source: 'startup' }), { JAFFER_SESSION: '1' });
