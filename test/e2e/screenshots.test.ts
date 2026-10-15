@@ -450,6 +450,17 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await page.keyboard.press('Escape'); // (the keyboard back to the terminal)
     // the whole panel: the Now card while Claude works (agents, counts, edited files, cost, today against a budget) above the same six conversations
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { dailyBudgetUsd: 10, typicalTurnMs: 240_000 } }));
+    // (1.2.0: ten finished turns, so the Now card draws its turn bars: each is a working state, then an idle one with its cost)
+    await page.evaluate(() => {
+      const ev = (window as any).__event;
+      const now = Date.now();
+      [95, 40, 210, 75, 160, 55, 300, 120, 35, 180].forEach((sec, i) => {
+        const turnStartedAt = now - sec * 1000;
+        const base = { id: 'demo-turns', startedAt: now - 3_600_000, turns: i + 1, calls: [], counts: {}, files: [], subagents: [], turnStartedAt };
+        ev('claude.state', { sessions: [{ ...base, state: 'working', since: turnStartedAt }] });
+        ev('claude.state', { sessions: [{ ...base, state: 'idle', since: now, cost: { last: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, usd: [0.04, 0.02, 0.31, 0.06, 0.12, 0.03, 0.42, 0.09, 0.02, 0.15][i] }, totalUsd: 1, answers: i + 1, partial: false, at: i + 1 } }] });
+      });
+    });
     await page.evaluate(
       ([dir]) => {
         const now = Date.now();
@@ -475,15 +486,30 @@ describe.skipIf(!OUT)('README screenshots', () => {
               cost: { last: { input: 3000, output: 4200, cacheRead: 180_000, cacheWrite: 0, usd: 0.13 }, totalUsd: 1.2, answers: 8, partial: false, at: now - 120_000 },
             },
           ],
-          today: { usd: 4.82, date: new Date().toISOString().slice(0, 10) },
+          today: { usd: 4.82, date: new Date().toISOString().slice(0, 10), workMs: 4_320_000 },
         });
       },
       [repo] as const,
     );
     await page.waitForSelector('.now-card[data-state="working"] .now-files button');
+    await page.waitForSelector('.now-turns'); // (1.2.0)
+    await clearToasts();
     await sleep(400);
     await shot('19-side-panel');
     await page.evaluate(() => (window as any).__event('claude.state', { sessions: [] }));
+    // 1.2.0: the What's New card (an update from 1.1.1 to this version) above the Now card, then the card dismissed as a person would
+    await page.evaluate(() => window.jaffer.call('config.patch', { updates: { seenVersion: '1.1.1' } }));
+    await page.waitForSelector('.side-panel > .wn-card');
+    await clearToasts();
+    await shot('20-whats-new');
+    await page.click('.wn-card button:has-text("Dismiss")');
+    await page.waitForSelector('.side-panel > .wn-card', { state: 'detached' });
+    // 1.2.0: the shortcuts sheet (⌘/, Help → Keyboard Shortcuts)
+    await page.evaluate(() => (window as any).__menu('shortcuts'));
+    await page.waitForSelector('.ks-sheet');
+    await shot('21-shortcuts');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.ks-sheet', { state: 'detached' });
     await page.evaluate(() => window.jaffer.call('config.patch', { claude: { dailyBudgetUsd: 0 } }));
   }, 40_000);
 
