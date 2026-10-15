@@ -584,6 +584,53 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   }, 60_000);
 
+  it('companion size: a select in Settings writes appearance.petSize, the corner scales from its bottom right, takes no clicks and stays inside the terminal', async () => {
+    const setApp = (appearance: object) => page.evaluate((a) => window.jaffer.call('config.patch', { appearance: a }), appearance);
+    const corner = '.pet-corner';
+    const size = () => page.evaluate(async () => ((await window.jaffer.call('config.get')) as any).appearance.petSize);
+    const box = async () => (await page.locator(corner).boundingBox())!;
+    await setApp({ companion: 'mole', petSize: 'normal' });
+    await page.waitForSelector(`${corner}[data-companion='mole'] .pet`);
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
+    const select = page.locator('.settings .field', { hasText: 'Companion size' }).locator('select');
+    expect(await select.inputValue()).toBe('normal');
+    expect(await page.textContent('.settings .field:has(select option[value="huge"])')).toContain('Makes the mole or the scene bigger or smaller in the corner.');
+    const normal = await box();
+    const factors: Record<string, number> = { small: 0.75, normal: 1, large: 1.5, huge: 2.25 };
+    for (const [id, f] of Object.entries(factors)) {
+      await select.selectOption(id);
+      await until(async () => (await size()) === id, 5_000, `petSize ${id} in the config`);
+      await until(async () => Math.abs((await box()).width / normal.width - f) < 0.02, 5_000, `the corner at ${f}x`);
+      expect(Math.abs((await box()).height / normal.height - f)).toBeLessThan(0.02);
+      const b = await box();
+      expect(Math.abs(b.x + b.width - (normal.x + normal.width))).toBeLessThan(1); // anchored at the bottom right
+      expect(Math.abs(b.y + b.height - (normal.y + normal.height))).toBeLessThan(1);
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+    const term = (await page.locator('.terminal-area').boundingBox())!;
+    for (const companion of ['mole', 'matrix']) {
+      await setApp({ companion, petSize: 'huge' });
+      await page.waitForSelector(`${corner}[data-companion='${companion}']`);
+      const b = await box();
+      expect(b.x).toBeGreaterThanOrEqual(term.x - 0.5);
+      expect(b.y).toBeGreaterThanOrEqual(term.y - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(term.x + term.width + 0.5);
+      expect(b.y + b.height).toBeLessThanOrEqual(term.y + term.height + 0.5);
+      expect(await page.$eval(corner, (el) => getComputedStyle(el).pointerEvents)).toBe('none');
+      const scale = Number(await page.$eval(corner, (el) => getComputedStyle(el).scale));
+      if (companion === 'mole') expect(scale).toBe(2.25);
+      else expect(scale).toBeLessThan(2.25); // the scene would be wider than half of the terminal: the cap holds it back (and it is still bigger than normal)
+      expect(scale).toBeGreaterThan(1.5);
+      expect(await page.$eval(corner, (el) => (el.getBoundingClientRect().width))).toBeLessThanOrEqual(term.width / 2 + 0.5); // never more than half the terminal's width
+    }
+    await setApp({ companion: 'mole', petSize: 'giant' }); // an unknown value counts as normal
+    await until(async () => Math.abs((await box()).width - normal.width) < 0.5, 5_000, 'an unknown size to draw as normal');
+    await setApp({ petSize: 'normal' });
+  }, 60_000);
+
   it('the scenes: each one works while Claude works, shows an agent for every helper, stays in its corner, and stands still without motion', async () => {
     const setCompanion = (companion: string) => page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), companion);
     const cs = (sel: string, prop: string) => page.$eval(sel, (el, p) => (getComputedStyle(el) as any)[p as string], prop);

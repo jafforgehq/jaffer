@@ -279,6 +279,19 @@ describe('appearance.companion', () => {
 });
 
 
+describe('appearance.petSize', () => {
+  it('is normal by default, also for a config file saved before it existed; a choice is kept and the value stays text', () => {
+    expect(DEFAULT_CONFIG.appearance.petSize).toBe('normal');
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { pet: false } }));
+    const store = new ConfigStore(env.paths);
+    expect(store.get().appearance.petSize).toBe('normal');
+    store.patch({ appearance: { petSize: 'huge' } });
+    expect(new ConfigStore(env.paths).get().appearance.petSize).toBe('huge');
+    store.patch({ appearance: { petSize: 5 as never } });
+    expect(store.get().appearance.petSize).toBe('huge'); // a number is not a size: the previous value stays
+  });
+});
+
 describe('a config file or patch with values of the wrong kind', () => {
   const load = (raw: unknown) => {
     fs.writeFileSync(env.paths.config, JSON.stringify(raw));

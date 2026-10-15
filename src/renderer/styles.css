@@ -570,7 +570,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 
 /* The pet: a mole in a corner of the terminal card. Every pose is a [data-mood] state (so it is right with Animations off too); the motion is only
    added under :root:not([data-motion='off']), and macOS Reduce motion stops it through the global rule below. */
-.pet-corner { position: absolute; right: 22px; bottom: 10px; z-index: 3; pointer-events: none; opacity: 0.94; display: flex; flex-direction: row-reverse; align-items: flex-end; }
+.pet-corner { position: absolute; right: 22px; bottom: 10px; z-index: 3; pointer-events: none; opacity: 0.94; display: flex; flex-direction: row-reverse; align-items: flex-end; scale: var(--pet-scale, 1); transform-origin: right bottom; } /* Companion size: drawn bigger or smaller from the bottom right corner, no reflow; Pet.tsx sets --pet-scale (the chosen factor, kept to half of the terminal's width and height) */
 /* helpers: one smaller mole per running background agent, standing to the left of the main one */
 .pet-helper { width: 78px; height: 47px; margin-left: -6px; } /* a corner of the terminal; clicks and selection go straight through */
 .pet { width: 112px; height: 67px; overflow: visible; --fur: color-mix(in srgb, var(--text) 44%, var(--bg-solid)); --soil: color-mix(in srgb, var(--accent) 26%, color-mix(in srgb, var(--text) 24%, var(--bg-solid))); --fur-deep: color-mix(in srgb, var(--fur) 62%, #000); --pet-y: 8px; }

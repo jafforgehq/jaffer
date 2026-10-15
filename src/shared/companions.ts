@@ -15,3 +15,16 @@ export const DEFAULT_COMPANION: Companion = 'mole';
 export function companionOf(v: unknown): Companion {
   return COMPANIONS.some((c) => c.id === v) ? (v as Companion) : DEFAULT_COMPANION;
 }
+
+/** How big the companion is drawn in its corner (Settings → Appearance → Companion size). */
+export const PET_SIZES = [
+  { id: 'small', name: 'Small', scale: 0.75 },
+  { id: 'normal', name: 'Normal', scale: 1 },
+  { id: 'large', name: 'Large', scale: 1.5 },
+  { id: 'huge', name: 'Huge', scale: 2.25 },
+] as const;
+
+/** Whatever a config file says, a factor that exists: anything else (a typo, a size from a newer version) is normal. */
+export function petScale(size: string): number {
+  return PET_SIZES.find((s) => s.id === size)?.scale ?? 1;
+}

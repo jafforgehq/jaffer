@@ -13,7 +13,7 @@ import { actions, runClaude, type Action } from '../actions';
 import { FIND_OPTS, terminals } from './TerminalView';
 import { THEMES } from '../themes';
 import { hookHealthWarning } from '../claude-ui';
-import { COMPANIONS, companionOf } from '../../shared/companions';
+import { COMPANIONS, PET_SIZES, companionOf, petScale } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset } from './icons';
 
@@ -599,6 +599,15 @@ export function Settings(): VNode {
                   );
                 })}
               </div>
+              <Field label="Companion size" hint="Makes the mole or the scene bigger or smaller in the corner.">
+                <select value={PET_SIZES.find((s) => petScale(c.appearance.petSize) === s.scale)?.id ?? 'normal'} onChange={(e) => set({ appearance: { petSize: (e.target as HTMLSelectElement).value } })}>
+                  {PET_SIZES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Seasonal touches" hint="a small hat or heart on the mole, and a few drifting dots in the scenes, around Halloween, the winter holidays and Valentine's Day">
                 <Switch checked={c.appearance.seasonal !== false} onChange={(v) => set({ appearance: { seasonal: v } })} />
               </Field>

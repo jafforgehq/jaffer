@@ -6,7 +6,7 @@ import { isDozing, petMood, petTool, type PetMood } from '../../shared/pet-mood'
 import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
 import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
-import { COMPANIONS, companionOf, type Companion } from '../../shared/companions';
+import { COMPANIONS, companionOf, petScale, type Companion } from '../../shared/companions';
 import { currentSeason } from '../season';
 import type { Season } from '../../shared/season';
 import { Scene } from './Scenes';
@@ -269,6 +269,26 @@ export function Pet(): VNode | null {
     return () => clearInterval(t);
   }, []);
 
+  // Companion size: a factor, kept to half of the terminal's width and height when it would grow the corner past that (never below normal)
+  const corner = useRef<HTMLDivElement>(null);
+  const want = petScale(String(cfg.value?.appearance.petSize));
+  const shownOn = cfg.value?.appearance.pet !== false;
+  const kind = companionOf(cfg.value?.appearance.companion);
+  useEffect(() => {
+    const el = corner.current;
+    const area = el?.parentElement;
+    if (!el || !area) return;
+    const fit = () => {
+      const cap = Math.min((0.5 * area.clientWidth) / (el.offsetWidth || 1), (0.5 * area.clientHeight) / (el.offsetHeight || 1)); // offset sizes are the unscaled layout size
+      el.style.setProperty('--pet-scale', String(want > 1 ? Math.max(1, Math.min(want, cap)) : want));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(area);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [want, shownOn, kind]);
+
   if (cfg.value?.appearance.pet === false) return null;
   const companion = companionOf(cfg.value?.appearance.companion);
   const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
@@ -283,7 +303,7 @@ export function Pet(): VNode | null {
   if (companion !== 'mole') {
     const name = COMPANIONS.find((c) => c.id === companion)!.name;
     return (
-      <div class="pet-corner" data-companion={companion}>
+      <div class="pet-corner" data-companion={companion} ref={corner}>
         <Scene
           variant={companion}
           mood={mood}
@@ -299,7 +319,7 @@ export function Pet(): VNode | null {
     );
   }
   return (
-    <div class="pet-corner" data-companion="mole">
+    <div class="pet-corner" data-companion="mole" ref={corner}>
       <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${dozing ? ' · dozing' : ''}${crew}`} tool={tool} dozing={dozing} flinch={flinch} />
       {helpers.map((m, i) => (
         <Mole
