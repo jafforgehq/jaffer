@@ -595,7 +595,8 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
     const select = page.locator('.settings .field', { hasText: 'Companion size' }).locator('select');
-    expect(await select.inputValue()).toBe('normal');
+    await until(async () => (await select.inputValue()) === 'normal', 5_000, 'the select at Normal');
+    await until(async () => ['1', 'none'].includes(await page.$eval(corner, (el) => getComputedStyle(el).scale)), 5_000, 'the corner at its normal scale');
     expect(await page.textContent('.settings .field:has(select option[value="huge"])')).toContain('Makes the mole or the scene bigger or smaller in the corner.');
     const normal = await box();
     const factors: Record<string, number> = { small: 0.75, normal: 1, large: 1.5, huge: 2.25 };
@@ -614,6 +615,11 @@ describe('Jaffer UI end to end', () => {
     for (const companion of ['mole', 'matrix']) {
       await setApp({ companion, petSize: 'huge' });
       await page.waitForSelector(`${corner}[data-companion='${companion}']`);
+      // the cap is applied by an effect after the first layout: wait for the settled scale
+      await until(async () => {
+        const sc = Number(await page.$eval(corner, (el) => getComputedStyle(el).scale));
+        return companion === 'mole' ? sc === 2.25 : sc > 1.5 && sc < 2.25;
+      }, 5_000, `${companion}: the corner at its settled huge scale`);
       const b = await box();
       expect(b.x).toBeGreaterThanOrEqual(term.x - 0.5);
       expect(b.y).toBeGreaterThanOrEqual(term.y - 0.5);
