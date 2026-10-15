@@ -3,7 +3,8 @@ import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
 import { BlockModel, blockOutputText, fenceText, saveName, type Block, type MarkKind } from '../blocks';
-import { cfg, safeCommand, toast } from '../state';
+import { activeTheme, cfg, safeCommand, toast } from '../state';
+import { drawBlockImage, layoutBlockImage } from '../block-image';
 import { isSensitiveCommand } from '../../shared/redact';
 import { took } from '../../shared/notify-policy';
 
@@ -83,6 +84,20 @@ function copy(text: string, said: string): void {
     () => toast({ kind: 'info', text: said }, 2500),
     () => toast({ kind: 'error', text: 'Could not copy to the clipboard.' }),
   );
+}
+
+/** "Copy as image" (1.2.0): the command (as the window may show it) and the output drawn in the terminal's font and colours, as a PNG on the clipboard; never saved. */
+function copyImage(command: string | undefined, output: string): void {
+  const a = cfg.value?.appearance;
+  const { lines } = layoutBlockImage({ command, output });
+  const canvas = drawBlockImage(lines, command !== undefined, activeTheme(), { family: a?.fontFamily || 'monospace', size: a?.fontSize ?? 13 });
+  const failed = () => toast({ kind: 'error', text: 'Could not copy the image to the clipboard.' });
+  canvas.toBlob((blob) => {
+    if (!blob) return failed();
+    void Promise.resolve()
+      .then(() => navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]))
+      .then(() => toast({ kind: 'info', text: 'Copied as image' }, 2500), failed);
+  }, 'image/png');
 }
 
 export function attachBlocks(term: Terminal): BlocksHandle {
@@ -194,6 +209,7 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         },
       },
       { label: 'Copy as Markdown', run: () => copy(fenceText(output(b), shownCommand(b)), 'Copied as Markdown') },
+      { label: 'Copy as image', run: () => copyImage(shownCommand(b), output(b)) },
     );
     return items;
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RecentCommands } from '../src/shared/recent-commands';
+import { RecentCommands, groupByFolder } from '../src/shared/recent-commands';
 import { COMMAND_HEAD } from '../src/shared/process-badge';
 
 describe('RecentCommands: the menu bar’s last five commands (memory only)', () => {
@@ -44,5 +44,26 @@ describe('RecentCommands: the menu bar’s last five commands (memory only)', ()
     r.add(`echo ${'b'.repeat(4 * COMMAND_HEAD - 10)}`);
     expect(performance.now() - t).toBeLessThan(1_000);
     expect(r.list()).toHaveLength(1);
+  });
+});
+
+describe('groupByFolder: ⌘R by folder (1.2.0)', () => {
+  it('groups under the tilde folder, newest group first, in the order given within each; no folder is "Unknown folder"', () => {
+    const items = [
+      { cmd: 'c', cwd: '/Users/maya/b' },
+      { cmd: 'b', cwd: '/Users/maya/a' },
+      { cmd: 'x' },
+      { cmd: 'a', cwd: '/Users/maya/b' },
+      { cmd: 'h', cwd: '/Users/maya' },
+      { cmd: 'e', cwd: '' },
+    ];
+    expect(groupByFolder(items, '/Users/maya').map((g) => [g.label, g.items.map((i) => i.cmd)])).toEqual([
+      ['~/b', ['c', 'a']],
+      ['~/a', ['b']],
+      ['Unknown folder', ['x', 'e']],
+      ['~', ['h']],
+    ]);
+    expect(groupByFolder([{ cwd: '/opt/x' }], '')[0]!.label).toBe('/opt/x');
+    expect(groupByFolder([], '/Users/maya')).toEqual([]);
   });
 });

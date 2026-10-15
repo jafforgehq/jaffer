@@ -25,6 +25,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'zoom-out': { label: 'Smaller', accelerator: 'Cmd+-' },
   'zoom-reset': { label: 'Actual Size', accelerator: 'Cmd+0' },
   'whats-new': { label: "What's New…" },
+  shortcuts: { label: 'Keyboard Shortcuts', accelerator: 'Cmd+/' },
 };
 
 /** The accelerator of the `togglefullscreen` role (View → Enter Full Screen), which no item of ours may share. */

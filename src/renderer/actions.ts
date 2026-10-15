@@ -76,6 +76,7 @@ export const actions: Action[] = [
   { id: 'find-next', title: 'Find next', section: 'Terminal', keys: '⌘G', keywords: 'search again match', run: () => findAgain(1) },
   { id: 'find-prev', title: 'Find previous', section: 'Terminal', keys: '⇧⌘G', keywords: 'search again match', run: () => findAgain(-1) },
   { id: 'recent-commands', title: 'Recent commands', section: 'Terminal', keys: '⌘R', keywords: 'history copy clipboard', run: () => openOverlay('recent') },
+  { id: 'shortcuts', title: 'Keyboard shortcuts', section: 'App', keys: '⌘/', keywords: 'keys accelerators cheat sheet help', run: () => openOverlay('keys') },
   { id: 'whats-new', title: "What's new", section: 'App', keywords: 'release notes changelog version update news', run: showWhatsNew },
   { id: 'history', title: 'Past Claude conversations…', section: 'App', keys: '⇧⌘O', keywords: 'resume claude history copy clipboard', run: showConversations },
   { id: 'resume-last', title: 'Resume last conversation', section: 'App', keys: '⇧⌘R', keywords: 'continue past history newest folder', run: resumeLast },

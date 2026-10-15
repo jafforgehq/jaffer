@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import type { VNode } from 'preact';
 import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, historyItems, homeDir, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
 import { conversationName, paletteConversations } from '../../shared/history-label';
+import { groupByFolder } from '../../shared/recent-commands';
+import { SECTION_ORDER, filterShortcuts, shortcutGroups } from '../../shared/shortcuts';
 import { parseNames } from '../../shared/history-names';
 import { readHistory, resumeConversation } from '../resume';
 import { EDITOR_SCHEMES, editorUrl } from '../../shared/editor-url';
@@ -62,7 +64,6 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (
 
 // ------------------------------------------------------------------ palette
 
-const SECTION_ORDER = ['View', 'Claude', 'Terminal', 'Integrations', 'Appearance', 'App'];
 const SECTION_ICON: Record<string, (p: { size: number }) => VNode> = {
   View: IconLayout,
   Claude: IconAgent,
@@ -247,11 +248,15 @@ export function RecentCommands(): VNode {
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => input.current?.focus(), []);
-  const rows = useMemo(() => {
+  /** By folder (1.2.0): the rows under their folder, the newest folder first; memory only, like the list. */
+  const [byFolder, setByFolder] = useState(false);
+  const groups = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return commands.value.map((c) => ({ c, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
-  }, [q, commands.value]); // (a command that ends while the list is open shows up)
-  useEffect(() => setSel(0), [q]);
+    const rows = commands.value.map((c) => ({ c, cwd: c.cwd, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
+    return byFolder ? groupByFolder(rows, homeDir()) : [{ label: '', items: rows }];
+  }, [q, commands.value, byFolder]); // (a command that ends while the list is open shows up)
+  const rows = groups.flatMap((g) => g.items);
+  useEffect(() => setSel(0), [q, byFolder]);
   useEffect(() => {
     list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
   }, [sel]);
@@ -282,15 +287,22 @@ export function RecentCommands(): VNode {
               else if (e.key === 'Enter') (e.preventDefault(), pick(sel));
             }}
           />
+          <button class={`rc-toggle ${byFolder ? 'on' : ''}`} aria-pressed={byFolder} title="Group the commands by the folder they ran in" onClick={() => (setByFolder(!byFolder), input.current?.focus())}>
+            By folder
+          </button>
         </div>
         <div class="palette-list" ref={list}>
           {rows.length === 0 && <div class="pal-group">{commands.value.length ? 'No match' : 'No commands yet in this session'}</div>}
-          {rows.slice(0, 200).map((r, i) => (
-            <button key={`${r.c.at}-${i}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-exit={r.c.exit ?? ''} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
-              <span class="pal-title recent-cmd">{highlight(r.shown.slice(0, 200), q)}</span>
-              <span class="recent-ago">{fmtAgo(r.c.at)}</span>
-            </button>
-          ))}
+          {rows.slice(0, 200).flatMap((r, i) => {
+            const row = (
+              <button key={`${r.c.at}-${i}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-exit={r.c.exit ?? ''} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
+                <span class="pal-title recent-cmd">{highlight(r.shown.slice(0, 200), q)}</span>
+                <span class="recent-ago">{fmtAgo(r.c.at)}</span>
+              </button>
+            );
+            const g = byFolder ? groups.find((x) => x.items[0] === r) : undefined;
+            return g ? [<div class="pal-group rc-folder" key={`f-${i}`}>{g.label}</div>, row] : [row];
+          })}
         </div>
         <div class="pal-foot">
           <span>
@@ -300,6 +312,39 @@ export function RecentCommands(): VNode {
             <kbd>esc</kbd> close
           </span>
           <span>Nothing is typed; this list is not saved.</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** ⌘/ (1.2.0): every shortcut, from the palette's own actions and the terminal's keys, by section; a search narrows it. Nothing runs from here. */
+export function ShortcutsSheet(): VNode {
+  const [q, setQ] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => input.current?.focus(), []);
+  const groups = useMemo(() => filterShortcuts(shortcutGroups(actions), q), [q]);
+  const close = () => (overlay.value = null);
+  return (
+    <Modal onClose={close} title="Keyboard shortcuts">
+      <div class="palette ks-sheet">
+        <div class="pal-input">
+          <IconSearch size={17} />
+          <input ref={input} placeholder="Search shortcuts…" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
+        </div>
+        <div class="palette-list">
+          {groups.length === 0 && <div class="pal-group">No match</div>}
+          {groups.map((g) => (
+            <section key={g.section} class="ks-group">
+              <div class="pal-group">{g.section}</div>
+              {g.items.map((i) => (
+                <div key={i.keys} class="pal-row ks-row">
+                  <span class="pal-title">{highlight(i.title, q)}</span>
+                  <kbd>{i.keys}</kbd>
+                </div>
+              ))}
+            </section>
+          ))}
         </div>
       </div>
     </Modal>

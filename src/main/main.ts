@@ -714,6 +714,7 @@ function buildMenu(): void {
       role: 'help',
       submenu: [
         item('whats-new'),
+        item('shortcuts'),
         { label: 'Jaffer on GitHub', click: () => void shell.openExternal('https://github.com/jafforgehq/jaffer') },
         { label: 'Reveal Session Folder', click: () => void shell.openPath(paths.home) },
         { label: 'Show Log', click: () => void shell.openPath(paths.logFile) },

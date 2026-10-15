@@ -1437,7 +1437,7 @@ describe('Jaffer UI end to end', () => {
     };
     await (await markOf('echo hi-block')).click({ button: 'right' });
     await page.waitForSelector('.ctx-menu');
-    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy command', 'Copy output', 'Save output…', 'Copy as Markdown']);
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy command', 'Copy output', 'Save output…', 'Copy as Markdown', 'Copy as image']);
     await shot('17-gutter-menu');
     await page.keyboard.press('Escape');
     await page.waitForSelector('.ctx-menu', { state: 'detached' });
@@ -1459,7 +1459,7 @@ describe('Jaffer UI end to end', () => {
     await enter('echo $NO_SUCH_TOKEN');
     await (await markOf('echo $NO_SUCH_TOKEN')).click({ button: 'right' });
     await page.waitForSelector('.ctx-menu');
-    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy output', 'Save output…', 'Copy as Markdown']);
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy output', 'Save output…', 'Copy as Markdown', 'Copy as image']);
     await page.mouse.click(700, 420); // a click elsewhere closes it
     await page.waitForSelector('.ctx-menu', { state: 'detached' });
     await pick('echo $NO_SUCH_TOKEN', 'Copy as Markdown');
@@ -1473,6 +1473,62 @@ describe('Jaffer UI end to end', () => {
     await menu('copy-markdown');
     await toastSaid('Select something first');
   }, 60_000);
+
+  it('Copy as image (1.2.0): the gutter menu puts a PNG of the command and its output on the clipboard, never a sensitive command\'s line; a refusing clipboard says so', async () => {
+    // the clipboard's write is caught (the PNG kept), and what the canvas draws is read off fillText
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__img = { blobs: [] as Blob[], refuse: false };
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          readText: async () => '',
+          writeText: async () => undefined,
+          write: async (items: ClipboardItem[]) => {
+            if (w.__img.refuse) throw new Error('refused');
+            w.__img.blobs.push(await items[0]!.getType('image/png'));
+          },
+        },
+      });
+      w.__drawn = [] as string[];
+      const fill = CanvasRenderingContext2D.prototype.fillText;
+      CanvasRenderingContext2D.prototype.fillText = function (this: CanvasRenderingContext2D, text: string, x: number, y: number, max?: number) {
+        w.__drawn.push(text);
+        return max === undefined ? fill.call(this, text, x, y) : fill.call(this, text, x, y, max);
+      };
+    });
+    const png = () =>
+      page.evaluate(async () => {
+        const b = ((window as any).__img.blobs as Blob[]).at(-1)!;
+        return { type: b.type, size: b.size, head: [...new Uint8Array(await b.arrayBuffer()).slice(0, 8)] };
+      });
+    const pick = async (cmd: string) => {
+      await page.evaluate(() => ((window as any).__drawn = []));
+      await (await markOf(cmd)).click({ button: 'right' });
+      await page.waitForSelector('.ctx-menu');
+      await page.locator('.ctx-menu button', { hasText: 'Copy as image' }).click();
+      await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    };
+    await pick('echo hi-block');
+    await until(async () => page.evaluate(() => (window as any).__img.blobs.length === 1), 5_000, 'the image on the clipboard');
+    const p = await png();
+    expect(p.type).toBe('image/png');
+    expect(p.head).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(p.size).toBeGreaterThan(500);
+    expect(p.size).toBeLessThan(2_000_000);
+    expect(await page.evaluate(() => (window as any).__drawn)).toEqual(['$ echo hi-block', 'hi-block']);
+    await toastSaid('Copied as image');
+    // a sensitive command: its output only, no `$` line
+    await pick('echo $NO_SUCH_TOKEN');
+    await until(async () => page.evaluate(() => (window as any).__img.blobs.length === 2), 5_000, 'the second image');
+    const drawn: string[] = await page.evaluate(() => (window as any).__drawn);
+    expect(drawn.some((t) => t.startsWith('$') || /NO_SUCH_TOKEN/.test(t))).toBe(false);
+    // the clipboard refuses: an error toast, nothing kept
+    await page.evaluate(() => ((window as any).__img.refuse = true));
+    await pick('echo hi-block');
+    await toastSaid('Could not copy the image to the clipboard.');
+    expect(await page.evaluate(() => (window as any).__img.blobs.length)).toBe(2);
+  }, 40_000);
 
   it('⌘↑ / ⌘↓ jump between prompts; scrolled up into a long output, its command stays pinned on top, and a click goes to its prompt', async () => {
     await page.click('.term');
@@ -1771,6 +1827,57 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.palette-list')).toMatch(/Find next[\s\S]*Find previous|Find previous[\s\S]*Find next/);
     await page.keyboard.press('Escape');
   }, 40_000);
+
+  it('⌘R by folder (1.2.0): the toggle groups the commands under the folder they ran in, the newest folder first; Enter still only copies', async () => {
+    await clipStub();
+    for (const d of ['rc-alpha', 'rc-beta']) fs.mkdirSync(path.join(env.userHome, d), { recursive: true });
+    await page.click('.term');
+    for (const line of ['rc_back=$PWD; cd ~/rc-alpha', 'echo in-alpha-61', 'cd ~/rc-beta', 'echo in-beta-62', 'cd "$rc_back"']) {
+      await enter(line);
+      await ended(line);
+    }
+    await menu('recent-commands');
+    await page.waitForSelector('.recent-list input');
+    expect(await page.locator('.recent-list .rc-folder').count()).toBe(0);
+    await page.click('.recent-list .rc-toggle');
+    await until(async () => (await page.locator('.recent-list .rc-folder').count()) >= 2, 3_000, 'the folder groups');
+    expect(await page.getAttribute('.recent-list .rc-toggle', 'aria-pressed')).toBe('true');
+    const order = await page.$$eval('.recent-list .palette-list > *', (els) => els.map((e) => (e.classList.contains('rc-folder') ? `# ${e.textContent}` : (e.querySelector('.recent-cmd')?.textContent ?? ''))));
+    const beta = order.findIndex((t) => t.startsWith('# ') && t.endsWith('/rc-beta'));
+    const alpha = order.findIndex((t) => t.startsWith('# ') && t.endsWith('/rc-alpha'));
+    expect(beta).toBeGreaterThanOrEqual(0);
+    expect(alpha).toBeGreaterThan(beta); // the newest folder first
+    expect(order.slice(beta + 1, beta + 3)).toEqual(['cd "$rc_back"', 'echo in-beta-62']); // newest first within a folder
+    expect(order.slice(alpha + 1).find((t) => !t.startsWith('# '))).toBe('cd ~/rc-beta'); // (a command counts in the folder it was typed in)
+    expect(order.slice(alpha + 1)).toContain('echo in-alpha-61');
+    await shot('21b-recent-by-folder');
+    const before = await termText();
+    await page.locator('.recent-list .recent-cmd', { hasText: 'echo in-alpha-61' }).click();
+    await page.waitForSelector('.recent-list', { state: 'detached' });
+    await until(async () => (await page.evaluate(() => (window as any).__powerClip.written.at(-1))) === 'echo in-alpha-61', 3_000, 'the command on the clipboard');
+    await sleep(300);
+    expect(await termText()).toBe(before); // nothing typed
+  }, 40_000);
+
+  it('⌘/ (1.2.0): the shortcuts sheet lists the keys by section, the search narrows it, Esc closes it and the terminal has the keys again', async () => {
+    await page.click('.term');
+    await menu('shortcuts');
+    await page.waitForSelector('.ks-sheet input');
+    expect(await page.evaluate(() => document.activeElement?.matches('.ks-sheet input'))).toBe(true);
+    const sections = await page.$$eval('.ks-sheet .pal-group', (g) => g.map((x) => x.textContent));
+    expect(sections).toEqual(['View', 'Terminal', 'App']);
+    const keys = await page.$$eval('.ks-sheet kbd', (k) => k.map((x) => x.textContent));
+    for (const k of ['⌘/', '⌘R', '⇧⌘R', '⌘B', '⌘P', '⌘←', '⇧↵']) expect(keys).toContain(k);
+    expect(keys.filter((k, i) => keys.indexOf(k) !== i)).toEqual([]);
+    await sleep(300); // (the dialog's entrance has settled)
+    await shot('21c-shortcuts');
+    await page.keyboard.type('find');
+    await until(async () => (await page.locator('.ks-sheet .ks-row').count()) === 3, 3_000, 'the search');
+    expect(await page.$$eval('.ks-sheet .ks-row kbd', (k) => k.map((x) => x.textContent))).toEqual(['⌘F', '⌘G', '⇧⌘G']);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.ks-sheet', { state: 'detached' });
+    await until(async () => page.evaluate(() => !!document.activeElement?.classList.contains('xterm-helper-textarea')), 3_000, 'the terminal to have the keys again');
+  }, 30_000);
 
   // 1.1.0: replaces the 1.0.1 test of the ⇧⌘O overlay ("⇧⌘O lists past Claude conversations from the transcripts; …"), deliberately: the list moved into the side panel
   it('past conversations in the side panel: planted transcripts by day with their titles, the title and folder search, a click or Enter resumes (the line it types is caught here; a bad id never), ↑/↓/Esc, ⇧⌘O opens a closed panel with the search focused, read on open, after a turn and on refresh (never while closed), nothing else typed', async () => {

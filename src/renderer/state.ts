@@ -33,7 +33,7 @@ export interface SessionInfo {
   git?: GitStatus;
 }
 
-export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent';
+export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent' | 'keys';
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
@@ -83,6 +83,8 @@ export interface RecentCommand {
   exit: number | null;
   at: number;
   durMs: number;
+  /** The shell's folder when it ended (redacted, at most 4096 characters), for ⌘R by folder. */
+  cwd?: string;
 }
 /** This session's commands for ⌘R (newest first, at most 200). A sensitive command is never kept, and one longer than a command's head is left out. */
 export const commands = signal<RecentCommand[]>([]);
@@ -113,9 +115,10 @@ export function addPin(text: string): void {
   pins.value = [...pins.value.slice(-2), { id: pinId++, text }];
 }
 
-function remember(c: RecentCommand): void {
+export function remember(c: RecentCommand): void {
   if (!c.cmd.trim() || c.cmd.length > 4 * COMMAND_HEAD || isSensitiveCommand(c.cmd)) return;
-  commands.value = [c, ...commands.value.filter((x) => x.cmd !== c.cmd)].slice(0, 200);
+  const cwd = typeof c.cwd === 'string' && c.cwd ? redactText(c.cwd.slice(0, 4 * COMMAND_HEAD)).slice(0, 4096) : undefined;
+  commands.value = [{ ...c, cwd }, ...commands.value.filter((x) => x.cmd !== c.cmd)].slice(0, 200);
 }
 
 /** Feature 9: the toast for long commands that finished while the window was away, the most recent first. */
@@ -297,7 +300,7 @@ export async function bootstrap(): Promise<void> {
         if (data.pane === 'main') {
           port.value = null;
           if (failTracker.record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) fixedAt.value = Date.now();
-          remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0 });
+          remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0, cwd: typeof data.cwd === 'string' && data.cwd ? data.cwd : info.value.cwd });
           if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
         }
         void refreshInfoSoon();

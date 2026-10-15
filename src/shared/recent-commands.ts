@@ -1,6 +1,7 @@
 import { COMMAND_HEAD } from './process-badge';
 import { isSensitiveCommand, redactText } from './redact';
 import { clipLabel } from './tray-state';
+import { tildeOf } from './history-label';
 
 /** A command for the menu bar's Recent Commands: `label` is what the menu shows, `raw` what a click copies. */
 export interface RecentCommand {
@@ -26,4 +27,16 @@ export class RecentCommands {
   list(): RecentCommand[] {
     return this.items;
   }
+}
+
+/** ⌘R by folder (1.2.0): `items` (newest first) under their folder's tilde label, the group of the newest first; no folder is "Unknown folder". */
+export function groupByFolder<T extends { cwd?: string }>(items: T[], home: string): { label: string; items: T[] }[] {
+  const groups = new Map<string, { label: string; items: T[] }>();
+  for (const it of items) {
+    const key = it.cwd || '';
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { label: key ? tildeOf(key, home) : 'Unknown folder', items: [] }));
+    g.items.push(it);
+  }
+  return [...groups.values()];
 }
