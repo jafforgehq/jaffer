@@ -43,9 +43,12 @@ export function appearanceChanged(prev: AppearanceCfg, next: AppearanceCfg): { b
   return { blur: vibrancyFor(prev) !== vibrancyFor(next), systemStats: (prev.appearance?.systemStats === true) !== (next.appearance?.systemStats === true) };
 }
 
+/** The window's `minHeight`: a drop-down window is never asked to be lower. */
+export const MIN_WINDOW_HEIGHT = 420;
+
 export interface Rect { x: number; y: number; width: number; height: number }
-/** Drop-down mode: the whole width of the display's work area, 45% of its height (at least 320, never more than the area), at its top edge. */
+/** Drop-down mode: the whole width of the display's work area, 45% of its height (at least the window's minimum height, never more than the area), at its top edge. */
 export function dropdownBounds(workArea: Rect): Rect {
-  const height = Math.min(workArea.height, Math.max(320, Math.round(workArea.height * 0.45)));
+  const height = Math.min(workArea.height, Math.max(MIN_WINDOW_HEIGHT, Math.round(workArea.height * 0.45)));
   return { x: workArea.x, y: workArea.y, width: workArea.width, height };
 }

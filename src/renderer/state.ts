@@ -84,7 +84,7 @@ export interface RecentCommand {
   exit: number | null;
   at: number;
   durMs: number;
-  /** The shell's folder when it ended (redacted, at most 4096 characters), for ⌘R by folder. */
+  /** The folder the command ran in (the end-of-command mark comes before the folder update; redacted, at most 4096 characters), for ⌘R by folder. The same command again keeps only its newest folder. */
   cwd?: string;
 }
 /** This session's commands for ⌘R (newest first, at most 200). A sensitive command is never kept, and one longer than a command's head is left out. */
@@ -371,8 +371,8 @@ export async function bootstrap(): Promise<void> {
     appVersion.value = app.version;
     overlay.value = config.onboarded ? null : 'onboarding';
   });
-  // after an update: one toast (not on a first start, which has nothing unseen)
-  if (config.onboarded && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
+  // after an update: one toast (not on a first start, which has nothing unseen, and not when the open panel already shows the card)
+  if (config.onboarded && !panelOpen() && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
   await Promise.all([refreshInfo(), loadClaudeState(), loadApprovals()]);
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   ready.value = true;

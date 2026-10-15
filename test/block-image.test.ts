@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_COLS, IMAGE_LINES, layoutBlockImage } from '../src/renderer/block-image';
+import { IMAGE_COLS, IMAGE_LINES, imageCanvasSize, layoutBlockImage, MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE } from '../src/renderer/block-image';
 
 describe('layoutBlockImage: what "Copy as image" draws', () => {
   it('the command as `$ <cmd>` on the first line, then the output; no command, no command line', () => {
@@ -40,6 +40,20 @@ describe('layoutBlockImage: what "Copy as image" draws', () => {
         expect(r.lines.length).toBeLessThanOrEqual(IMAGE_LINES + 2);
         for (const l of r.lines) expect(l.length).toBeLessThanOrEqual(IMAGE_COLS);
       }
+    }
+  });
+
+  it('the canvas stays bounded: twice the pixels while that is under 40 megapixels, else once; each side and the whole area capped', () => {
+    expect(imageCanvasSize(800, 600)).toEqual({ width: 800, height: 600, dpr: 2 });
+    expect(imageCanvasSize(2600, 3700)).toEqual({ width: 2600, height: 3700, dpr: 2 }); // (13 px font, every line and column: just under)
+    expect(imageCanvasSize(4500, 6900)).toEqual({ width: 4500, height: 6900, dpr: 1 });
+    for (const [w, h] of [[20_000, 30_000], [1, 1e9], [1e9, 1], [16_384, 16_384]]) {
+      const r = imageCanvasSize(w!, h!);
+      expect(r.width).toBeLessThanOrEqual(MAX_IMAGE_SIDE);
+      expect(r.height).toBeLessThanOrEqual(MAX_IMAGE_SIDE);
+      expect(r.width * r.height * r.dpr * r.dpr).toBeLessThanOrEqual(MAX_IMAGE_PIXELS);
+      expect(r.width).toBeGreaterThan(0);
+      expect(r.height).toBeGreaterThan(0);
     }
   });
 });

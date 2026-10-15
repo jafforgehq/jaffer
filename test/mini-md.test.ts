@@ -17,6 +17,11 @@ describe('mini-md: the release notes as data (never HTML)', () => {
     expect(parseMd('see *Settings* and 2 * 3 and a* b')).toEqual([{ kind: 'p', inline: [{ text: 'see ' }, { text: 'Settings', style: 'i' }, { text: ' and 2 * 3 and a* b' }] }]);
   });
 
+  it('the italic closer is never a star of a ** pair: *a **b** c* is one italic run with bold inside', () => {
+    expect(parseMd('*a **b** c* d')).toEqual([{ kind: 'p', inline: [{ text: 'a ', style: 'i' }, { text: 'b', style: 'b' }, { text: ' c', style: 'i' }, { text: ' d' }] }]);
+    expect(parseMd('*a **b c')).toEqual([{ kind: 'p', inline: [{ text: '*a **b c' }] }]);
+  });
+
   it('code inside bold or italic stays code, and the rest keeps the style', () => {
     expect(parseMd('**copies `a/b` now** and *runs `x` fine*')).toEqual([
       { kind: 'p', inline: [{ text: 'copies ', style: 'b' }, { text: 'a/b', style: 'code' }, { text: ' now', style: 'b' }, { text: ' and ' }, { text: 'runs ', style: 'i' }, { text: 'x', style: 'code' }, { text: ' fine', style: 'i' }] },
@@ -46,6 +51,19 @@ describe('mini-md: the release notes as data (never HTML)', () => {
       const t0 = performance.now();
       parseMd('- item\n'.repeat(size / 7));
       expect(performance.now() - t0).toBeLessThan(500);
+    }
+  });
+
+  it('is bounded on many-line paragraphs too (the lines join into one text to scan): 1 MB and 8 MB of each shape', () => {
+    for (const size of [1024 * 1024, 8 * 1024 * 1024]) {
+      for (const line of ['**a', '*a', '*a **b', '`x', '*a `b', '**a *b', 'x * y', '***', '* *', 'a*b**c`d']) {
+        const md = `${line}\n`.repeat(Math.ceil(size / (line.length + 1)));
+        const t0 = performance.now();
+        let blocks: ReturnType<typeof parseMd> = [];
+        expect(() => (blocks = parseMd(md)), `${line} x ${size}`).not.toThrow();
+        expect(performance.now() - t0, `${line} x ${size}`).toBeLessThan(250);
+        expect(JSON.stringify(blocks).length).toBeLessThan(4_000_000); // (200 KB of `*a` lines is many small pieces)
+      }
     }
   });
 });

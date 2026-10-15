@@ -634,8 +634,8 @@ export function Settings(): VNode {
               <Field label="Only in the menu bar (hide the Dock icon)" hint="needs the menu bar icon; quit from its menu">
                 <Switch checked={c.window?.menuBarOnly === true && c.window?.menuBar !== false} disabled={c.window?.menuBar === false} onChange={(v) => set({ window: { menuBarOnly: v } })} />
               </Field>
-              <Field label="Drop-down mode" hint="The hotkey slides Jaffer down from the top of the screen, and it hides when you click elsewhere. Needs the hotkey.">
-                <Switch checked={c.window?.dropdown === true} onChange={(v) => set({ window: { dropdown: v } })} />
+              <Field label="Drop-down mode" hint="the hotkey brings Jaffer down at the top of the screen under the pointer; it hides when you click elsewhere. Needs the hotkey">
+                <Switch checked={c.window?.dropdown === true && !!c.hotkey?.trim()} disabled={!c.hotkey?.trim()} onChange={(v) => set({ window: { dropdown: v } })} />
               </Field>
               <Field label="Menu bar text" hint="beside the icon. The costs are estimates and need “Show what each answer cost” (Claude Code)">
                 <select value={c.window?.menuBarTitle ?? 'off'} onChange={(e) => set({ window: { menuBarTitle: (e.target as HTMLSelectElement).value } })}>

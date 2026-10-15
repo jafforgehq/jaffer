@@ -9,7 +9,7 @@ import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
 import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
-import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, vibrancyFor } from '../shared/window-policy';
+import { appearanceChanged, dropdownBounds, isAppUrl, isWebUrl, MIN_WINDOW_HEIGHT, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { ApprovalView } from '../core/claude/approvals';
@@ -564,7 +564,7 @@ function createWindow(): void {
     x: saved?.x,
     y: saved?.y,
     minWidth: 640,
-    minHeight: 420,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     title: 'Jaffer',
     titleBarStyle: 'hiddenInset',
@@ -590,8 +590,8 @@ function createWindow(): void {
   win.on('focus', () => sendToRenderer('jaffer:focus', true));
   win.on('blur', () => {
     sendToRenderer('jaffer:focus', false);
-    // drop-down mode: a click elsewhere puts the window away (not while a dialog of ours is open, nor in full screen)
-    if (dropdownOn() && dialogsOpen === 0 && win && !win.isDestroyed() && !win.isFullScreen()) hideWindow();
+    // drop-down mode: a click elsewhere puts the window away (only while the hotkey that brings it back is registered; not while a dialog of ours is open, nor in full screen)
+    if (dropdownOn() && hotkey && dialogsOpen === 0 && win && !win.isDestroyed() && !win.isFullScreen()) hideWindow();
   });
   // Closing the window (the red ✕, ⌘W) does what Settings say (`closeWindow`): by default it hides, and the terminal runs on while the
   // app does; the menu bar icon, the hotkey and the Dock bring it back, and Quit Jaffer is the way out.
@@ -637,20 +637,25 @@ const dropdownOn = (): boolean => appCfg.window?.dropdown === true;
 
 /** The hotkey: as `toggleWindow`, but in drop-down mode the window first slides to the top of the display under the cursor (not one in full screen). */
 function hotkeyToggle(): void {
-  if (!dropdownOn() || win?.isFullScreen()) return toggleWindow();
+  if (!dropdownOn() || (win && !win.isDestroyed() && win.isFullScreen())) return toggleWindow();
   if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) return hideWindow();
-  if (!win || win.isDestroyed()) createWindow();
+  const fresh = !win || win.isDestroyed();
+  if (fresh) showWindow(); // (makes the window, which shows itself on ready-to-show as always)
   win?.setBounds(dropdownBounds(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea), false);
-  showWindow();
+  if (!fresh) showWindow();
 }
 
-/** Drop-down mode turned off: the window goes back to the bounds it had (window.json was not touched meanwhile; none saved: it stays). */
+/** Drop-down mode turned off: the window goes back to the bounds it had (window.json was not touched meanwhile), or to the first-start size, centred, when none (or no place) was saved. In full screen: once it leaves it. */
 function restoreBounds(): void {
+  if (!win || win.isDestroyed()) return;
+  win.removeListener('leave-full-screen', restoreAfterFullScreen);
+  if (win.isFullScreen()) return void win.once('leave-full-screen', restoreAfterFullScreen);
   const b = loadBounds();
-  if (!b || !win || win.isDestroyed() || win.isFullScreen()) return;
-  if (typeof b.x === 'number' && typeof b.y === 'number') win.setBounds(b, false);
-  else win.setSize(b.width, b.height, false);
+  if (b && typeof b.x === 'number' && typeof b.y === 'number') return win.setBounds(b, false);
+  win.setSize(b?.width ?? 1280, b?.height ?? 820, false);
+  win.center();
 }
+const restoreAfterFullScreen = (): void => void (!dropdownOn() && restoreBounds());
 
 /** A hide that waits for the window to leave full screen; showing the window again calls it off. */
 let cancelHide: (() => void) | null = null;

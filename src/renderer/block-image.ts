@@ -35,18 +35,28 @@ export function layoutBlockImage({ command, output, cols = IMAGE_COLS }: { comma
   return { lines, truncated };
 }
 
-/** The lines on a canvas in the terminal's font and colours (the command line muted), at twice the pixels. */
+/** A canvas this big is drawn at once instead of twice the pixels, and no canvas has more pixels or a longer side (a big font would ask for hundreds of megapixels). */
+export const MAX_IMAGE_PIXELS = 40_000_000;
+export const MAX_IMAGE_SIDE = 16_384;
+
+/** The canvas for a picture of `width` x `height` CSS pixels: each side capped (rows past the height are cut off), at twice the pixels while that stays under `MAX_IMAGE_PIXELS`. */
+export function imageCanvasSize(width: number, height: number): { width: number; height: number; dpr: 1 | 2 } {
+  const w = Math.max(1, Math.min(Math.ceil(width), MAX_IMAGE_SIDE));
+  const h = Math.max(1, Math.min(Math.ceil(height), MAX_IMAGE_SIDE, Math.floor(MAX_IMAGE_PIXELS / w)));
+  return { width: w, height: h, dpr: w * h * 4 <= MAX_IMAGE_PIXELS ? 2 : 1 };
+}
+
+/** The lines on a canvas in the terminal's font and colours (the command line muted), at twice the pixels when that is not too big. Throws when there is no canvas to draw on (the caller says so). */
 export function drawBlockImage(lines: string[], hasCommand: boolean, theme: JafferTheme, font: { family: string; size: number }): HTMLCanvasElement {
   const pad = 16;
   const lineH = Math.round(font.size * 1.4);
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no 2d canvas');
   const cssFont = `${font.size}px ${font.family}`;
   ctx.font = cssFont;
   const maxW = ctx.measureText('M').width * IMAGE_COLS * 2; // (wide characters take two columns)
-  const width = Math.ceil(Math.min(maxW, Math.max(1, ...lines.map((l) => ctx.measureText(l).width))) + pad * 2);
-  const height = lines.length * lineH + pad * 2;
-  const dpr = 2;
+  const { width, height, dpr } = imageCanvasSize(Math.min(maxW, Math.max(1, ...lines.map((l) => ctx.measureText(l).width))) + pad * 2, lines.length * lineH + pad * 2);
   canvas.width = width * dpr;
   canvas.height = height * dpr;
   ctx.scale(dpr, dpr);

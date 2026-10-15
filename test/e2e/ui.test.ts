@@ -1427,6 +1427,13 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await win()).dropdown === true, 5_000, 'drop-down mode on');
       await dropdown.locator('.switch').click();
       await until(async () => (await win()).dropdown === false, 5_000, 'drop-down mode off');
+      expect(await dropdown.textContent()).toContain('the hotkey brings Jaffer down at the top of the screen under the pointer; it hides when you click elsewhere. Needs the hotkey');
+      // no hotkey: the switch is disabled (and shows off)
+      await cfgPatch({ hotkey: '', window: { dropdown: true } });
+      await until(async () => dropdown.locator('input').isDisabled(), 5_000, 'drop-down disabled without a hotkey');
+      expect(await dropdown.locator('input').isChecked()).toBe(false);
+      await cfgPatch({ hotkey: 'Control+`', window: { dropdown: false } });
+      await until(async () => !(await dropdown.locator('input').isDisabled()), 5_000, 'drop-down enabled with the hotkey');
     } finally {
       await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
@@ -1593,14 +1600,34 @@ describe('Jaffer UI end to end', () => {
     expect(await page.evaluate(() => (window as any).__drawn)).toEqual(['$ echo hi-block', 'hi-block']);
     await toastSaid('Copied as image');
     // a sensitive command: its output only, no `$` line
-    await pick('echo $NO_SUCH_TOKEN');
+    await page.click('.term');
+    await enter('echo $NO_SUCH_TOKEN seen-out');
+    await pick('echo $NO_SUCH_TOKEN seen-out');
     await until(async () => page.evaluate(() => (window as any).__img.blobs.length === 2), 5_000, 'the second image');
     const drawn: string[] = await page.evaluate(() => (window as any).__drawn);
+    expect(drawn.map((t) => t.trim())).toEqual(['seen-out']);
     expect(drawn.some((t) => t.startsWith('$') || /NO_SUCH_TOKEN/.test(t))).toBe(false);
+    // a sensitive command with no output: nothing to draw, so no blank image
+    await pick('echo $NO_SUCH_TOKEN');
+    await toastSaid('Nothing to copy');
+    expect(await page.evaluate(() => (window as any).__drawn)).toEqual([]);
     // the clipboard refuses: an error toast, nothing kept
     await page.evaluate(() => ((window as any).__img.refuse = true));
     await pick('echo hi-block');
     await toastSaid('Could not copy the image to the clipboard.');
+    expect(await page.evaluate(() => (window as any).__img.blobs.length)).toBe(2);
+    // no canvas to draw on: the same error toast, nothing kept
+    await page.evaluate(() => ((window as any).__img.refuse = false));
+    const failToasts = () => page.locator('.toast-text', { hasText: 'Could not copy the image to the clipboard.' }).count();
+    const before = await failToasts();
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__getContext = HTMLCanvasElement.prototype.getContext;
+      (HTMLCanvasElement.prototype as any).getContext = () => null;
+    });
+    await pick('echo hi-block');
+    await until(async () => (await failToasts()) > before, 5_000, 'a second error toast');
+    await page.evaluate(() => ((HTMLCanvasElement.prototype as any).getContext = (window as any).__getContext));
     expect(await page.evaluate(() => (window as any).__img.blobs.length)).toBe(2);
   }, 40_000);
 
@@ -3268,6 +3295,7 @@ describe('Jaffer UI end to end', () => {
       await page.waitForSelector('.pet[data-season="winter"]');
       expect(await page.locator('.pet[data-role="main"] .pet-season[data-season="winter"]').count()).toBe(1);
       expect(await page.locator('.pet-helper[data-season]').count()).toBe(0);
+      expect(await page.$eval('.pet-season .ps-c', (el) => getComputedStyle(el).fill)).toBe('rgb(244, 241, 234)'); // (the brim is snow-white whatever the theme's text colour)
       await shot('19d-season-winter');
       await page_('debug=1&season=halloween');
       await page.waitForSelector('.pet[data-season="halloween"] .pet-season[data-season="halloween"]');
@@ -3312,6 +3340,7 @@ describe('Jaffer UI end to end', () => {
       await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
       await page.waitForSelector('.term .xterm');
     };
+    const frames = (n: number) => page.evaluate((k) => new Promise<void>((r) => { const f = () => (k-- > 0 ? requestAnimationFrame(f) : r()); f(); }), n);
     const firstText = (md: string) => {
       const b = parseMd(md).find((x) => x.kind !== 'ul')!;
       return (b as { inline: { text: string }[] }).inline.map((i) => i.text).join('').slice(0, 30);
@@ -3352,6 +3381,12 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.wn-card .wn-title')).toBe('All versions');
     expect(await page.locator('.wn-card button', { hasText: 'All versions' }).count()).toBe(0);
 
+    // the panel already open after an update: the card is there, so no toast
+    await reload();
+    await page.waitForSelector('.side-panel > .wn-card');
+    await frames(2); // (the toast is set before the first render, so it would be in this one)
+    expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
+
     // Dismiss: the card goes, this version counts as seen, and a reload shows neither card nor toast
     await page.click('.wn-card button:has-text("Dismiss")');
     await page.waitForSelector('.wn-card', { state: 'detached' });
@@ -3360,7 +3395,7 @@ describe('Jaffer UI end to end', () => {
     await cfgPatch({ panel: { open: true } });
     await reload();
     await page.waitForSelector('.side-panel');
-    await sleep(600);
+    await frames(2);
     expect(await page.locator('.wn-card').count()).toBe(0);
     expect(await page.locator('.toast-text', { hasText: 'Jaffer updated' }).count()).toBe(0);
 

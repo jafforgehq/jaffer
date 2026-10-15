@@ -90,8 +90,14 @@ function copy(text: string, said: string): void {
 function copyImage(command: string | undefined, output: string): void {
   const a = cfg.value?.appearance;
   const { lines } = layoutBlockImage({ command, output });
-  const canvas = drawBlockImage(lines, command !== undefined, activeTheme(), { family: a?.fontFamily || 'monospace', size: a?.fontSize ?? 13 });
   const failed = () => toast({ kind: 'error', text: 'Could not copy the image to the clipboard.' });
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = drawBlockImage(lines, command !== undefined, activeTheme(), { family: a?.fontFamily || 'monospace', size: a?.fontSize ?? 13 });
+  } catch {
+    failed(); // (no 2d context, or the canvas could not be allocated)
+    return;
+  }
   canvas.toBlob((blob) => {
     if (!blob) return failed();
     void Promise.resolve()
@@ -209,7 +215,14 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         },
       },
       { label: 'Copy as Markdown', run: () => copy(fenceText(output(b), shownCommand(b)), 'Copied as Markdown') },
-      { label: 'Copy as image', run: () => copyImage(shownCommand(b), output(b)) },
+      {
+        label: 'Copy as image',
+        run: () => {
+          const cmd = shownCommand(b);
+          const text = cmd === undefined ? someOutput(b) : output(b); // (no command line to draw and no output: not a blank image)
+          if (text !== undefined) copyImage(cmd, text);
+        },
+      },
     );
     return items;
   };

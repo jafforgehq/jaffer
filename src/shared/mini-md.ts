@@ -12,7 +12,7 @@ export type MdBlock = { kind: 'h'; level: 2 | 3; inline: Inline[] } | { kind: 'p
 const MAX_TEXT = 200_000;
 const MAX_LINE = 4096;
 
-/** `**bold**`, `*italic*` and `` `code` `` in one line of text. Inside bold or italic (`base`) only code is looked for (the pieces keep the style). */
+/** `**bold**`, `*italic*` and `` `code` `` in one line of text. Inside bold (`base`) only code is looked for, inside italic bold and code (the pieces keep the style, or take bold's): two levels at most. */
 function inline(s: string, base?: 'b' | 'i'): Inline[] {
   const out: Inline[] = [];
   let plain = '';
@@ -24,7 +24,8 @@ function inline(s: string, base?: 'b' | 'i'): Inline[] {
     if (plain) out.push(base ? { text: plain, style: base } : { text: plain });
     plain = '';
   };
-  if (base) noBold = noItalic = true;
+  if (base) noItalic = true;
+  if (base === 'b') noBold = true;
   while (i < s.length) {
     if (s.startsWith('**', i) && !noBold) {
       const end = s.indexOf('**', i + 2);
@@ -36,7 +37,8 @@ function inline(s: string, base?: 'b' | 'i'): Inline[] {
       }
       if (end < 0) noBold = true;
     } else if (s[i] === '*' && !s.startsWith('**', i) && s[i + 1] !== ' ' && !noItalic) {
-      const end = s.indexOf('*', i + 1);
+      let end = s.indexOf('*', i + 1);
+      while (end >= 0 && s[end + 1] === '*') end = s.indexOf('*', end + 2); // (a ** pair inside is bold, never the closer)
       if (end > i + 1) {
         flush();
         out.push(...inline(s.slice(i + 1, end), 'i'));

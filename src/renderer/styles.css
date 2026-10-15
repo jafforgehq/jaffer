@@ -708,10 +708,10 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .pet-season .ps-line { fill: none; stroke: color-mix(in srgb, var(--accent) 55%, #000); stroke-width: 0.9; stroke-linecap: round; }
 .pet-season .ps-stem { fill: none; stroke: var(--ok); stroke-width: 1.8; stroke-linecap: round; }
 .pet-season[data-season='winter'] .ps-a { fill: var(--danger); }
-.pet-season[data-season='winter'] .ps-c { fill: color-mix(in srgb, var(--text) 82%, var(--bg-solid)); }
+.pet-season[data-season='winter'] .ps-c { fill: #f4f1ea; } /* (snow-white in every theme: the text colour is dark in a light one) */
 .pet-season[data-season='valentine'] .ps-a { fill: color-mix(in srgb, var(--danger) 80%, var(--violet)); }
 .sc-flake { fill: var(--accent); opacity: 0.55; transform-box: fill-box; }
-.scene[data-season='winter'] .sc-flake { fill: color-mix(in srgb, var(--text) 80%, var(--bg-solid)); opacity: 0.7; }
+.scene[data-season='winter'] .sc-flake { fill: #f4f1ea; opacity: 0.7; }
 .scene[data-season='halloween'] .sc-flake:nth-child(2n) { fill: var(--violet); }
 .scene[data-season='valentine'] .sc-flake { fill: var(--danger); }
 @keyframes sc-fall { from { transform: translateY(-10px); opacity: 0; } 20%, 80% { opacity: 0.7; } to { transform: translateY(16px); opacity: 0; } }
