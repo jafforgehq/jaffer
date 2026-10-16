@@ -3300,6 +3300,11 @@ describe('Jaffer UI end to end', () => {
         const want = { x: P.x + ((c.col - 1) * P.w) / grid.cols, y: P.y + ((c.row - 1) * P.h) / grid.rows, w: P.w / grid.cols, h: (c.rows * P.h) / grid.rows };
         for (const k of ['x', 'y', 'w', 'h'] as const) expect(Math.abs(b[k] - want[k]), `pane ${i + 1} of ${n}: ${k} ${b[k]} vs ${want[k]}`).toBeLessThanOrEqual(2);
       });
+      if (n === 1) {
+        // the one terminal's screen fills its pane (no leftover bands above or below)
+        const fill = await page.evaluate(() => ({ pane: document.querySelector('.pane')!.getBoundingClientRect().height, screen: document.querySelector('.pane .xterm-screen')!.getBoundingClientRect().height }));
+        expect(fill.screen).toBeGreaterThan(fill.pane - 60);
+      }
       for (let i = 0; i < n; i++)
         for (let j = i + 1; j < n; j++) {
           const a = g.cells[i]!;
@@ -3395,6 +3400,47 @@ describe('Jaffer UI end to end', () => {
     await menu('focus-terminal-3');
     await until(async () => /split-c/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p3');
 
+    // a paste of several lines asks, and Paste puts the lines into the terminal they were pasted into, wherever the focus is by then
+    await patch({ terminal: { pasteGuard: true } });
+    await menu('focus-terminal-2');
+    await focusOn('p2');
+    const pasted = Array.from({ length: 14 }, (_, i) => `echo PASTE-P2-${i + 1}`).join('\n') + '\n';
+    await page.evaluate((t) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', t);
+      document.querySelector('.term[data-pane="p2"] .xterm-helper-textarea')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, pasted);
+    await page.waitForSelector('.paste-bar');
+    expect(await page.textContent('.paste-bar b')).toBe('Paste 14 lines?');
+    await menu('focus-terminal-3');
+    await focusOn('p3');
+    await page.locator('.paste-bar .btn.primary').click();
+    await page.waitForSelector('.paste-bar', { state: 'detached' });
+    await focusOn('p3'); // (the keyboard stays with the focused terminal)
+    await page.evaluate(() => window.jaffer.call('pty.write', { pane: 'p2', data: '\r' })); // (a shell with bracketed paste holds pasted lines until Enter)
+    await until(async () => /^PASTE-P2-14/m.test(await textOf('p2')), 8_000, 'the pasted lines to run in p2');
+    expect(await textOf('p3')).not.toContain('PASTE-P2');
+
+    // a turn of a Claude in a terminal that is not focused still counts, and its summary says where; moving the focus counts nothing
+    await endClaude();
+    await menu('focus-terminal-1');
+    await focusOn('main');
+    const turns = () => page.evaluate(() => (window as any).__jaffer.turns() as number);
+    const t0 = await turns();
+    const fg = { id: 'fg-main', pane: 'main', state: 'working', turnStartedAtAgo: 5_000 };
+    const bg = { id: 'bg-p2', pane: 'p2', turnStartedAtAgo: 25_000 };
+    await inject([fg, { ...bg, state: 'working' }]);
+    await inject([fg, { ...bg, state: 'idle' }]);
+    await inject([fg, { ...bg, state: 'idle', cost: { usd: 0.02, at: 93 } }]);
+    await until(async () => (await turns()) === t0 + 1, 5_000, "p2's turn to count");
+    await until(async () => (await toastCount('split-b: Claude finished in 25s')) === 1, 5_000, "the summary naming p2's folder");
+    for (const k of ['focus-terminal-2', 'focus-terminal-1']) await menu(k);
+    await focusOn('main');
+    await sleep(500);
+    expect(await turns()).toBe(t0 + 1);
+    expect(await toastCount('Claude finished in')).toBe(1);
+    await inject([]);
+
     // resume types only into the focused, idle terminal; a busy focused one gets nothing typed (copied, and why)
     const sid = '00000093-aaaa-4bbb-8ccc-ddddeeeeffff';
     const pdir = path.join(env.userHome, '.claude', 'projects', '-split-a');
@@ -3437,23 +3483,70 @@ describe('Jaffer UI end to end', () => {
     await sleep(300);
     expect(await ids()).toHaveLength(4);
     expect((await daemonPanes()).find((p) => p.id === 'p2')?.busy).toBe('sleep 31');
-    // ⇧⌘W is the same question for the focused terminal; End terminal closes it and the keyboard goes to a neighbour
+    // ⇧⌘W is the same question for the focused terminal. Closed meanwhile from elsewhere, the question goes with it and the keyboard goes
+    // to a neighbour; the id opened again starts without the question
     await menu('focus-terminal-2');
     await focusOn('p2');
     await menu('close-terminal');
     await ask.waitFor();
-    await ask.getByRole('button', { name: 'End terminal' }).click();
+    await page.evaluate(() => window.jaffer.call('pane.close', { pane: 'p2' }));
     await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close');
     expect((await daemonPanes()).map((p) => p.id)).toEqual(['main', 'p3', 'p4']);
     await focusOn('p3');
     await geometry(3);
     await until(sizes, 5_000, 'the sizes at 3 after a close');
     expect(await page.evaluate(() => (window as any).__jaffer.terminals.has('p2'))).toBe(false);
-    // nothing runs: ✕ closes at once
+    await menu('split-terminal');
+    await until(async () => (await ids()).join() === 'main,p3,p4,p2', 5_000, 'p2 opened again, last');
+    await prompts('p2');
+    await sleep(300);
+    expect(await page.locator('.pn-confirm').count()).toBe(0);
+    // nothing runs: ✕ closes at once, and a double click sends one request
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__closes = 0;
+      const orig = w.jaffer.call;
+      w.jaffer.call = (m: string, p: unknown) => (m === 'pane.close' && w.__closes++, orig(m, p));
+      w.__closeSpyOff = () => (w.jaffer.call = orig);
+    });
+    await closeBtn('p2').dblclick();
+    await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close at once');
+    await sleep(400);
+    expect(await page.evaluate(() => (window as any).__closes)).toBe(1);
+    await page.evaluate(() => (window as any).__closeSpyOff());
     await closeBtn('p4').click();
     await until(async () => (await ids()).join() === 'main,p3', 5_000, 'p4 to close without a question');
     expect(await page.locator('.pn-confirm').count()).toBe(0);
     await geometry(2);
+
+    // the sticky command header sits over the focused terminal, and follows it when the window is resized
+    await focusOn('p3');
+    await run('p3', 'seq 1 400', /^400$/m);
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollLines(-150));
+    await page.waitForSelector('.sticky-cmd');
+    const stickyOverP3 = async () => {
+      const st = (await page.locator('.sticky-cmd').boundingBox())!;
+      const p3 = (await page.locator('.pane[data-pane="p3"]').boundingBox())!;
+      return Math.abs(st.x - (p3.x + 12)) <= 2 && Math.abs(st.y - (p3.y + 6)) <= 2;
+    };
+    await until(stickyOverP3, 3_000, 'the header over p3');
+    await page.setViewportSize({ width: 1100, height: 860 });
+    await until(stickyOverP3, 3_000, 'the header to follow p3 after a resize');
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await until(stickyOverP3, 3_000, 'the header to follow p3 back');
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollToBottom());
+    await page.waitForSelector('.sticky-cmd', { state: 'detached' });
+    // the find bar searches the focused terminal; when the focus moves, the other terminal keeps no marks
+    const findMarks = (id: string) => page.locator(`.term[data-pane="${id}"] .xterm-find-result-decoration, .term[data-pane="${id}"] .xterm-find-active-result-decoration`).count();
+    await menu('find');
+    await page.waitForSelector('.findbar input');
+    await page.fill('.findbar input', '399');
+    await until(async () => (await findMarks('p3')) > 0, 5_000, 'the match marked in p3');
+    await menu('focus-terminal-1');
+    await until(async () => (await findMarks('p3')) === 0, 5_000, "p3's marks to go when the focus moves");
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.findbar', { state: 'detached' });
+    await focusOn('main');
 
     // a Claude in a terminal (its hooks name the pane): closing that terminal ends that Claude only
     await sendHook('UserPromptSubmit', { session_id: 'split-claude-p3', jaffer_pane: 'p3', prompt: 'hi' });

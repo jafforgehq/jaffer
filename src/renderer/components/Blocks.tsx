@@ -3,7 +3,7 @@ import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
 import { BlockModel, blockOutputText, fenceText, saveName, type Block, type MarkKind } from '../blocks';
-import { activePane, activeTheme, cfg, safeCommand, toast } from '../state';
+import { activePane, activeTheme, cfg, paneLayout, safeCommand, toast } from '../state';
 import { drawBlockImage, layoutBlockImage } from '../block-image';
 import { isSensitiveCommand } from '../../shared/redact';
 import { took } from '../../shared/notify-policy';
@@ -418,7 +418,8 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
 export function StickyHeader(): VNode | null {
   const s = sticky.value[activePane.value];
   if (!s) return null;
-  // in the split view it sits at the top of the focused terminal (one terminal: where it always was)
+  // in the split view it sits at the top of the focused terminal (one terminal: where it always was), placed again when the boxes move
+  void paneLayout.value;
   const el = document.querySelector<HTMLElement>(`.panes:not([data-count='1']) > .pane[data-pane="${activePane.value}"]`);
   const at = el ? { top: `${el.offsetTop + 6}px`, left: `${el.offsetLeft + 12}px`, maxWidth: `${Math.max(120, el.offsetWidth - 160)}px` } : undefined;
   return (

@@ -1,7 +1,6 @@
-import { signal } from '@preact/signals';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, claudeIn, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
+import { activePane, addPane, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { baseName } from '../claude-ui';
@@ -15,8 +14,6 @@ import { TerminalView, terminals } from './TerminalView';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
-/** The terminal whose ✕ waits for End terminal or Cancel (something runs in it). Memory only. */
-const closeAsk = signal<string | null>(null);
 
 /** ⌘D: one more terminal in the focused one's folder (the daemon reads it from the terminal named), and it takes the keyboard. */
 export async function splitTerminal(): Promise<void> {
@@ -59,9 +56,14 @@ export function closeTerminal(id = activePane.value): void {
   closeAsk.value = id;
 }
 
+/** The terminals whose close or restart is on its way. */
+const ending = new Set<string>();
+
 /** With several terminals this one closes; the last one restarts (a fresh shell in the same folder, a blank screen). */
 async function endTerminal(id: string): Promise<void> {
   closeAsk.value = null;
+  if (ending.has(id)) return; // (a double click, or ⇧⌘W twice: one request)
+  ending.add(id);
   try {
     if (panes.value.length > 1) {
       await call('pane.close', { pane: id });
@@ -72,6 +74,8 @@ async function endTerminal(id: string): Promise<void> {
     }
   } catch (e) {
     toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+  } finally {
+    ending.delete(id);
   }
 }
 
@@ -119,8 +123,14 @@ export function PaneTree(): VNode {
   const list = panes.value.slice(0, MAX_PANES);
   const g = paneGrid(list.length);
   const multi = list.length > 1;
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const ro = new ResizeObserver(() => paneLayout.value++);
+    for (const el of box.current?.children ?? []) ro.observe(el);
+    return () => ro.disconnect();
+  }, [list.join()]);
   return (
-    <div class="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
+    <div ref={box} class="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
       {list.map((id, i) => {
         const c = g.cells[i]!;
         return (

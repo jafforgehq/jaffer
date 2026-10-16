@@ -195,10 +195,17 @@ export function FindBar(): VNode {
   const [hits, setHits] = useState<{ resultIndex: number; resultCount: number } | null>(null);
   useLayoutEffect(() => input.current?.focus(), []);
   const h = () => terminals.get(activePane.value);
+  // the focused terminal's search: when the focus moves, the count follows it and the other terminal's marks go
+  const pane = activePane.value;
   useEffect(() => {
-    const sub = h()?.search.onDidChangeResults(setHits);
-    return () => sub?.dispose();
-  }, []);
+    const t = terminals.get(pane);
+    const sub = t?.search.onDidChangeResults(setHits);
+    return () => {
+      sub?.dispose();
+      t?.search.clearDecorations();
+      setHits(null);
+    };
+  }, [pane]);
   const close = () => {
     h()?.search.clearDecorations();
     overlay.value = null;
@@ -355,10 +362,12 @@ export function ShortcutsSheet(): VNode {
 export function PasteBar(): VNode | null {
   const ask = pasteAsk.value;
   const done = (paste: boolean) => {
-    const t = terminals.get(activePane.value);
     pasteAsk.value = null;
-    if (paste && ask) t?.paste(ask.text);
-    t?.focus();
+    // into the terminal it was pasted into, wherever the focus is now; the keyboard stays with the focused one
+    const into = ask && terminals.get(ask.pane);
+    if (paste && ask && !into) toast({ kind: 'info', text: 'That terminal is closed: nothing was pasted.' });
+    if (paste && ask) into?.paste(ask.text);
+    terminals.get(activePane.value)?.focus();
   };
   useLayoutEffect(() => {
     if (!ask) return;

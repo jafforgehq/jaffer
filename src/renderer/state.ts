@@ -47,6 +47,10 @@ export const panes = signal<string[]>(['main']);
 export const paneInfo = signal<Record<string, SessionInfo>>({});
 /** The focused terminal's info: the title bar, the companion and resume read this, so they follow the focus. */
 export const info = computed<SessionInfo>(() => paneInfo.value[activePane.value] ?? { cwd: '' });
+/** Bumped when a terminal's box moves or changes size (a split, a close, the window resized): what is placed over a terminal follows it. */
+export const paneLayout = signal(0);
+/** The terminal whose ✕ waits for End terminal or Cancel (something runs in it). Memory only. */
+export const closeAsk = signal<string | null>(null);
 /** Bumped when an id is opened again, so its view starts fresh (and attaches again) instead of keeping a closed terminal's. */
 const paneGen = new Map<string, number>();
 export const paneKey = (id: string): string => `${id}#${paneGen.get(id) ?? 0}`;
@@ -70,6 +74,7 @@ export function removePane(id: string): void {
     const { [id]: _gone, ...rest } = paneInfo.value;
     paneInfo.value = rest;
     if (activePane.value === id && next.length) activePane.value = next[Math.min(i, next.length - 1)]!;
+    if (closeAsk.value === id) closeAsk.value = null; // (the question goes with it: an id opened again starts without it)
   });
   fails.delete(id);
   clearTimeout(infoTimers.get(id));
@@ -134,8 +139,8 @@ export const pins = signal<{ id: number; text: string }[]>([]);
 /** The latest local server port the focused terminal's running command printed; gone when it ends or the focus moves. */
 export const port = signal<number | null>(null);
 effect(() => void (activePane.value && (port.value = null)));
-/** A paste of several lines, waiting for Paste or Cancel. */
-export const pasteAsk = signal<{ text: string; lines: number; first: string } | null>(null);
+/** A paste of several lines, waiting for Paste or Cancel, and the terminal it was pasted into. */
+export const pasteAsk = signal<{ text: string; lines: number; first: string; pane: string } | null>(null);
 
 /** How many lines a paste has: `\r\n`, `\n` and a lone `\r` each end one; a trailing break does not start another. */
 export function lineCount(text: string): number {
@@ -268,25 +273,44 @@ export function answerApproval(id: string, decision: 'allow' | 'deny' | 'ask'): 
 }
 export const timesAnswered = (sessionId: string, tool: string): number => answered.get(`${sessionId}\n${tool}`) ?? 0;
 
-let seen: ClaudeSession | null = null;
+/** Each Claude session as last pushed, by id: turns are counted per session, whichever terminal has the focus. */
+let seen = new Map<string, ClaudeSession>();
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
-/** A finished turn's summary, waiting (up to 3 s) for the turn's cost. */
-let pending: { id: string; durMs: number; counts: Record<string, number>; files: string[]; timer: ReturnType<typeof setTimeout> } | null = null;
+/** A finished turn's summary, waiting (up to 3 s) for the turn's cost; `where` names its terminal when several are open. */
+let pending: { id: string; durMs: number; counts: Record<string, number>; files: string[]; where: string; timer: ReturnType<typeof setTimeout> } | null = null;
+/** Bumped when any session's turn ends (working → idle): the past conversations read their list again. */
+export const turnsEnded = signal(0);
 
-/** A `claude.state` from the daemon (or a test: any field may be missing), and what its changes to the current session mean. */
+/** "split-b: " for a session in one of several terminals (its folder's name, else its number); nothing with one terminal. */
+function whereOf(s: ClaudeSession): string {
+  const i = s.pane ? panes.value.indexOf(s.pane) : -1;
+  if (panes.value.length < 2 || i < 0) return '';
+  return `${baseName(paneInfo.value[s.pane!]?.cwd ?? '') || `Terminal ${i + 1}`}: `;
+}
+
+/** A `claude.state` from the daemon (or a test: any field may be missing), and what its changes to each session mean. */
 function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; date: string; workMs?: number } } | null | undefined): void {
   batch(() => {
     claudeLive.value = Array.isArray(data?.sessions) ? data.sessions : [];
     claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
     if (claudeLive.value.some((c) => c?.state === 'working' || c?.state === 'needs-you')) lastActivityAt.value = Date.now();
   });
-  const s = currentClaude();
-  const p = s && seen?.id === s.id ? seen : null;
-  seen = s;
-  if (!s) return;
-  if (p && s.compacting && !p.compacting) toast({ kind: 'info', text: 'Claude is compacting its context' });
+  const before = seen;
+  seen = new Map();
+  for (const s of claudeLive.value) {
+    if (!s || typeof s.id !== 'string') continue;
+    const p = before.get(s.id) ?? null;
+    seen.set(s.id, s);
+    sessionChanged(s, p);
+  }
+}
+
+/** One session's change since its last push (`p`: null the first time it is seen). */
+function sessionChanged(s: ClaudeSession, p: ClaudeSession | null): void {
+  if (p && s.compacting && !p.compacting) toast({ kind: 'info', text: `${whereOf(s)}Claude is compacting its context` });
   const asked = p?.tool?.name;
   if (p?.state === 'needs-you' && s.state === 'working' && asked) answered.set(`${s.id}\n${asked}`, timesAnswered(s.id, asked) + 1);
+  if (p?.state === 'working' && s.state === 'idle') turnsEnded.value++;
   const cost = s.cost && s.cost.at !== p?.cost?.at ? s.cost.last : undefined;
   if (p?.state === 'working' && s.state === 'idle' && !s.cutShort) turnFinished(s, cost?.usd, !!cost);
   else if (cost) {
@@ -309,7 +333,7 @@ function turnFinished(s: ClaudeSession, usd: number | undefined, costKnown: bool
   const counts = turnCounts(s.calls, s.turnStartedAt);
   // (a turn without a prompt keeps the last prompt's files: only a turn that wrote lists them)
   const files = counts.write && Array.isArray(s.files) ? s.files : [];
-  pending = { id: s.id, durMs, counts, files, timer: setTimeout(() => showSummary(undefined), 3000) };
+  pending = { id: s.id, durMs, counts, files, where: whereOf(s), timer: setTimeout(() => showSummary(undefined), 3000) };
   if (costKnown || cfg.value?.claude?.showCost === false) showSummary(usd);
 }
 
@@ -321,7 +345,7 @@ function showSummary(usd: number | undefined): void {
   const shown = p.files.slice(0, 5);
   toast({
     kind: 'info',
-    text: turnSummaryText({ durMs: p.durMs, counts: p.counts, usd: cfg.value?.claude?.showCost === false ? undefined : usd }),
+    text: p.where + turnSummaryText({ durMs: p.durMs, counts: p.counts, usd: cfg.value?.claude?.showCost === false ? undefined : usd }),
     actions: shown.map((f) => ({ label: baseName(f), run: () => void jaffer().revealPath(f).catch(() => undefined) })),
     note: p.files.length > shown.length ? `+${p.files.length - shown.length} more` : undefined,
   });

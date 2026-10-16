@@ -1,7 +1,7 @@
 import type { VNode } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
-import { activePane, cfg, clock, currentClaude, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast } from '../state';
+import { activePane, cfg, clock, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast, turnsEnded } from '../state';
 import { conversationName, conversationRow, costByFolder, filterByFolder, groupConversations, topFolders } from '../../shared/history-label';
 import { parseNames, pinnedIds, removeName, setName, togglePin } from '../../shared/history-names';
 import type { TrashResult } from '../../main/trash-conversations';
@@ -94,13 +94,9 @@ export function Conversations(): VNode {
   };
   useEffect(() => {
     load();
-    // a finished turn changes the list (working → idle)
-    let was = currentClaude()?.state;
-    const off = effect(() => {
-      const s = currentClaude()?.state;
-      if (was === 'working' && s === 'idle') load();
-      was = s;
-    });
+    // a finished turn of any session changes the list (working → idle); the focus moving does not
+    const ended = turnsEnded.value;
+    const off = effect(() => void (turnsEnded.value !== ended && load()));
     return () => (off(), void asked++); // (an answer that comes after the panel closed is dropped)
   }, []);
   useEffect(() => {

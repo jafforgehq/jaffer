@@ -156,7 +156,7 @@ export function TerminalView({ pane }: { pane: string }) {
       if (lines < 2) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      pasteAsk.value = { text, lines, first: redactText(firstLine(text)).slice(0, 80) };
+      pasteAsk.value = { text, lines, first: redactText(firstLine(text)).slice(0, 80), pane };
     };
     el.addEventListener('paste', onPaste, true);
 
@@ -213,7 +213,7 @@ export function TerminalView({ pane }: { pane: string }) {
         for (const p of pending.splice(0)) if (p.seq > snapshotSeq) apply(p.seq, p.data);
         if (activePane.value === pane && !overlay.value) term.focus();
       } catch (e) {
-        term.write(`\r\n\x1b[31mCould not attach to the session: ${e instanceof Error ? e.message : e}\x1b[0m\r\n`);
+        if (!disposed) term.write(`\r\n\x1b[31mCould not attach to the session: ${e instanceof Error ? e.message : e}\x1b[0m\r\n`);
       }
     };
 
@@ -359,6 +359,7 @@ export function TerminalView({ pane }: { pane: string }) {
 
     return () => {
       disposed = true;
+      clearTimeout(resizeTimer); // (a closed terminal sends no resize)
       stop();
       stopFocus();
       stopHold();
