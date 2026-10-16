@@ -2268,7 +2268,7 @@ describe('Jaffer UI end to end', () => {
     await page.focus('.sp-convos .conv-search input');
     await page.keyboard.press('Escape');
     expect(await focused()).toBe('terminal');
-    // Tab to a row (past the first row and its copy, name, pin and (1.3.0) trash buttons; 1.2.0: the folder chips sit between the search and the rows):
+    // Tab to a row (past the first row and its copy, name, (1.4.0) tag and hide, pin and (1.3.0) trash buttons; 1.2.0: the folder chips sit between the search and the rows):
     // Enter resumes THAT row; ↑/↓ go on from the focused row; Shift+Tab to the refresh button: Enter refreshes and types nothing
     await page.fill('.sp-convos .conv-search input', 'hist-proj');
     await until(async () => (await mine()).length === 3, 3_000, 'the three for Tab');
@@ -2277,6 +2277,10 @@ describe('Jaffer UI end to end', () => {
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-copy'))).toBe(true);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-name-btn'))).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tag-btn'))).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-hide'))).toBe(true);
     await page.keyboard.press('Tab');
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-pin'))).toBe(true);
     await page.keyboard.press('Tab');
@@ -2570,7 +2574,7 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await nameOf(92)) === 'Deploy fix', 3_000, 'the new name in the row');
     await sleep(300);
     expect(await termText()).toBe(renameBefore); // Enter in the name field names the row: nothing is typed into the terminal (no resume)
-    expect((await cfgNow()).history).toEqual({ names: [`${sid(92)} Deploy fix`], pinned: [] });
+    expect((await cfgNow()).history).toEqual({ names: [`${sid(92)} Deploy fix`], pinned: [], tags: [], hidden: [] });
     expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id)).toBe(sid(92)); // (the keyboard back on the row)
     // on disk: the person's own name and nothing of the transcript
     const onDisk = fs.readFileSync(env.paths.config, 'utf8');
@@ -2789,6 +2793,8 @@ describe('Jaffer UI end to end', () => {
     for (let k = 0; k < chips; k++) await page.keyboard.press('Tab'); // (the other chips, then Cost by folder)
     expect((await active()).cls).toContain('conv-cost-toggle');
     await page.keyboard.press('Tab');
+    expect((await active()).cls).toContain('st-toggle'); // (1.4.0: Storage)
+    await page.keyboard.press('Tab');
     expect((await active()).cls).toContain('conv-row');
 
     // a refresh with a newer conversation above keeps the keyboard on the same row
@@ -2798,10 +2804,8 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await row(98).count()) === 1, 5_000, 'the newer one listed');
     await sleep(200);
     expect(await active()).toEqual({ cls: 'conv-row', id: sid(96) });
-    // pinning from the keyboard keeps it on the star, in the Pinned group and back
-    await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
-    await page.keyboard.press('Tab');
+    // pinning from the keyboard keeps it on the star, in the Pinned group and back (past copy, name and, 1.4.0, tag and hide)
+    for (let k = 0; k < 5; k++) await page.keyboard.press('Tab');
     expect((await active()).cls).toContain('conv-pin');
     await page.keyboard.press('Enter');
     await until(async () => (await groupOf(96)) === 'Pinned', 3_000, 'pinned');
@@ -2818,7 +2822,9 @@ describe('Jaffer UI end to end', () => {
     await patch({ panel: { width: 220 } });
     await until(async () => Math.round((await page.locator('.side-panel').boundingBox())!.width) <= 222, 3_000, 'the narrow panel');
     await page.click('.sp-convos .conv-cost-toggle');
+    await page.click('.sp-convos .st-toggle'); // (1.4.0: the storage view must fit too)
     await page.waitForSelector('.sp-convos .conv-costs');
+    await page.waitForSelector('.sp-convos .st-row');
     await until(async () => ((await page.textContent('.sp-convos .conv-costs')) ?? '').includes('≈ $90'), 3_000, 'the wide figure');
     const fit = await page.evaluate(() => {
       const box = document.querySelector('.sp-convos')!;
@@ -2838,6 +2844,7 @@ describe('Jaffer UI end to end', () => {
     expect(fit.clipped).toEqual([]);
     expect(fit.rowShare).toBeGreaterThan(0.9);
     await page.click('.sp-convos .conv-cost-toggle');
+    await page.click('.sp-convos .st-toggle');
     await patch({ panel: { width: 300 } });
 
     await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__revReal; });
@@ -2964,7 +2971,7 @@ describe('Jaffer UI end to end', () => {
     expect([...(await trashed()).at(-1)!].sort()).toEqual([103, 104, 105, 106].map(sid));
     calls++;
     await until(async () => JSON.stringify(await ids()) === JSON.stringify([sid(106)]), 5_000, 'only the running one left');
-    expect((await cfgNow()).history).toEqual({ pinned: [], names: [] });
+    expect((await cfgNow()).history).toEqual({ pinned: [], names: [], tags: [], hidden: [] });
     await answer(null);
 
     // All listed, without a chip: only that item, every row the list shows
@@ -3093,6 +3100,236 @@ describe('Jaffer UI end to end', () => {
     await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__privReal; });
     await page.fill('.sp-convos .conv-search input', '');
     fs.rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it('past conversations, 1.4.0: tags (a menu per row, chips that filter with the folder and the search), hide and unhide (Hidden (N), left out of Remove… counts), and a removal takes their tags and hidden marks', async () => {
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-dddd15151515';
+    const eps = path.join(env.userHome, 'p15-eps');
+    const zeta = path.join(env.userHome, 'p15-zeta');
+    const files = new Map<number, string>();
+    const plant = (n: number, proj: string, cwd: string, end: number) => {
+      const dir = path.join(env.userHome, '.claude', 'projects', proj);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const line = (type: string, at: number, extra: object) => JSON.stringify({ type, cwd, timestamp: new Date(at).toISOString(), ...extra });
+      fs.writeFileSync(file, [line('user', end - 60_000, { message: { role: 'user', content: `Tag talk ${n}` } }), line('assistant', end, { message: { id: `g${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+      fs.utimesSync(file, end / 1000, end / 1000);
+      files.set(n, file);
+    };
+    const T = Date.now();
+    plant(1, '-p15-eps', eps, T - 50_000);
+    plant(2, '-p15-eps', eps, T - 40_000);
+    for (const n of [3, 4, 5]) plant(n, '-p15-zeta', zeta, T - 100_000 + n);
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const item = (n: number) => page.locator(`.sp-convos .conv-item:has(.conv-row[data-id="${sid(n)}"])`);
+    const ids = async () => (await page.$$eval('.sp-convos .conv-row', (r) => r.map((x) => (x as HTMLElement).dataset.id!))).sort();
+    const want = (...ns: number[]) => ns.map(sid).sort();
+    const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
+    const menuItems = () => page.$$eval('.ctx-menu [role="menuitem"]', (b) => b.map((x) => x.textContent));
+    const openTags = async (n: number) => (await item(n).hover(), await item(n).locator('.conv-tag-btn').click(), await page.waitForSelector('.conv-tagmenu'));
+    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.fill('.sp-convos .conv-search input', 'Tag talk');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await ids()).length === 5, 5_000, 'the planted conversations');
+    expect(await page.locator('.sp-convos .conv-tag-chips').count()).toBe(0); // (no tags yet: no chips)
+
+    // the tag menu: "New tag…" has the keyboard, Enter adds (the menu stays), Esc closes it back to the row's tag button
+    expect(await item(1).locator('.conv-tag-btn').getAttribute('aria-label')).toBe('Tags');
+    await openTags(1);
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
+    await page.keyboard.type('  Work ');
+    await page.keyboard.press('Enter');
+    await until(async () => JSON.stringify((await cfgNow()).history.tags) === JSON.stringify([`${sid(1)} Work`]), 3_000, 'the tag kept');
+    await until(async () => (await page.locator('.conv-tagmenu [role="menuitemcheckbox"][aria-checked="true"]').count()) === 1, 3_000, 'Work on in the menu');
+    await page.keyboard.type('urgent');
+    await page.keyboard.press('Enter');
+    await until(async () => (await cfgNow()).history.tags.length === 2, 3_000, 'the second tag');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tag-btn'))).toBe(true);
+    await until(async () => JSON.stringify(await item(1).locator('.conv-tag').allTextContents()) === JSON.stringify(['Work', 'urgent']), 3_000, 'the tags on the row');
+    // another row: the tags in use are switches (↑ from the input reaches them); a click turns one on; a click elsewhere closes
+    await openTags(3);
+    expect(await page.$$eval('.conv-tagmenu [role="menuitemcheckbox"]', (b) => b.map((x) => [x.textContent, x.getAttribute('aria-checked')]))).toEqual([['urgent', 'false'], ['Work', 'false']]); // (as often used: by name)
+    await page.keyboard.press('ArrowUp');
+    expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Work');
+    await page.click('.conv-tagmenu [role="menuitemcheckbox"] >> text=Work');
+    await until(async () => (await cfgNow()).history.tags.includes(`${sid(3)} Work`), 3_000, 'Work on row 3');
+    await page.click('.sp-convos .conv-head > span');
+    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+    // a fourth tag is refused with a toast
+    await patch({ history: { tags: [`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`, `${sid(3)} Work`] } });
+    await openTags(1);
+    await page.keyboard.type('fourth');
+    await page.keyboard.press('Enter');
+    await toastSaid('At most 3 tags a conversation.');
+    expect((await cfgNow()).history.tags).toHaveLength(4);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+
+    // the tag chips: the most used first, colours from the palette; a chip filters, with the folder chip and the search too
+    await until(async () => JSON.stringify(await page.locator('.sp-convos .conv-tag-chip').allTextContents()) === JSON.stringify(['Work', 'third', 'urgent']), 3_000, 'the tag chips');
+    expect(Number(await page.getAttribute('.sp-convos .conv-tag-chip >> nth=0', 'data-c'))).toBeLessThan(6);
+    await openTags(1);
+    await shot('16a-tags');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+    await page.click('.sp-convos .conv-tag-chip >> text=Work');
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 3)), 3_000, 'the Work chip');
+    await page.click(`.sp-convos .conv-chip[data-cwd="${zeta}"]`);
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(3)), 3_000, 'Work and zeta');
+    await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0'); // (All folders)
+    await page.fill('.sp-convos .conv-search input', 'Tag talk 1');
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'Work and the search');
+    await page.fill('.sp-convos .conv-search input', 'Tag talk');
+    await page.click('.sp-convos .conv-tag-chip >> text=Work');
+    await until(async () => (await ids()).length === 5, 3_000, 'the chip off again');
+
+    // hide: the row goes, Hidden (N) appears; Remove… does not count it (All listed, This folder)
+    expect(await page.locator('.sp-convos .conv-hidden-toggle').count()).toBe(0);
+    await item(2).hover();
+    expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Hide');
+    await item(2).locator('.conv-hide').click();
+    await until(async () => (await row(2).count()) === 0, 3_000, 'the hidden row to go');
+    expect((await cfgNow()).history.hidden).toEqual([sid(2)]);
+    expect(await page.textContent('.sp-convos .conv-hidden-toggle')).toBe('Hidden (1)');
+    await page.click(`.sp-convos .conv-chip[data-cwd="${eps}"]`);
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'the eps chip');
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu');
+    expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    // Hidden (1) on: the hidden row is back, dimmed, with Unhide; Remove… still leaves it out
+    await page.click('.sp-convos .conv-hidden-toggle');
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 2)), 3_000, 'the hidden row shown');
+    expect(await item(2).getAttribute('data-hidden')).toBe('');
+    expect(await item(1).getAttribute('data-hidden')).toBeNull();
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu');
+    expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu', { state: 'detached' });
+    await item(2).hover();
+    expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Unhide');
+    await item(2).locator('.conv-hide').click();
+    await until(async () => (await cfgNow()).history.hidden.length === 0, 3_000, 'unhidden');
+    await until(async () => (await page.locator('.sp-convos .conv-hidden-toggle').count()) === 0, 3_000, 'no Hidden toggle');
+    expect(await item(2).getAttribute('data-hidden')).toBeNull();
+
+    // a removal takes the tags and the hidden mark of what went to the Trash, and nothing else's
+    await patch({ history: { hidden: [sid(3), sid(4)] } });
+    await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0');
+    await page.click('.sp-convos .conv-hidden-toggle');
+    await until(async () => (await ids()).length === 5, 3_000, 'all five, hidden ones shown');
+    fs.rmSync(files.get(3)!, { force: true });
+    await item(3).hover();
+    await item(3).locator('.conv-trash').click();
+    await toastSaid('Moved 1 conversation to the Trash');
+    await until(async () => (await cfgNow()).history.hidden.length === 1, 3_000, 'its hidden mark gone');
+    const h = (await cfgNow()).history;
+    expect(h.hidden).toEqual([sid(4)]);
+    expect(h.tags).toEqual([`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`]);
+
+    await patch({ history: { tags: [], hidden: [] } });
+    await page.fill('.sp-convos .conv-search input', '');
+    for (const proj of ['-p15-eps', '-p15-zeta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+  }, 60_000);
+
+  it('past conversations, 1.4.0: Storage lists the 10 biggest with a trash button (the app\'s removal), Remove… → Older than 30/60/90 days with their counts and ids (200 at a time), and deep search only with its permission: the hits filter the rows with N matches', async () => {
+    const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-dddd16161616';
+    const proj = path.join(env.userHome, '.claude', 'projects', '-p16-store');
+    const oldProj = path.join(env.userHome, '.claude', 'projects', '-p16-old');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.mkdirSync(oldProj, { recursive: true });
+    const cwd = path.join(env.userHome, 'p16-store');
+    const DAY = 86_400_000;
+    const plant = (dir: string, n: number, daysAgo: number, words: string, extra: object[] = [], pad = 0) => {
+      const end = Date.now() - daysAgo * DAY - 60_000 + n;
+      const file = path.join(dir, `${sid(n)}.jsonl`);
+      const lines = [{ type: 'user', cwd, timestamp: new Date(end - 1000).toISOString(), message: { role: 'user', content: words } }, ...extra, { type: 'assistant', cwd, timestamp: new Date(end).toISOString(), message: { id: `s${n}`, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } }];
+      fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n' + 'x'.repeat(pad));
+      fs.utimesSync(file, end / 1000, end / 1000);
+      return file;
+    };
+    const big = plant(proj, 1, 0, 'Store the big one', [], 3 * 1024 * 1024);
+    plant(proj, 2, 0, 'Store needle-word and NEEDLE-WORD');
+    plant(proj, 3, 0, 'Store with a tool', [{ type: 'assistant', cwd, timestamp: new Date().toISOString(), message: { id: 't3', model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', id: 'u', name: 'Bash', input: { command: 'echo needle-word' } }] } }]);
+    plant(proj, 4, 40, 'Store old needle-word');
+    plant(proj, 5, 70, 'Store older');
+    plant(proj, 6, 100, 'Store oldest');
+    for (let i = 0; i < 202; i++) plant(oldProj, 1000 + i, 120 + i / 1000, 'Store very old'); // (more than one removal takes)
+    const row = (n: number) => page.locator(`.sp-convos .conv-row[data-id="${sid(n)}"]`);
+    const ids = async () => (await page.$$eval('.sp-convos .conv-row', (r) => r.map((x) => (x as HTMLElement).dataset.id!))).sort();
+    const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
+    const trashed = () => page.evaluate(() => ((window as any).__trashed ?? []) as string[][]);
+    const menuItems = () => page.$$eval('.ctx-menu [role="menuitem"]', (b) => b.map((x) => x.textContent));
+    const old = (days: number) => page.evaluate((d) => window.jaffer.call('claude.old', { days: d }), days) as Promise<{ ids: string[]; total: number }>;
+    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.fill('.sp-convos .conv-search input', 'Store');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await ids()).length >= 6, 5_000, 'the planted conversations');
+
+    // Storage: the total, the 10 biggest (the planted 3 MB one first) with size and folder; its trash button goes through the app's removal
+    expect(await page.getAttribute('.sp-convos .st-toggle', 'aria-expanded')).toBe('false');
+    await page.click('.sp-convos .st-toggle');
+    await page.waitForSelector('.sp-convos .st-panel .st-row');
+    expect(await page.textContent('.sp-convos .st-total')).toMatch(/^[\d.]+ (KB|MB) in \d+ conversations$/);
+    expect(await page.getAttribute('.sp-convos .st-row >> nth=0', 'data-id')).toBe(sid(1));
+    expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-size')).toBe('3 MB');
+    expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-dir')).toMatch(/^~\/(\S+\/)?p16-store$/); // (the bridge's home is a folder above the test's HOME)
+    expect(await page.locator('.sp-convos .st-row').count()).toBeLessThanOrEqual(10);
+    await shot('16b-storage');
+    fs.rmSync(big);
+    await page.click('.sp-convos .st-row >> nth=0 >> .st-trash');
+    await toastSaid('Moved 1 conversation to the Trash');
+    expect((await trashed()).at(-1)).toEqual([sid(1)]);
+    await until(async () => (await page.locator(`.sp-convos .st-row[data-id="${sid(1)}"]`).count()) === 0, 5_000, 'the storage view read again');
+    await page.click('.sp-convos .st-toggle');
+    await page.waitForSelector('.sp-convos .st-panel', { state: 'detached' });
+
+    // deep search: no switch without the permission (and the daemon refuses), then the switch; the hits filter the rows, with N matches
+    expect(await page.locator('.sp-convos .conv-deep').count()).toBe(0);
+    await expect(page.evaluate(() => window.jaffer.call('claude.search', { q: 'needle-word' }))).rejects.toThrow();
+    await patch({ permissions: { deepSearch: true } });
+    await page.waitForSelector('.sp-convos .conv-deep');
+    expect(await page.textContent('.sp-convos .conv-deep')).toBe('Search text');
+    await page.click('.sp-convos .conv-deep');
+    expect(await page.getAttribute('.sp-convos .conv-deep', 'aria-pressed')).toBe('true');
+    await page.fill('.sp-convos .conv-search input', 'NEEDLE-word');
+    await until(async () => JSON.stringify(await ids()) === JSON.stringify([sid(2), sid(4)].sort()), 5_000, 'the rows with the text');
+    expect(await row(2).locator('.conv-hits').textContent()).toBe('2 matches');
+    expect(await row(4).locator('.conv-hits').textContent()).toBe('1 match');
+    expect(await row(3).count()).toBe(0); // (only in a tool call: never searched)
+    await shot('16c-deep-search');
+    await page.fill('.sp-convos .conv-search input', 'ne');
+    await until(async () => ((await page.textContent('.sp-convos .conv-deep-note')) ?? '').includes('3 to 64'), 3_000, 'the note for a short query');
+    await page.click('.sp-convos .conv-deep');
+    await page.fill('.sp-convos .conv-search input', 'Store');
+    await until(async () => (await ids()).length >= 5 && (await page.locator('.sp-convos .conv-hits').count()) === 0, 3_000, 'the title search back');
+    await patch({ permissions: { deepSearch: false } });
+    await until(async () => (await page.locator('.sp-convos .conv-deep').count()) === 0, 3_000, 'the switch gone');
+
+    // Remove… → Older than 30/60/90 days: counts of all the conversations on disk, a click asks the app for the oldest 200, a toast says how many more
+    const [o30, o60, o90] = [await old(30), await old(60), await old(90)];
+    expect(o90.total).toBeGreaterThanOrEqual(203);
+    expect(o90.ids).toHaveLength(200);
+    expect(o30.total).toBeGreaterThan(o60.total); // (the planted 40 and 70 days old ones)
+    expect(o60.total).toBeGreaterThan(o90.total);
+    await page.click('.sp-convos .conv-remove');
+    await page.waitForSelector('.ctx-menu');
+    await until(async () => (await menuItems()).length === 4, 3_000, 'the Older than items');
+    expect((await menuItems()).slice(1)).toEqual([`Older than 30 days (${o30.total})`, `Older than 60 days (${o60.total})`, `Older than 90 days (${o90.total})`]);
+    expect(await page.textContent('.ctx-menu .ctx-note')).toContain('includes pinned and hidden');
+    await page.click(`.ctx-menu [role="menuitem"] >> text=Older than 90 days`);
+    await toastSaid(`${o90.total - 200} more: repeat`);
+    expect((await trashed()).at(-1)).toEqual(o90.ids);
+    expect((await trashed()).at(-1)![0]).toBe(sid(1201)); // (the oldest first)
+
+    await page.fill('.sp-convos .conv-search input', '');
+    for (const d of [proj, oldProj]) fs.rmSync(d, { recursive: true, force: true });
   }, 60_000);
 
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {

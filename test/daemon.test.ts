@@ -655,6 +655,51 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect(((await c.call('claude.history', { include: 'nope' })).items as unknown[]).length).toBe(50);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('claude.storage, claude.old and claude.search (1.4.0): sizes, the oldest ids and the ids that match, nothing else; old takes 30, 60 or 90 days; search only with permissions.deepSearch', async () => {
+    const c = await connect();
+    const dir = path.join(env.userHome, '.claude', 'projects', '-p15-extras');
+    fs.mkdirSync(dir, { recursive: true });
+    const id = (n: number) => `${String(n).padStart(8, '0')}-abab-4ddd-8eee-ffff00001111`;
+    const plant = (n: number, daysAgo: number, words: string) => {
+      const at = Date.now() - daysAgo * 86_400_000;
+      const file = path.join(dir, `${id(n)}.jsonl`);
+      fs.writeFileSync(file, JSON.stringify({ type: 'user', cwd: '/p15/folder', timestamp: new Date(at).toISOString(), message: { role: 'user', content: words } }) + '\n' + 'x'.repeat(n === 2 ? 900_000 : 10));
+      fs.utimesSync(file, at / 1000, at / 1000);
+    };
+    plant(1, 100, 'p15-word once');
+    plant(2, 45, 'nothing to see');
+    plant(3, 0, 'P15-WORD and p15-word');
+    fs.mkdirSync(path.join(dir, id(2)));
+    fs.writeFileSync(path.join(dir, id(2), 'tool-result.txt'), 'y'.repeat(100_000));
+
+    const s = await c.call('claude.storage', {});
+    expect(Object.keys(s).sort()).toEqual(['biggest', 'count', 'totalBytes']);
+    expect(s.count).toBeGreaterThanOrEqual(3);
+    const big = s.biggest.find((b: { id: string }) => b.id === id(2));
+    expect(big).toMatchObject({ id: id(2), cwd: '/p15/folder' });
+    expect(big.bytes).toBe(fs.statSync(path.join(dir, `${id(2)}.jsonl`)).size + 100_000);
+
+    const o30 = await c.call('claude.old', { days: 30 });
+    expect(o30.ids.filter((x: string) => x.endsWith('-abab-4ddd-8eee-ffff00001111'))).toEqual([id(1), id(2)]);
+    expect(o30.total).toBe(o30.ids.length);
+    expect((await c.call('claude.old', { days: 90 })).ids.filter((x: string) => x.endsWith('-abab-4ddd-8eee-ffff00001111'))).toEqual([id(1)]);
+    for (const days of [7, '30', null, 365]) await expect(c.call('claude.old', { days }), String(days)).rejects.toThrow(/30, 60 or 90/);
+
+    expect((await c.call('config.get')).permissions.deepSearch).toBe(false);
+    await expect(c.call('claude.search', { q: 'p15-word' })).rejects.toThrow(/off in Settings/);
+    await c.call('config.patch', { permissions: { deepSearch: true } });
+    try {
+      const r = await c.call('claude.search', { q: 'p15-word' });
+      expect(r).toEqual({ hits: [{ id: id(3), count: 2 }, { id: id(1), count: 1 }], partial: false });
+      await expect(c.call('claude.search', { q: 'ab' })).rejects.toThrow(/3 to 64/);
+      await expect(c.call('claude.search', {})).rejects.toThrow(/3 to 64/);
+    } finally {
+      await c.call('config.patch', { permissions: { deepSearch: false } });
+    }
+    await expect(c.call('claude.search', { q: 'p15-word' })).rejects.toThrow(/off in Settings/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {

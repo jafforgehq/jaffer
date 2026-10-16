@@ -130,6 +130,9 @@ export interface JafferConfig {
   history: {
     names: string[];
     pinned: string[];
+    /** (1.4.0) The person's own tags, `"<session id> <tag>"` (at most 3 a conversation, 400 in all), and the hidden ones' ids (at most 500); see `history-tags.ts`. */
+    tags: string[];
+    hidden: string[];
   };
   hotkey: string;
   /**
@@ -173,7 +176,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   session: { stayAwake: true },
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false, dropdown: false },
   panel: { open: true, width: 300 },
-  history: { names: [], pinned: [] },
+  history: { names: [], pinned: [], tags: [], hidden: [] },
   hotkey: 'Control+`',
   migrated: 0,
 };

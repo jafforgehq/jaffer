@@ -72,14 +72,19 @@ describe('updates.seenVersion', () => {
 describe('history.names and history.pinned (1.2.0)', () => {
   const ID = '0f8b2c1e-9a7d-4c3b-8e2f-1a2b3c4d5e6f';
   it('are empty lists by default, also for a config file saved before they existed; a list of text is kept, anything else is not', () => {
-    expect(DEFAULT_CONFIG.history).toEqual({ names: [], pinned: [] });
+    expect(DEFAULT_CONFIG.history).toEqual({ names: [], pinned: [], tags: [], hidden: [] });
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
-    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [], pinned: [] });
+    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [], pinned: [], tags: [], hidden: [] });
     const store = new ConfigStore(env.paths);
-    store.patch({ history: { names: [`${ID} My name`], pinned: [ID] } });
-    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [`${ID} My name`], pinned: [ID] });
+    store.patch({ history: { names: [`${ID} My name`], pinned: [ID], tags: [], hidden: [] } });
+    expect(new ConfigStore(env.paths).get().history).toEqual({ names: [`${ID} My name`], pinned: [ID], tags: [], hidden: [] });
     store.patch({ history: { names: { [ID]: 'x' } as never, pinned: [5] as never } });
-    expect(store.get().history).toEqual({ names: [`${ID} My name`], pinned: [ID] });
+    expect(store.get().history).toEqual({ names: [`${ID} My name`], pinned: [ID], tags: [], hidden: [] });
+    // (1.4.0) tags and hidden ids: lists of text, like the names
+    store.patch({ history: { tags: [`${ID} work`], hidden: [ID] } });
+    expect(new ConfigStore(env.paths).get().history).toMatchObject({ tags: [`${ID} work`], hidden: [ID] });
+    store.patch({ history: { tags: 'work' as never, hidden: [{}] as never } });
+    expect(store.get().history).toMatchObject({ tags: [`${ID} work`], hidden: [ID] });
   });
 });
 

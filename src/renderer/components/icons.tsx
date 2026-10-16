@@ -123,3 +123,16 @@ export const IconLock = ({ size, class: c }: P): VNode => (
     <path d="M8 11V8a4 4 0 0 1 8 0v3" />
   </svg>
 );
+export const IconTag = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3-8.7 8.7-8.3-8.3z" />
+    <circle cx="8" cy="8" r="1.3" />
+  </svg>
+);
+export const IconEyeOff = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M3 12s3.3-6 9-6 9 6 9 6-3.3 6-9 6-9-6-9-6z" />
+    <circle cx="12" cy="12" r="2.5" />
+    <path d="M4 4l16 16" />
+  </svg>
+);

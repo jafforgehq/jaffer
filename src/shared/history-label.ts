@@ -107,6 +107,28 @@ export function filterByFolder<T extends Pick<Conversation, 'id' | 'cwd' | 'titl
   return t ? items.filter((c) => has(names?.get(c.id)) || has(c.title) || (!!c.cwd && has(tildeOf(c.cwd, home)))) : items;
 }
 
+/**
+ * The side panel's rows (1.4.0): the search over names, titles and folders (or, with deep search, only its hits), then the folder chip,
+ * the tag chip (any case) and, unless shown, not the hidden ones.
+ */
+export function filterConversations<T extends Pick<Conversation, 'id' | 'cwd' | 'title'>>(
+  items: T[],
+  f: { q: string; home: string; names?: Map<string, string>; folder?: string | null; tag?: string | null; tags?: Map<string, string[]>; hidden?: Set<string>; showHidden?: boolean; hits?: Map<string, number> | null },
+): T[] {
+  const tag = f.tag?.toLowerCase();
+  return (f.hits ? items.filter((c) => f.hits!.has(c.id)) : filterByFolder(items, f.q, f.home, f.names)).filter(
+    (c) => (!f.folder || c.cwd === f.folder) && (!tag || !!f.tags?.get(c.id)?.some((t) => t.toLowerCase() === tag)) && (f.showHidden || !f.hidden?.has(c.id)),
+  );
+}
+
+/** A size for people: 0 B, 999 B, 1.5 KB, 250 KB, 12.3 MB, 3.46 GB. */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '–';
+  if (n < 1024) return `${Math.round(n)} B`;
+  const [v, unit] = n < 1024 ** 2 ? [n / 1024, 'KB'] : n < 1024 ** 3 ? [n / 1024 ** 2, 'MB'] : [n / 1024 ** 3, 'GB'];
+  return `${v >= 100 ? Math.round(v) : unit === 'GB' && v < 10 ? v.toFixed(2) : v.toFixed(1).replace(/\.0$/, '')} ${unit}`;
+}
+
 /** The pinned conversations (newest first) as a "Pinned" group above the days; a pinned one is not in its day again. */
 export function groupConversations<T extends Pick<Conversation, 'id' | 'endedAt'>>(items: T[], now: number, pinned: string[]): { label: string; items: T[] }[] {
   const pin = new Set(pinned);

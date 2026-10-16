@@ -66,14 +66,14 @@ export async function listConversations(opts: { claudeDir: string; limit?: numbe
  * The transcripts: `<root>/<folder>/<uuid>.jsonl`, regular files in real folders only (a link is not followed, a subfolder not entered),
  * newest first; `root` is `realpath(<claudeDir>/projects)`. Undefined when there is no such folder.
  */
-export async function transcriptFiles(claudeDir: string): Promise<{ root: string; found: { file: string; id: string; mtimeMs: number }[] } | undefined> {
+export async function transcriptFiles(claudeDir: string): Promise<{ root: string; found: { file: string; id: string; mtimeMs: number; size: number }[] } | undefined> {
   let root: string;
   try {
     root = await fs.promises.realpath(path.join(claudeDir, 'projects'));
   } catch {
     return undefined;
   }
-  const found: { file: string; id: string; mtimeMs: number }[] = [];
+  const found: { file: string; id: string; mtimeMs: number; size: number }[] = [];
   for (const dir of await names(root)) {
     const d = path.join(root, dir);
     if (!(await fs.promises.lstat(d).catch(() => null))?.isDirectory()) continue; // a link is not followed, wherever it leads
@@ -82,7 +82,7 @@ export async function transcriptFiles(claudeDir: string): Promise<{ root: string
       if (!isSessionId(id)) continue;
       const file = path.join(d, name);
       const st = await fs.promises.lstat(file).catch(() => null);
-      if (st?.isFile()) found.push({ file, id, mtimeMs: st.mtimeMs });
+      if (st?.isFile()) found.push({ file, id, mtimeMs: st.mtimeMs, size: st.size });
     }
   }
   found.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -130,6 +130,82 @@ export async function conversationFiles(claudeDir: string, ids: unknown): Promis
     }
   }
   return [...want].flatMap((id) => found.get(id) ?? []);
+}
+
+/** (1.4.0) What the transcripts take on disk: all of them, and the 10 biggest (a title only when the list already read it). */
+export interface Storage {
+  totalBytes: number;
+  count: number;
+  biggest: { id: string; title?: string; cwd?: string; bytes: number; endedAt: number }[];
+}
+
+const STORAGE_TTL = 30_000;
+/** The most entries counted in one conversation's folder (subagent transcripts, tool results). */
+const DIR_MAX = 5000;
+let storageSeen: { stamp: string; at: number; value: Storage } | undefined;
+
+/**
+ * (1.4.0) The size of each `<id>.jsonl` (confined as for the list) plus its sibling real folder `<id>/` (links skipped, at most 5000
+ * entries walked), their total and the 10 biggest with their folder and end (the head and tail read of the list, cached) and their title
+ * only when the list already has it: no other text is read. Kept 30 s while the project folders did not change. Changes nothing.
+ */
+export async function conversationStorage(claudeDir: string, now = Date.now()): Promise<Storage> {
+  const stamp = await projectsStamp(claudeDir);
+  if (storageSeen?.stamp === stamp && now - storageSeen.at >= 0 && now - storageSeen.at < STORAGE_TTL) return storageSeen.value;
+  const t = await transcriptFiles(claudeDir);
+  if (!t) return { totalBytes: 0, count: 0, biggest: [] };
+  const sized: { file: string; id: string; bytes: number }[] = [];
+  for (const f of t.found) sized.push({ file: f.file, id: f.id, bytes: f.size + (await dirBytes(t.root, path.join(path.dirname(f.file), f.id))) });
+  const biggest: Storage['biggest'] = [];
+  for (const f of [...sized].sort((a, b) => b.bytes - a.bytes).slice(0, 10)) {
+    const conv = await readOne(t.root, f.file, f.id, false, false, false);
+    const title = cache.get(f.file)?.title;
+    biggest.push({ id: f.id, ...(typeof title === 'string' ? { title } : {}), ...(conv?.cwd ? { cwd: conv.cwd } : {}), bytes: f.bytes, endedAt: conv?.endedAt ?? 0 });
+  }
+  const value = { totalBytes: sized.reduce((a, f) => a + f.bytes, 0), count: sized.length, biggest };
+  storageSeen = { stamp, at: now, value };
+  return value;
+}
+
+/** The project folders and when each last changed (a transcript added or removed): cheap, one `lstat` a folder. */
+async function projectsStamp(claudeDir: string): Promise<string> {
+  const root = await fs.promises.realpath(path.join(claudeDir, 'projects')).catch(() => '');
+  if (!root) return '';
+  const parts = [root];
+  for (const n of (await names(root)).sort()) parts.push(`${n}:${(await fs.promises.lstat(path.join(root, n)).catch(() => null))?.mtimeMs ?? 0}`);
+  return parts.join('\0');
+}
+
+/** The bytes of the regular files in a real folder inside `root` and its real subfolders: links skipped, at most 5000 entries. */
+async function dirBytes(root: string, dir: string): Promise<number> {
+  if (!(await fs.promises.lstat(dir).catch(() => null))?.isDirectory() || (await fs.promises.realpath(dir).catch(() => '')) !== dir || !dir.startsWith(root + path.sep)) return 0;
+  let bytes = 0;
+  let seen = 0;
+  const todo = [dir];
+  while (todo.length && seen < DIR_MAX) {
+    const d = todo.pop()!;
+    for (const n of await names(d)) {
+      if (++seen > DIR_MAX) break;
+      const p = path.join(d, n);
+      const st = await fs.promises.lstat(p).catch(() => null);
+      if (st?.isFile()) bytes += st.size;
+      else if (st?.isDirectory()) todo.push(p);
+    }
+  }
+  return bytes;
+}
+
+export const OLD_DAYS = [30, 60, 90];
+
+/**
+ * (1.4.0) Remove… → Older than 30, 60 or 90 days: of all the transcripts (confined as for the list), the ids last written before then,
+ * oldest first, at most 200 (one removal), and how many there are in all. Any other number of days is refused.
+ */
+export async function oldConversations(claudeDir: string, days: unknown, now = Date.now()): Promise<{ ids: string[]; total: number }> {
+  if (typeof days !== 'number' || !OLD_DAYS.includes(days)) throw new RangeError('The days must be 30, 60 or 90.');
+  const cut = now - days * 86_400_000;
+  const old = [...new Set(((await transcriptFiles(claudeDir))?.found ?? []).filter((f) => f.mtimeMs < cut).reverse().map((f) => f.id))];
+  return { ids: old.slice(0, MAX_REMOVE), total: old.length };
 }
 
 async function names(dir: string): Promise<string[]> {
@@ -237,14 +313,14 @@ function parse(line: string): Record<string, unknown> | undefined {
   }
 }
 
-async function readAt(fh: fs.promises.FileHandle, position: number, length: number): Promise<string> {
+export async function readAt(fh: fs.promises.FileHandle, position: number, length: number): Promise<string> {
   const buf = Buffer.alloc(length);
   const { bytesRead } = await fh.read(buf, 0, length, position);
   return buf.toString('utf8', 0, bytesRead);
 }
 
 /** The whole lines of a stretch of the file: a piece cut by the start or the end of the stretch is not a line. */
-function lines(text: string, atStart: boolean, atEnd: boolean): string[] {
+export function lines(text: string, atStart: boolean, atEnd: boolean): string[] {
   const out = text.split('\n');
   if (!atStart) out.shift();
   if (!atEnd) out.pop();

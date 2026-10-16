@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationName, conversationRow, costByFolder, filterByFolder, fmtAgo, freshList, groupByDay, groupConversations, historyMenuItems, lastConversation, newestOnly, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
+import { conversationName, conversationRow, costByFolder, filterByFolder, filterConversations, fmtAgo, formatBytes, freshList, groupByDay, groupConversations, historyMenuItems, lastConversation, newestOnly, paletteConversations, resumeCommand, tildeOf, topFolders } from '../src/shared/history-label';
 
 const id = (n: number) => `0000000${n}`.slice(-8) + '-1111-4222-8333-444455556666';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
@@ -266,5 +266,41 @@ describe('past conversations, 1.2.0 review fixes: a fresh list for ⇧⌘R, uniq
     expect(await staleFail).toEqual({ newest: false });
     expect(await ok).toEqual({ value: 'ok', newest: true });
     await expect(newest(async () => Promise.reject(new Error('down')))).rejects.toThrow('down');
+  });
+});
+
+describe('past conversations, 1.4.0: tags, hidden, deep search hits, sizes', () => {
+  const items = [
+    { id: id(1), cwd: '/Users/me/api', title: 'Login bug', endedAt: NOW },
+    { id: id(2), cwd: '/Users/me/api', title: 'Deploy', endedAt: NOW },
+    { id: id(3), cwd: '/Users/me/web', title: 'Login page', endedAt: NOW },
+  ];
+  const ids = (l: { id: string }[]) => l.map((c) => c.id);
+
+  it('filterConversations: the search, the folder chip, the tag chip (any case) and hidden ones out, all at once', () => {
+    const tags = new Map([[id(1), ['Work']], [id(3), ['work', 'ui']]]);
+    expect(ids(filterConversations(items, { q: 'login', home: '/Users/me' }))).toEqual([id(1), id(3)]);
+    expect(ids(filterConversations(items, { q: 'login', home: '/Users/me', folder: '/Users/me/api' }))).toEqual([id(1)]);
+    expect(ids(filterConversations(items, { q: '', home: '/Users/me', tag: 'WORK', tags }))).toEqual([id(1), id(3)]);
+    expect(ids(filterConversations(items, { q: '', home: '/Users/me', tag: 'work', tags, folder: '/Users/me/web' }))).toEqual([id(3)]);
+    expect(ids(filterConversations(items, { q: '', home: '/Users/me', hidden: new Set([id(2)]) }))).toEqual([id(1), id(3)]);
+    expect(ids(filterConversations(items, { q: '', home: '/Users/me', hidden: new Set([id(2)]), showHidden: true }))).toEqual([id(1), id(2), id(3)]);
+  });
+
+  it('filterConversations with deep search hits: only the hits, whatever the titles say (the folder, tag and hidden still apply)', () => {
+    const hits = new Map([[id(2), 4], [id(3), 1]]);
+    expect(ids(filterConversations(items, { q: 'zzz', home: '/Users/me', hits }))).toEqual([id(2), id(3)]);
+    expect(ids(filterConversations(items, { q: 'zzz', home: '/Users/me', hits, folder: '/Users/me/web' }))).toEqual([id(3)]);
+    expect(ids(filterConversations(items, { q: 'zzz', home: '/Users/me', hits, hidden: new Set([id(3)]) }))).toEqual([id(2)]);
+  });
+
+  it('formatBytes: B, KB, MB, GB', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(999)).toBe('999 B');
+    expect(formatBytes(1536)).toBe('1.5 KB');
+    expect(formatBytes(250 * 1024)).toBe('250 KB');
+    expect(formatBytes(12.34 * 1024 * 1024)).toBe('12.3 MB');
+    expect(formatBytes(3.456 * 1024 ** 3)).toBe('3.46 GB');
+    expect(formatBytes(NaN)).toBe('–');
   });
 });

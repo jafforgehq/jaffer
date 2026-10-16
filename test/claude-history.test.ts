@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { conversationFiles, listConversations } from '../src/core/claude/history';
+import { conversationFiles, conversationStorage, listConversations, oldConversations } from '../src/core/claude/history';
 import { isSessionId } from '../src/shared/session-id';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -371,5 +371,115 @@ describe('conversationFiles (1.3.0: what moving a conversation to the Trash may 
     const before = list();
     await conversationFiles(claudeDir, [uuid(1)]);
     expect(list()).toEqual(before);
+  });
+});
+
+describe('conversationStorage (1.4.0): how much room the transcripts take, the 10 biggest', () => {
+  const sized = (id: string, bytes: number, mtime: number, project = '-Users-me-code') => {
+    const file = write(id, [user('hi', '/work/app', mtime)], mtime, project);
+    fs.appendFileSync(file, 'x'.repeat(Math.max(0, bytes - fs.statSync(file).size)));
+    fs.utimesSync(file, mtime / 1000, mtime / 1000);
+    return file;
+  };
+
+  it('adds each <uuid>.jsonl and its sibling folder (nested files counted, links not), the 10 biggest first with the folder and the end; numbers and ids only', async () => {
+    for (let i = 1; i <= 12; i++) sized(uuid(i), 1000 * i, T0 + i * 1000);
+    const dir = path.join(projects, '-Users-me-code', uuid(1));
+    fs.mkdirSync(path.join(dir, 'subagents'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'subagents', 'agent-a.jsonl'), 'y'.repeat(50_000));
+    fs.writeFileSync(path.join(dir, 'tool-result.txt'), 'z'.repeat(5_000));
+    const outside = path.join(env.root, 'outside-big');
+    fs.writeFileSync(outside, 'o'.repeat(900_000));
+    fs.symlinkSync(outside, path.join(dir, 'linked-file'));
+    fs.symlinkSync(env.root, path.join(dir, 'linked-dir'));
+    const s = await conversationStorage(claudeDir);
+    expect(s.count).toBe(12);
+    expect(s.totalBytes).toBe(Array.from({ length: 12 }, (_, i) => 1000 * (i + 1)).reduce((a, b) => a + b) + 55_000);
+    expect(s.biggest).toHaveLength(10);
+    expect(s.biggest[0]).toEqual({ id: uuid(1), cwd: '/work/app', bytes: 1000 + 55_000, endedAt: T0 + 1000 });
+    expect(s.biggest.slice(1).map((b) => b.id)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4].map(uuid));
+    for (const b of s.biggest) expect(Object.keys(b).every((k) => ['id', 'title', 'cwd', 'bytes', 'endedAt'].includes(k))).toBe(true);
+    expect(JSON.stringify(s)).not.toContain('hi');
+  });
+
+  it('a title only when the list already read it (no new text read); the list\'s title comes along once it has', async () => {
+    write(uuid(1), [user('Secret first words', '/a', T0)], T0);
+    expect((await conversationStorage(claudeDir)).biggest[0]!.title).toBeUndefined();
+    await listConversations({ claudeDir });
+    expect((await conversationStorage(claudeDir, Date.now() + 31_000)).biggest[0]!.title).toBe('Secret first words');
+  });
+
+  it('is confined like the list: no linked transcript or project folder, no loose or nested transcript, nothing that is not <uuid>.jsonl', async () => {
+    sized(uuid(1), 2000, T0);
+    const outside = path.join(env.root, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, `${uuid(2)}.jsonl`), 'o'.repeat(70_000));
+    fs.symlinkSync(path.join(outside, `${uuid(2)}.jsonl`), path.join(projects, '-Users-me-code', `${uuid(3)}.jsonl`));
+    fs.symlinkSync(outside, path.join(projects, '-linked'));
+    fs.writeFileSync(path.join(projects, `${uuid(4)}.jsonl`), 'l'.repeat(70_000));
+    fs.writeFileSync(path.join(projects, '-Users-me-code', 'notes.jsonl'), 'n'.repeat(70_000));
+    // a sibling folder that is a link is not walked
+    fs.symlinkSync(outside, path.join(projects, '-Users-me-code', uuid(1)));
+    expect(await conversationStorage(claudeDir)).toEqual({ totalBytes: 2000, count: 1, biggest: [{ id: uuid(1), cwd: '/work/app', bytes: 2000, endedAt: T0 }] });
+    expect(await conversationStorage(path.join(env.root, 'nowhere'))).toEqual({ totalBytes: 0, count: 0, biggest: [] });
+  });
+
+  it('walks at most 5000 entries of a sibling folder', async () => {
+    const file = sized(uuid(1), 100, T0);
+    const dir = path.join(projects, '-Users-me-code', uuid(1));
+    fs.mkdirSync(dir);
+    for (let i = 0; i < 5200; i++) fs.writeFileSync(path.join(dir, `f${i}`), 'a');
+    const s = await conversationStorage(claudeDir);
+    expect(s.totalBytes).toBe(fs.statSync(file).size + 5000);
+  }, 30_000);
+
+  it('is kept 30 s while the project folders did not change; a file added or gone is seen at once', async () => {
+    const t = Date.now();
+    sized(uuid(1), 1000, T0);
+    expect((await conversationStorage(claudeDir, t)).totalBytes).toBe(1000);
+    fs.appendFileSync(path.join(projects, '-Users-me-code', `${uuid(1)}.jsonl`), 'x'.repeat(500)); // (the folder did not change)
+    expect((await conversationStorage(claudeDir, t + 1000)).totalBytes).toBe(1000);
+    expect((await conversationStorage(claudeDir, t + 31_000)).totalBytes).toBe(1500);
+    sized(uuid(2), 2000, T0, '-other'); // (a new folder)
+    expect((await conversationStorage(claudeDir, t + 32_000)).count).toBe(2);
+    fs.rmSync(path.join(projects, '-other', `${uuid(2)}.jsonl`));
+    expect((await conversationStorage(claudeDir, t + 33_000)).count).toBe(1);
+  });
+
+  it('changes nothing on disk', async () => {
+    sized(uuid(1), 1000, T0);
+    fs.mkdirSync(path.join(projects, '-Users-me-code', uuid(1)));
+    const list = () => fs.readdirSync(projects, { recursive: true }).sort();
+    const before = list();
+    await conversationStorage(claudeDir);
+    expect(list()).toEqual(before);
+  });
+});
+
+describe('oldConversations (1.4.0): Remove… → Older than 30, 60 or 90 days', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.parse('2026-10-16T12:00:00.000Z');
+
+  it('the ids whose transcript was last written before the cut, oldest first, at most 200, and how many there are in all', async () => {
+    write(uuid(1), [user('a', '/a', NOW)], NOW - 10 * DAY);
+    write(uuid(2), [user('a', '/a', NOW)], NOW - 45 * DAY);
+    write(uuid(3), [user('a', '/a', NOW)], NOW - 100 * DAY, '-other');
+    write(uuid(4), [user('a', '/a', NOW)], NOW - 61 * DAY);
+    expect(await oldConversations(claudeDir, 30, NOW)).toEqual({ ids: [uuid(3), uuid(4), uuid(2)], total: 3 });
+    expect(await oldConversations(claudeDir, 60, NOW)).toEqual({ ids: [uuid(3), uuid(4)], total: 2 });
+    expect(await oldConversations(claudeDir, 90, NOW)).toEqual({ ids: [uuid(3)], total: 1 });
+    expect(await oldConversations(path.join(env.root, 'nowhere'), 30, NOW)).toEqual({ ids: [], total: 0 });
+  });
+
+  it('at most 200 ids (the oldest), the total says how many more', async () => {
+    for (let i = 0; i < 230; i++) write(`${String(i).padStart(8, '0')}-1111-4222-8333-444455556666`, ['{}'], NOW - 40 * DAY - i * 60_000);
+    const r = await oldConversations(claudeDir, 30, NOW);
+    expect(r.total).toBe(230);
+    expect(r.ids).toHaveLength(200);
+    expect(r.ids[0]).toBe('00000229-1111-4222-8333-444455556666');
+  });
+
+  it('only 30, 60 or 90 days', async () => {
+    for (const bad of [0, 1, 29, 31, -30, 30.5, '30', null, undefined, Infinity, NaN]) await expect(oldConversations(claudeDir, bad, NOW), String(bad)).rejects.toThrow(/30, 60 or 90/);
   });
 });

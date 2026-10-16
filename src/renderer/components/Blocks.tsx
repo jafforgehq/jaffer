@@ -431,7 +431,7 @@ export function StickyHeader(): VNode | null {
 }
 
 /** A small menu of the window's own at (x, y): the gutter mark's, and (1.3.0) the past conversations' Remove…. Esc or a click elsewhere closes it. */
-export function Menu({ x, y, items, done, anchor }: { x: number; y: number; items: MenuItem[]; done(): void; anchor?: HTMLElement | null }): VNode {
+export function Menu({ x, y, items, done, anchor, note }: { x: number; y: number; items: MenuItem[]; done(): void; anchor?: HTMLElement | null; note?: string }): VNode {
   const ref = useRef<HTMLDivElement>(null);
   const close = () => {
     ctxMenu.value = null;
@@ -456,6 +456,7 @@ export function Menu({ x, y, items, done, anchor }: { x: number; y: number; item
           {i.label}
         </button>
       ))}
+      {note && <div class="ctx-note">{note}</div>}
     </div>
   );
 }

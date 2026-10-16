@@ -18,7 +18,8 @@ import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
 import { readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
-import { listConversations } from '../core/claude/history';
+import { conversationStorage, listConversations, OLD_DAYS, oldConversations } from '../core/claude/history';
+import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
@@ -674,6 +675,19 @@ export class JafferService {
     r.handle('claude.history', async (p: { include?: unknown } | null) => ({
       items: await listConversations({ claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), limit: 50, withCost: this.config.get().claude.showCost, include: p?.include }),
     }));
+    // (1.4.0) What the transcripts take on disk (sizes, ids, the folder and end of the 10 biggest, a title only when the list has it), and
+    // Remove… → Older than 30/60/90 days (ids by when the file was last written); both read names and sizes, no text
+    r.handle('claude.storage', () => conversationStorage(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude')));
+    r.handle('claude.old', (p: { days?: unknown } | null) => {
+      if (!OLD_DAYS.includes(p?.days as number)) throw new RpcError('The days must be 30, 60 or 90.', 'EINVAL');
+      return oldConversations(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), p!.days);
+    });
+    // (1.4.0) Deep search, only while permissions.deepSearch is on: the ids of the conversations whose message text holds q, and how often; never the text
+    r.handle('claude.search', (p: { q?: unknown } | null) => {
+      if (!this.config.get().permissions.deepSearch) throw new RpcError('Searching the text of past conversations is off in Settings → Privacy and permissions.', 'EPERM');
+      if (!searchQuery(p?.q)) throw new RpcError('Search for 3 to 64 characters, without control characters.', 'EINVAL');
+      return searchConversations(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), p!.q);
+    });
 
     // ---- config
     r.handle('config.get', () => this.config.get());
