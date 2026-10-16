@@ -716,6 +716,35 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await expect(c.call('claude.search', { q: 'p15-word' })).rejects.toThrow(/off in Settings/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('claude.setup (1.4.0): the Setup list of a folder from Claude Code\'s files (never ~/.claude.json, never a hook command); a folder that is not absolute or not there means the home folder', async () => {
+    const c = await connect();
+    const claudeDir = path.join(env.userHome, '.claude'); // the daemon's CLAUDE_CONFIG_DIR
+    const proj = path.join(env.userHome, 'setup-proj');
+    const put = (p: string, t: string) => (fs.mkdirSync(path.dirname(p), { recursive: true }), fs.writeFileSync(p, t));
+    put(path.join(claudeDir, 'skills/s-user/SKILL.md'), '---\nname: s-user\ndescription: a user skill\n---\n');
+    put(path.join(proj, '.claude/skills/s-proj/SKILL.md'), '---\nname: s-proj\n---\n');
+    put(path.join(proj, '.mcp.json'), JSON.stringify({ mcpServers: { 'srv-a': { command: 'npx', args: ['SECRET-ARG'] } } }));
+    put(path.join(proj, '.claude/settings.json'), JSON.stringify({ hooks: { PostToolUse: [{ hooks: [{ type: 'command', command: 'echo SECRET-HOOK' }] }] } }));
+    put(path.join(env.userHome, '.claude.json'), '{"oauthAccount":"SECRET-LOGIN"}');
+    try {
+      const s = await c.call('claude.setup', { cwd: proj });
+      expect(s.skills.map((k: { name: string; scope: string }) => `${k.scope}:${k.name}`)).toEqual(['user:s-user', 'project:s-proj']);
+      expect(s.mcpFile).toEqual([{ name: 'srv-a', scope: 'project' }]);
+      expect(s.hooks).toContainEqual({ event: 'PostToolUse', count: 1 });
+      expect(JSON.stringify(s)).not.toMatch(/SECRET|npx/);
+      for (const cwd of ['setup-proj', path.join(proj, 'nope'), `${proj}\n`, 'x'.repeat(5000), 5, null]) {
+        const h = await c.call('claude.setup', { cwd });
+        expect(h.mcpFile, String(cwd)).toEqual([]);
+        expect(h.skills.map((k: { name: string }) => k.name), String(cwd)).toEqual(['s-user']);
+      }
+      expect((await c.call('claude.setup', {})).skills.map((k: { name: string }) => k.name)).toEqual(['s-user']);
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+      fs.rmSync(path.join(claudeDir, 'skills'), { recursive: true, force: true });
+      fs.rmSync(path.join(env.userHome, '.claude.json'), { force: true });
+    }
+  });
 });
 
 describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
@@ -795,6 +824,25 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     await c.call('setup.claude.login', {});
     await waitUntil(async () => (await c.call('setup.claude.auth', {})).loggedIn === true, 10_000);
     expect((await c.call('setup.claude.auth', {})).loginError).toBeUndefined();
+  });
+
+  it('claude.mcp (1.4.0): `claude mcp list` in the asked folder (else the home folder), parsed to names and states; one at a time: a second ask while one runs gets the same answer', async () => {
+    fake.setMode('ok');
+    fake.setMcpList('Checking MCP server health…\n\ngh: npx -y server --token SECRET-TOKEN - ✓ Connected\nlin: https://example.com/SECRET (HTTP) - ⚠ Needs authentication\n');
+    const proj = path.join(env2.userHome, 'mcp-proj');
+    fs.mkdirSync(proj, { recursive: true });
+    const r = await c.call('claude.mcp', { cwd: proj });
+    expect(r).toEqual({ ok: true, servers: [{ name: 'gh', status: 'connected', label: 'Connected' }, { name: 'lin', status: 'needs-auth', label: 'Needs sign-in' }] });
+    expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(proj));
+    expect(JSON.stringify(r)).not.toContain('SECRET');
+    await c.call('claude.mcp', { cwd: 'relative/dir' });
+    expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env2.userHome));
+    fake.setMode('mcp-slow');
+    const before = fake.calls().filter((l) => l.startsWith('mcp list')).length;
+    const [a, b] = await Promise.all([c.call('claude.mcp', { cwd: proj }), c.call('claude.mcp', { cwd: env2.userHome })]);
+    expect(a).toEqual(b);
+    expect(fake.calls().filter((l) => l.startsWith('mcp list')).length).toBe(before + 1);
+    fake.setMode('ok');
   });
 });
 

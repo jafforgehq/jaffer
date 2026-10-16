@@ -4454,6 +4454,146 @@ describe('Jaffer UI end to end', () => {
     }
   }, 40_000);
 
+  it('the Setup section (1.4.0): collapsed at first; open, it lists the focused terminal folder\'s MCP servers (Check runs `claude mcp list` once), skills, rules and memory, plugins, subagents and hooks with a state each; more than 6 fold to a count; another terminal\'s folder refreshes it; nothing overflows at 220 px; nothing is typed', async () => {
+    const claudeDir = path.join(env.userHome, '.claude');
+    const projA = path.join(env.userHome, 'setup-a');
+    const projB = path.join(env.userHome, 'setup-b');
+    const put = (p: string, t: string) => (fs.mkdirSync(path.dirname(p), { recursive: true }), fs.writeFileSync(p, t));
+    const planted = [projA, projB, path.join(claudeDir, 'skills'), path.join(claudeDir, 'plugins')];
+    put(path.join(projA, '.mcp.json'), JSON.stringify({ mcpServers: { 'srv-file': { command: 'npx', args: ['--token', 'SECRET-ARG'] } } }));
+    put(path.join(projA, '.claude/skills/skill-a/SKILL.md'), '---\nname: skill-a\ndescription: A project skill for the test\n---\n');
+    for (let i = 1; i <= 7; i++) put(path.join(claudeDir, `skills/u${i}/SKILL.md`), `---\nname: user-skill-${i}\n---\n`);
+    put(path.join(projA, 'CLAUDE.md'), 'Project memory for the test\n');
+    put(path.join(projA, '.claude/rules/api.md'), '---\npaths:\n  - "src/**"\n---\nRules\n');
+    put(path.join(projA, '.claude/settings.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'echo SECRET-HOOK' }, { type: 'command', command: 'true' }] }] } }));
+    put(path.join(projA, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'plug-a@market': true } }));
+    put(path.join(claudeDir, 'plugins/installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'plug-a@market': [{ version: '1.0.0' }], 'plug-b@market': [{ version: '2.0.0' }] } }));
+    put(path.join(projA, '.claude/agents/rev.md'), '---\nname: reviewer-a\n---\n');
+    put(path.join(projB, '.mcp.json'), JSON.stringify({ mcpServers: { 'srv-b': { command: 'x' } } }));
+    fake.setMcpList('Checking MCP server health…\n\nsrv-file: npx -y thing --token SECRET-ARG - ✓ Connected\nuser-srv: https://example.com/SECRET-URL (HTTP) - ✗ Failed to connect\n');
+    fake.setMode('mcp-slow');
+    const mcpCalls = () => fake.calls().filter((l) => l.startsWith('mcp list')).length;
+    const mcpBefore = mcpCalls();
+    const chipName = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-name`).textContent();
+    const ids = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const group = (g: string) => page.locator(`.sx-group[data-group="${g}"]`);
+    const items = (g: string) => group(g).locator('.sx-item').evaluateAll((els) => els.map((e) => ({ name: e.querySelector('.sx-name')!.textContent, state: (e.querySelector('.sx-dot') as HTMLElement).dataset.state, danger: (e.querySelector('.sx-dot') as HTMLElement).dataset.danger !== undefined, note: e.querySelector('.sx-note')?.textContent ?? null, tag: e.querySelector('.sx-tag')?.textContent ?? null })));
+    const count = (g: string) => group(g).locator('.sx-count').textContent();
+    const cd = (pane: string, dir: string) => page.evaluate(([p, d]) => window.jaffer.call('pty.write', { pane: p, data: `\x15cd '${d}'\r` }), [pane, dir]);
+    const mainWas = (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd as string;
+    const panelWas = (await page.evaluate(() => window.jaffer.call('config.get'))).panel;
+    await cfgPatch({ panel: { open: true, width: 220 } });
+    await page.waitForSelector('.side-panel .sx-setup');
+    try {
+      // the third section, at the bottom, collapsed: nothing read yet
+      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'now-card', 'sp-convos', 'sx-setup']);
+      expect(await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')).toBe('false');
+      expect(await page.locator('.sx-body').count()).toBe(0);
+      // the main terminal in A, a second one in B (the person's own typing, before the window is watched)
+      await cd('main', projA);
+      await until(async () => (await chipName('main')) === 'setup-a', 8_000, 'main in setup-a');
+      await menu('split-terminal');
+      await until(async () => (await ids()).length === 2, 10_000, 'a second terminal');
+      await until(async () => (await chipName('p2')) === 'setup-a', 8_000, 'p2 starting in setup-a');
+      await cd('p2', projB);
+      await until(async () => (await chipName('p2')) === 'setup-b', 8_000, 'p2 in setup-b');
+      await menu('focus-terminal-1');
+      await until(async () => (await page.evaluate(() => (window as any).__jaffer.activePane())) === 'main', 5_000, 'main focused');
+      // from here on the window is watched: what it asks the daemon, and that it types nothing
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__sxCalls = [];
+        w.__sxReal = w.jaffer.call;
+        w.jaffer.call = (m: string, p: any) => (w.__sxCalls.push(m === 'pty.write' ? `pty.write ${JSON.stringify(p?.data)}` : m), w.__sxReal(m, p));
+      });
+      const calls = () => page.evaluate(() => (window as any).__sxCalls as string[]);
+
+      await page.click('.sx-setup .sx-head');
+      expect(await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')).toBe('true');
+      await page.waitForSelector('.sx-body[data-loaded] .sx-group[data-group="hooks"]');
+      expect(await page.$$eval('.sx-group .sx-ghead span:first-child', (els) => els.map((e) => e.textContent))).toEqual(['MCP servers', 'Skills', 'Rules and memory', 'Plugins', 'Subagents', 'Hooks']);
+      expect(await items('mcp')).toEqual([{ name: 'srv-file', state: 'unknown', danger: false, note: 'not checked', tag: null }]);
+      expect(await page.textContent('.sx-hint')).toBe('This starts your MCP servers briefly to see if they answer.');
+      // 8 skills: folded to the count, Show all opens them
+      expect(await count('skills')).toBe('8');
+      expect(await group('skills').locator('.sx-item').count()).toBe(0);
+      await group('skills').locator('.sx-more').click();
+      expect((await items('skills')).map((k) => k.name)).toEqual([...Array.from({ length: 7 }, (_, i) => `user-skill-${i + 1}`), 'skill-a']);
+      expect(await group('skills').locator('.sx-item', { hasText: 'skill-a' }).getAttribute('title')).toBe('A project skill for the test · A skill of this project');
+      const rules = await items('rules');
+      expect(rules).toContainEqual({ name: '~/setup-a/CLAUDE.md', state: 'ok', danger: false, note: '28 B', tag: null });
+      expect(rules).toContainEqual({ name: '~/setup-a/.claude/rules/api.md', state: 'ok', danger: false, note: expect.stringMatching(/ B$/), tag: 'scoped' });
+      expect(await items('plugins')).toEqual([
+        { name: 'plug-a@market', state: 'ok', danger: false, note: '1.0.0', tag: null },
+        { name: 'plug-b@market', state: 'off', danger: false, note: 'off', tag: null },
+      ]);
+      expect((await items('agents')).map((a) => a.name)).toContain('reviewer-a');
+      if (await group('hooks').locator('.sx-more', { hasText: 'Show all' }).count()) await group('hooks').locator('.sx-more').click(); // (Jaffer's own hooks are there too)
+      expect(Number((await items('hooks')).find((h) => h.name === 'UserPromptSubmit')?.note)).toBeGreaterThanOrEqual(2); // (the project's two, and the user's)
+      expect(mcpCalls()).toBe(mcpBefore); // (opening the section starts nothing)
+
+      // Check: busy while it runs, then the states; servers only `claude mcp list` knows are added
+      await page.click('.sx-check');
+      await until(async () => (await page.getAttribute('.sx-check', 'aria-busy')) === 'true', 3_000, 'the busy button');
+      expect(await page.textContent('.sx-check')).toBe('Checking…');
+      await until(async () => (await page.textContent('.sx-check')) === 'Check MCP servers', 10_000, 'the check to end');
+      expect(await items('mcp')).toEqual([
+        { name: 'srv-file', state: 'ok', danger: false, note: 'Connected', tag: null },
+        { name: 'user-srv', state: 'attention', danger: true, note: 'Failed to connect', tag: null },
+      ]);
+      expect(mcpCalls()).toBe(mcpBefore + 1);
+      expect(fake.read('mcp.cwd')).toBe(projA);
+      expect(await page.textContent('.sx-setup')).not.toMatch(/SECRET|npx|https/);
+      await shot('17-setup');
+
+      // nothing overflows sideways at 220 px
+      const over = () => page.evaluate(() => {
+        const p = document.querySelector('.side-panel')!.getBoundingClientRect();
+        const b = document.querySelector('.sx-body') as HTMLElement;
+        const out = [...document.querySelectorAll('.sx-setup *')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && (r.right > p.right + 0.5 || r.left < p.left - 0.5); }).map((e) => e.className);
+        return { panel: Math.round(p.width), scroll: b.scrollWidth > b.clientWidth, out };
+      });
+      expect(await over()).toEqual({ panel: 220, scroll: false, out: [] });
+
+      // the other terminal: its folder's list, the check's answer gone; back again: A's list, not checked any more
+      await menu('focus-terminal-2');
+      await until(async () => JSON.stringify(await items('mcp')) === JSON.stringify([{ name: 'srv-b', state: 'unknown', danger: false, note: 'not checked', tag: null }]), 8_000, "B's MCP servers");
+      expect(await count('skills')).toBe('7');
+      expect(await count('plugins')).toBe('2');
+      await menu('focus-terminal-1');
+      await until(async () => (await items('mcp')).map((m) => `${m.name} ${m.note}`).join() === 'srv-file not checked', 8_000, "A's MCP servers, not checked");
+      expect(mcpCalls()).toBe(mcpBefore + 1);
+      expect(await over()).toEqual({ panel: 220, scroll: false, out: [] });
+
+      const seen = await calls();
+      expect(seen.filter((m) => m.startsWith('pty.write'))).toEqual([]);
+      expect(seen.filter((m) => m === 'claude.mcp')).toHaveLength(1);
+      expect(seen.filter((m) => m === 'claude.setup').length).toBeGreaterThanOrEqual(3);
+      expect(seen.some((m) => /config\.patch/.test(m))).toBe(false); // (read only: nothing changes a setting)
+
+      // collapsed again, it is gone
+      await page.click('.sx-setup .sx-head');
+      expect(await page.locator('.sx-body').count()).toBe(0);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        if (w.__sxReal) w.jaffer.call = w.__sxReal;
+        delete w.__sxReal;
+      });
+      if ((await page.getAttribute('.sx-setup .sx-head', 'aria-expanded').catch(() => null)) === 'true') await page.click('.sx-setup .sx-head');
+      fake.setMode('ok');
+      if ((await ids()).includes('p2')) {
+        await menu('focus-terminal-2');
+        await menu('close-terminal');
+        await until(async () => (await ids()).length === 1, 10_000, 'one terminal again');
+      }
+      await cd('main', mainWas);
+      await until(async () => (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd === mainWas, 8_000, 'main back in its folder');
+      await cfgPatch({ panel: panelWas });
+      for (const p of planted) fs.rmSync(p, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it('seasonal touches: the mole and the scenes dress by data-season (a fake season only with ?debug), off with the setting, none outside the dates', async () => {
     const page_ = (q: string) => page.goto(`${url}?${q}&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`).then(() => page.waitForSelector('.term .xterm'));
     try {
@@ -4531,7 +4671,7 @@ describe('Jaffer UI end to end', () => {
       expect(await page.locator('.side-panel').count()).toBe(0);
       await page.locator('.toast', { hasText: `Jaffer updated to ${version}` }).locator('.toast-act', { hasText: "What's new" }).click();
       await page.waitForSelector('.side-panel > .wn-card');
-      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'sp-convos']); // the card is the one new child, above Now
+      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'sp-convos', 'sx-setup']); // the card is the one new child, above Now (1.4.0: Setup, the third section, at the bottom)
       expect(await page.locator('.sp-convos, .now-card').count()).toBe(2);
       const text = (await page.textContent('.wn-card')) ?? '';
       expect(text).toContain(`What's new in ${unseen[0]!.version}`);

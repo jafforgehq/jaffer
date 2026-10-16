@@ -13,6 +13,9 @@ import path from 'node:path';
  *
  * `interactive: 'stub'`: `claude` with no arguments (what typing `claude` in the terminal does) prints a line and exits 0 instead of
  * starting the real TUI, so a test can see that something started Claude Code without a TUI taking over the shell.
+ * `claude mcp list` (1.4.0) prints the file mcp-list (`setMcpList`) and notes its folder in mcp.cwd and the Jaffer variables it got in
+ * mcp.env; it never reaches the real claude. Modes: "mcp-slow" waits a second first, "mcp-hang" starts a child (its pid in mcp.child) and
+ * waits for it, "mcp-fail" exits 1 after printing.
  * Any other command goes to `passthrough` (the real claude) when one is given, so a test can keep using the real thing
  * for everything but the login state.
  */
@@ -55,6 +58,17 @@ if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   echo in > "$D/state"
   exit 0
 fi
+if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
+  pwd > "$D/mcp.cwd"
+  echo "\${JAFFER_SESSION:-}|\${JAFFER_PANE:-}|\${JAFFER_OWNED:-}" > "$D/mcp.env"
+  case "$M" in
+    mcp-slow) sleep 1 ;;
+    mcp-hang) sleep 30 & echo $! > "$D/mcp.child"; wait; exit 0 ;;
+  esac
+  [ -f "$D/mcp-list" ] && cat "$D/mcp-list"
+  [ "$M" = mcp-fail ] && exit 1
+  exit 0
+fi
 if [ "$#" -eq 0 ] && [ "$INTERACTIVE" = stub ]; then echo "fake claude: interactive session"; exit 0; fi
 if [ -n "$REAL" ]; then exec "$REAL" "$@"; fi
 echo "fake claude: unsupported: $*" >&2
@@ -67,6 +81,8 @@ exit 64
     bin,
     setLoggedIn: (v: boolean) => fs.writeFileSync(state, v ? 'in' : 'out'),
     setMode: (m: string) => fs.writeFileSync(mode, m),
+    setMcpList: (text: string) => fs.writeFileSync(path.join(dir, 'mcp-list'), text),
+    read: (name: string): string => (fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').trim() : ''),
     calls: (): string[] => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : []),
   };
 }

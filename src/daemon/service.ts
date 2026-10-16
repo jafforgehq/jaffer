@@ -21,6 +21,8 @@ import { readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claud
 import { conversationStorage, listConversations, OLD_DAYS, oldConversations } from '../core/claude/history';
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
+import { readSetup } from '../core/claude/setup';
+import { runMcpList, type McpCheck } from '../core/claude/mcp';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
 import { nextTypicalTurnMs } from '../shared/turn-median';
@@ -87,6 +89,8 @@ export class JafferService {
   /** Permission prompts waiting for a click on Allow or Deny (`claude.approvals`), in memory only: what is shown of each, never its input. */
   private approvals = new Map<string, { view: ApprovalView; done: (decision: 'allow' | 'deny' | null) => void }>();
   private claudePushTimer: NodeJS.Timeout | null = null;
+  /** (1.4.0) The one `claude mcp list` under way (a second ask while it runs gets the same answer). */
+  private mcpCheck: Promise<McpCheck> | null = null;
   private claudePushPending = false;
   private stopping = false;
   /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
@@ -693,6 +697,18 @@ export class JafferService {
       return searchConversations(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), p!.q);
     });
 
+    // (1.4.0) The side panel's Setup list: what Claude Code is set up with in a folder (skills, plugins, rules, subagents, hook counts, the
+    // names in .mcp.json), from its files only; never ~/.claude.json, never a hook's command
+    r.handle('claude.setup', (p: { cwd?: unknown } | null) => readSetup({ home: this.userHome, claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), cwd: this.setupFolder(p?.cwd) }));
+    // (1.4.0) Only on the person's click (*Check MCP servers*): `claude mcp list` starts their servers to ask them; names and states come back
+    r.handle('claude.mcp', (p: { cwd?: unknown } | null) => {
+      const cwd = this.setupFolder(p?.cwd);
+      this.mcpCheck ??= this.probeClaude()
+        .then(() => runMcpList(this.claudeBin, cwd, this.claudeEnv()))
+        .finally(() => (this.mcpCheck = null));
+      return this.mcpCheck;
+    });
+
     // ---- config
     r.handle('config.get', () => this.config.get());
     r.handle('config.patch', (p: DeepPartial<JafferConfig>) => this.config.patch(p ?? {}));
@@ -752,6 +768,11 @@ export class JafferService {
       this.onShutdown.fn(); // (the daemon's main claims the end now and begins the stop once this reply has gone out)
       return true;
     });
+  }
+
+  /** The folder the window named for the Setup list: an existing absolute folder of at most 4096 characters without control characters, else the home folder. */
+  private setupFolder(cwd: unknown): string {
+    return typeof cwd === 'string' && cwd.length <= 4096 && path.isAbsolute(cwd) && !/\p{Cc}/u.test(cwd) && isDir(cwd) ? cwd : this.userHome;
   }
 
   private userEnv(): NodeJS.ProcessEnv {

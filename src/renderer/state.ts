@@ -518,6 +518,8 @@ export const togglePanel = (via = 'other'): void => {
   lastPanelToggle = { at: now, via };
   patchPanel({ open: !panelOpen() });
 };
+/** (1.4.0) The side panel's Setup section is expanded (memory only: each start has it collapsed). */
+export const setupOpen = signal(false);
 /** The past conversations the panel last read (`claude.history`: ids, folders, times, token costs), so it shows them at once when it opens again; null: never read. Memory only. */
 export const historyItems = signal<Conversation[] | null>(null);
 // (1.4.0) The budgets: one toast when the day's work time passes `claude.dailyWorkBudgetMin` (once a day), and one per folder and week
