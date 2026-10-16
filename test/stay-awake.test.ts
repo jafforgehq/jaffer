@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { caffeinateHold, isDefaultHome, spawnHold } from '../src/core/session/caffeinate';
-import { isInteractiveCommand, optionWords, StayAwake, WRAPPER_LONG_OPTIONS, WRAPPER_OPTIONS, type Work } from '../src/core/session/stay-awake';
+import { isInteractiveCommand, optionWords, pickCommand, StayAwake, WRAPPER_LONG_OPTIONS, WRAPPER_OPTIONS, type Work } from '../src/core/session/stay-awake';
 import { STAY_AWAKE } from '../src/shared/stay-awake-config';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -455,6 +455,35 @@ describe('StayAwake: a command that runs a long time', () => {
     sa.update({ enabled: true, claude: true, command: { cmd: 'make', since: now - 2 * STAY_AWAKE.commandCapMs } });
     expect(sa.holding).toBe(true);
     expect(holds).toHaveLength(1);
+  });
+});
+
+// 1.4.0: up to four terminals, each may run a command; the daemon tells StayAwake about one of them
+describe('pickCommand: which running command of the terminals counts', () => {
+  const T = 50_000_000;
+  const at = (cmd: string | null, ago: number | null, alive = true) => ({ alive, cmd, since: ago === null ? null : T - ago });
+  it('the one that has run longest, of the terminals whose shells are alive and run something', () => {
+    expect(pickCommand([], T)).toBeNull();
+    expect(pickCommand([at(null, null), at('make', 5_000, false)], T)).toBeNull(); // (a dead shell never reported its end)
+    expect(pickCommand([at('npm test', 10_000), at('make', 60_000), at(null, null), at('cargo build', 90_000, false)], T)).toEqual({ cmd: 'make', since: T - 60_000 });
+    expect(pickCommand([at('make', null)], T)).toBeNull();
+  });
+
+  it('a program a person sits in comes last, and one past the six-hour cap next: neither hides a build in another terminal', () => {
+    expect(pickCommand([at('less log', 3_600_000), at('npm run build', 40_000)], T)).toEqual({ cmd: 'npm run build', since: T - 40_000 });
+    expect(pickCommand([at('make', STAY_AWAKE.commandCapMs + 1), at('npm run build', 40_000)], T)).toEqual({ cmd: 'npm run build', since: T - 40_000 });
+    expect(pickCommand([at('vim x', 7_200_000), at('make', STAY_AWAKE.commandCapMs + 1)], T)).toEqual({ cmd: 'make', since: T - STAY_AWAKE.commandCapMs - 1 }); // (so the cap still lets go at once)
+    expect(pickCommand([at('ssh host', 1_000), at('vim x', 7_200_000)], T)).toEqual({ cmd: 'vim x', since: T - 7_200_000 });
+  });
+});
+
+describe('StayAwake: a shorter wait for a command (the daemon\'s test hook)', () => {
+  it('holds once a command has run commandAfterMs when that is given', () => {
+    const quick = new StayAwake({ platform: 'darwin', pid: PID, now: () => now, setTimer: () => 0, clearTimer: () => undefined, hold: (args) => (holds.push({ args, released: false }), { release: () => undefined }), commandAfterMs: 2_000 });
+    quick.update(running('make', 1_999));
+    expect(quick.holding).toBe(false);
+    quick.update(running('make', 2_000));
+    expect(quick.holding).toBe(true);
   });
 });
 

@@ -115,6 +115,17 @@ export function isInteractiveCommand(cmd: string): boolean {
   return false;
 }
 
+/**
+ * Which of the terminals' running commands is the one `Work` names: of those whose shell is alive (a shell that died mid-command never
+ * reported its end) and that run something, the one that has run longest; a program a person sits in comes last and one past the cap
+ * next, so neither hides a build in another terminal (and a command past the cap alone still lets go at once).
+ */
+export function pickCommand(running: { alive: boolean; cmd: string | null; since: number | null }[], now: number): { cmd: string; since: number } | null {
+  const rank = (c: { cmd: string; since: number }) => (isInteractiveCommand(c.cmd) ? 2 : now - c.since >= STAY_AWAKE.commandCapMs ? 1 : 0);
+  const live = running.flatMap((r) => (r.alive && r.cmd !== null && r.since !== null ? [{ cmd: r.cmd, since: r.since }] : []));
+  return live.sort((a, b) => rank(a) - rank(b) || a.since - b.since)[0] ?? null;
+}
+
 export interface StayAwakeDeps {
   /** `darwin` is the only platform that holds. */
   platform: string;
@@ -130,6 +141,8 @@ export interface StayAwakeDeps {
   now(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(t: unknown): void;
+  /** How long a command must run before it holds (default `STAY_AWAKE.commandAfterMs`; the daemon's test hook can only shorten it). */
+  commandAfterMs?: number;
 }
 
 /** A hold, as `StayAwakeDeps.hold` gives it. */
@@ -178,7 +191,7 @@ export class StayAwake {
       return;
     }
     const ran = w.command && !isInteractiveCommand(w.command.cmd) ? this.d.now() - w.command.since : -1;
-    const command = ran >= STAY_AWAKE.commandAfterMs && ran < STAY_AWAKE.commandCapMs;
+    const command = ran >= (this.d.commandAfterMs ?? STAY_AWAKE.commandAfterMs) && ran < STAY_AWAKE.commandCapMs;
     this.wanted = w.claude || command;
     if (this.wanted) {
       this.cancelRelease();

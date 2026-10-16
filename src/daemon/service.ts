@@ -12,7 +12,7 @@ import { claudeStatus, findClaude, HOOK_EVENTS, hooksPointAt, installHooks, setu
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { approvalDetail, approvalTool, APPROVAL_WAIT_MS, type ApprovalView } from '../core/claude/approvals';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
-import { isInteractiveCommand, StayAwake, type Work } from '../core/session/stay-awake';
+import { pickCommand, StayAwake, type Work } from '../core/session/stay-awake';
 import { STAY_AWAKE } from '../shared/stay-awake-config';
 import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
@@ -94,6 +94,8 @@ export class JafferService {
   private log: (msg: string) => void;
   private userHome: string;
   private version: string;
+  /** How long a command must run before it holds the Mac awake: 30 s (`JAFFER_TEST_STAY_AWAKE_AFTER_MS`, a test hook inert unless set, can only shorten it). */
+  private commandAfterMs = Math.min(STAY_AWAKE.commandAfterMs, Number(process.env.JAFFER_TEST_STAY_AWAKE_AFTER_MS) || STAY_AWAKE.commandAfterMs);
 
   constructor(private opts: ServiceOptions = {}) {
     this.paths = opts.paths ?? makePaths();
@@ -114,6 +116,7 @@ export class JafferService {
         return t;
       },
       clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
+      commandAfterMs: this.commandAfterMs,
     });
   }
 
@@ -264,6 +267,7 @@ export class JafferService {
     const p = this.host.get(pane);
     if (!p || !c.alive) return;
     const snapshot = await p.consistentSnapshot();
+    if (!this.attachedTo(pane)(c)) return; // (it let go of that terminal meanwhile: no snapshot it did not ask for)
     this.panesOf(c, 'stale').delete(pane);
     c.send({ event: 'pty.reset', data: { pane, snapshot } });
   }
@@ -357,14 +361,8 @@ export class JafferService {
    */
   private stayAwakeWork(): Work {
     const claude = this.claudeWatcher.sessions().some((s) => s.state !== 'ended' && (s.state === 'working' || s.subagents.some((a) => a.status === 'running')));
-    const now = Date.now();
-    const rank = (c: { cmd: string; since: number }) => (isInteractiveCommand(c.cmd) ? 2 : now - c.since >= STAY_AWAKE.commandCapMs ? 1 : 0);
-    const running = (this.host?.list() ?? []).flatMap((p) => {
-      const s = this.host.get(p.id);
-      return s?.alive && s.runningCommand !== null && s.runningSince !== null ? [{ cmd: s.runningCommand, since: s.runningSince }] : [];
-    });
-    const command = running.sort((a, b) => rank(a) - rank(b) || a.since - b.since)[0] ?? null;
-    return { enabled: this.config.get().session.stayAwake, claude, command };
+    const running = (this.host?.list() ?? []).map((p) => ({ alive: p.alive, cmd: p.busy, since: this.host.get(p.id)?.runningSince ?? null }));
+    return { enabled: this.config.get().session.stayAwake, claude, command: pickCommand(running, Date.now()) };
   }
 
   /** Tells `StayAwake` what works now, and keeps a look on a running command (it counts once it has run half a minute, with no event to say so). */
@@ -375,7 +373,7 @@ export class JafferService {
       this.stayAwake.update(work);
       const ticking = work.enabled && work.command !== null;
       if (ticking && !this.commandTicker) {
-        this.commandTicker = setInterval(() => this.refreshStayAwake(), STAY_AWAKE_TICK_MS);
+        this.commandTicker = setInterval(() => this.refreshStayAwake(), Math.min(STAY_AWAKE_TICK_MS, this.commandAfterMs));
         this.commandTicker.unref?.();
       } else if (!ticking && this.commandTicker) {
         clearInterval(this.commandTicker);
@@ -614,7 +612,7 @@ export class JafferService {
     r.handle('pane.split', (p: { pane?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown } | null) => {
       const base = pane(p);
       const num = (v: unknown, d: number) => (typeof v === 'number' ? v : d);
-      return this.host.split({ cwd: typeof p?.cwd === 'string' ? p.cwd : base.cwd, cols: num(p?.cols, base.cols), rows: num(p?.rows, base.rows) });
+      return this.host.split({ cwd: typeof p?.cwd === 'string' && isDir(p.cwd) ? p.cwd : base.cwd, cols: num(p?.cols, base.cols), rows: num(p?.rows, base.rows) });
     });
     // ends that terminal's shell for good (it must be named; the last one is refused: `session.restart` it)
     r.handle('pane.close', (p: { pane?: unknown } | null) => {
@@ -752,6 +750,15 @@ export class JafferService {
 /** A command that was stopped, not ended (Ctrl+Z: the shell reports 128 + a stop signal, 145 to 150 on macOS and Linux). */
 function stoppedExit(exit: number | null): boolean {
   return exit != null && exit >= 145 && exit <= 150;
+}
+
+/** An existing folder (a file, a missing path or one too long for the system is not). */
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
 }
 
 function shq(s: string): string {

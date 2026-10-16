@@ -1,5 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeEnv, type TestEnv } from './helpers/env';
@@ -340,6 +341,79 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     expect((await c.call('pane.list', {}))[0].pid).toBe(main.pid);
     other.close();
   }, 40_000);
+
+  it('pane.split takes only a folder: a file or a missing path splits in the folder of the terminal it splits', async () => {
+    const c = await connect();
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    const folder = fs.realpathSync(fs.mkdtempSync(path.join(env.root, 'split-from-')));
+    const file = path.join(folder, 'a-file.txt');
+    fs.writeFileSync(file, 'x');
+    await c.call('pty.write', { data: `cd '${folder}'\r` });
+    await waitUntil(async () => (await c.call('session.info', {})).cwd === folder);
+    for (const cwd of [file, path.join(folder, 'missing')]) {
+      const p = await c.call('pane.split', { cwd });
+      expect(p.cwd, cwd).toBe(folder);
+      await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+      expect(await c.call('pane.close', { pane: p.id })).toBe(true);
+    }
+    await c.call('pty.write', { data: 'cd\r' });
+  });
+
+  it('falling behind is per terminal: a window too slow for one gets that one back from a snapshot (not the others), and none for a terminal it let go of meanwhile', async () => {
+    const c = await connect();
+    const done = collect(c, 'pty.command');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await c.call('pane.split', {});
+    await c.call('session.attach', { pane: 'p2' });
+    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+    await sleep(800);
+    // a window that stops reading its socket (a raw connection, so that it really falls behind)
+    const sock = net.createConnection(env.paths.socket);
+    await new Promise((r) => sock.once('connect', r));
+    const got: any[] = [];
+    let buf = '';
+    sock.on('data', (d) => {
+      buf += d.toString();
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        got.push(JSON.parse(buf.slice(0, i)));
+        buf = buf.slice(i + 1);
+      }
+    });
+    let id = 0;
+    const send = (method: string, params: object) => (sock.write(JSON.stringify({ id: ++id, method, params }) + '\n'), id);
+    const answered = (n: number) => got.some((m) => m.id === n);
+    const resets = (pane: string, from = 0) => got.slice(from).filter((m) => m.event === 'pty.reset' && m.data.pane === pane);
+    const flood = async (n: number) => {
+      const cmd = `yes flood-${n}-abcdefghijklmnopqrstuvwxyz0123456789 | head -c 16000000`;
+      await c.call('pty.write', { pane: 'p2', data: `${cmd}\r` });
+      await waitUntil(() => done.some((x) => x.pane === 'p2' && x.cmd === cmd), 30_000);
+    };
+    const a = send('session.attach', { pane: 'main' });
+    const b = send('session.attach', { pane: 'p2' });
+    await waitUntil(() => answered(a) && answered(b));
+    // still attached to p2 when it catches up: p2 comes back from a snapshot, main never fell behind and keeps streaming
+    sock.pause();
+    await flood(1);
+    sock.resume();
+    await waitUntil(() => resets('p2').length === 1, 20_000);
+    expect(resets('main')).toEqual([]);
+    await c.call('pty.write', { data: 'echo main-still-streams-71\r' });
+    await waitUntil(() => got.some((m) => m.event === 'pty.data' && m.data.pane === 'main' && m.data.data.includes('main-still-streams-71')), 10_000);
+    // let go of p2 while behind on it: no snapshot of p2 follows
+    sock.pause();
+    await flood(2);
+    const d = send('session.detach', { pane: 'p2' });
+    sock.resume();
+    await waitUntil(() => answered(d), 20_000);
+    const after = got.findIndex((m) => m.id === d);
+    const h = send('hello', {});
+    await waitUntil(() => answered(h), 10_000);
+    await sleep(1500);
+    expect(resets('p2', after)).toEqual([]);
+    sock.destroy();
+    expect(await c.call('pane.close', { pane: 'p2' })).toBe(true);
+  }, 90_000);
 
   it('a Claude in one terminal is that terminal\'s: its hooks say which (JAFFER_PANE), and the other terminal ending (exit, close, its claude command) leaves it working', async () => {
     const c = await connect();
@@ -1439,31 +1513,6 @@ describe('the Mac stays awake while Claude or a long command works (bundled daem
     expect(Date.now() - ended).toBeGreaterThanOrEqual(13_000);
   }, 120_000);
 
-  // 1.4.0: a command in any terminal counts, not only in the first
-  it('a long command in a second terminal holds too, and closing that terminal lets go', async () => {
-    await waitUntil(() => ops().length > 0 && ops()[ops().length - 1] === 'release', 25_000);
-    const before = ops().length;
-    const starts = collect(c, 'pty.start') as { pane: string; cmd: string }[];
-    await c.call('pane.split', {});
-    await c.call('session.attach', { pane: 'p2' });
-    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
-    await sleep(800);
-    // (main runs a program a person sits in, started first: the longer one, but it does not hide p2's command)
-    await c.call('pty.write', { data: 'less /etc/hosts\r' });
-    await waitUntil(() => starts.some((s) => s.pane === 'main' && s.cmd === 'less /etc/hosts'));
-    await sleep(1000);
-    await c.call('pty.write', { pane: 'p2', data: 'sleep 120\r' });
-    await waitUntil(() => starts.some((s) => s.pane === 'p2' && s.cmd === 'sleep 120'));
-    await waitUntil(() => ops().length === before + 1, 45_000);
-    expect(ops()[before]).toBe('hold');
-    const closed = Date.now();
-    await c.call('pane.close', { pane: 'p2' });
-    await waitUntil(() => ops().length === before + 2, 25_000);
-    expect(ops()[before + 1]).toBe('release');
-    expect(Date.now() - closed).toBeGreaterThanOrEqual(13_000);
-    await c.call('pty.write', { data: 'q' });
-  }, 120_000);
-
   it('stopping the daemon lets go of the hold', async () => {
     await hook('stay-4', 'UserPromptSubmit', { prompt: 'go' });
     await waitUntil(async () => (await state('stay-4')) === 'working');
@@ -1473,6 +1522,59 @@ describe('the Mac stays awake while Claude or a long command works (bundled daem
     await waitUntil(async () => !(await tryConnect(env6.paths, 300)), 10_000);
     expect(ops().length).toBe(held + 1);
     expect(ops()[held]).toBe('release');
+  }, 30_000);
+});
+
+// 1.4.0: a command in any terminal counts, not only in the first. A daemon of its own, with the 30 s a command must run shortened
+// (JAFFER_TEST_STAY_AWAKE_AFTER_MS, a test hook that can only shorten it), so that this runs alone and quickly.
+describe('the Mac stays awake for a long command in any terminal (bundled daemon, the hold written to a log)', () => {
+  let env7: TestEnv;
+  let c: RpcClient;
+  const log = () => path.join(env7.root, 'hold.log');
+  const ops = (): string[] => {
+    try {
+      return fs.readFileSync(log(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).op);
+    } catch {
+      return [];
+    }
+  };
+
+  beforeAll(async () => {
+    env7 = makeEnv();
+    fs.writeFileSync(path.join(env7.userHome, '.zshenv'), 'skip_global_compinit=1\n');
+    c = await ensureDaemon(env7.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env7.userHome, SHELL: '/bin/bash', PS1: '$ ', JAFFER_TEST_HOLD_LOG: log(), JAFFER_TEST_STAY_AWAKE_AFTER_MS: '1000' },
+    });
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+  }, 30_000);
+
+  afterAll(async () => {
+    c?.close();
+    const last = await tryConnect(env7.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env7?.cleanup();
+  });
+
+  it('a long command in a second terminal holds too, and closing that terminal lets go', async () => {
+    await waitUntil(() => ops().length === 0 || ops()[ops().length - 1] === 'release', 25_000);
+    const before = ops().length;
+    const starts = collect(c, 'pty.start') as { pane: string; cmd: string }[];
+    await c.call('pane.split', {});
+    await c.call('session.attach', { pane: 'p2' });
+    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+    await sleep(800);
+    await c.call('pty.write', { pane: 'p2', data: 'sleep 120\r' });
+    await waitUntil(() => starts.some((s) => s.pane === 'p2' && s.cmd === 'sleep 120'));
+    await waitUntil(() => ops().length === before + 1, 8_000);
+    expect(ops()[before]).toBe('hold');
+    await c.call('pane.close', { pane: 'p2' });
+    await waitUntil(() => ops().length === before + 2, 20_000);
+    expect(ops()[before + 1]).toBe('release');
   }, 30_000);
 });
 
