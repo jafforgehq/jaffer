@@ -10,7 +10,7 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, activeTheme, cfg, firstLine, homeDir, info, layoutHold, lineCount, overlay, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, activeTheme, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
 import { redactText } from '../../shared/redact';
@@ -46,16 +46,17 @@ function joinPath(base: string, rel: string): string {
   return '/' + parts.join('/');
 }
 
-/** Feature 11: a printed path, absolute (relative ones against the session's folder, `~` against home). */
-function resolvePath(p: string): string | null {
+/** Feature 11: a printed path, absolute (relative ones against that terminal's folder, `~` against home). */
+function resolvePath(p: string, pane: string): string | null {
   if (p.startsWith('/')) return joinPath('/', p);
   const home = homeDir();
   if (p.startsWith('~/')) return home ? joinPath(home, p.slice(2)) : null;
-  return info.value.cwd ? joinPath(info.value.cwd, p) : null;
+  const cwd = paneInfo.value[pane]?.cwd;
+  return cwd ? joinPath(cwd, p) : null;
 }
 
-function openFound(f: FoundPath): void {
-  const abs = resolvePath(f.path);
+function openFound(f: FoundPath, pane: string): void {
+  const abs = resolvePath(f.path, pane);
   if (!abs) return;
   void window.jaffer.openPath({ path: abs, line: f.line, col: f.col }).then(
     (r) => r.opened || toast({ kind: 'info', text: r.editorFailed ? 'Could not open the editor link' : 'No file there.' }, 3000),
@@ -141,7 +142,7 @@ export function TerminalView({ pane }: { pane: string }) {
           found.map((f) => ({
             range: { start: { x: (cellOf[f.start] ?? f.start) + 1, y }, end: { x: (cellOf[f.end - 1] ?? f.end - 1) + 1, y } },
             text: text.slice(f.start, f.end),
-            activate: (ev: MouseEvent) => ev.metaKey && openFound(f),
+            activate: (ev: MouseEvent) => ev.metaKey && openFound(f, pane),
           })),
         );
       },
@@ -187,7 +188,7 @@ export function TerminalView({ pane }: { pane: string }) {
       /* falls back to the DOM renderer */
     }
 
-    const blocks = attachBlocks(term);
+    const blocks = attachBlocks(term, pane);
 
     let attached = false;
     let snapshotSeq = -1;
@@ -235,10 +236,10 @@ export function TerminalView({ pane }: { pane: string }) {
       if (event === 'pty.data') {
         if (!attached) pending.push({ seq: data.seq, data: data.data });
         else if (data.seq > snapshotSeq) apply(data.seq, data.data);
-        // Feature 37: a local server the running command prints (not inside a full-screen program, and not Claude Code's own screen,
+        // Feature 37: a local server the focused terminal's running command prints (not inside a full-screen program, and not Claude Code's own screen,
         // which it draws in the normal buffer); the finder reads a bounded head
-        const busy = info.value.busy;
-        if (busy && !isClaudeCommand(busy) && cfg.value?.terminal?.portLinks !== false && term.buffer.active.type !== 'alternate') {
+        const busy = paneInfo.value[pane]?.busy;
+        if (busy && pane === activePane.value && !isClaudeCommand(busy) && cfg.value?.terminal?.portLinks !== false && term.buffer.active.type !== 'alternate') {
           const found = findPorts(data.data);
           if (found.length) port.value = found.at(-1)!;
         }
@@ -366,9 +367,9 @@ export function TerminalView({ pane }: { pane: string }) {
       el.removeEventListener('drop', onDrop);
       el.removeEventListener('dragover', onDragOver);
       el.removeEventListener('paste', onPaste, true);
-      terminals.delete(pane);
+      if (terminals.get(pane) === handle) terminals.delete(pane); // (an id opened again after a close has a new view already)
       blocks.dispose();
-      void call('session.detach', {}).catch(() => undefined);
+      void call('session.detach', { pane }).catch(() => undefined); // (this terminal only: the others stay attached)
       try {
         webgl?.dispose();
       } catch {

@@ -1,4 +1,4 @@
-import { batch, effect, signal } from '@preact/signals';
+import { batch, computed, effect, signal } from '@preact/signals';
 import type { JafferConfig } from '../shared/config';
 import type { ClaudeSession } from '../core/claude/watcher';
 import type { UpdateState } from '../shared/update-policy';
@@ -39,8 +39,44 @@ export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'r
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
 export const ready = signal(false);
-export const info = signal<SessionInfo>({ cwd: '' });
+/** The focused terminal (1.4.0: one of up to four): the keyboard, the menus, the find bar, resume and ⇧⌘C act on it. */
 export const activePane = signal('main');
+/** The terminals, in the order they were opened (the daemon's ids; an id can come back after a close). Memory only. */
+export const panes = signal<string[]>(['main']);
+/** Each terminal's folder, repository and running command, from its own events and `session.info {pane}`. Memory only. */
+export const paneInfo = signal<Record<string, SessionInfo>>({});
+/** The focused terminal's info: the title bar, the companion and resume read this, so they follow the focus. */
+export const info = computed<SessionInfo>(() => paneInfo.value[activePane.value] ?? { cwd: '' });
+/** Bumped when an id is opened again, so its view starts fresh (and attaches again) instead of keeping a closed terminal's. */
+const paneGen = new Map<string, number>();
+export const paneKey = (id: string): string => `${id}#${paneGen.get(id) ?? 0}`;
+function setPaneInfo(pane: string, patch: Partial<SessionInfo>): void {
+  if (!panes.value.includes(pane)) return; // (a closed terminal's late answer)
+  paneInfo.value = { ...paneInfo.value, [pane]: { cwd: '', ...paneInfo.value[pane], ...patch } };
+}
+/** A terminal was opened (a split, or one the window had not seen): it goes last. */
+export function addPane(id: string): void {
+  if (panes.value.includes(id)) return;
+  paneGen.set(id, (paneGen.get(id) ?? 0) + 1);
+  panes.value = [...panes.value, id];
+}
+/** A terminal was closed: its info goes, and the focus moves to the one now in its place (or the one before it). */
+export function removePane(id: string): void {
+  const i = panes.value.indexOf(id);
+  if (i < 0) return;
+  const next = panes.value.filter((p) => p !== id);
+  batch(() => {
+    panes.value = next;
+    const { [id]: _gone, ...rest } = paneInfo.value;
+    paneInfo.value = rest;
+    if (activePane.value === id && next.length) activePane.value = next[Math.min(i, next.length - 1)]!;
+  });
+  fails.delete(id);
+  clearTimeout(infoTimers.get(id));
+  infoTimers.delete(id);
+  clearTimeout(gitTimers.get(id));
+  gitTimers.delete(id);
+}
 /** A slow clock for relative times ("2m ago") without a timer per component. */
 export const clock = signal(Date.now());
 setInterval(() => (clock.value = Date.now()), 15_000);
@@ -56,7 +92,9 @@ export const lastActivityAt = signal(Date.now());
 /** When a command last worked after three failures in a row (the companion's "Fixed it!" burst), and when a bell last rang (its flinch); 0 = never. */
 export const fixedAt = signal(0);
 export const bellAt = signal(0);
-const failTracker = new FailTracker();
+/** Failures in a row, per terminal (a fix in one terminal is not the end of another's failures). */
+const fails = new Map<string, FailTracker>();
+const failTracker = (pane: string): FailTracker => fails.get(pane) ?? (fails.set(pane, new FailTracker()), fails.get(pane)!);
 /** A bell rings again at once when a program rings in a loop: the companion flinches at most once in this long. */
 const BELL_GAP_MS = 2000;
 export const appVersion = signal('');
@@ -93,8 +131,9 @@ export const commands = signal<RecentCommand[]>([]);
 export const lastFind = signal('');
 /** Lines pinned under the title bar (⇧⌘L), at most 3, already redacted. */
 export const pins = signal<{ id: number; text: string }[]>([]);
-/** The latest local server port the running command printed; gone when it ends. */
+/** The latest local server port the focused terminal's running command printed; gone when it ends or the focus moves. */
 export const port = signal<number | null>(null);
+effect(() => void (activePane.value && (port.value = null)));
 /** A paste of several lines, waiting for Paste or Cancel. */
 export const pasteAsk = signal<{ text: string; lines: number; first: string } | null>(null);
 
@@ -166,8 +205,13 @@ export interface ClaudeAuthState {
 }
 /** What the Claude in the terminal is doing, pushed by the daemon from its hook events (newest change first). */
 export const claudeLive = signal<ClaudeSession[]>([]);
-/** The Claude session the mole and the title bar follow: the most recently changed one that has not ended. */
-export const currentClaude = (): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended') ?? null;
+/** The Claude session the mole and the title bar follow: the focused terminal's (its hooks name the terminal), else the most recently changed one that has not ended. */
+export const currentClaude = (): ClaudeSession | null => {
+  const live = claudeLive.value.filter((s) => s.state !== 'ended');
+  return live.find((s) => s.pane === activePane.value) ?? live[0] ?? null;
+};
+/** The Claude of one terminal, when its hooks named that terminal and it has not ended. */
+export const claudeIn = (pane: string): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended' && s.pane === pane) ?? null;
 async function loadClaudeState(): Promise<void> {
   try {
     setClaude(await jaffer().call('claude.state', {}));
@@ -295,13 +339,26 @@ export const ptyBus = new Emitter<{ event: string; data: any }>();
 
 // ------------------------------------------------------------------ bootstrap
 
-async function refreshInfo(): Promise<void> {
+async function refreshInfo(pane: string): Promise<void> {
   try {
-    const i = await jaffer().call('session.info', {});
+    const i = await jaffer().call('session.info', { pane });
+    const { recentCommands: _recent, panes: _panes, ...rest } = i as SessionInfo & { panes?: unknown; recentCommands?: unknown };
+    setPaneInfo(pane, { project: undefined, branch: undefined, git: undefined, ...rest }); // (the answer leaves out what there is none of: outside a repository there is no branch, not the last one)
+  } catch {
+    /* ignore (a terminal closed meanwhile) */
+  }
+}
+
+/** The daemon's terminals (at the start, and after the terminal host came back): the ones the window has keep their place, new ones go last. */
+async function refreshPanes(): Promise<void> {
+  try {
+    const list = ((await jaffer().call('pane.list', {})) as { id: string }[]).map((p) => p.id);
     batch(() => {
-      const { recentCommands: _recent, panes: _panes, ...rest } = i as SessionInfo & { panes?: unknown; recentCommands?: unknown };
-      info.value = { ...info.value, project: undefined, branch: undefined, git: undefined, ...rest }; // (the answer leaves out what there is none of: outside a repository there is no branch, not the last one)
+      for (const id of panes.value) if (!list.includes(id)) removePane(id);
+      for (const id of list) addPane(id);
+      if (!panes.value.includes(activePane.value)) activePane.value = panes.value[0] ?? 'main';
     });
+    await Promise.all(panes.value.map(refreshInfo));
   } catch {
     /* ignore */
   }
@@ -312,46 +369,49 @@ export async function bootstrap(): Promise<void> {
   j.onEvent((event, data) => {
     if (event.startsWith('pty.')) {
       ptyBus.emit({ event, data });
+      const pane = typeof data?.pane === 'string' ? data.pane : 'main';
       if (event === 'pty.start') {
         lastActivityAt.value = Date.now();
-        if (data.pane === 'main') {
-          info.value = { ...info.value, busy: data.cmd || 'command', busySince: Date.now() };
-          port.value = null;
-        }
-        void refreshInfoSoon();
+        setPaneInfo(pane, { busy: data.cmd || 'command', busySince: Date.now() });
+        if (pane === activePane.value) port.value = null;
+        refreshInfoSoon(pane);
       } else if (event === 'pty.command') {
         lastActivityAt.value = Date.now();
-        info.value = { ...info.value, busy: null, busySince: null };
-        if (data.pane === 'main') {
-          port.value = null;
-          if (failTracker.record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) fixedAt.value = Date.now();
-          remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0, cwd: typeof data.cwd === 'string' && data.cwd ? data.cwd : info.value.cwd });
-          if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
-        }
-        void refreshInfoSoon();
+        setPaneInfo(pane, { busy: null, busySince: null });
+        if (pane === activePane.value) port.value = null;
+        if (failTracker(pane).record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) fixedAt.value = Date.now();
+        remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0, cwd: typeof data.cwd === 'string' && data.cwd ? data.cwd : paneInfo.value[pane]?.cwd });
+        if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
+        refreshInfoSoon(pane);
       } else if (event === 'pty.bell') {
         const now = Date.now();
         if (now - bellAt.value >= BELL_GAP_MS) bellAt.value = now;
       } else if (event === 'pty.cwd') {
-        info.value = { ...info.value, cwd: data.cwd };
-        void refreshInfoSoon();
-      } else if (event === 'pty.prompt' && data.pane === 'main') {
+        setPaneInfo(pane, { cwd: data.cwd });
+        refreshInfoSoon(pane);
+      } else if (event === 'pty.prompt') {
         // the daemon counts the repository after each prompt (debounced, git takes up to a second): read it once that is done
-        if (gitTimer) clearTimeout(gitTimer);
-        gitTimer = setTimeout(() => void refreshInfo(), 1500);
+        clearTimeout(gitTimers.get(pane));
+        gitTimers.set(pane, setTimeout(() => void refreshInfo(pane), 1500));
       }
     } else if (event === 'claude.state') setClaude(data);
     else if (event === 'claude.approvals') setApprovals(data);
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'config.changed') cfg.value = data;
-    else if (event === 'session.lifecycle') void refreshInfo();
+    else if (event === 'session.lifecycle' && typeof data?.pane === 'string') {
+      if (data.lifecycle === 'closed') removePane(data.pane);
+      else {
+        if (data.lifecycle === 'spawned') addPane(data.pane);
+        void refreshInfo(data.pane);
+      }
+    }
     else if (event === 'daemon.down') {
       daemonUp.value = false;
       approvals.value = []; // (no answer can reach it)
     }
     else if (event === 'daemon.up') {
       daemonUp.value = true;
-      void refreshInfo();
+      void refreshPanes();
       void loadClaudeState();
       void loadApprovals();
       ptyBus.emit({ event: 'daemon.up', data: {} });
@@ -373,16 +433,16 @@ export async function bootstrap(): Promise<void> {
   });
   // after an update: one toast (not on a first start, which has nothing unseen, and not when the open panel already shows the card)
   if (config.onboarded && !panelOpen() && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
-  await Promise.all([refreshInfo(), loadClaudeState(), loadApprovals()]);
+  await Promise.all([refreshPanes(), loadClaudeState(), loadApprovals()]);
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   ready.value = true;
 }
 
-let infoTimer: ReturnType<typeof setTimeout> | null = null;
-let gitTimer: ReturnType<typeof setTimeout> | null = null;
-function refreshInfoSoon(): void {
-  if (infoTimer) clearTimeout(infoTimer);
-  infoTimer = setTimeout(() => void refreshInfo(), 120);
+const infoTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const gitTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function refreshInfoSoon(pane: string): void {
+  clearTimeout(infoTimers.get(pane));
+  infoTimers.set(pane, setTimeout(() => void refreshInfo(pane), 120));
 }
 
 export async function patchConfig(p: object): Promise<void> {

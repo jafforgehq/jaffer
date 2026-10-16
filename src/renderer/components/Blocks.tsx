@@ -3,7 +3,7 @@ import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
 import { BlockModel, blockOutputText, fenceText, saveName, type Block, type MarkKind } from '../blocks';
-import { activeTheme, cfg, safeCommand, toast } from '../state';
+import { activePane, activeTheme, cfg, safeCommand, toast } from '../state';
 import { drawBlockImage, layoutBlockImage } from '../block-image';
 import { isSensitiveCommand } from '../../shared/redact';
 import { took } from '../../shared/notify-policy';
@@ -47,13 +47,14 @@ interface MenuItem {
   run(): void;
 }
 
-const sticky = signal<Sticky | null>(null);
-const ctxMenu = signal<{ x: number; y: number; block: number; items: MenuItem[]; done(): void } | null>(null);
-let live: BlocksHandle | null = null;
+/** Per terminal (1.4.0): the command header of each; the focused terminal's shows. */
+const sticky = signal<Record<string, Sticky | null>>({});
+const ctxMenu = signal<{ x: number; y: number; pane: string; block: number; items: MenuItem[]; done(): void } | null>(null);
+const live = new Map<string, BlocksHandle>();
 
-/** The blocks of the terminal (for later features: paths relative to a block's folder, recent output). */
+/** The blocks of the focused terminal (for later features: paths relative to a block's folder, recent output). */
 export function currentBlocks(): Block[] {
-  return live?.list() ?? [];
+  return live.get(activePane.value)?.list() ?? [];
 }
 
 function state(b: Block): 'ok' | 'fail' | 'run' {
@@ -106,14 +107,14 @@ function copyImage(command: string | undefined, output: string): void {
   }, 'image/png');
 }
 
-export function attachBlocks(term: Terminal): BlocksHandle {
+export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
   const tracked = new Map<number, Tracked>();
   const labels = new Map<number, string>();
   const free = (id: number) => {
     const t = tracked.get(id);
     tracked.delete(id);
     labels.delete(id);
-    if (ctxMenu.value?.block === id) ctxMenu.value = null; // its menu goes with it
+    if (ctxMenu.value?.pane === pane && ctxMenu.value.block === id) ctxMenu.value = null; // its menu goes with it
     if (!t) return;
     t.gutter?.dispose();
     t.prompt.dispose();
@@ -251,7 +252,7 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         el.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          ctxMenu.value = { x: e.clientX, y: e.clientY, block: b.id, items: menuFor(b), done: () => term.focus() };
+          ctxMenu.value = { x: e.clientX, y: e.clientY, pane, block: b.id, items: menuFor(b), done: () => term.focus() };
         });
       }
       style(el, b);
@@ -291,8 +292,8 @@ export function attachBlocks(term: Terminal): BlocksHandle {
         next = { id: b.id, label, state: state(b), go: () => term.scrollToLine(Math.max(0, b.promptLine)) };
       }
     }
-    const cur = sticky.value;
-    if (next?.id !== cur?.id || next?.state !== cur?.state || next?.label !== cur?.label) sticky.value = next;
+    const cur = sticky.value[pane];
+    if (next?.id !== cur?.id || next?.state !== cur?.state || next?.label !== cur?.label) sticky.value = { ...sticky.value, [pane]: next };
   }
 
   const mark = (kind: MarkKind, payload: string): boolean => {
@@ -340,8 +341,8 @@ export function attachBlocks(term: Terminal): BlocksHandle {
     unlight();
     for (const id of [...tracked.keys()]) free(id);
     model.reset();
-    sticky.value = null;
-    ctxMenu.value = null;
+    if (sticky.value[pane]) sticky.value = { ...sticky.value, [pane]: null };
+    if (ctxMenu.value?.pane === pane) ctxMenu.value = null;
   };
 
   const enable = () => {
@@ -378,7 +379,9 @@ export function attachBlocks(term: Terminal): BlocksHandle {
       disable();
       for (const s of subs) s.dispose();
       cancelAnimationFrame(raf);
-      if (live === handle) live = null;
+      if (live.get(pane) === handle) live.delete(pane);
+      const { [pane]: _gone, ...rest } = sticky.value;
+      sticky.value = rest;
     },
     list: () => (sync(), model.blocks().map((b) => ({ ...b }))),
     jump: (dir) => {
@@ -407,16 +410,19 @@ export function attachBlocks(term: Terminal): BlocksHandle {
       copy(fenceText(text, cmd), 'Copied as Markdown');
     },
   };
-  live = handle;
+  live.set(pane, handle);
   return handle;
 }
 
 /** Feature 26: scrolled up into a command's output, its command (through `safeCommand`) and its exit mark stay on top; a click goes to its prompt. */
 export function StickyHeader(): VNode | null {
-  const s = sticky.value;
+  const s = sticky.value[activePane.value];
   if (!s) return null;
+  // in the split view it sits at the top of the focused terminal (one terminal: where it always was)
+  const el = document.querySelector<HTMLElement>(`.panes:not([data-count='1']) > .pane[data-pane="${activePane.value}"]`);
+  const at = el ? { top: `${el.offsetTop + 6}px`, left: `${el.offsetLeft + 12}px`, maxWidth: `${Math.max(120, el.offsetWidth - 160)}px` } : undefined;
   return (
-    <button class="sticky-cmd" data-state={s.state} title="Go to its prompt" onClick={() => s.go()}>
+    <button class="sticky-cmd" data-state={s.state} title="Go to its prompt" style={at} onClick={() => s.go()}>
       <span class="sticky-mark" />
       <span class="sticky-text">{s.label}</span>
     </button>

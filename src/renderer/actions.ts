@@ -5,6 +5,7 @@ import { isClaudeCommand } from '../shared/process-badge';
 import { FIND_OPTS, terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 import { resumeLast } from './resume';
+import { closeTerminal, cycleTerminal, focusTerminal, splitTerminal } from './components/PaneTree';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -85,7 +86,15 @@ export const actions: Action[] = [
   { id: 'prompt-next', title: 'Next prompt', section: 'Terminal', keys: '⌘↓', keywords: 'jump command block scroll down', run: () => term()?.blocks.jump(1) },
   { id: 'copy-markdown', title: 'Copy as Markdown', section: 'Terminal', keys: '⌥⌘C', keywords: 'selection fenced code block clipboard', run: () => term()?.blocks.copyMarkdown() },
   { id: 'focus-mode', get title() { return focusMode.value ? 'Leave focus mode' : 'Focus mode'; }, section: 'App', keys: '⌥⌘F', keywords: 'quiet distraction notifications hold fade', run: () => setFocusMode(!focusMode.value) },
-  { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', {}), 'Shell restarted in the same folder.') },
+  { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', { pane: activePane.value }), 'Shell restarted in the same folder.') },
+  { id: 'split-terminal', title: 'Split terminal', section: 'Terminal', keys: '⌘D', keywords: 'new pane split view second shell', run: splitTerminal },
+  { id: 'close-terminal', title: 'Close terminal', section: 'Terminal', keys: '⇧⌘W', keywords: 'end pane split delete', run: () => closeTerminal() },
+  { id: 'next-terminal', title: 'Next terminal', section: 'Terminal', keys: '⌘]', keywords: 'pane split focus', run: () => cycleTerminal(1) },
+  { id: 'prev-terminal', title: 'Previous terminal', section: 'Terminal', keys: '⌘[', keywords: 'pane split focus', run: () => cycleTerminal(-1) },
+  { id: 'focus-terminal-1', title: 'Terminal 1', section: 'Terminal', keys: '⌘1', keywords: 'pane split focus first', run: () => focusTerminal(1) },
+  { id: 'focus-terminal-2', title: 'Terminal 2', section: 'Terminal', keys: '⌘2', keywords: 'pane split focus second', run: () => focusTerminal(2) },
+  { id: 'focus-terminal-3', title: 'Terminal 3', section: 'Terminal', keys: '⌘3', keywords: 'pane split focus third', run: () => focusTerminal(3) },
+  { id: 'focus-terminal-4', title: 'Terminal 4', section: 'Terminal', keys: '⌘4', keywords: 'pane split focus fourth', run: () => focusTerminal(4) },
   { id: 'settings', title: 'Open settings', section: 'App', keys: '⌘,', run: () => openOverlay('settings') },
   { id: 'toggle-panel', title: 'Toggle side panel', section: 'View', keys: '⌘B', keywords: 'sidebar now claude status conversations', run: () => togglePanel('menu') },
   { id: 'zoom-in', title: 'Bigger text', section: 'View', keys: '⌘=', run: () => zoom(1) },

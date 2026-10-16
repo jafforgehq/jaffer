@@ -19,6 +19,15 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'focus-mode': { label: 'Focus Mode', accelerator: 'Alt+Cmd+F' }, // (⌃⌘F is Full Screen's, which macOS and Electron's own role hold)
   'run-claude': { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C' },
   'restart-shell': { label: 'Restart Shell' },
+  // 1.4.0: up to four terminals (⌘D, ⇧⌘W, ⌘1..⌘4, ⌘] and ⌘[ are no role's: the Window menu role has no Close on macOS)
+  'split-terminal': { label: 'Split Terminal', accelerator: 'Cmd+D' },
+  'close-terminal': { label: 'Close Terminal', accelerator: 'Shift+Cmd+W' },
+  'next-terminal': { label: 'Next Terminal', accelerator: 'Cmd+]' },
+  'prev-terminal': { label: 'Previous Terminal', accelerator: 'Cmd+[' },
+  'focus-terminal-1': { label: 'Terminal 1', accelerator: 'Cmd+1' },
+  'focus-terminal-2': { label: 'Terminal 2', accelerator: 'Cmd+2' },
+  'focus-terminal-3': { label: 'Terminal 3', accelerator: 'Cmd+3' },
+  'focus-terminal-4': { label: 'Terminal 4', accelerator: 'Cmd+4' },
   palette: { label: 'Command Palette…', accelerator: 'Cmd+P' },
   'toggle-panel': { label: 'Toggle Side Panel', accelerator: 'Cmd+B' },
   'zoom-in': { label: 'Bigger', accelerator: 'Cmd+=' },

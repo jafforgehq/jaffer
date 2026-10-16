@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, shouldAskOnQuit } from '../src/shared/quit-policy';
+import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, quitState, shouldAskOnQuit } from '../src/shared/quit-policy';
 
 /** The app owns its terminal: quitting ends it, so the app asks when something would stop; another Jaffer's background session is ended only on a click. */
 
@@ -22,6 +22,23 @@ describe('quitNeedsConfirm: ⌘Q asks only when something would stop', () => {
   it('Return and Esc both mean Cancel: a stray Return (typing into Claude as the question appears) never ends it', () => {
     expect(QUIT_BUTTONS[QUIT_DEFAULT_ID]).toBe('Cancel');
     expect(QUIT_BUTTONS[QUIT_CANCEL_ID]).toBe('Cancel');
+  });
+});
+
+describe('quitState (1.4.0): what runs in any of the terminals counts', () => {
+  it('nothing runs in any terminal and no Claude works: nothing to ask', () => {
+    expect(quitState([], false)).toEqual({ claudeWorking: false, commandRunning: false });
+    expect(quitNeedsConfirm(quitState(new Map<string, string>().values(), false))).toBeNull();
+  });
+  it('a command in a terminal that is not the first one asks', () => {
+    const running = new Map([['p3', 'npm run build']]);
+    expect(quitState(running.values(), false)).toEqual({ claudeWorking: false, commandRunning: true });
+    expect(quitNeedsConfirm(quitState(running.values(), false))?.detail).toBe('A command is running and will stop.');
+  });
+  it('Claude Code as the command of any terminal is Claude Code (also a resumed one), and a working Claude counts without a command', () => {
+    expect(quitState(['ls -la', "cd '/tmp/a b' && claude --resume 00000001-aaaa-4bbb-8ccc-ddddeeeeffff"], false)).toEqual({ claudeWorking: true, commandRunning: true });
+    expect(quitState(['claude'], false).claudeWorking).toBe(true);
+    expect(quitState([], true)).toEqual({ claudeWorking: true, commandRunning: false });
   });
 });
 

@@ -12,6 +12,7 @@ import { RELEASE_NOTES } from '../../src/generated/release-notes';
 import { parseMd } from '../../src/shared/mini-md';
 import { seasonOf } from '../../src/shared/season';
 import { unseenNotes } from '../../src/shared/whats-new';
+import { paneGrid } from '../../src/shared/pane-grid';
 
 /**
  * Drives the real renderer in headless Chromium against the real daemon (through the dev bridge),
@@ -3199,26 +3200,6 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings', { state: 'detached' });
   });
 
-  it('there is exactly one session: no split controls, the shortcuts do nothing, and the daemon refuses to open another', async () => {
-    await page.keyboard.press('Escape');
-    expect(await page.$('button[title^="Split"]')).toBeNull();
-    await page.evaluate(() => (window as any).__menu('split-right')); // what ⌘D used to do
-    await page.evaluate(() => (window as any).__menu('split-down'));
-    await sleep(500);
-    expect(await page.$$('.term .xterm')).toHaveLength(1);
-    expect(await page.$('.divider, .pane-head')).toBeNull();
-    // (1.4.0: the daemon has pane.split now, up to four terminals; the window opens none by itself. Task 2 rewrites this test for the split view.)
-    expect(await page.evaluate(() => window.jaffer.call('pane.list'))).toHaveLength(1);
-    // the one terminal fills its area (no leftover bands above or below)
-    const box = await page.evaluate(() => {
-      const pane = document.querySelector('.pane') as HTMLElement;
-      const screen = pane.querySelector('.xterm-screen') as HTMLElement;
-      return { pane: pane.getBoundingClientRect().height, screen: screen.getBoundingClientRect().height };
-    });
-    expect(box.pane).toBeGreaterThan(600);
-    expect(box.screen).toBeGreaterThan(box.pane - 60);
-  }, 30_000);
-
   it('reconnecting the page restores the same session (nothing was lost)', async () => {
     const before = await page.evaluate(() => window.jaffer.call('pane.list'));
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
@@ -3266,6 +3247,250 @@ describe('Jaffer UI end to end', () => {
       }
     });
   const resizes = () => page.evaluate(() => (window as any).__resizes.length as number);
+
+  // 1.4.0: up to four terminals, only by the person's own split (spec features 2-5). Replaces 'there is exactly one session'.
+  it('terminals: split up to four, focus, close and restart', async () => {
+    // (no Escape first: readline would read it and the next key as one Meta key, and eat the first letter typed)
+    await clipStub();
+    const dirs = ['split-a', 'split-b', 'split-c', 'split-d'].map((d) => path.join(env.userHome, d));
+    for (const d of dirs) fs.mkdirSync(d, { recursive: true });
+    const ids = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const focused = () => page.evaluate(() => (window as any).__jaffer.activePane() as string);
+    const outlined = () => page.$$eval('.pane[data-focused]', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const textOf = (id: string) =>
+      page.evaluate((p) => {
+        const t = (window as any).__jaffer.terminals.get(p)?.term;
+        if (!t) return '';
+        const b = t.buffer.active;
+        let out = ''; // (wrapped rows joined: a long folder in the prompt wraps in a narrow terminal)
+        for (let i = 0; i < b.length; i++) {
+          const l = b.getLine(i)!;
+          out += (l.isWrapped ? '' : '\n') + l.translateToString(true);
+        }
+        return out;
+      }, id);
+    const keyboardIn = () => page.evaluate(() => (document.activeElement?.closest('.pane') as HTMLElement | null)?.dataset.pane ?? null);
+    const focusOn = async (id: string) => {
+      await until(async () => (await focused()) === id && (await keyboardIn()) === id && (await outlined()).join() === ((await ids()).length > 1 ? id : ''), 5_000, `${id} to have the keyboard`);
+    };
+    const chipName = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-name`).textContent();
+    const closeBtn = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-x`);
+    const daemonPanes = () => page.evaluate(() => window.jaffer.call('pane.list')) as Promise<{ id: string; pid: number; cwd: string; cols: number; rows: number; busy: string | null; alive: boolean }[]>;
+    const prompts = (id: string) => until(async () => /❯/.test(await textOf(id)), 15_000, `the prompt in ${id}`);
+    const run = async (id: string, line: string, done: RegExp) => {
+      await focusOn(id);
+      await enter(line);
+      await until(async () => done.test(await textOf(id)), 10_000, `${line} in ${id}`);
+    };
+    /** Every pane where the grid puts it: equal parts of the `.panes` box, within 2 px, none overlapping. */
+    const geometry = async (n: number) => {
+      const g = await page.evaluate(() => {
+        const box = (e: Element) => {
+          const r = e.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        };
+        return { all: box(document.querySelector('.panes')!), count: (document.querySelector('.panes') as HTMLElement).dataset.count, cells: [...document.querySelectorAll('.panes > .pane')].map(box) };
+      });
+      expect(g.count).toBe(String(n));
+      expect(g.cells).toHaveLength(n);
+      const grid = paneGrid(n);
+      const P = g.all;
+      grid.cells.forEach((c, i) => {
+        const b = g.cells[i]!;
+        const want = { x: P.x + ((c.col - 1) * P.w) / grid.cols, y: P.y + ((c.row - 1) * P.h) / grid.rows, w: P.w / grid.cols, h: (c.rows * P.h) / grid.rows };
+        for (const k of ['x', 'y', 'w', 'h'] as const) expect(Math.abs(b[k] - want[k]), `pane ${i + 1} of ${n}: ${k} ${b[k]} vs ${want[k]}`).toBeLessThanOrEqual(2);
+      });
+      for (let i = 0; i < n; i++)
+        for (let j = i + 1; j < n; j++) {
+          const a = g.cells[i]!;
+          const b = g.cells[j]!;
+          const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+          const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+          expect(ox > 0.5 && oy > 0.5, `panes ${i + 1} and ${j + 1} of ${n} overlap`).toBe(false);
+        }
+    };
+    /** Each xterm's size is the size its shell has, and the screen fits the pane's box (one terminal per box, no leftover band). */
+    const sizes = async () => {
+      const shown = await page.evaluate(() =>
+        [...(window as any).__jaffer.terminals.entries()].map(([id, h]: [string, any]) => {
+          const term = document.querySelector(`.term[data-pane="${id}"]`)!.getBoundingClientRect();
+          const screen = document.querySelector(`.term[data-pane="${id}"] .xterm-screen`)!.getBoundingClientRect();
+          return { id, cols: h.term.cols, rows: h.term.rows, term: { w: term.width, h: term.height }, screen: { w: screen.width, h: screen.height } };
+        }),
+      );
+      const pty = await daemonPanes();
+      for (const s of shown) {
+        const p = pty.find((x) => x.id === s.id);
+        if (!p || p.cols !== s.cols || p.rows !== s.rows) return false;
+        if (s.screen.w > s.term.w || s.screen.h > s.term.h || s.screen.w < s.term.w - 60 || s.screen.h < s.term.h - 50) return false;
+      }
+      return shown.length === pty.length && shown;
+    };
+    /** pty.resize calls per pane since `countResizes()`. */
+    const resizesBy = () => page.evaluate(() => (window as any).__resizes.reduce((m: Record<string, number>, r: { pane: string }) => ((m[r.pane] = (m[r.pane] ?? 0) + 1), m), {}) as Record<string, number>);
+
+    // one terminal: no split controls of 1.3 and the old menu ids do nothing; it fills its area
+    expect(await ids()).toEqual(['main']);
+    expect(await page.$('button[title^="Split"], .divider, .pane-head')).toBeNull();
+    await menu('split-right');
+    await menu('split-down');
+    await sleep(400);
+    expect(await page.$$('.term .xterm')).toHaveLength(1);
+    expect(await daemonPanes()).toHaveLength(1);
+    await geometry(1);
+    expect((await page.locator('.pane').boundingBox())!.height).toBeGreaterThan(600);
+    expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
+    await page.click('.term');
+    await run('main', `cd '${dirs[0]}'`, /split-a ❯ *$/m);
+    await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the chip to follow cd');
+
+    // ⌘D: one more terminal in the focused one's folder takes the keyboard; the one whose box changed refits once (one pty.resize, not one per pixel)
+    let n = 1;
+    const shrinks: Record<string, string> = { p2: 'main', p3: 'p2', p4: 'main' }; // (2: side by side; 3: the right one splits; 4: the left one splits)
+    for (const id of ['p2', 'p3', 'p4']) {
+      await sleep(300);
+      await countResizes();
+      await menu('split-terminal');
+      n++;
+      await until(async () => (await ids()).length === n, 10_000, `${n} panes`);
+      expect(await ids()).toEqual(['main', 'p2', 'p3', 'p4'].slice(0, n));
+      await prompts(id);
+      await focusOn(id);
+      await until(async () => (await chipName(id)) === `split-${'abcd'[n - 2]}`, 5_000, `${id} to start in the folder of the one it was split from`);
+      await until(sizes, 5_000, `every terminal's size to match its box at ${n}`);
+      await sleep(400);
+      const r = await resizesBy();
+      for (const old of (await ids()).filter((x) => x !== id)) expect(r[old] ?? 0, `pty.resize of ${old} when ${id} came`).toBeLessThanOrEqual(1);
+      expect(r[shrinks[id]!], `${shrinks[id]} refits once when ${id} comes`).toBe(1);
+      expect(r[id] ?? 0, `${id} resizes at most once after it attached`).toBeLessThanOrEqual(1);
+      await geometry(n);
+      await run(id, `cd '${dirs[n - 1]}'`, new RegExp(`split-${'abcd'[n - 1]} ❯ *$`, 'm'));
+      await until(async () => (await chipName(id)) === `split-${'abcd'[n - 1]}`, 5_000, `${id}'s chip`);
+    }
+    await shot('16-four-terminals');
+    // a fifth is refused with a toast
+    await menu('split-terminal');
+    await toastSaid('At most four terminals.');
+    await sleep(300);
+    expect(await ids()).toHaveLength(4);
+    expect(await daemonPanes()).toHaveLength(4);
+    // each chip: its folder, a close button, a dot only where a Claude runs
+    for (const [i, id] of ['main', 'p2', 'p3', 'p4'].entries()) {
+      expect(await chipName(id)).toBe(`split-${'abcd'[i]}`);
+      expect(await closeBtn(id).getAttribute('aria-label')).toBe('Close terminal');
+    }
+    expect(await page.locator('.titlebar button:not(.panel-toggle)').count()).toBe(0); // (the chips are in the panes, not the title bar)
+
+    // ⌘1..⌘4, ⌘] and ⌘[ (both wrap) move the keyboard and the outline
+    for (const [key, want] of [['focus-terminal-1', 'main'], ['focus-terminal-3', 'p3'], ['next-terminal', 'p4'], ['next-terminal', 'main'], ['prev-terminal', 'p4'], ['focus-terminal-2', 'p2']] as const) {
+      await menu(key);
+      await focusOn(want);
+    }
+    // typing goes only to the focused terminal
+    await enter('echo ONLY-IN-P2-$((40+51))');
+    await until(async () => /^ONLY-IN-P2-91/m.test(await textOf('p2')), 5_000, 'the marker in p2');
+    for (const id of ['main', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('ONLY-IN-P2');
+    // the title bar follows the focused terminal
+    await until(async () => /split-b/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p2');
+    await menu('focus-terminal-3');
+    await until(async () => /split-c/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p3');
+
+    // resume types only into the focused, idle terminal; a busy focused one gets nothing typed (copied, and why)
+    const sid = '00000093-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const pdir = path.join(env.userHome, '.claude', 'projects', '-split-a');
+    fs.mkdirSync(pdir, { recursive: true });
+    const at = Date.now();
+    const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: dirs[0], timestamp: new Date(t).toISOString(), ...extra });
+    fs.writeFileSync(path.join(pdir, `${sid}.jsonl`), [line('user', at - 2000, { message: { role: 'user', content: 'split resume' } }), line('assistant', at, { message: { id: 'r93', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+    await menu('focus-terminal-2');
+    await run('p2', 'sleep 31', /sleep 31/);
+    await until(async () => (await daemonPanes()).find((p) => p.id === 'p2')?.busy === 'sleep 31', 5_000, 'p2 to be busy');
+    await menu('focus-terminal-1');
+    await run('main', 'claude() { echo "RESUMED-IN:$JAFFER_PANE:$*"; }; echo DEFINED-$((90+5))', /^DEFINED-95/m);
+    await menu('resume-last');
+    await until(async () => /^RESUMED-IN:main:--resume 00000093/m.test(await textOf('main')), 8_000, 'the resume in main');
+    for (const id of ['p2', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('RESUMED-IN');
+    await sleep(2100); // (the type-once lock)
+    await menu('focus-terminal-2');
+    await focusOn('p2');
+    const p2Before = await textOf('p2');
+    await menu('resume-last');
+    await toastSaid('sleep 31 is running: command copied');
+    expect(await page.evaluate(() => (window as any).__powerClip.written.at(-1))).toBe(`cd '${dirs[0]}' && claude --resume ${sid}`);
+    await sleep(400);
+    expect(await textOf('p2')).toBe(p2Before);
+    expect((await textOf('main')).match(/^RESUMED-IN:/gm)).toHaveLength(1); // (typed once, into main only)
+
+    // ✕ on a terminal that runs something asks first (under its chip); Cancel (the default) and Esc keep it
+    await closeBtn('p2').click();
+    const ask = page.locator('.pane[data-pane="p2"] .pn-confirm');
+    await ask.waitFor();
+    expect(await ask.textContent()).toContain('A command is running: sleep 31');
+    await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard');
+    await page.keyboard.press('Enter');
+    await ask.waitFor({ state: 'detached' });
+    await closeBtn('p2').click();
+    await ask.waitFor();
+    await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard again');
+    await page.keyboard.press('Escape');
+    await ask.waitFor({ state: 'detached' });
+    await sleep(300);
+    expect(await ids()).toHaveLength(4);
+    expect((await daemonPanes()).find((p) => p.id === 'p2')?.busy).toBe('sleep 31');
+    // ⇧⌘W is the same question for the focused terminal; End terminal closes it and the keyboard goes to a neighbour
+    await menu('focus-terminal-2');
+    await focusOn('p2');
+    await menu('close-terminal');
+    await ask.waitFor();
+    await ask.getByRole('button', { name: 'End terminal' }).click();
+    await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close');
+    expect((await daemonPanes()).map((p) => p.id)).toEqual(['main', 'p3', 'p4']);
+    await focusOn('p3');
+    await geometry(3);
+    await until(sizes, 5_000, 'the sizes at 3 after a close');
+    expect(await page.evaluate(() => (window as any).__jaffer.terminals.has('p2'))).toBe(false);
+    // nothing runs: ✕ closes at once
+    await closeBtn('p4').click();
+    await until(async () => (await ids()).join() === 'main,p3', 5_000, 'p4 to close without a question');
+    expect(await page.locator('.pn-confirm').count()).toBe(0);
+    await geometry(2);
+
+    // a Claude in a terminal (its hooks name the pane): closing that terminal ends that Claude only
+    await sendHook('UserPromptSubmit', { session_id: 'split-claude-p3', jaffer_pane: 'p3', prompt: 'hi' });
+    await sendHook('UserPromptSubmit', { session_id: 'split-claude-main', jaffer_pane: 'main', prompt: 'hi' });
+    const stateOf = async (id: string) => ((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions as { id: string; state: string }[]).find((s) => s.id === id)?.state;
+    await until(async () => (await page.locator('.pane[data-pane="p3"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'p3 chip to show its Claude working');
+    await until(async () => (await page.locator('.pane[data-pane="main"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'main chip to show its own Claude');
+    await closeBtn('p3').click();
+    const askClaude = page.locator('.pane[data-pane="p3"] .pn-confirm');
+    await askClaude.waitFor();
+    expect(await askClaude.textContent()).toContain('Claude is running here');
+    await askClaude.getByRole('button', { name: 'End terminal' }).click();
+    await until(async () => (await ids()).join() === 'main', 5_000, 'p3 to close');
+    await until(async () => (await stateOf('split-claude-p3')) === 'ended', 5_000, "p3's Claude to end");
+    expect(await stateOf('split-claude-main')).toBe('working');
+    await sendHook('SessionEnd', { session_id: 'split-claude-main' });
+    await sendHook('SessionEnd', { session_id: 'split-claude-p3' });
+    await focusOn('main');
+    await geometry(1);
+
+    // the last terminal's ✕ is Restart terminal: a fresh shell in the same folder, a blank screen
+    expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
+    await enter('echo before-the-restart-94');
+    await until(async () => /^before-the-restart-94/m.test(await textOf('main')), 5_000, 'the marker');
+    const pid = (await daemonPanes())[0]!.pid;
+    await closeBtn('main').click();
+    await until(async () => {
+      const p = (await daemonPanes())[0];
+      return p?.alive && p.pid !== pid;
+    }, 10_000, 'a fresh shell');
+    expect(await page.locator('.pn-confirm').count()).toBe(0);
+    await until(async () => !(await textOf('main')).includes('before-the-restart-94'), 10_000, 'the old screen to go');
+    await prompts('main');
+    expect(fs.realpathSync((await daemonPanes())[0]!.cwd)).toBe(fs.realpathSync(dirs[0]!));
+    await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the same folder');
+    expect(await ids()).toEqual(['main']);
+  }, 120_000);
 
   it('the side panel: open by default beside the card; ⌘B, the menu, the title bar button, the palette and Settings toggle it, kept in panel.open; closed, nothing of it renders; it slides (not with motion off) and fades in focus mode', async () => {
     await page.keyboard.press('Escape');

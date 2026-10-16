@@ -18,8 +18,7 @@ import { VERSION } from '../core/version';
 import { RELEASE_NOTES } from '../generated/release-notes';
 import { effectiveSeen, unseenNotes } from '../shared/whats-new';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
-import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
-import { isClaudeCommand } from '../shared/process-badge';
+import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, quitState, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
 import { prepareHome } from './prepare-home';
@@ -114,21 +113,23 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
 }
 
-/** The command the shell runs now (from the daemon's events and `session.info`), for the question at ⌘Q. */
-let runningCommand: string | null = null;
+/** The command each terminal's shell runs now (from the daemon's events and `pane.list`), for the question at ⌘Q: any terminal counts. */
+const runningCommands = new Map<string, string>();
 
 function wireClient(c: RpcClient, o: OwnedDaemon): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
     sendToRenderer('jaffer:event', event, data);
     if (event === 'pty.notify') maybeNotify(data as { title: string; body: string });
     if (event === 'pty.bell') maybeBounce();
-    if (event === 'pty.start') runningCommand = (data as { cmd?: string }).cmd || 'command';
+    const pane = (data as { pane?: unknown } | null)?.pane;
+    const id = typeof pane === 'string' ? pane : 'main';
+    if (event === 'pty.start') runningCommands.set(id, (data as { cmd?: string }).cmd || 'command');
     if (event === 'pty.command') {
-      runningCommand = null;
+      runningCommands.delete(id);
       maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
       recentCommands.add((data as { cmd?: unknown }).cmd as string);
     }
-    if (event === 'pty.exit' || event === 'session.lifecycle') runningCommand = null; // (a fresh shell runs nothing)
+    if (event === 'pty.exit' || event === 'session.lifecycle') runningCommands.delete(id); // (a fresh shell runs nothing, a closed terminal nothing at all)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[]; today?: DayTotal }).sessions, (data as { today?: DayTotal }).today);
     if (event === 'config.changed') applyConfig(data as typeof appCfg);
     if (event === 'claude.approvals') onApprovals((data as { items?: unknown } | null)?.items);
@@ -137,7 +138,12 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     .call('config.get', {})
     .then((x) => applyConfig(x as typeof appCfg))
     .catch(() => undefined);
-  void c.call('session.info', {}).then((i: { busy?: string | null }) => (runningCommand = i?.busy ?? null)).catch(() => undefined);
+  void c
+    .call('pane.list', {})
+    .then((list: { id: string; busy?: string | null }[]) => {
+      for (const p of list) if (p.busy) runningCommands.set(p.id, p.busy);
+    })
+    .catch(() => undefined);
   c.onClose.on(() => {
     onApprovals([]); // (no answer can reach the terminal any more)
     void onConnectionLost(o);
@@ -149,7 +155,7 @@ async function startTerminal(): Promise<void> {
   const o = await startOwnedDaemon(paths, launcher);
   owned = o;
   client = o.client;
-  runningCommand = null;
+  runningCommands.clear();
   prevClaude = []; // a fresh terminal has no Claude yet: nothing of the old one's may count (the quit question, "needs you")
   syncTrayState(); // (nor the menu bar icon)
   wireClient(o.client, o);
@@ -176,7 +182,7 @@ async function restartTerminal(): Promise<void> {
 /** The child ended: expected (the app ended it), a session a client ended (the app quits with it), or a crash (a fresh one, or Quit). */
 async function onChildExit(o: OwnedDaemon, how: ChildExit): Promise<void> {
   if (owned !== o) return;
-  runningCommand = null;
+  runningCommands.clear();
   const action = childExitAction({ ...how, quitting });
   if (action === 'ignore') return;
   if (action === 'quit') {
@@ -691,7 +697,7 @@ function hideWindow(hint = false): void {
 
 /** The red ✕ and ⌘W (Settings → When I close the window: hide to the menu bar, quit, or ask). */
 function closeWindow(): void {
-  const d = closeDecision({ action: appCfg.window?.closeAction ?? 'menubar', fullScreen: !!win?.isFullScreen(), menuBar: !!tray, running: claudeBusy() || runningCommand !== null });
+  const d = closeDecision({ action: appCfg.window?.closeAction ?? 'menubar', fullScreen: !!win?.isFullScreen(), menuBar: !!tray, running: claudeBusy() || runningCommands.size > 0 });
   if (d === 'quit') quitFromMenu();
   else if (d === 'ask') void askOnClose();
   else hideWindow(true); // ('hide', or 'leave-full-screen-then-hide': hideWindow leaves full screen first)
@@ -784,6 +790,9 @@ function buildMenu(): void {
         { type: 'separator' },
         item('run-claude'),
         item('restart-shell'),
+        { type: 'separator' },
+        item('split-terminal'),
+        item('close-terminal'),
       ],
     },
     { role: 'editMenu' },
@@ -792,6 +801,13 @@ function buildMenu(): void {
       submenu: [
         item('palette'),
         item('toggle-panel'),
+        { type: 'separator' },
+        item('next-terminal'),
+        item('prev-terminal'),
+        item('focus-terminal-1'),
+        item('focus-terminal-2'),
+        item('focus-terminal-3'),
+        item('focus-terminal-4'),
         { type: 'separator' },
         item('zoom-in'),
         item('zoom-out'),
@@ -1194,7 +1210,7 @@ app.on('before-quit', (e) => {
   if (!quitConfirmed) {
     const o = owned;
     const childEnded = !o || o.ended;
-    const ask = childEnded ? null : quitNeedsConfirm({ claudeWorking: claudeBusy() || (runningCommand !== null && isClaudeCommand(runningCommand)), commandRunning: runningCommand !== null });
+    const ask = childEnded ? null : quitNeedsConfirm(quitState(runningCommands.values(), claudeBusy()));
     if (ask && shouldAskOnQuit({ askRequested: requested, confirmed: quitConfirmed, installing, childEnded, needsConfirm: !!ask })) {
       e.preventDefault();
       void confirmQuit(ask);

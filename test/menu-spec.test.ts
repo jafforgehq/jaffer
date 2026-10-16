@@ -71,6 +71,29 @@ describe('the menu and the palette agree', () => {
     expect(/role: 'help',\s*submenu: \[[^\]]*item\('whats-new'\),\s*item\('shortcuts'\)/.test(main)).toBe(true);
   });
 
+  it('split terminals (1.4.0): Split Terminal ⌘D, Close Terminal ⇧⌘W, ⌘1..⌘4 and ⌘] / ⌘[ in the palette and the menus, and no role of the Window menu owns ⇧⌘W', () => {
+    const want: Record<string, [string, string, string]> = {
+      'split-terminal': ['Split Terminal', 'Cmd+D', '⌘D'],
+      'close-terminal': ['Close Terminal', 'Shift+Cmd+W', '⇧⌘W'],
+      'next-terminal': ['Next Terminal', 'Cmd+]', '⌘]'],
+      'prev-terminal': ['Previous Terminal', 'Cmd+[', '⌘['],
+      'focus-terminal-1': ['Terminal 1', 'Cmd+1', '⌘1'],
+      'focus-terminal-2': ['Terminal 2', 'Cmd+2', '⌘2'],
+      'focus-terminal-3': ['Terminal 3', 'Cmd+3', '⌘3'],
+      'focus-terminal-4': ['Terminal 4', 'Cmd+4', '⌘4'],
+    };
+    const main = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
+    for (const [id, [label, accelerator, keys]] of Object.entries(want)) {
+      expect(MENU_ITEMS[id], id).toEqual({ label, accelerator });
+      expect(actions.find((a) => a.id === id)?.keys, id).toBe(keys);
+      expect(main, `${id} in a menu`).toContain(`item('${id}')`);
+    }
+    expect(/label: 'Shell',\s*submenu: \[[^\]]*item\('split-terminal'\),\s*item\('close-terminal'\)/.test(main)).toBe(true);
+    // the Window menu is the role (macOS: Minimize ⌘M, Zoom, Bring All to Front); no `close` role anywhere that would take ⇧⌘W or ⌘W
+    expect(main).toContain("{ role: 'windowMenu' }");
+    expect(main).not.toMatch(/role: 'close'/);
+  });
+
   it('no accelerator is used twice, and none takes ⌃⌘F (Full Screen) or ⌘Q', () => {
     const all = [...Object.values(MENU_ITEMS).map((i) => i.accelerator), 'Cmd+Q', TOGGLE_FULLSCREEN].filter(Boolean);
     expect(all.length).toBeGreaterThan(15);

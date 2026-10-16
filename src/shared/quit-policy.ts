@@ -5,6 +5,8 @@
  * app. And when the child ends, the app quits with it, or offers a fresh one after a crash.
  */
 
+import { isClaudeCommand } from './process-badge';
+
 export interface QuitAsk {
   message: string;
   detail: string;
@@ -23,6 +25,15 @@ export function quitNeedsConfirm(o: { claudeWorking: boolean; commandRunning: bo
   if (o.claudeWorking) return { message: 'Quit Jaffer?', detail: 'Claude Code is running and will stop.' };
   if (o.commandRunning) return { message: 'Quit Jaffer?', detail: 'A command is running and will stop.' };
   return null;
+}
+
+/**
+ * `quitNeedsConfirm`'s inputs from every terminal (1.4.0): `running` the commands that run now, one per terminal that runs one;
+ * `claudeBusy` a Claude Code works or waits in any of them. A terminal whose command is Claude Code counts as Claude.
+ */
+export function quitState(running: Iterable<string>, claudeBusy: boolean): { claudeWorking: boolean; commandRunning: boolean } {
+  const cmds = [...running];
+  return { claudeWorking: claudeBusy || cmds.some(isClaudeCommand), commandRunning: cmds.length > 0 };
 }
 
 /**
