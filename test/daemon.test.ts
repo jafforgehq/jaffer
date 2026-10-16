@@ -697,6 +697,8 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     const o30 = await c.call('claude.old', { days: 30 });
     expect(o30.ids.filter((x: string) => x.endsWith('-abab-4ddd-8eee-ffff00001111'))).toEqual([id(1), id(2)]);
     expect(o30.total).toBe(o30.ids.length);
+    expect(o30.counts[30]).toBe(o30.total);
+    expect(o30.counts[90]).toBe((await c.call('claude.old', { days: 90 })).total);
     expect((await c.call('claude.old', { days: 90 })).ids.filter((x: string) => x.endsWith('-abab-4ddd-8eee-ffff00001111'))).toEqual([id(1)]);
     for (const days of [7, '30', null, 365]) await expect(c.call('claude.old', { days }), String(days)).rejects.toThrow(/30, 60 or 90/);
 

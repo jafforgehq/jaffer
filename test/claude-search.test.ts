@@ -56,6 +56,13 @@ describe('searchConversations (1.4.0, opt-in): which conversations hold a text, 
       JSON.stringify({ type: 'summary', summary: 'PLANTED-SECRET summary' }),
       JSON.stringify({ type: 'user', cwd: '/PLANTED-SECRET', toolUseResult: { stdout: 'PLANTED-SECRET' }, message: { role: 'user', content: 'plain words' } }),
       JSON.stringify({ type: 'system', content: 'PLANTED-SECRET system' }),
+      // (fix round) what is not the person's or Claude's words: `!` command output, a slash command's output, a hook's text, meta, compaction and sidechain lines
+      user('<bash-stdout>PLANTED-SECRET from a ! command</bash-stdout>'),
+      user([{ type: 'text', text: '<local-command-stdout>PLANTED-SECRET</local-command-stdout>' }]),
+      user('  <user-prompt-submit-hook>PLANTED-SECRET</user-prompt-submit-hook>'),
+      JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: 'PLANTED-SECRET meta' } }),
+      JSON.stringify({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'PLANTED-SECRET compacted' } }),
+      JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'PLANTED-SECRET from a subagent' }] } }),
     ]);
     expect(await searchConversations(claudeDir, 'planted-secret')).toEqual({ hits: [], partial: false });
     write(uuid(2), [user('a PLANTED-SECRET said in words')]);
@@ -86,6 +93,14 @@ describe('searchConversations (1.4.0, opt-in): which conversations hold a text, 
     expect(r.hits).toHaveLength(SEARCH_FILES);
     expect(r.hits.some((h) => h.id.startsWith('00000000') || h.id.startsWith('00000004'))).toBe(false);
   }, 30_000);
+
+  it('a newer search cancels an older one still scanning: the older gives nothing, partial', async () => {
+    for (let i = 0; i < 20; i++) write(`${String(i).padStart(8, '0')}-1111-4222-8333-444455556666`, [user('cancel words')], T0 + i);
+    const older = searchConversations(claudeDir, 'cancel');
+    const newer = searchConversations(claudeDir, 'cancel');
+    expect(await older).toEqual({ hits: [], partial: true });
+    expect((await newer).hits).toHaveLength(20);
+  });
 
   it('stops at its time budget and says so (partial)', async () => {
     write(uuid(1), [user('words')]);

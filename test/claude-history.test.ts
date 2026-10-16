@@ -424,6 +424,12 @@ describe('conversationStorage (1.4.0): how much room the transcripts take, the 1
     expect(await conversationStorage(path.join(env.root, 'nowhere'))).toEqual({ totalBytes: 0, count: 0, biggest: [] });
   });
 
+  it('overlapping calls share one walk', async () => {
+    sized(uuid(1), 1000, T0);
+    const [a, b] = await Promise.all([conversationStorage(claudeDir), conversationStorage(claudeDir)]);
+    expect(a).toBe(b);
+  });
+
   it('walks at most 5000 entries of a sibling folder', async () => {
     const file = sized(uuid(1), 100, T0);
     const dir = path.join(projects, '-Users-me-code', uuid(1));
@@ -465,10 +471,11 @@ describe('oldConversations (1.4.0): Remove… → Older than 30, 60 or 90 days',
     write(uuid(2), [user('a', '/a', NOW)], NOW - 45 * DAY);
     write(uuid(3), [user('a', '/a', NOW)], NOW - 100 * DAY, '-other');
     write(uuid(4), [user('a', '/a', NOW)], NOW - 61 * DAY);
-    expect(await oldConversations(claudeDir, 30, NOW)).toEqual({ ids: [uuid(3), uuid(4), uuid(2)], total: 3 });
-    expect(await oldConversations(claudeDir, 60, NOW)).toEqual({ ids: [uuid(3), uuid(4)], total: 2 });
-    expect(await oldConversations(claudeDir, 90, NOW)).toEqual({ ids: [uuid(3)], total: 1 });
-    expect(await oldConversations(path.join(env.root, 'nowhere'), 30, NOW)).toEqual({ ids: [], total: 0 });
+    const counts = { 30: 3, 60: 2, 90: 1 }; // (one enumeration counts all three: the menu asks once)
+    expect(await oldConversations(claudeDir, 30, NOW)).toEqual({ ids: [uuid(3), uuid(4), uuid(2)], total: 3, counts });
+    expect(await oldConversations(claudeDir, 60, NOW)).toEqual({ ids: [uuid(3), uuid(4)], total: 2, counts });
+    expect(await oldConversations(claudeDir, 90, NOW)).toEqual({ ids: [uuid(3)], total: 1, counts });
+    expect(await oldConversations(path.join(env.root, 'nowhere'), 30, NOW)).toEqual({ ids: [], total: 0, counts: { 30: 0, 60: 0, 90: 0 } });
   });
 
   it('at most 200 ids (the oldest), the total says how many more', async () => {

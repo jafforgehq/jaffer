@@ -320,7 +320,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-tagmenu .conv-tagopt { display: flex; align-items: center; gap: 6px; }
 .conv-tagmenu .conv-tagopt[aria-checked='true']::after { content: '✓'; margin-left: auto; color: var(--accent); }
 .conv-tagdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--tc); }
-.conv-tagmenu .conv-tagnew { height: 26px; margin: 4px 2px 2px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-xs); background: var(--hover); color: var(--text); font-size: 12px; box-shadow: none; }
+.conv-tagmenu .conv-tagnew { box-sizing: border-box; width: calc(100% - 4px); height: 26px; margin: 4px 2px 2px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--r-xs); background: var(--hover); color: var(--text); font-size: 12px; box-shadow: none; }
 .ctx-note { max-width: 220px; padding: 4px 10px 2px; color: var(--faint); font-size: 11px; }
 /* (1.4.0) deep search */
 .conv-deep { flex: none; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 999px; background: none; color: var(--faint); font-size: 10.5px; white-space: nowrap; cursor: pointer; }
@@ -426,7 +426,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .sticky-cmd[data-state='fail'] .sticky-mark { background: var(--danger); }
 .sticky-cmd .sticky-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the gutter mark's menu (the window's own, not a native one) */
-.ctx-menu { position: fixed; z-index: 60; min-width: 180px; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); }
+.ctx-menu { position: fixed; z-index: 60; min-width: 180px; max-height: calc(100vh - 16px); overflow: auto; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); }
 .ctx-menu button { border: 0; border-radius: var(--r-xs); padding: 6px 10px; background: transparent; text-align: left; font-size: 12.5px; }
 .ctx-menu button:hover, .ctx-menu button:focus-visible { background: var(--hover); outline: none; }
 

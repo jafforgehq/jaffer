@@ -450,7 +450,7 @@ export function Menu({ x, y, items, done, anchor, note }: { x: number; y: number
     };
   }, []);
   return (
-    <div class="ctx-menu" role="menu" ref={ref} style={{ left: `${Math.min(x, window.innerWidth - 200)}px`, top: `${Math.min(y, window.innerHeight - 40 * items.length)}px` }}>
+    <div class="ctx-menu" role="menu" ref={ref} style={{ left: `${Math.max(0, Math.min(x, window.innerWidth - 200))}px`, top: `${Math.max(8, Math.min(y, window.innerHeight - 40 * items.length))}px` }}>
       {items.map((i) => (
         <button key={i.label} role="menuitem" onClick={() => (close(), i.run())}>
           {i.label}

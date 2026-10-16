@@ -59,7 +59,7 @@ function TagMenu({ id, x, y, anchor, done }: { id: string; x: number; y: number;
   const all = allTags(list);
   useLayoutEffect(() => {
     ref.current?.querySelector<HTMLElement>('input')?.focus(); // (a new tag can be typed at once; ↑ reaches the others)
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && (e.preventDefault(), done(true));
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && !e.isComposing && (e.preventDefault(), done(true)); // (an input method's Esc cancels its own text)
     const away = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !anchor?.contains(e.target as Node) && done(false); // (the tag button closes it itself)
     window.addEventListener('keydown', key, true);
     window.addEventListener('mousedown', away, true);
@@ -74,11 +74,12 @@ function TagMenu({ id, x, y, anchor, done }: { id: string; x: number; y: number;
   const onKey = (e: KeyboardEvent) => {
     const items = [...(ref.current?.querySelectorAll<HTMLElement>('button, input') ?? [])];
     const at = items.indexOf(e.target as HTMLElement);
+    if (e.isComposing) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') (e.preventDefault(), items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus());
     else if (e.key === 'Enter' && e.target instanceof HTMLInputElement && !e.isComposing) (e.preventDefault(), draft.trim() && (set(draft, true), setDraft('')));
   };
   return (
-    <div class="ctx-menu conv-tagmenu" role="menu" aria-label="Tags" ref={ref} style={{ left: `${Math.min(x, window.innerWidth - 200)}px`, top: `${Math.min(y, window.innerHeight - 40 - 32 * (all.length + 1))}px` }} onKeyDown={onKey}>
+    <div class="ctx-menu conv-tagmenu" role="menu" aria-label="Tags" ref={ref} style={{ left: `${Math.max(0, Math.min(x, window.innerWidth - 200))}px`, top: `${Math.max(8, Math.min(y, window.innerHeight - 40 - 32 * (all.length + 1)))}px` }} onKeyDown={onKey}>
       {all.map((t) => {
         const on = mine.includes(t.tag.toLowerCase());
         return (
@@ -88,7 +89,9 @@ function TagMenu({ id, x, y, anchor, done }: { id: string; x: number; y: number;
           </button>
         );
       })}
-      <input class="conv-tagnew" placeholder="New tag…" aria-label="New tag (Enter adds it)" maxLength={MAX_TAG} value={draft} spellcheck={false} onInput={(e) => setDraft((e.target as HTMLInputElement).value)} />
+      <div role="group" aria-label="New tag">
+        <input class="conv-tagnew" placeholder="New tag…" aria-label="New tag (Enter adds it)" maxLength={MAX_TAG} value={draft} spellcheck={false} onInput={(e) => setDraft((e.target as HTMLInputElement).value)} />
+      </div>
     </div>
   );
 }
@@ -115,8 +118,8 @@ export function Conversations(): VNode {
   const [costsOpen, setCostsOpen] = useState(false);
   /** Where the Remove… menu shows, null: closed. */
   const [removeAt, setRemoveAt] = useState<{ x: number; y: number } | null>(null);
-  /** (1.4.0) Remove… → Older than 30/60/90 days: the ids (at most 200) and how many in all, asked when the menu opens. */
-  const [old, setOld] = useState<Record<number, { ids: string[]; total: number }>>({});
+  /** (1.4.0) Remove… → Older than 30/60/90 days: how many each, asked once when the menu opens (the ids are asked again on the click). */
+  const [old, setOld] = useState<Record<number, number>>({});
   /** (1.4.0) The tag chip chosen (lower case, memory only), the open tag menu, the hidden ones shown, the storage view, deep search. */
   const [tag, setTag] = useState<string | null>(null);
   const [tagAt, setTagAt] = useState<{ id: string; x: number; y: number; anchor: HTMLElement } | null>(null);
@@ -318,16 +321,23 @@ export function Conversations(): VNode {
     const b = removeBtn.current!.getBoundingClientRect();
     setRemoveAt({ x: b.left, y: b.bottom + 4 });
     setOld({});
-    for (const days of [30, 60, 90])
-      void window.jaffer
-        .call<{ ids: string[]; total: number }>('claude.old', { days })
-        .then((r) => setOld((o) => ({ ...o, [days]: r })))
-        .catch(() => undefined);
+    void window.jaffer
+      .call<{ counts: Record<number, number> }>('claude.old', { days: 30 })
+      .then((r) => setOld(r.counts ?? {}))
+      .catch(() => undefined);
   };
-  const olderItems = [30, 60, 90].flatMap((days) => {
-    const o = old[days];
-    return o && o.total > 0 ? [{ label: `Older than ${days} days (${o.total})`, run: () => void remove(o.ids, undefined, o.total - o.ids.length) }] : [];
-  });
+  /** The oldest 200 of that age as they are now (the app's question names exactly how many it found of them). */
+  const removeOld = async (days: number) => {
+    let r: { ids: string[]; total: number };
+    try {
+      r = await window.jaffer.call<{ ids: string[]; total: number }>('claude.old', { days });
+    } catch (e) {
+      return void toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+    if (!r.ids.length) return void toast({ kind: 'info', text: `No conversations older than ${days} days` }, 3500);
+    await remove(r.ids, undefined, r.total - r.ids.length);
+  };
+  const olderItems = [30, 60, 90].flatMap((days) => ((old[days] ?? 0) > 0 ? [{ label: `Older than ${days} days (${old[days]})`, run: () => void removeOld(days) }] : []));
   const onKey = (e: KeyboardEvent) => {
     const n = Math.max(1, flat.length);
     const t = e.target as HTMLElement;

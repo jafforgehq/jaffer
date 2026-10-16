@@ -13,6 +13,8 @@ export const SEARCH_FILES = 200;
 const HALF = 1024 * 1024;
 const MAX_COUNT = 99;
 const BUDGET_MS = 5000;
+/** The newest search: an older one still scanning stops at its next file (the panel only wants the newest answer). */
+let newest = 0;
 
 /** The query: trimmed, 3 to 64 characters, no control character; undefined otherwise. */
 export function searchQuery(q: unknown): string | undefined {
@@ -25,6 +27,7 @@ export function searchQuery(q: unknown): string | undefined {
 export async function searchConversations(claudeDir: string, q: unknown, opts: { budgetMs?: number } = {}): Promise<{ hits: { id: string; count: number }[]; partial: boolean }> {
   const text = searchQuery(q);
   if (!text) throw new RangeError('Search for 3 to 64 characters, without control characters.');
+  const mine = ++newest;
   const needle = text.toLowerCase();
   const raw = JSON.stringify(needle).slice(1, -1); // (as it is written in a JSON line: a line that does not hold this is not parsed)
   const start = Date.now();
@@ -33,6 +36,7 @@ export async function searchConversations(claudeDir: string, q: unknown, opts: {
   const hits = new Map<string, number>();
   let partial = false;
   for (const f of (t?.found ?? []).slice(0, SEARCH_FILES)) {
+    if (mine !== newest) return { hits: [], partial: true };
     if (Date.now() - start >= budget) {
       partial = true;
       break;
@@ -70,19 +74,24 @@ async function countFile(root: string, file: string, needle: string, raw: string
   }
 }
 
-/** The text of a user or assistant message on this line: its content when that is a string, else its `text` parts; nothing else. */
+/**
+ * The text of a user or assistant message on this line: its content when that is a string, else its `text` parts; nothing else. Not a
+ * meta, compaction or sidechain line, and not a text that starts with `<` (as the title reader: `!` command output, a slash command's
+ * output, a hook's text are tags, not anyone's words).
+ */
 function messageText(line: string): string[] {
-  let o: { type?: unknown; message?: { content?: unknown } } | undefined;
+  let o: { type?: unknown; isMeta?: unknown; isCompactSummary?: unknown; isSidechain?: unknown; message?: { content?: unknown } } | undefined;
   try {
     o = JSON.parse(line);
   } catch {
     return [];
   }
-  if (!o || typeof o !== 'object' || (o.type !== 'user' && o.type !== 'assistant')) return [];
+  if (!o || typeof o !== 'object' || (o.type !== 'user' && o.type !== 'assistant') || o.isMeta === true || o.isCompactSummary === true || o.isSidechain === true) return [];
   const c = o.message && typeof o.message === 'object' ? o.message.content : undefined;
-  if (typeof c === 'string') return [c];
+  const words = (s: string) => !s.trimStart().startsWith('<');
+  if (typeof c === 'string') return words(c) ? [c] : [];
   if (!Array.isArray(c)) return [];
-  return c.flatMap((p: { type?: unknown; text?: unknown }) => (p?.type === 'text' && typeof p.text === 'string' ? [p.text] : []));
+  return c.flatMap((p: { type?: unknown; text?: unknown }) => (p?.type === 'text' && typeof p.text === 'string' && words(p.text) ? [p.text] : []));
 }
 
 function countIn(text: string, needle: string, max: number): number {

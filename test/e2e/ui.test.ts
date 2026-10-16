@@ -3138,6 +3138,15 @@ describe('Jaffer UI end to end', () => {
     expect(await item(1).locator('.conv-tag-btn').getAttribute('aria-label')).toBe('Tags');
     await openTags(1);
     expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
+    // (fix round) the input is a group in the menu, not a menu item; the menu scrolls rather than leaving the window; keys of an input method's composition stay with it
+    expect(await page.locator('.conv-tagmenu [role="group"] .conv-tagnew').count()).toBe(1);
+    expect(await page.$eval('.conv-tagmenu', (m) => [getComputedStyle(m).overflowY, getComputedStyle(m).maxHeight !== 'none', m.getBoundingClientRect().top >= 0])).toEqual(['auto', true, true]);
+    await page.evaluate(() => {
+      for (const key of ['ArrowUp', 'Escape']) document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key, isComposing: true, bubbles: true, cancelable: true }));
+    });
+    await sleep(150);
+    expect(await page.locator('.conv-tagmenu').count()).toBe(1);
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
     await page.keyboard.type('  Work ');
     await page.keyboard.press('Enter');
     await until(async () => JSON.stringify((await cfgNow()).history.tags) === JSON.stringify([`${sid(1)} Work`]), 3_000, 'the tag kept');
@@ -3318,13 +3327,25 @@ describe('Jaffer UI end to end', () => {
     expect(o90.ids).toHaveLength(200);
     expect(o30.total).toBeGreaterThan(o60.total); // (the planted 40 and 70 days old ones)
     expect(o60.total).toBeGreaterThan(o90.total);
+    // (fix round) the menu asks the daemon once for all three counts; a click asks once more, for that age's ids as they are now
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__oldReal = w.jaffer.call;
+      w.__oldCalls = [];
+      w.jaffer.call = (m: string, p: any) => (m === 'claude.old' && w.__oldCalls.push(p?.days), w.__oldReal(m, p));
+    });
+    const oldCalls = () => page.evaluate(() => (window as any).__oldCalls as number[]);
     await page.click('.sp-convos .conv-remove');
     await page.waitForSelector('.ctx-menu');
     await until(async () => (await menuItems()).length === 4, 3_000, 'the Older than items');
+    await sleep(200);
+    expect((await oldCalls()).length).toBe(1);
     expect((await menuItems()).slice(1)).toEqual([`Older than 30 days (${o30.total})`, `Older than 60 days (${o60.total})`, `Older than 90 days (${o90.total})`]);
     expect(await page.textContent('.ctx-menu .ctx-note')).toContain('includes pinned and hidden');
     await page.click(`.ctx-menu [role="menuitem"] >> text=Older than 90 days`);
     await toastSaid(`${o90.total - 200} more: repeat`);
+    expect((await oldCalls()).slice(1)).toEqual([90]);
+    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__oldReal; });
     expect((await trashed()).at(-1)).toEqual(o90.ids);
     expect((await trashed()).at(-1)![0]).toBe(sid(1201)); // (the oldest first)
 

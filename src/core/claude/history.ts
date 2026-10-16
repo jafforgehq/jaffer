@@ -143,13 +143,23 @@ const STORAGE_TTL = 30_000;
 /** The most entries counted in one conversation's folder (subagent transcripts, tool results). */
 const DIR_MAX = 5000;
 let storageSeen: { stamp: string; at: number; value: Storage } | undefined;
+/** A walk under way, by folder: overlapping calls share it. */
+const storageRunning = new Map<string, Promise<Storage>>();
 
 /**
  * (1.4.0) The size of each `<id>.jsonl` (confined as for the list) plus its sibling real folder `<id>/` (links skipped, at most 5000
  * entries walked), their total and the 10 biggest with their folder and end (the head and tail read of the list, cached) and their title
  * only when the list already has it: no other text is read. Kept 30 s while the project folders did not change. Changes nothing.
  */
-export async function conversationStorage(claudeDir: string, now = Date.now()): Promise<Storage> {
+export function conversationStorage(claudeDir: string, now = Date.now()): Promise<Storage> {
+  const running = storageRunning.get(claudeDir);
+  if (running) return running;
+  const p = measure(claudeDir, now).finally(() => storageRunning.delete(claudeDir));
+  storageRunning.set(claudeDir, p);
+  return p;
+}
+
+async function measure(claudeDir: string, now: number): Promise<Storage> {
   const stamp = await projectsStamp(claudeDir);
   if (storageSeen?.stamp === stamp && now - storageSeen.at >= 0 && now - storageSeen.at < STORAGE_TTL) return storageSeen.value;
   const t = await transcriptFiles(claudeDir);
@@ -198,14 +208,16 @@ async function dirBytes(root: string, dir: string): Promise<number> {
 export const OLD_DAYS = [30, 60, 90];
 
 /**
- * (1.4.0) Remove… → Older than 30, 60 or 90 days: of all the transcripts (confined as for the list), the ids last written before then,
- * oldest first, at most 200 (one removal), and how many there are in all. Any other number of days is refused.
+ * (1.4.0) Remove… → Older than 30, 60 or 90 days: of all the transcripts (confined as for the list), the ids last written before `days`,
+ * oldest first, at most 200 (one removal), how many there are in all, and (from the same one enumeration) the counts for 30, 60 and 90.
+ * Any other number of days is refused.
  */
-export async function oldConversations(claudeDir: string, days: unknown, now = Date.now()): Promise<{ ids: string[]; total: number }> {
+export async function oldConversations(claudeDir: string, days: unknown, now = Date.now()): Promise<{ ids: string[]; total: number; counts: Record<number, number> }> {
   if (typeof days !== 'number' || !OLD_DAYS.includes(days)) throw new RangeError('The days must be 30, 60 or 90.');
-  const cut = now - days * 86_400_000;
-  const old = [...new Set(((await transcriptFiles(claudeDir))?.found ?? []).filter((f) => f.mtimeMs < cut).reverse().map((f) => f.id))];
-  return { ids: old.slice(0, MAX_REMOVE), total: old.length };
+  const found = ((await transcriptFiles(claudeDir))?.found ?? []).slice().reverse(); // (oldest first)
+  const older = (d: number) => [...new Set(found.filter((f) => f.mtimeMs < now - d * 86_400_000).map((f) => f.id))];
+  const old = older(days);
+  return { ids: old.slice(0, MAX_REMOVE), total: old.length, counts: Object.fromEntries(OLD_DAYS.map((d) => [d, d === days ? old.length : older(d).length])) };
 }
 
 async function names(dir: string): Promise<string[]> {
