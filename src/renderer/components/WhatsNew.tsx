@@ -9,10 +9,10 @@ const Inl = ({ parts }: { parts: Inline[] }): VNode => (
   </>
 );
 
-/** A release note as elements (`parseMd` gives data; text is always a text node). */
-function Notes({ md }: { md: string }): VNode {
+/** A release note (since 1.4.0 also Explain's answer: `cls`) as elements (`parseMd` gives data; text is always a text node). */
+export function Notes({ md, cls = 'wn-body' }: { md: string; cls?: string }): VNode {
   return (
-    <div class="wn-body">
+    <div class={cls}>
       {parseMd(md).map((b: MdBlock, n) =>
         b.kind === 'h' ? (
           <div key={n} class="wn-h" data-level={b.level}>

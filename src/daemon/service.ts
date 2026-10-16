@@ -23,6 +23,7 @@ import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
 import { readSetup } from '../core/claude/setup';
 import { runMcpList, type McpCheck } from '../core/claude/mcp';
+import { buildExplainPrompt, explainSupported, lastReply, runExplain, type ExplainResult } from '../core/claude/explain';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
 import { nextTypicalTurnMs } from '../shared/turn-median';
@@ -91,6 +92,10 @@ export class JafferService {
   private claudePushTimer: NodeJS.Timeout | null = null;
   /** (1.4.0) The one `claude mcp list` under way (a second ask while it runs gets the same answer). */
   private mcpCheck: Promise<McpCheck> | null = null;
+  /** (1.4.0) The one Explain under way, when each session's last one ended (5 s between two), and whether this `claude` can run the helper. */
+  private explaining: Promise<ExplainResult> | null = null;
+  private explainedAt = new Map<string, number>();
+  private explainOk: { bin: string | null; ok: boolean } | null = null;
   private claudePushPending = false;
   private stopping = false;
   /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
@@ -709,6 +714,14 @@ export class JafferService {
       return this.mcpCheck;
     });
 
+    // (1.4.0) Explain, only while this daemon's own permissions.explain is on (never the page's word): the latest answer of a session it
+    // tracks (the one named, else the newest that has not ended) goes to one helper `claude -p` without tools; its answer goes back to the
+    // caller only. Nothing of either is logged or kept. One at a time: a second ask while one runs gets the same answer.
+    r.handle('claude.explain', (p: { session?: unknown } | null): Promise<ExplainResult> | ExplainResult => {
+      if (this.config.get().permissions.explain !== true) return { ok: false, reason: 'off' };
+      return (this.explaining ??= this.explain(p?.session).finally(() => (this.explaining = null)));
+    });
+
     // ---- config
     r.handle('config.get', () => this.config.get());
     r.handle('config.patch', (p: DeepPartial<JafferConfig>) => this.config.patch(p ?? {}));
@@ -770,6 +783,27 @@ export class JafferService {
     });
   }
 
+  private async explain(id: unknown): Promise<ExplainResult> {
+    const live = this.claudeWatcher.sessions();
+    const s = id === undefined || id === null ? live.find((x) => x.state !== 'ended') : live.find((x) => x.id === id);
+    if (!s?.transcriptPath) return { ok: false, reason: 'no-reply' };
+    const now = Date.now();
+    for (const [k, t] of this.explainedAt) if (now - t >= EXPLAIN_COOLDOWN_MS) this.explainedAt.delete(k);
+    if (this.explainedAt.has(s.id)) return { ok: false, reason: 'busy' };
+    await this.probeClaude();
+    const env = this.claudeEnv();
+    if (this.explainOk?.bin !== this.claudeBin) this.explainOk = { bin: this.claudeBin, ok: await explainSupported(this.claudeBin, env) };
+    if (!this.explainOk.ok) return { ok: false, reason: 'unavailable' };
+    if (this.config.get().permissions.explain !== true) return { ok: false, reason: 'off' }; // (switched off meanwhile: read nothing)
+    const text = await lastReply(s.transcriptPath, process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'));
+    if (!text) return { ok: false, reason: 'no-reply' };
+    try {
+      return await runExplain({ claudeBin: this.claudeBin, prompt: buildExplainPrompt(text), env });
+    } finally {
+      this.explainedAt.set(s.id, Date.now());
+    }
+  }
+
   /** The folder the window named for the Setup list: an existing absolute folder of at most 4096 characters without control characters, else the home folder. */
   private setupFolder(cwd: unknown): string {
     return typeof cwd === 'string' && cwd.length <= 4096 && path.isAbsolute(cwd) && !/\p{Cc}/u.test(cwd) && isDir(cwd) ? cwd : this.userHome;
@@ -803,6 +837,9 @@ export class JafferService {
     return this.claudeProbe;
   }
 }
+
+/** The least time between two Explains of one session (a double click is not two helper runs). */
+const EXPLAIN_COOLDOWN_MS = 5000;
 
 /** A command that was stopped, not ended (Ctrl+Z: the shell reports 128 + a stop signal, 145 to 150 on macOS and Linux). */
 function stoppedExit(exit: number | null): boolean {

@@ -356,6 +356,24 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .wn-actions { flex: none; display: flex; gap: 6px; }
 .wn-actions .btn { height: 26px; font-size: 12px; }
 
+/* (1.4.0) Explain: a helper Claude's plain explanation of the latest answer, above the Now card, until dismissed */
+.ex-card { flex: 0 1 auto; max-height: 50%; margin: 8px 8px 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); min-width: 0; min-height: 0; }
+.ex-head { flex: none; display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.ex-title { flex: 1; min-width: 0; }
+.ex-head .btn { height: 22px; }
+.ex-busy { display: flex; align-items: center; gap: 8px; }
+.ex-busy span { flex: 1; min-width: 0; }
+.ex-error { color: var(--text); line-height: 1.45; }
+.ex-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.ex-body { display: flex; flex-direction: column; gap: 6px; line-height: 1.45; overflow-wrap: anywhere; color: var(--text); }
+.ex-body p, .ex-body ul { margin: 0; }
+.ex-body ul { padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.ex-body strong { font-weight: 600; }
+.ex-body code { font-size: 11px; padding: 0 3px; border-radius: var(--r-xs); background: var(--hover); }
+.ex-body .wn-h { font-weight: 600; }
+.ex-note { flex: none; font-size: 11px; color: var(--faint); }
+.now-ex { display: flex; flex-wrap: wrap; gap: 6px; }
+
 .now-card { flex: none; margin: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
 .now-head { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 550; font-size: 12.5px; }
 .now-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }

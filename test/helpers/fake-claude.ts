@@ -16,6 +16,11 @@ import path from 'node:path';
  * `claude mcp list` (1.4.0) prints the file mcp-list (`setMcpList`) and notes its folder in mcp.cwd and the Jaffer variables it got in
  * mcp.env; it never reaches the real claude. Modes: "mcp-slow" waits a second first, "mcp-hang" starts a child (its pid in mcp.child) and
  * waits for it, "mcp-fail" exits 1 after printing.
+ * `claude --help` (1.4.0, Explain) prints the options Explain needs (mode "explain-old": a help without them). `claude -p …` never
+ * reaches the real claude: it notes its arguments (one per line) in explain.argv, its folder in explain.cwd and what was in it in
+ * explain.ls, its stdin in explain.stdin and the variables it got in explain.env, prints a secret on stderr and then the file
+ * explain-out (`setExplainOut`) or a fixed answer. Modes: "explain-hang" starts a child (its pid in explain.child) and waits for it,
+ * "explain-fail" exits 1, "explain-slow" waits a second first.
  * Any other command goes to `passthrough` (the real claude) when one is given, so a test can keep using the real thing
  * for everything but the login state.
  */
@@ -69,6 +74,26 @@ if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
   [ "$M" = mcp-fail ] && exit 1
   exit 0
 fi
+if [ "$1" = "--help" ]; then
+  if [ "$M" = explain-old ]; then printf 'Usage: claude [options]\n  -p, --print  Print response and exit\n'; exit 0; fi
+  printf 'Usage: claude [options] [command] [prompt]\n  -p, --print\n  --tools <tools...>\n  --strict-mcp-config\n  --no-session-persistence\n  --output-format <format>\n  --permission-prompts <target>\n  --safe-mode\n'
+  exit 0
+fi
+if [ "$1" = "-p" ]; then
+  printf '%s\n' "$@" > "$D/explain.argv"
+  pwd > "$D/explain.cwd"
+  ls -A > "$D/explain.ls"
+  echo "\${JAFFER_SESSION:-}|\${JAFFER_PANE:-}|\${JAFFER_OWNED:-}|\${ANTHROPIC_API_KEY:-}|\${ANTHROPIC_AUTH_TOKEN:-}|\${JAFFER_NO_HOOKS:-}" > "$D/explain.env"
+  cat > "$D/explain.stdin"
+  echo "SECRET-STDERR the helper failed loudly" >&2
+  case "$M" in
+    explain-slow) sleep 1 ;;
+    explain-hang) sleep 30 & echo $! > "$D/explain.child"; wait; exit 0 ;;
+    explain-fail) exit 1 ;;
+  esac
+  if [ -f "$D/explain-out" ]; then cat "$D/explain-out"; else echo "It fixed the bug and suggests running the tests."; fi
+  exit 0
+fi
 if [ "$#" -eq 0 ] && [ "$INTERACTIVE" = stub ]; then echo "fake claude: interactive session"; exit 0; fi
 if [ -n "$REAL" ]; then exec "$REAL" "$@"; fi
 echo "fake claude: unsupported: $*" >&2
@@ -82,6 +107,7 @@ exit 64
     setLoggedIn: (v: boolean) => fs.writeFileSync(state, v ? 'in' : 'out'),
     setMode: (m: string) => fs.writeFileSync(mode, m),
     setMcpList: (text: string) => fs.writeFileSync(path.join(dir, 'mcp-list'), text),
+    setExplainOut: (text: string) => fs.writeFileSync(path.join(dir, 'explain-out'), text),
     read: (name: string): string => (fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), 'utf8').trim() : ''),
     calls: (): string[] => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : []),
   };

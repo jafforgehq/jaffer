@@ -844,6 +844,58 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(fake.calls().filter((l) => l.startsWith('mcp list')).length).toBe(before + 1);
     fake.setMode('ok');
   });
+
+  it('claude.explain (1.4.0): off (the daemon\'s own permissions.explain) refuses without reading or starting anything; on, the latest answer of a known session goes to one `claude -p` and its answer comes back; an unknown session has no reply; 5 s between two of one session; one at a time', async () => {
+    fake.setMode('ok');
+    const helperCalls = () => fake.calls().filter((l) => l.startsWith('-p') || l.startsWith('--help')).length;
+    const sid = (n: number) => `0000000${n}-aaaa-4bbb-8ccc-ddddeeeeffff`;
+    const dir = path.join(env2.userHome, '.claude', 'projects', '-w');
+    fs.mkdirSync(dir, { recursive: true });
+    const plant = (id: string, answer: string) => {
+      const file = path.join(dir, `${id}.jsonl`);
+      fs.writeFileSync(file, [JSON.stringify({ type: 'user', message: { role: 'user', content: 'fix SECRET-PROMPT' } }), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: answer }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'SECRET-TOOL' } }] } })].join('\n') + '\n');
+      return file;
+    };
+    const turn = async (id: string, file: string) => {
+      await c.call('claude.event', { session_id: id, hook_event_name: 'UserPromptSubmit', transcript_path: file, cwd: '/w' });
+      await c.call('claude.event', { session_id: id, hook_event_name: 'Stop', transcript_path: file, cwd: '/w' });
+    };
+    await turn(sid(1), plant(sid(1), 'I changed a.ts so the build passes.'));
+    const before = helperCalls();
+    expect(await c.call('claude.explain', { session: sid(1) })).toEqual({ ok: false, reason: 'off' });
+    expect(await c.call('claude.explain', {})).toEqual({ ok: false, reason: 'off' });
+    expect(helperCalls()).toBe(before);
+    await c.call('config.patch', { permissions: { explain: true } });
+    try {
+      expect(await c.call('claude.explain', { session: 'not-a-session' })).toEqual({ ok: false, reason: 'no-reply' });
+      expect(await c.call('claude.explain', { session: 5 })).toEqual({ ok: false, reason: 'no-reply' });
+      expect(helperCalls()).toBe(before);
+      expect(await c.call('claude.explain', { session: sid(1) })).toEqual({ ok: true, text: 'It fixed the bug and suggests running the tests.' });
+      const stdin = fake.read('explain.stdin');
+      expect(stdin).toContain('I changed a.ts so the build passes.');
+      expect(stdin).not.toMatch(/SECRET/);
+      expect(fake.read('explain.env')).toBe('|||||1'); // (the daemon runs with ANTHROPIC_API_KEY set: never passed on)
+      // again at once: too soon for that session
+      const n = helperCalls();
+      expect(await c.call('claude.explain', { session: sid(1) })).toEqual({ ok: false, reason: 'busy' });
+      expect(helperCalls()).toBe(n);
+      // one at a time: a second ask while one runs gets the same answer
+      await turn(sid(2), plant(sid(2), 'Second answer.'));
+      fake.setMode('explain-slow');
+      const p = fake.calls().filter((l) => l.startsWith('-p')).length;
+      const [a, b] = await Promise.all([c.call('claude.explain', { session: sid(2) }), c.call('claude.explain', { session: sid(2) })]);
+      expect(a).toEqual({ ok: true, text: 'It fixed the bug and suggests running the tests.' });
+      expect(b).toEqual(a);
+      expect(fake.calls().filter((l) => l.startsWith('-p')).length).toBe(p + 1);
+      // a session that has answered nothing yet
+      await c.call('claude.event', { session_id: sid(3), hook_event_name: 'SessionStart', cwd: '/w' });
+      expect(await c.call('claude.explain', { session: sid(3) })).toEqual({ ok: false, reason: 'no-reply' });
+    } finally {
+      fake.setMode('ok');
+      await c.call('config.patch', { permissions: { explain: false } });
+      for (const n of [1, 2, 3]) await c.call('claude.event', { session_id: sid(n), hook_event_name: 'SessionEnd' });
+    }
+  });
 });
 
 describe('the terminal Claude, live (bundled daemon, hooks through the real jaffer CLI)', () => {

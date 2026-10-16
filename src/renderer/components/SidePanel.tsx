@@ -6,6 +6,7 @@ import { nowCardModel, panelWidth, todayTimeline } from '../panel';
 import { Conversations } from './Conversations';
 import { Setup } from './Setup';
 import { WhatsNew } from './WhatsNew';
+import { askToExplain, Explain, explainCard, explainLast } from './Explain';
 import { terminals } from './TerminalView';
 import { ApprovalAsk } from './Chrome';
 
@@ -121,6 +122,18 @@ export function NowCard(): VNode {
           {m.moreFiles > 0 && <span class="now-more">+{m.moreFiles} more</span>}
         </div>
       )}
+      {s?.state === 'idle' && s.turns > 0 && (
+        <div class="now-ex">
+          {cfg.value?.permissions?.explain === true && (
+            <button class="btn small now-explain" disabled={!!explainCard.value && 'busy' in explainCard.value} onClick={() => void explainLast(s.id)}>
+              Explain the last answer
+            </button>
+          )}
+          <button class="btn ghost small now-ask" title="Copies a prompt that asks the Claude in the terminal to explain; you paste it" onClick={askToExplain}>
+            Ask Claude to explain
+          </button>
+        </div>
+      )}
     </section>
   );
 }
@@ -220,6 +233,7 @@ export function SidePanel(): VNode | null {
         onBlur={settleKeys}
       />
       <WhatsNew />
+      <Explain />
       <NowCard />
       <Conversations />
       <Setup />

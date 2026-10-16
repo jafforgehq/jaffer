@@ -4594,6 +4594,107 @@ describe('Jaffer UI end to end', () => {
     }
   }, 90_000);
 
+  it('Explain (1.4.0): with permissions.explain off there is no Explain button and claude.explain is never asked, and Ask Claude to explain only copies its prompt; on, after a finished turn the button asks the helper, the card shows its answer above Now and Dismiss takes it away; a failure is one calm line; nothing is typed', async () => {
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+    await endClaude();
+    fake.setMode('ok');
+    const panelWas = (await page.evaluate(() => window.jaffer.call('config.get'))).panel;
+    await cfgPatch({ panel: { open: true, width: 320 }, permissions: { explain: false } });
+    const sid = '0000000e-aaaa-4bbb-8ccc-ddddeeee0007';
+    const dir = path.join(env.userHome, '.claude', 'projects', '-explain');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${sid}.jsonl`);
+    fs.writeFileSync(file, [JSON.stringify({ type: 'user', message: { role: 'user', content: 'fix SECRET-PROMPT' } }), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'I fixed **a.ts**; run the tests next.' }] } })].join('\n') + '\n');
+    const helperRuns = () => fake.calls().filter((l) => l.startsWith('-p')).length;
+    const runsBefore = helperRuns();
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__exCalls = [];
+      w.__exReal = w.jaffer.call;
+      w.jaffer.call = (m: string, p: any) => (w.__exCalls.push(m), w.__exReal(m, p));
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => '', writeText: async (t: string) => void (w.__exClip = t) } });
+    });
+    const calls = () => page.evaluate(() => (window as any).__exCalls as string[]);
+    try {
+      // no Claude yet: neither button
+      expect(await page.locator('.now-explain, .now-ask').count()).toBe(0);
+      await sendHook('UserPromptSubmit', { session_id: sid, transcript_path: file, jaffer_pane: 'main', prompt: 'go' });
+      await sendHook('Stop', { session_id: sid, transcript_path: file, jaffer_pane: 'main' });
+      await page.waitForSelector('.now-card[data-state="idle"] .now-ask');
+      // off: only Ask Claude to explain, which copies the prompt and says so
+      expect(await page.locator('.now-explain').count()).toBe(0);
+      expect(await page.textContent('.now-ask')).toBe('Ask Claude to explain');
+      await page.click('.now-ask');
+      await toastSaid('Copied. Paste it in the terminal.');
+      expect(await page.evaluate(() => (window as any).__exClip)).toBe('Explain what you just did in this session in plain words, for someone new to this: what, why, and what I might do next.');
+      expect(await page.locator('.ex-card').count()).toBe(0);
+
+      // on: the button; a click asks the helper and the card shows its answer (as elements, never HTML) between What's New and Now
+      await cfgPatch({ permissions: { explain: true } });
+      await page.waitForSelector('.now-explain');
+      expect(await page.textContent('.now-explain')).toBe('Explain the last answer');
+      fake.setMode('explain-slow');
+      fake.setExplainOut('It **fixed** a.ts.\n\n- Run `npm test` next\n<img src=x onerror=alert(1)>');
+      await page.click('.now-explain');
+      await page.waitForSelector('.ex-card[aria-busy="true"]');
+      expect(await page.textContent('.ex-card')).toContain('Asking Claude…');
+      await page.waitForSelector('.ex-card .ex-body', { timeout: 15_000 });
+      expect(await page.locator('.side-panel > *').evaluateAll((els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'ex-card', 'now-card', 'sp-convos', 'sx-setup']);
+      expect(await page.textContent('.ex-body strong')).toBe('fixed');
+      expect(await page.textContent('.ex-body code')).toBe('npm test');
+      expect(await page.locator('.ex-body img').count()).toBe(0);
+      expect(await page.textContent('.ex-body')).toContain('<img src=x onerror=alert(1)>');
+      expect(await page.textContent('.ex-card')).toContain('Uses your Claude subscription');
+      expect(await page.textContent('.ex-card')).toContain('Explained by a separate Claude run; check important details.');
+      expect(helperRuns()).toBe(runsBefore + 1);
+      expect(fake.read('explain.stdin')).toContain('I fixed **a.ts**; run the tests next.');
+      expect(fake.read('explain.stdin')).not.toContain('SECRET');
+      expect(fake.read('explain.argv').split('\n')).toEqual(['-p', '--tools', '', '--strict-mcp-config', '--no-session-persistence', '--output-format', 'text', '--permission-prompts', 'none', '--safe-mode']);
+      expect(fake.read('explain.env')).toBe('|||||1'); // (the daemon here runs with an API key: never passed on)
+      await shot('18-explain');
+      await page.click('.ex-card .ex-dismiss');
+      await until(async () => (await page.locator('.ex-card').count()) === 0, 3_000, 'the card to go');
+
+      // Cancel while it waits: the card goes and the late answer is ignored
+      await sleep(5_200); // (5 s between two of one session)
+      await page.click('.now-explain');
+      await page.waitForSelector('.ex-card[aria-busy="true"] .ex-cancel');
+      await page.click('.ex-cancel');
+      expect(await page.locator('.ex-card').count()).toBe(0);
+      await until(async () => helperRuns() === runsBefore + 2, 5_000, 'the second run');
+      await sleep(1_500);
+      expect(await page.locator('.ex-card').count()).toBe(0);
+
+      // a failure: one calm line, never what the helper printed
+      await sleep(5_200);
+      fake.setMode('explain-fail');
+      await page.click('.now-explain');
+      await until(async () => (await page.locator('.ex-card .ex-error').count()) > 0, 10_000, 'the calm line');
+      expect(await page.textContent('.ex-error')).toBe('Claude could not explain it this time. Check that you are signed in, then try again.');
+      expect(await page.textContent('.ex-card')).not.toContain('SECRET');
+      await page.click('.ex-card .ex-dismiss');
+
+      // off again: everything goes, and nothing was typed
+      await cfgPatch({ permissions: { explain: false } });
+      await until(async () => (await page.locator('.now-explain').count()) === 0, 3_000, 'the button to go');
+      const asked = await calls();
+      expect(asked.filter((m) => m === 'claude.explain')).toHaveLength(3);
+      expect(asked).not.toContain('pty.write');
+    } finally {
+      fake.setMode('ok');
+      fs.rmSync(path.join(fake.dir, 'explain-out'), { force: true });
+      await page.evaluate(() => {
+        const w = window as any;
+        if (w.__exReal) w.jaffer.call = w.__exReal;
+        delete w.__exReal;
+      });
+      await cfgPatch({ panel: panelWas, permissions: { explain: false } });
+      await sendHook('SessionEnd', { session_id: sid });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it('seasonal touches: the mole and the scenes dress by data-season (a fake season only with ?debug), off with the setting, none outside the dates', async () => {
     const page_ = (q: string) => page.goto(`${url}?${q}&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`).then(() => page.waitForSelector('.term .xterm'));
     try {
@@ -5264,7 +5365,7 @@ describe('Jaffer UI end to end', () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
     expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });
     expect(await page.locator('.ap-ask, .modal, .palette').count()).toBe(0);
-    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob|ci)Real/); // (every wrapper restored; 1.4.0: ci)
+    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob|ci|ex)Real/); // (every wrapper restored; 1.4.0: ci, ex)
     const c = await page.evaluate(() => window.jaffer.call('config.get'));
     expect(c.claude.approvals).toBe(false);
     expect(c.updates.seenVersion).toBe(version);
