@@ -447,3 +447,20 @@ describe('panel: the side panel (1.1.0)', () => {
     expect(new ConfigStore(env.paths).get().panel).toEqual({ open: false, width: 410 });
   });
 });
+
+describe('permissions (1.4.0)', () => {
+  it('has its defaults (explain and deepSearch off, resumeTyping and trash on), also for a config file saved before it existed', () => {
+    expect(DEFAULT_CONFIG.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'nord' } }));
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+  });
+
+  it('a choice is kept, and a value of the wrong kind (or a section that is no object) leaves what was there', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ permissions: { resumeTyping: false, explain: true } });
+    store.patch({ permissions: { trash: 'no', deepSearch: 1 } } as never);
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: true, deepSearch: false, resumeTyping: false, trash: true });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ permissions: 'off' }));
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+  });
+});

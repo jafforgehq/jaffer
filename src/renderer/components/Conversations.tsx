@@ -28,6 +28,7 @@ function patchHistory(p: { names?: string[]; pinned?: string[] }): void {
 /** The toast after a removal: how many went to the Trash, and why any did not. */
 function trashSaid(r: TrashResult): string {
   const n = r.trashed.length;
+  if (r.refused.some((x) => x.reason === 'off')) return 'Moving conversations to the Trash is off in Settings → Privacy and permissions';
   if (r.refused.some((x) => x.reason === 'unknown')) return 'Jaffer could not check whether Claude is running, so nothing was moved';
   const of = (reason: string) => r.refused.filter((x) => x.reason === reason).length;
   const [running, gone, failed] = [of('running'), of('not found'), of('error')];
@@ -71,6 +72,7 @@ export function Conversations(): VNode {
   const refocus = useRef<{ id: string; what: '.conv-row' | '.conv-pin' } | null>(null);
   const items = historyItems.value;
   const showCost = cfg.value?.claude?.showCost !== false;
+  const trashOn = cfg.value?.permissions?.trash !== false; // (Settings → Privacy and permissions: off, no trash button, no Remove… and Delete does nothing)
   const names = useMemo(() => parseNames(cfg.value?.history?.names), [cfg.value?.history?.names]);
   const pinned = useMemo(() => pinnedIds(cfg.value?.history?.pinned), [cfg.value?.history?.pinned]);
 
@@ -199,7 +201,7 @@ export function Conversations(): VNode {
     else if (e.key === 'Enter' && t === input.current && !e.isComposing) (e.preventDefault(), pick(sel));
     else if (e.key === 'F2' && flat[sel]) (e.preventDefault(), startEdit(flat[sel]!.id));
     // Delete on a row (or one of its buttons) removes that row: the one with the keyboard, not the one under the mouse
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && !(t instanceof HTMLInputElement) && t.closest('.conv-item')) {
+    else if (trashOn && (e.key === 'Delete' || e.key === 'Backspace') && !(t instanceof HTMLInputElement) && t.closest('.conv-item')) {
       e.preventDefault();
       const id = t.closest('.conv-item')!.querySelector<HTMLElement>('.conv-row')?.dataset.id;
       const at = flat.findIndex((c) => c.id === id);
@@ -220,22 +222,24 @@ export function Conversations(): VNode {
       <div class="conv-head">
         <span>Past conversations</span>
         <span class="conv-head-acts">
-          <button
-            ref={removeBtn}
-            class="conv-remove"
-            aria-haspopup="menu"
-            aria-expanded={!!removeAt}
-            disabled={!listed.length}
-            onClick={toggleRemove}
-          >
-            Remove…
-          </button>
+          {trashOn && (
+            <button
+              ref={removeBtn}
+              class="conv-remove"
+              aria-haspopup="menu"
+              aria-expanded={!!removeAt}
+              disabled={!listed.length}
+              onClick={toggleRemove}
+            >
+              Remove…
+            </button>
+          )}
           <button class="icon-btn sm conv-refresh" title="Refresh" aria-label="Refresh the past conversations" data-busy={loading ? '' : undefined} onClick={load}>
             <IconReset size={13} />
           </button>
         </span>
       </div>
-      {removeAt && (
+      {trashOn && removeAt && (
         <Menu
           x={removeAt.x}
           y={removeAt.y}
@@ -336,9 +340,11 @@ export function Conversations(): VNode {
                     <button class="icon-btn sm conv-pin" title={isPinned ? 'Unpin' : 'Pin'} aria-label={isPinned ? 'Unpin this conversation' : 'Pin this conversation'} aria-pressed={isPinned} onClick={() => pin(c.id)}>
                       <IconStar size={12} />
                     </button>
-                    <button class="icon-btn sm conv-trash" title="Move to Trash" aria-label="Move to Trash" onClick={() => void remove([c.id], n)}>
-                      <IconTrash size={12} />
-                    </button>
+                    {trashOn && (
+                      <button class="icon-btn sm conv-trash" title="Move to Trash" aria-label="Move to Trash" onClick={() => void remove([c.id], n)}>
+                        <IconTrash size={12} />
+                      </button>
+                    )}
                   </span>
                 </div>
               );

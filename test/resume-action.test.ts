@@ -81,4 +81,16 @@ describe('resume a past conversation (1.1.1): what a click types, or copies and 
       expect(performance.now() - t0).toBeLessThan(1000);
     }
   });
+  it('typing switched off (1.4.0, permissions.resumeTyping): an idle prompt gets the command copied, with the reason; busy reasons stay as they were', () => {
+    expect(resumeAction({ cwd: DIR, busy: null }, { id: ID, cwd: DIR }, { allowTyping: false })).toEqual({
+      kind: 'copy',
+      text: `claude --resume ${ID}`,
+      why: 'Typing is off in Settings → Privacy and permissions: command copied',
+    });
+    expect(resumeAction({ cwd: '/tmp' }, { id: ID, cwd: DIR }, { allowTyping: false })).toMatchObject({ kind: 'copy', text: `cd '${DIR}' && claude --resume ${ID}` });
+    expect(why(resumeAction({ cwd: DIR, busy: 'claude' }, { id: ID, cwd: DIR }, { allowTyping: false }))).toBe('Claude is already running here: quit it first (/exit)');
+    expect(resumeAction({ cwd: DIR }, { id: 'nope', cwd: DIR }, { allowTyping: false }).kind).toBe('none');
+    expect(resumeAction({ cwd: DIR }, { id: ID, cwd: DIR }, { allowTyping: true }).kind).toBe('type');
+    expect(resumeAction({ cwd: DIR }, { id: ID, cwd: DIR }, {}).kind).toBe('type'); // (default: on)
+  });
 });

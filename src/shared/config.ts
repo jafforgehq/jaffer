@@ -71,6 +71,17 @@ export interface JafferConfig {
     /** A chip in the title bar for a local server the running command mentions (`localhost:5173`); a click opens it in the browser. */
     portLinks: boolean;
   };
+  /** What Jaffer may read or do (1.4.0), each switch in Settings → Privacy and permissions and at the end of first run. `claude.approvals` is the fifth. */
+  permissions: {
+    /** A button may send Claude's latest reply to a separate Claude run to be explained in plain words. Off: no reply is ever read. */
+    explain: boolean;
+    /** The panel's search may scan the text of past conversations. */
+    deepSearch: boolean;
+    /** A click on a past conversation types the resume line at an idle prompt. Off: it only copies the command. */
+    resumeTyping: boolean;
+    /** The panel may move past conversations to the Trash (after Jaffer asks). Off: no remove buttons. */
+    trash: boolean;
+  };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. `seenVersion`: the newest version whose release notes the person dismissed (empty: not yet; the window decides what that means). */
   updates: { auto: boolean; seenVersion: string };
   /** What Jaffer may tell you while it is in the background. */
@@ -143,6 +154,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
+  permissions: { explain: false, deepSearch: false, resumeTyping: true, trash: true },
   updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true },
   session: { stayAwake: true },

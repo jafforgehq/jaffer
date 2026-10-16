@@ -26,7 +26,7 @@ export function copyToTerminal(text: string, said: string): void {
 }
 
 export function resumeConversation(c: Pick<Conversation, 'id' | 'cwd'>): void {
-  const a = resumeAction(info.value, c);
+  const a = resumeAction(info.value, c, { allowTyping: cfg.value?.permissions?.resumeTyping !== false });
   if (a.kind === 'none') return void toast({ kind: 'error', text: a.why });
   if (a.kind === 'copy') return copyToTerminal(a.text, a.why);
   const t = terminals.get(activePane.value);

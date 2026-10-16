@@ -142,4 +142,14 @@ describe('trashConversations (1.3.0): past conversations to the Trash, after one
     });
     expect(trashAsk(3)).toMatchObject({ message: 'Move 3 past conversations to the Trash?', detail: 'Claude Code can no longer resume them. You can put them back from the Trash.' });
   });
+  it('switched off (1.4.0, permissions.trash): nothing is looked up, asked or moved, and every valid id is refused as off', async () => {
+    plant(1);
+    const { d, trashed } = deps({ enabled: () => false });
+    expect(await trashConversations([uuid(1), uuid(2), '../x'], d)).toEqual({ trashed: [], refused: [{ id: uuid(1), reason: 'off' }, { id: uuid(2), reason: 'off' }] });
+    expect(d.liveIds).not.toHaveBeenCalled();
+    expect(d.confirm).not.toHaveBeenCalled();
+    expect(trashed).toEqual([]);
+    const on = deps({ enabled: () => true });
+    expect((await trashConversations([uuid(1)], on.d)).trashed).toEqual([uuid(1)]);
+  });
 });

@@ -165,6 +165,22 @@ describe('Jaffer UI end to end', () => {
     expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // not done until they say so
     await shot('01-onboarding');
 
+    // 1.4.0: Get started leads to the last stage, Privacy and permissions; nothing is done until "Looks good"
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard[data-step="privacy"]');
+    expect(await page.locator('.onboard .btn.primary').textContent()).toBe('Looks good');
+    expect(await page.locator('.onboard .pv-list .field').count()).toBe(5);
+    expect(await page.locator('.onboard .pv-locked').count()).toBe(1);
+    const defaults = async () => page.$$eval('.onboard .pv-list .field input[type="checkbox"]', (b) => b.map((x) => (x as HTMLInputElement).checked));
+    expect(await defaults()).toEqual([false, false, true, true, false]);
+    await page.locator('.onboard .pv-list .field', { hasText: 'Move conversations to the Trash' }).locator('.switch').click(); // a switch writes at once
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.trash === false, 5_000, 'the trash switch to be written');
+    await page.locator('.onboard .pv-list .field', { hasText: 'Move conversations to the Trash' }).locator('.switch').click();
+    await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.trash === true, 5_000, 'the trash switch to be written again');
+    expect((await page.evaluate(() => window.jaffer.call('config.get'))).onboarded).toBe(false); // still not done
+    await page.keyboard.press('Escape');
+    expect(await page.locator('.onboard').count()).toBe(1); // and it cannot be dismissed
+    await shot('01c-onboarding-privacy');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
     await page.waitForSelector('.term .xterm');
@@ -226,6 +242,8 @@ describe('Jaffer UI end to end', () => {
     expect(text).not.toMatch(/Start Claude Code|Show what Claude is doing|curate memory|Learn from my sessions|memory/i);
     expect(text).toMatch(/Settings → Claude Code/i); // and how to add Claude later
     await shot('01b-onboarding-plain-terminal');
+    await page.click('.onboard .btn.primary'); // (1.4.0: then the privacy stage, which a plain terminal sees too)
+    await page.waitForSelector('.onboard[data-step="privacy"]');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
     await page.waitForSelector('.term .xterm');
@@ -250,6 +268,8 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 }); // already signed in: straight to the choices
     await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click();
     expect(await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('input[type=checkbox]').isChecked()).toBe(false);
+    await page.click('.onboard .btn.primary');
+    await page.waitForSelector('.onboard[data-step="privacy"]'); // (1.4.0)
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard', { state: 'detached' });
     await page.waitForSelector('.term .xterm');
@@ -2964,6 +2984,117 @@ describe('Jaffer UI end to end', () => {
     for (const proj of ['-p13-eps', '-p13-zeta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
   }, 60_000);
 
+  it('Settings → Privacy and permissions (1.4.0): five switches with their words, in order, and the locked rules; each switch writes its own config key and nothing else', async () => {
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.click('.settings-nav button:has-text("Privacy and permissions")');
+    const fields = page.locator('.settings .pv-list .field');
+    expect(await fields.count()).toBe(5);
+    const labels = await page.$$eval('.settings .pv-list .field .field-label', (l) => l.map((x) => x.firstChild?.textContent));
+    expect(labels).toEqual([
+      'Explain the last answer with a helper Claude',
+      'Search the text of past conversations',
+      'Type the resume line for you',
+      'Move conversations to the Trash',
+      'Answer permission prompts from the notification',
+    ]);
+    const hints = await page.$$eval('.settings .pv-list .field small', (l) => l.map((x) => x.textContent ?? ''));
+    expect(hints[0]).toMatch(/sends it to a separate Claude run on your subscription.*Uses your plan's usage.*Off: Jaffer never reads a reply\./);
+    expect(hints[1]).toMatch(/Shows only which conversations match\. Nothing is stored\./);
+    expect(hints[2]).toMatch(/types claude --resume into an idle terminal\. Off: it only copies the command\./);
+    expect(hints[3]).toMatch(/Always asks first; never deletes for good\./);
+    expect(hints[4]).toMatch(/Experimental\./);
+    const locked = (await page.textContent('.settings .pv-locked')) ?? '';
+    expect(locked).toContain('Always locked');
+    expect(locked).toMatch(/Allow .* needs your own click, with the whole request shown/);
+    expect(locked).toMatch(/never reads Claude's login files or your keychain/);
+    expect(locked).toMatch(/Nothing is deleted for good/);
+    expect(locked).toMatch(/redacted/);
+    expect(await page.locator('.settings .pv-locked input').count()).toBe(0); // no switch for what is locked
+    await shot('08b-privacy');
+    const read = () => page.evaluate(() => window.jaffer.call('config.get'));
+    const flip = (label: string) => page.locator('.settings .pv-list .field', { hasText: label }).locator('.switch').click();
+    const perms = async () => (await read()).permissions;
+    expect(await perms()).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    for (const [label, key, now] of [
+      ['Explain the last answer', 'explain', true],
+      ['Search the text of past conversations', 'deepSearch', true],
+      ['Type the resume line', 'resumeTyping', false],
+      ['Move conversations to the Trash', 'trash', false],
+    ] as const) {
+      await flip(label);
+      await until(async () => (await perms())[key] === now, 5_000, `${key} to be written`);
+      expect(await perms(), key).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, [key]: now }); // only that key moved
+      await flip(label);
+      await until(async () => (await perms())[key] === !now, 5_000, `${key} to be written back`);
+    }
+    const before = (await read()).claude.approvals;
+    await flip('Answer permission prompts');
+    await until(async () => (await read()).claude.approvals === !before, 5_000, 'approvals to be written');
+    await flip('Answer permission prompts');
+    await until(async () => (await read()).claude.approvals === before, 5_000, 'approvals to be written back');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+  }, 40_000);
+
+  it('Privacy and permissions off (1.4.0): resumeTyping off, a click on a past conversation copies the command, types nothing and says why; trash off, no trash button, no Remove… and Delete does nothing; main refuses too', async () => {
+    await clipStub();
+    const sid = '00000091-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const dir = path.join(env.userHome, '.claude', 'projects', '-p14-priv');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${sid}.jsonl`);
+    const at = Date.now() - 20_000;
+    const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: env.userHome, timestamp: new Date(t).toISOString(), ...extra });
+    fs.writeFileSync(file, [line('user', at - 5000, { message: { role: 'user', content: 'Privacy probe p14' } }), line('assistant', at, { message: { id: 'p14', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__privReal = w.jaffer.call;
+      w.__privTyped = [];
+      w.jaffer.call = (m: string, p: any) => (m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__privTyped.push(p.data), Promise.resolve({})) : w.__privReal(m, p));
+    });
+    const typed = () => page.evaluate(() => (window as any).__privTyped as string[]);
+    const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1) as string | undefined);
+    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.fill('.sp-convos .conv-search input', 'p14');
+    await page.click('.sp-convos .conv-refresh');
+    const row = page.locator(`.sp-convos .conv-row[data-id="${sid}"]`);
+    await until(async () => (await row.count()) === 1, 5_000, 'the planted conversation');
+    // both on (the defaults): the trash button and Remove… are there
+    expect(await page.locator('.sp-convos .conv-trash').count()).toBe(1);
+    expect(await page.locator('.sp-convos .conv-remove').count()).toBe(1);
+
+    await patch({ permissions: { resumeTyping: false, trash: false } });
+    await until(async () => (await page.locator('.sp-convos .conv-trash, .sp-convos .conv-remove').count()) === 0, 5_000, 'the remove buttons to go');
+    await page.click('.term');
+    await sleep(300); // (the shell is at an idle prompt)
+    await row.click();
+    await until(async () => /claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff$/.test((await clipLast()) ?? ''), 3_000, 'the command on the clipboard');
+    await toastSaid('Typing is off in Settings → Privacy and permissions: command copied');
+    await sleep(400);
+    expect(await typed()).toEqual([]); // nothing was typed
+    // Delete on a focused row does nothing (no question, no call to main)
+    await page.evaluate(() => { const w = window as any; w.__trashed = []; });
+    await row.focus();
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Backspace');
+    await sleep(400);
+    expect(await page.evaluate(() => ((window as any).__trashed ?? []).length)).toBe(0);
+    expect(fs.existsSync(file)).toBe(true);
+
+    // back on: the same click types the resume line, and the trash buttons return
+    await patch({ permissions: { resumeTyping: true, trash: true } });
+    await until(async () => (await page.locator('.sp-convos .conv-trash').count()) === 1 && (await page.locator('.sp-convos .conv-remove').count()) === 1, 5_000, 'the remove buttons to return');
+    await page.click('.term');
+    await row.click();
+    await until(async () => (await typed()).length === 1, 3_000, 'the resume line typed');
+    expect((await typed())[0]).toMatch(/claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff\r$/);
+
+    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__privReal; });
+    await page.fill('.sp-convos .conv-search input', '');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
     const errors: string[] = [];
     const onErr = (e: Error) => errors.push(e.message);
@@ -3180,7 +3311,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Terminal', 'Claude Code', 'Updates', 'Reset']);
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Terminal', 'Claude Code', 'Privacy and permissions', 'Updates', 'Reset']); // (1.4.0: Privacy and permissions)
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
     for (const section of ['Appearance', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);
@@ -3191,7 +3322,11 @@ describe('Jaffer UI end to end', () => {
     await page.click('.settings-nav button:has-text("Claude Code")');
     expect((await page.textContent('.settings')) ?? '').toMatch(/Claude Code is installed/); // install and sign-in help live here now
     expect(await page.textContent('.settings')).not.toMatch(/Runs on|Automatic \(|Approvals|Run commands|Always-allowed/);
-    // 1.2.0: answering permission prompts from the notification is one switch here, experimental and off by default (its words avoid the above)
+    // 1.2.0: answering permission prompts from the notification is one switch, experimental and off by default (its words avoid the above);
+    // 1.4.0: it lives in Privacy and permissions now (one place), and Claude Code points to it
+    expect(await page.locator('.settings .field', { hasText: 'Answer permission prompts from the notification' }).count()).toBe(0);
+    expect(await page.textContent('.settings')).toContain('in Privacy and permissions');
+    await page.click('.settings-nav button:has-text("Privacy and permissions")');
     const approvalsField = page.locator('.settings .field', { hasText: 'Answer permission prompts from the notification' });
     expect(await approvalsField.count()).toBe(1);
     expect(await approvalsField.textContent()).toMatch(/Experimental\. Claude Code waits up to 20 s .* its own prompt appears as usual/);

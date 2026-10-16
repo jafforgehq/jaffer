@@ -15,7 +15,7 @@ import { THEMES } from '../themes';
 import { hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, PET_SIZES, companionOf, petScale } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
-import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset } from './icons';
+import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset, IconLock } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -435,7 +435,45 @@ function Field({ label, hint, children, buttons }: { label: string; hint?: strin
   return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
-type Section = 'appearance' | 'terminal' | 'integrations' | 'updates' | 'reset';
+type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'updates' | 'reset';
+
+/**
+ * Privacy and permissions (1.4.0): what Jaffer may read, send or do, one switch each, in plain words. Shared by Settings and the last
+ * stage of first run; a switch writes at once (the daemon keeps it). The locked rules have no switch.
+ */
+function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p: object) => void }): VNode {
+  const p = c.permissions;
+  return (
+    <div class="pv-list">
+      <Field label="Explain the last answer with a helper Claude" hint="Reads Claude's latest reply and sends it to a separate Claude run on your subscription to write a plain explanation. Uses your plan's usage. Off: Jaffer never reads a reply.">
+        <Switch checked={p?.explain === true} onChange={(v) => set({ permissions: { explain: v } })} />
+      </Field>
+      <Field label="Search the text of past conversations" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">
+        <Switch checked={p?.deepSearch === true} onChange={(v) => set({ permissions: { deepSearch: v } })} />
+      </Field>
+      <Field label="Type the resume line for you" hint="Clicking a past conversation types claude --resume into an idle terminal. Off: it only copies the command.">
+        <Switch checked={p?.resumeTyping !== false} onChange={(v) => set({ permissions: { resumeTyping: v } })} />
+      </Field>
+      <Field label="Move conversations to the Trash" hint="Lets you remove past conversations from the panel. Always asks first; never deletes for good.">
+        <Switch checked={p?.trash !== false} onChange={(v) => set({ permissions: { trash: v } })} />
+      </Field>
+      <Field label="Answer permission prompts from the notification" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
+        <Switch checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
+      </Field>
+      <div class="pv-locked" role="note" aria-label="Always locked">
+        <b>
+          <IconLock size={12} /> Always locked
+        </b>
+        <ul>
+          <li>Allow on a permission prompt needs your own click, with the whole request shown.</li>
+          <li>Jaffer never reads Claude's login files or your keychain.</li>
+          <li>Nothing is deleted for good: removed conversations go to the Trash.</li>
+          <li>Everything Jaffer shows is redacted first, and a sensitive command is never named.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
 
 export function Settings(): VNode {
   const c = cfg.value!;
@@ -474,6 +512,7 @@ export function Settings(): VNode {
     { id: 'appearance', label: 'Appearance', icon: <IconPalette size={14} /> },
     { id: 'terminal', label: 'Terminal', icon: <IconTerminal size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
+    { id: 'privacy', label: 'Privacy and permissions', icon: <IconLock size={14} /> },
     { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
     { id: 'reset', label: 'Reset', icon: <IconReset size={14} /> },
   ];
@@ -737,10 +776,16 @@ export function Settings(): VNode {
               <Field label="Turn summary" hint="when a turn of 10 seconds or more ends: how long it took, what Claude did and the files it edited (click one to show it in Finder)">
                 <Switch checked={c.claude?.turnSummary !== false} onChange={(v) => set({ claude: { turnSummary: v } })} />
               </Field>
-              <Field label="Answer permission prompts from the notification" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
-                <Switch checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
-              </Field>
+              <p class="lede">Answering permission prompts from the notification is in Privacy and permissions.</p>
               <HookHealth />
+            </>
+          )}
+
+          {section === 'privacy' && (
+            <>
+              <h4>Privacy and permissions</h4>
+              <p class="lede">What Jaffer may read, send or do. Each switch takes effect at once.</p>
+              <PrivacySwitches c={c} set={set} />
             </>
           )}
 
@@ -972,7 +1017,7 @@ async function startClaudeWhenReady(): Promise<void> {
 }
 
 export function Onboarding(): VNode {
-  const [stage, setStage] = useState<'signin' | 'choices'>('signin');
+  const [stage, setStage] = useState<'signin' | 'choices' | 'privacy'>('signin');
   const [plain, setPlain] = useState(false); // chose a terminal without Claude: no Claude choices, nothing installed, nothing typed
   const [claude, setClaude] = useState(true);
   const [start, setStart] = useState(true);
@@ -1009,14 +1054,26 @@ export function Onboarding(): VNode {
             <p>
               A calm terminal with a companion that shows what <b>Claude Code</b> is doing. Sign in to Claude to connect it, or start with a plain terminal.
             </p>
-          ) : (
+          ) : stage === 'choices' ? (
             <p>
               A calm terminal, with a companion for <b>Claude Code</b>.
             </p>
+          ) : (
+            <p>Jaffer only reads or does what you allow. Check the switches; you can change them any time in Settings.</p>
           )}
         </div>
         {stage === 'signin' ? (
           <SignInStep onDone={() => setStage('choices')} onSkip={() => (setPlain(true), setStage('choices'))} />
+        ) : stage === 'privacy' ? (
+          <>
+            <PrivacySwitches c={cfg.value!} set={(p) => void patchConfig(p).catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) }))} />
+            <div class="onboard-foot">
+              <button class="btn primary big" onClick={() => void go()} disabled={busy}>
+                {busy ? 'Setting up…' : 'Looks good'}
+              </button>
+              <span class="faint">Everything here can be changed later in Settings → Privacy and permissions.</span>
+            </div>
+          </>
         ) : (
           <>
             <div class="features">
@@ -1057,8 +1114,8 @@ export function Onboarding(): VNode {
               {plain && <p class="faint ob-note">Claude Code is optional. Whenever you want it, add it in Settings → Claude Code.</p>}
             </div>
             <div class="onboard-foot">
-              <button class="btn primary big" onClick={() => void go()} disabled={busy}>
-                {busy ? 'Setting up…' : 'Get started'}
+              <button class="btn primary big" onClick={() => setStage('privacy')}>
+                Get started
               </button>
               <span class="faint">Everything here can be changed later in Settings.</span>
             </div>

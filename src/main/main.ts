@@ -275,6 +275,7 @@ let appCfg: {
   onboarded?: boolean;
   updates?: { seenVersion?: string };
   history?: { names?: string[] };
+  permissions?: { trash?: boolean };
 } = {};
 
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
@@ -1086,6 +1087,7 @@ ipcMain.handle('jaffer:trash-conversations', async (e, p: unknown) => {
   if (!Array.isArray(ids) || ids.length > MAX_REMOVE || !ids.every((x) => typeof x === 'string')) throw new Error('Not a list of conversations.');
   return trashConversations(ids, {
     claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), // (as the daemon reads the list)
+    enabled: () => appCfg.permissions?.trash !== false, // (Settings → Privacy and permissions; the page hides the buttons, main refuses anyway)
     trashItem: (f) => shell.trashItem(f),
     confirm: async (n) => {
       const ask = trashAsk(n);

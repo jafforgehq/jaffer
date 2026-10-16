@@ -300,6 +300,8 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await shot('01-welcome');
     // this demo person starts Claude Code themselves (the scripted session below stands in for it)
     await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click();
+    await page.click('.onboard .btn.primary'); // Get started → the privacy stage (1.4.0)
+    await page.waitForSelector('.onboard[data-step="privacy"]');
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.term .xterm');
     await until(async () => (await termLines()).some((l) => l.includes('❯')), 30_000, 'the shell prompt');

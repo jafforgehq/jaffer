@@ -528,6 +528,11 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .field-ctl .row input { min-width: 150px; }
 .field-ctl input[type='text'], .field-ctl input[type='password'], .field-ctl select { width: 100%; min-width: 220px; }
 .field-ctl input[type='number'] { width: 80px; }
+/* privacy and permissions (Settings and the last stage of first run) */
+.pv-list { position: relative; }
+.pv-locked { margin: 12px 0 4px; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--line); font-size: 12px; color: var(--muted); line-height: 1.5; }
+.pv-locked b { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 12.5px; }
+.pv-locked ul { margin: 6px 0 0; padding-left: 18px; }
 .hook-health { padding: 10px 0; }
 .hook-health ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 22px; }
 .hook-health li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }

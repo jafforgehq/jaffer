@@ -14,10 +14,12 @@ export interface TrashDeps {
   confirm(n: number): Promise<boolean>;
   /** The ids of the sessions the daemon's watcher has that have not ended; throws when that cannot be known. */
   liveIds(): Promise<string[]>;
+  /** (1.4.0) `permissions.trash`: false refuses everything before anything is looked up or asked. Absent: on. */
+  enabled?(): boolean;
 }
 
 /** `unknown`: the running sessions could not be looked up, so nothing was touched (never a guess). */
-export type TrashRefusal = 'running' | 'not found' | 'error' | 'unknown';
+export type TrashRefusal = 'running' | 'not found' | 'error' | 'unknown' | 'off';
 export interface TrashResult {
   trashed: string[];
   refused: { id: string; reason: TrashRefusal }[];
@@ -62,6 +64,10 @@ export async function trashConversations(ids: unknown, deps: TrashDeps): Promise
   };
 
   if (!valid.length) return result([]);
+  if (deps.enabled && !deps.enabled()) {
+    for (const id of valid) why.set(id, 'off');
+    return result([]);
+  }
   const asked = await look(valid);
   if (!asked.size) return result([]);
   if (!(await deps.confirm(asked.size))) return result([], true);
