@@ -120,8 +120,8 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
   it('does not leak daemon-only environment into the shell', async () => {
     sh = startShell(env, { shell });
     await untilReady(sh);
-    const res = await runInShell(sh, 'echo "[${ELECTRON_RUN_AS_NODE-unset}] [$TERM] [$COLORTERM] [$TERM_PROGRAM] [$JAFFER_SESSION]"');
-    expect(res.output).toBe('[unset] [xterm-256color] [truecolor] [Jaffer] [1]');
+    const res = await runInShell(sh, 'echo "[${ELECTRON_RUN_AS_NODE-unset}] [$TERM] [$COLORTERM] [$TERM_PROGRAM] [$JAFFER_SESSION] [$JAFFER_PANE]"');
+    expect(res.output).toBe('[unset] [xterm-256color] [truecolor] [Jaffer] [1] [main]'); // (1.4.0: which terminal the shell is, for the Claude in it)
   });
 });
 
@@ -165,24 +165,81 @@ describe('shell integration regressions (found by macOS CI)', () => {
   });
 });
 
-describe('one session, ever', () => {
-  it('runs a single shell, drops extra panes an older version saved, and refuses to start another', async () => {
+// Changed on purpose for 1.4.0 (the spec replaces "one session, ever"): up to four terminals, only by a split, none saved or replayed.
+describe('up to four terminals, only by a split', () => {
+  const stopAll = async (host: SessionHost) => {
+    const all = host.list().map((p) => host.get(p.id)!);
+    host.dispose();
+    for (const s of all) await stopShell(s);
+  };
+
+  it('starts one shell (panes an older version saved are ignored), splits up to four, refuses a fifth, closes any but the last, and reuses a free id', async () => {
     const host = new SessionHost(env.paths, env.config, 'test');
     const pane = (id: string) => ({ id, cwd: env.userHome, cols: 100, rows: 30 });
     fs.mkdirSync(env.paths.sessionDir, { recursive: true });
     fs.writeFileSync(path.join(env.paths.sessionDir, 'state.json'), JSON.stringify({ version: 1, startedAt: new Date().toISOString(), savedAt: new Date().toISOString(), panes: [pane('main'), pane('p9x1')] }));
+    const seen: string[] = [];
+    host.events.on((e) => 'lifecycle' in e && seen.push(`${e.pane} ${e.lifecycle}`));
     await host.start();
     try {
       expect(host.list().map((p) => p.id)).toEqual(['main']);
-      await expect(host.spawn('p2')).rejects.toThrow(/only one session/);
+      const second = await host.split({ cwd: env.userHome, cols: 90, rows: 20 });
+      expect(second).toMatchObject({ id: 'p2', cwd: env.userHome, cols: 90, rows: 20, alive: true });
+      await host.split();
+      await host.split();
+      expect(host.list().map((p) => p.id)).toEqual(['main', 'p2', 'p3', 'p4']);
+      await expect(host.split()).rejects.toThrow('At most four terminals.');
+      expect(host.list()).toHaveLength(4);
+      const p3 = host.get('p3')!;
+      const others = ['main', 'p2', 'p4'].map((id) => host.get(id)!.pid);
+      host.close('p3');
+      expect(seen).toContain('p3 closed');
+      expect(host.list().map((p) => p.id)).toEqual(['main', 'p2', 'p4']);
+      expect(['main', 'p2', 'p4'].map((id) => host.get(id)!.pid)).toEqual(others); // the others are untouched
+      await waitUntilTrue(() => !p3.alive, 5_000);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(host.get('p3')).toBeUndefined(); // closed for good: not respawned
+      expect(seen.filter((l) => l.startsWith('p3 ')).sort()).toEqual(['p3 closed', 'p3 spawned']);
+      expect((await host.split()).id).toBe('p3'); // a free id is used again
+      for (const id of ['main', 'p2', 'p3']) host.close(id);
+      expect(host.list().map((p) => p.id)).toEqual(['p4']);
+      expect(() => host.close('p4')).toThrow('Use restart for the last terminal.');
+      expect(() => host.close('nope')).toThrow();
       expect(host.list()).toHaveLength(1);
-      expect('split' in host).toBe(false); // there is no API for it either
     } finally {
-      const main = host.get('main');
-      host.dispose();
-      if (main) await stopShell(main);
+      await stopAll(host);
     }
-  });
+  }, 40_000);
+
+  it('each shell knows which terminal it is (JAFFER_PANE), the daemon itself does not, and restarting one leaves the others alone', async () => {
+    const host = new SessionHost(env.paths, env.config, 'test');
+    await host.start();
+    const seen: string[] = [];
+    host.events.on((e) => 'lifecycle' in e && seen.push(`${e.pane} ${e.lifecycle}`));
+    try {
+      await host.split();
+      for (const id of ['main', 'p2']) {
+        const s = host.get(id)!;
+        await untilReady(s);
+        expect((await runInShell(s, 'echo "[$JAFFER_PANE]"')).output).toBe(`[${id}]`);
+      }
+      expect(process.env.JAFFER_PANE).toBeUndefined();
+      const main = host.get('main')!.pid;
+      const p2 = host.get('p2')!;
+      await host.restart('p2');
+      await waitUntilTrue(() => seen.includes('p2 restarted'), 8_000);
+      expect(host.get('p2')).not.toBe(p2);
+      expect(host.get('p2')!.alive).toBe(true);
+      expect(host.get('main')!.pid).toBe(main);
+      // a shell that exits by itself comes back, in any terminal
+      host.get('p2')!.write('exit\r');
+      await waitUntilTrue(() => seen.filter((l) => l === 'p2 restarted').length === 2, 8_000);
+      expect(host.list().map((p) => p.id)).toEqual(['main', 'p2']);
+      expect(host.get('main')!.pid).toBe(main);
+    } finally {
+      await stopAll(host);
+    }
+  }, 40_000);
 });
 
 describe('the one session comes back when its shell dies', () => {

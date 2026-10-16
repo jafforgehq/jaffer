@@ -264,13 +264,127 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     bystander.close();
   }, 60_000);
 
-  it('there is only one session: no client can open a second shell or close the first', async () => {
+  // Changed on purpose for 1.4.0 (the spec replaces the one-session rule): up to four terminals, only by a split.
+  it('up to four terminals: pane.split opens one in the folder of the one it splits, a fifth is refused, pane.close ends one for good, never the last', async () => {
     const c = await connect();
-    await expect(c.call('pane.split', {})).rejects.toThrow(/unknown method/);
-    await expect(c.call('pane.close', { pane: 'main' })).rejects.toThrow(/unknown method/);
-    const panes = await c.call('pane.list', {});
-    expect(panes.map((p: any) => p.id)).toEqual(['main']);
+    const life = collect(c, 'session.lifecycle');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    const folder = fs.realpathSync(fs.mkdtempSync(path.join(env.root, 'split-')));
+    const second = await c.call('pane.split', { cwd: folder, cols: 80, rows: 24 });
+    expect(second).toMatchObject({ id: 'p2', cwd: folder, cols: 80, rows: 24, alive: true });
+    expect((await c.call('pane.split', { pane: 'p2' })).cwd).toBe(folder); // (no folder given: the one of the terminal it splits)
+    await c.call('pane.split', {});
+    expect((await c.call('pane.list', {})).map((p: any) => p.id)).toEqual(['main', 'p2', 'p3', 'p4']);
+    await expect(c.call('pane.split', {})).rejects.toThrow('At most four terminals.');
+    await expect(c.call('pane.split', { pane: 'nope' })).rejects.toThrow(/No such pane/);
+    for (const id of ['p4', 'p3']) expect(await c.call('pane.close', { pane: id })).toBe(true);
+    await expect(c.call('pane.close', { pane: 'p3' })).rejects.toThrow(/No such pane/);
+    await waitUntil(() => life.some((e) => e.pane === 'p3' && e.lifecycle === 'closed'));
+    expect(life.filter((e) => e.lifecycle === 'spawned').map((e) => e.pane)).toEqual(['p2', 'p3', 'p4']);
+    await sleep(500);
+    expect((await c.call('pane.list', {})).map((p: any) => p.id)).toEqual(['main', 'p2']); // nothing comes back by itself
+    expect(await c.call('pane.close', { pane: 'p2' })).toBe(true);
+    await expect(c.call('pane.close', { pane: 'main' })).rejects.toThrow('Use restart for the last terminal.');
+    expect((await c.call('pane.list', {})).map((p: any) => p.id)).toEqual(['main']);
   });
+
+  it('each terminal streams on its own: events carry their pane, a window gets only the terminals it attached to, and detaching one keeps the others', async () => {
+    const c = await connect();
+    const log: { event: string; data: any }[] = [];
+    c.on('*', (m) => log.push(m));
+    await c.call('session.attach', { cols: 100, rows: 30 }); // (no pane: main, as before)
+    await c.call('pane.split', {});
+    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+    const att = await c.call('session.attach', { pane: 'p2', cols: 90, rows: 25 });
+    expect(att).toMatchObject({ pane: 'p2', snapshot: { cols: 90, rows: 25 } });
+    expect(att.panes.map((p: any) => p.id)).toEqual(['main', 'p2']);
+    const ran = (pane: string, cmd: string) => log.some((m) => m.event === 'pty.command' && m.data.pane === pane && m.data.cmd === cmd);
+    const printed = (pane: string, text: string) => log.some((m) => m.event === 'pty.data' && m.data.pane === pane && m.data.data.includes(text));
+    await sleep(800);
+    await c.call('pty.write', { pane: 'p2', data: 'echo only-in-p2-61\r' });
+    await c.call('pty.write', { data: 'echo only-in-main-62\r' });
+    await waitUntil(() => ran('p2', 'echo only-in-p2-61') && ran('main', 'echo only-in-main-62'));
+    expect(printed('main', 'only-in-p2-61') || printed('p2', 'only-in-main-62')).toBe(false);
+    const snap = async (pane: string) => ((await c.call('session.snapshot', { pane })) as { data: string }).data;
+    expect(await snap('p2')).toContain('only-in-p2-61');
+    expect(await snap('p2')).not.toContain('only-in-main-62');
+    // a second window attached to main only hears nothing of p2
+    const other = await connect();
+    const heard: { event: string; data: any }[] = [];
+    other.on('*', (m) => heard.push(m));
+    await other.call('session.attach', { pane: 'main' });
+    // detached from p2, the first window still gets main
+    expect(await c.call('session.detach', { pane: 'p2' })).toBe(true);
+    const mark = log.length;
+    await c.call('pty.write', { pane: 'p2', data: 'echo after-detach-63\r' });
+    await c.call('pty.write', { pane: 'main', data: 'echo still-attached-64\r' });
+    await waitUntil(() => ran('main', 'echo still-attached-64'));
+    await waitUntil(async () => (await snap('p2')).includes('after-detach-63'));
+    await sleep(300);
+    expect(log.slice(mark).some((m) => m.data?.pane === 'p2')).toBe(false);
+    expect(heard.some((m) => m.data?.pane === 'p2')).toBe(false);
+    expect(heard.some((m) => m.event === 'pty.command' && m.data.cmd === 'echo still-attached-64')).toBe(true);
+    // session.info and session.restart take a pane: restarting p2 leaves main's shell as it was
+    expect((await c.call('session.info', { pane: 'p2' })).cwd).toBe(fs.realpathSync(env.userHome));
+    await expect(c.call('session.info', { pane: 'nope' })).rejects.toThrow(/No such pane/);
+    const [main, p2] = await c.call('pane.list', {});
+    await c.call('session.restart', { pane: 'p2' });
+    await waitUntil(async () => {
+      const p = (await c.call('pane.list', {}))[1];
+      return p.alive && p.pid !== p2.pid;
+    });
+    expect((await c.call('pane.list', {}))[0].pid).toBe(main.pid);
+    // closing p2: told to every window, and it is gone
+    expect(await c.call('pane.close', { pane: 'p2' })).toBe(true);
+    await waitUntil(() => heard.some((m) => m.event === 'session.lifecycle' && m.data.pane === 'p2' && m.data.lifecycle === 'closed'));
+    expect((await c.call('pane.list', {}))[0].pid).toBe(main.pid);
+    other.close();
+  }, 40_000);
+
+  it('a Claude in one terminal is that terminal\'s: its hooks say which (JAFFER_PANE), and the other terminal ending (exit, close, its claude command) leaves it working', async () => {
+    const c = await connect();
+    const cmds = collect(c, 'pty.command');
+    await c.call('session.attach', { cols: 100, rows: 30 });
+    await c.call('pane.split', {});
+    await c.call('session.attach', { pane: 'p2' });
+    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+    await sleep(800);
+    const sessions = async () => (await c.call('claude.state', {})).sessions as ClaudeSession[];
+    const stateOf = async (id: string) => (await sessions()).find((s) => s.id === id)?.state;
+    // the real hook, from inside p2's shell: the CLI adds the terminal's id
+    const P2 = 'c1a0de00-0000-4000-8000-000000000022';
+    await c.call('pty.write', { pane: 'p2', data: `echo '{"session_id":"${P2}","hook_event_name":"UserPromptSubmit","prompt":"go"}' | jaffer hook user-prompt-submit\r` });
+    await waitUntil(async () => (await stateOf(P2)) === 'working');
+    expect((await sessions()).find((s) => s.id === P2)!.pane).toBe('p2');
+    const MAIN = 'c1a0de00-0000-4000-8000-000000000011';
+    await c.call('claude.event', { session_id: MAIN, hook_event_name: 'UserPromptSubmit', prompt: 'go', jaffer_pane: 'main' });
+    // main's claude command ends (the stand-in exits): main's Claude is over, p2's goes on
+    await c.call('pty.write', { data: 'claude\r' });
+    await waitUntil(() => cmds.some((x) => x.pane === 'main' && x.cmd === 'claude'));
+    await waitUntil(async () => (await stateOf(MAIN)) === 'ended');
+    expect(await stateOf(P2)).toBe('working');
+    // main's shell exits (and comes back): p2's Claude still goes on
+    await c.call('claude.event', { session_id: MAIN, hook_event_name: 'SessionStart', source: 'resume', jaffer_pane: 'main' });
+    await c.call('claude.event', { session_id: MAIN, hook_event_name: 'UserPromptSubmit', prompt: 'go', jaffer_pane: 'main' });
+    await c.call('pty.write', { data: 'exit\r' });
+    await waitUntil(async () => (await stateOf(MAIN)) === 'ended');
+    expect(await stateOf(P2)).toBe('working');
+    // typing in main answers only main's Claude: p2's waits on
+    await c.call('claude.event', { session_id: P2, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'toolu_p2', jaffer_pane: 'p2' });
+    await c.call('claude.event', { session_id: P2, hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash', jaffer_pane: 'p2' });
+    await waitUntil(async () => (await stateOf(P2)) === 'needs-you');
+    await waitUntil(async () => (await c.call('pane.list', {}))[0].alive);
+    await c.call('pty.write', { data: 'x' });
+    await sleep(300);
+    expect(await stateOf(P2)).toBe('needs-you');
+    await c.call('pty.write', { data: '\x15' });
+    await c.call('pty.write', { pane: 'p2', data: 'y' });
+    await waitUntil(async () => (await stateOf(P2)) === 'working');
+    await c.call('pty.write', { pane: 'p2', data: '\x15' });
+    // p2 is closed: its Claude went with it
+    await c.call('pane.close', { pane: 'p2' });
+    await waitUntil(async () => (await stateOf(P2)) === 'ended');
+  }, 40_000);
 
   it('rejects unknown methods without dropping the connection', async () => {
     const c = await connect();
@@ -1323,6 +1437,31 @@ describe('the Mac stays awake while Claude or a long command works (bundled daem
     await waitUntil(() => ops().length === before + 2, 25_000);
     expect(ops()[before + 1]).toBe('release');
     expect(Date.now() - ended).toBeGreaterThanOrEqual(13_000);
+  }, 120_000);
+
+  // 1.4.0: a command in any terminal counts, not only in the first
+  it('a long command in a second terminal holds too, and closing that terminal lets go', async () => {
+    await waitUntil(() => ops().length > 0 && ops()[ops().length - 1] === 'release', 25_000);
+    const before = ops().length;
+    const starts = collect(c, 'pty.start') as { pane: string; cmd: string }[];
+    await c.call('pane.split', {});
+    await c.call('session.attach', { pane: 'p2' });
+    await waitUntil(async () => (await c.call('pane.list', {}))[1]?.alive === true);
+    await sleep(800);
+    // (main runs a program a person sits in, started first: the longer one, but it does not hide p2's command)
+    await c.call('pty.write', { data: 'less /etc/hosts\r' });
+    await waitUntil(() => starts.some((s) => s.pane === 'main' && s.cmd === 'less /etc/hosts'));
+    await sleep(1000);
+    await c.call('pty.write', { pane: 'p2', data: 'sleep 120\r' });
+    await waitUntil(() => starts.some((s) => s.pane === 'p2' && s.cmd === 'sleep 120'));
+    await waitUntil(() => ops().length === before + 1, 45_000);
+    expect(ops()[before]).toBe('hold');
+    const closed = Date.now();
+    await c.call('pane.close', { pane: 'p2' });
+    await waitUntil(() => ops().length === before + 2, 25_000);
+    expect(ops()[before + 1]).toBe('release');
+    expect(Date.now() - closed).toBeGreaterThanOrEqual(13_000);
+    await c.call('pty.write', { data: 'q' });
   }, 120_000);
 
   it('stopping the daemon lets go of the hold', async () => {

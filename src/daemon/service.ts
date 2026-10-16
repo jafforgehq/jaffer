@@ -12,7 +12,8 @@ import { claudeStatus, findClaude, HOOK_EVENTS, hooksPointAt, installHooks, setu
 import { ClaudeWatcher } from '../core/claude/watcher';
 import { approvalDetail, approvalTool, APPROVAL_WAIT_MS, type ApprovalView } from '../core/claude/approvals';
 import { transcriptActive, watchInterruption } from '../core/claude/transcript-watch';
-import { StayAwake, type Work } from '../core/session/stay-awake';
+import { isInteractiveCommand, StayAwake, type Work } from '../core/session/stay-awake';
+import { STAY_AWAKE } from '../shared/stay-awake-config';
 import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -78,10 +79,8 @@ export class JafferService {
   private liveSize = new Map<string, number>();
   /** The lengths of the last turns Claude finished (at most 15): their median is `claude.typicalTurnMs`. */
   private recentTurns: number[] = [];
-  /** The repository of the shell's folder as `git status` saw it at the last prompt (for the folder pill). */
-  private git: { root: string; status: GitStatus } | undefined;
-  private gitTimer: NodeJS.Timeout | null = null;
-  private gitSeq = 0;
+  /** Per terminal: the repository of its shell's folder as `git status` saw it at its last prompt (for the folder pill). */
+  private git = new Map<string, { timer: NodeJS.Timeout | null; seq: number; value?: { root: string; status: GitStatus } }>();
   /** Permission prompts waiting for a click on Allow or Deny (`claude.approvals`), in memory only: what is shown of each, never its input. */
   private approvals = new Map<string, { view: ApprovalView; done: (decision: 'allow' | 'deny' | null) => void }>();
   private claudePushTimer: NodeJS.Timeout | null = null;
@@ -166,7 +165,7 @@ export class JafferService {
     for (const t of this.costTimers) clearTimeout(t);
     this.costTimers.clear();
     if (this.liveTimer) clearInterval(this.liveTimer);
-    if (this.gitTimer) clearTimeout(this.gitTimer);
+    for (const g of this.git.values()) if (g.timer) clearTimeout(g.timer);
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
     this.host?.dispose();
     await this.rpc.close();
@@ -205,11 +204,12 @@ export class JafferService {
 
   // ------------------------------------------------------------------ terminal info
 
-  private terminalInfo() {
-    const pane = this.host.mainPane;
+  private terminalInfo(id = this.host.firstId) {
+    const pane = this.host.get(id);
     const cwd = pane?.cwd ?? this.userHome;
     const proj = resolveProject(cwd, this.userHome);
-    const git = proj.root && this.git?.root === proj.root ? this.git.status : undefined;
+    const seen = this.git.get(id)?.value;
+    const git = proj.root && seen?.root === proj.root ? seen.status : undefined;
     return { cwd, project: proj.root, branch: proj.branch, git, busy: pane?.runningCommand ?? null, busySince: pane?.runningSince ?? null };
   }
 
@@ -217,32 +217,38 @@ export class JafferService {
    * The shell is back at its prompt: what changed in its folder's repository since (staged, changed, untracked, ahead, behind), for the
    * folder pill. `session.info` carries it; outside a repository, or when git is missing or slow, there is none.
    */
-  private refreshGit(): void {
-    if (this.gitTimer) clearTimeout(this.gitTimer);
-    this.gitTimer = setTimeout(() => {
-      this.gitTimer = null;
-      const seq = ++this.gitSeq;
-      const root = resolveProject(this.host.mainPane?.cwd ?? this.userHome, this.userHome).root;
-      if (!root) return void (this.git = undefined);
+  private refreshGit(pane: string): void {
+    const g = this.git.get(pane) ?? { timer: null, seq: 0 };
+    this.git.set(pane, g);
+    if (g.timer) clearTimeout(g.timer);
+    g.timer = setTimeout(() => {
+      g.timer = null;
+      const seq = ++g.seq;
+      const root = resolveProject(this.host.get(pane)?.cwd ?? this.userHome, this.userHome).root;
+      if (!root) return void (g.value = undefined);
       void readGitStatus(root).then((status) => {
-        if (seq === this.gitSeq) this.git = status && { root, status }; // (an answer overtaken by a newer prompt's is dropped)
+        if (seq === g.seq) g.value = status && { root, status }; // (an answer overtaken by a newer prompt's is dropped)
       });
     }, GIT_DEBOUNCE_MS);
-    this.gitTimer.unref?.();
+    g.timer.unref?.();
   }
 
   // ------------------------------------------------------------------ events
 
-  private attached = (c: ServerConn) => c.meta.attached === true;
+  /** Per connection: the terminals it shows (`session.attach`), and those it fell too far behind on (`stale`: resynced once it drains). */
+  private panesOf = (c: ServerConn, key: 'attached' | 'stale'): Set<string> => (c.meta[key] ??= new Set<string>()) as Set<string>;
+  private attachedTo = (pane: string) => (c: ServerConn) => this.panesOf(c, 'attached').has(pane);
+  private attachedAny = (c: ServerConn) => this.panesOf(c, 'attached').size > 0;
 
   private sendPty(pane: string, event: PtyEvent): void {
     const base = { pane };
     if (event.type === 'data') {
       for (const c of this.rpc.conns) {
-        if (!this.attached(c) || c.meta.stale) continue;
+        const stale = this.panesOf(c, 'stale');
+        if (!this.panesOf(c, 'attached').has(pane) || stale.has(pane)) continue;
         if (c.backlog > MAX_BACKLOG) {
-          // Too far behind: stop feeding it, resync from a snapshot once its socket drains.
-          c.meta.stale = true;
+          // Too far behind: stop feeding it this terminal, resync it from a snapshot once its socket drains.
+          stale.add(pane);
           c.socket.once('drain', () => void this.resync(c, pane));
           continue;
         }
@@ -251,14 +257,14 @@ export class JafferService {
       return;
     }
     const name = `pty.${event.type}`;
-    this.rpc.broadcast(name, { ...base, ...event }, this.attached);
+    this.rpc.broadcast(name, { ...base, ...event }, this.attachedTo(pane));
   }
 
   private async resync(c: ServerConn, pane: string): Promise<void> {
     const p = this.host.get(pane);
     if (!p || !c.alive) return;
     const snapshot = await p.consistentSnapshot();
-    c.meta.stale = false;
+    this.panesOf(c, 'stale').delete(pane);
     c.send({ event: 'pty.reset', data: { pane, snapshot } });
   }
 
@@ -273,28 +279,31 @@ export class JafferService {
     const snapshot = await p.consistentSnapshot();
     if (this.stopping || this.host.get(pane) !== p) return; // (replaced again meanwhile: that shell's own reset follows)
     for (const c of this.rpc.conns) {
-      if (this.attached(c) && !c.meta.stale && c.alive) c.send({ event: 'pty.reset', data: { pane, snapshot } });
+      if (this.attachedTo(pane)(c) && !this.panesOf(c, 'stale').has(pane) && c.alive) c.send({ event: 'pty.reset', data: { pane, snapshot } });
     }
   }
 
   private wireEvents(): void {
     this.host.events.on((e) => {
       if ('lifecycle' in e) {
-        this.rpc.broadcast('session.lifecycle', e, this.attached);
+        // (to every window that shows a terminal: a new one is there to attach to, a closed one to take away)
+        this.rpc.broadcast('session.lifecycle', e, this.attachedAny);
         if (e.lifecycle === 'restarted') void this.resyncAttached(e.pane);
-        this.refreshStayAwake(); // (a new shell runs nothing)
+        if (e.lifecycle === 'closed') this.forgetPane(e.pane);
+        this.refreshStayAwake(); // (a new shell runs nothing, a closed one nothing any more)
         return;
       }
       this.sendPty(e.pane, e.event);
       // a command began or ended, or the shell is gone: a long one holds the Mac awake, and none holds nothing
       if (e.event.type === 'start' || e.event.type === 'command' || e.event.type === 'exit') this.refreshStayAwake();
-      if (e.event.type === 'prompt' && e.pane === 'main') this.refreshGit();
-      // The shell is gone and took its Claude with it: no conversation is running any more (a daemon that is stopping leaves it as it is).
-      if (e.event.type === 'exit' && !this.stopping) this.claudeWatcher.endAll();
-      // The `claude` in the terminal finished (or crashed): whatever its hooks last said is over. Not when it was only stopped (Ctrl+Z
+      if (e.event.type === 'prompt') this.refreshGit(e.pane);
+      // The shell is gone and took its Claude with it: that terminal's conversation is not running any more (another terminal's goes
+      // on; a daemon that is stopping leaves it as it is).
+      if (e.event.type === 'exit' && !this.stopping) this.claudeWatcher.endPane(e.pane);
+      // The `claude` in that terminal finished (or crashed): whatever its hooks last said is over. Not when it was only stopped (Ctrl+Z
       // reports 128 + a stop signal): it comes back with `fg`. (The command line comes from the shell's marks, which any output can forge
       // at any length: `isClaudeCommand` reads only its start.)
-      if (e.event.type === 'command' && !stoppedExit(e.event.exit) && isClaudeCommand(e.event.cmd)) this.claudeWatcher.endAll();
+      if (e.event.type === 'command' && !stoppedExit(e.event.exit) && isClaudeCommand(e.event.cmd)) this.claudeWatcher.endPane(e.pane);
     });
     this.claudeWatcher.changes.on((sessions) => {
       this.refreshStayAwake();
@@ -326,19 +335,36 @@ export class JafferService {
     });
   }
 
+  /** A terminal the person closed: no window shows it any more (its id may come back with a new shell), its repository and its Claude are over. */
+  private forgetPane(pane: string): void {
+    for (const c of this.rpc.conns) {
+      this.panesOf(c, 'attached').delete(pane);
+      this.panesOf(c, 'stale').delete(pane);
+    }
+    const g = this.git.get(pane);
+    if (g?.timer) clearTimeout(g.timer);
+    this.git.delete(pane);
+    if (!this.stopping) this.claudeWatcher.endPane(pane);
+  }
+
   // ------------------------------------------------------------------ stay awake
 
   /**
    * What works now. Claude: a session is working, or a background agent runs (a Claude that waits for the person is not work, and an
-   * ended session has nothing running). A command: the one running in the shell, if the shell is alive (a shell that died mid-command
-   * never reported its end).
+   * ended session has nothing running). A command: of those running in the terminals whose shells are alive (a shell that died
+   * mid-command never reported its end), the one that has run longest, a program a person sits in or one past the cap only when there is
+   * no other (so neither hides a build in another terminal).
    */
   private stayAwakeWork(): Work {
     const claude = this.claudeWatcher.sessions().some((s) => s.state !== 'ended' && (s.state === 'working' || s.subagents.some((a) => a.status === 'running')));
-    const pane = this.host?.mainPane;
-    const cmd = pane?.alive ? pane.runningCommand : null;
-    const since = pane?.runningSince ?? null;
-    return { enabled: this.config.get().session.stayAwake, claude, command: cmd !== null && since !== null ? { cmd, since } : null };
+    const now = Date.now();
+    const rank = (c: { cmd: string; since: number }) => (isInteractiveCommand(c.cmd) ? 2 : now - c.since >= STAY_AWAKE.commandCapMs ? 1 : 0);
+    const running = (this.host?.list() ?? []).flatMap((p) => {
+      const s = this.host.get(p.id);
+      return s?.alive && s.runningCommand !== null && s.runningSince !== null ? [{ cmd: s.runningCommand, since: s.runningSince }] : [];
+    });
+    const command = running.sort((a, b) => rank(a) - rank(b) || a.since - b.since)[0] ?? null;
+    return { enabled: this.config.get().session.stayAwake, claude, command };
   }
 
   /** Tells `StayAwake` what works now, and keeps a look on a running command (it counts once it has run half a minute, with no event to say so). */
@@ -537,8 +563,10 @@ export class JafferService {
 
   private registerMethods(): void {
     const r = this.rpc;
-    const pane = (p: { pane?: string }) => {
-      const s = this.host.get(p?.pane ?? 'main');
+    // a request names its terminal (`pane`), or means the first one (what a window of 1.3 and the CLI send)
+    const paneId = (p: { pane?: unknown } | null | undefined): string => (typeof p?.pane === 'string' ? p.pane : this.host.firstId);
+    const pane = (p: { pane?: unknown } | null | undefined) => {
+      const s = this.host.get(paneId(p));
       if (!s) throw new RpcError('No such pane', 'ENOPANE');
       return s;
     };
@@ -554,22 +582,27 @@ export class JafferService {
 
     // ---- terminal
     r.handle('session.attach', async (p: { cols?: number; rows?: number; pane?: string }, conn) => {
+      const id = paneId(p);
       const s = pane(p);
       if (p.cols && p.rows) s.resize(p.cols, p.rows);
       const snapshot = await s.consistentSnapshot();
-      conn.meta.attached = true;
-      conn.meta.stale = false;
-      return { pane: p.pane ?? 'main', panes: this.host.list(), snapshot };
+      this.panesOf(conn, 'attached').add(id);
+      this.panesOf(conn, 'stale').delete(id);
+      return { pane: id, panes: this.host.list(), snapshot };
     });
-    r.handle('session.detach', (_p, conn) => {
-      conn.meta.attached = false;
+    // one terminal (`pane`) or, with none, all of them (a window of 1.3 detached the whole connection)
+    r.handle('session.detach', (p: { pane?: unknown } | null, conn) => {
+      for (const key of ['attached', 'stale'] as const) {
+        if (typeof p?.pane === 'string') this.panesOf(conn, key).delete(p.pane);
+        else this.panesOf(conn, key).clear();
+      }
       return true;
     });
     r.handle('session.snapshot', async (p: { pane?: string }) => pane(p).consistentSnapshot());
     r.handle('pty.write', (p: { pane?: string; data: string }) => {
       pane(p).write(String(p.data));
-      // typing while Claude waits for them means they are answering; the terminal's own replies and focus reports do not
-      if (!isTerminalReport(String(p.data))) this.claudeWatcher.userAnswered();
+      // typing while Claude waits for them means they are answering (the Claude of that terminal); the terminal's own replies and focus reports do not
+      if (!isTerminalReport(String(p.data))) this.claudeWatcher.userAnswered(paneId(p));
       return true;
     });
     r.handle('pty.resize', (p: { pane?: string; cols: number; rows: number }) => {
@@ -577,11 +610,27 @@ export class JafferService {
       return true;
     });
     r.handle('pane.list', () => this.host.list());
-    r.handle('session.restart', async () => {
-      await this.host.restartMain();
+    // 1.4.0: up to four terminals, only by the person's split: a fresh shell in the folder given, else that of the terminal it splits
+    r.handle('pane.split', (p: { pane?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown } | null) => {
+      const base = pane(p);
+      const num = (v: unknown, d: number) => (typeof v === 'number' ? v : d);
+      return this.host.split({ cwd: typeof p?.cwd === 'string' ? p.cwd : base.cwd, cols: num(p?.cols, base.cols), rows: num(p?.rows, base.rows) });
+    });
+    // ends that terminal's shell for good (it must be named; the last one is refused: `session.restart` it)
+    r.handle('pane.close', (p: { pane?: unknown } | null) => {
+      if (typeof p?.pane !== 'string' || !this.host.get(p.pane)) throw new RpcError('No such pane', 'ENOPANE');
+      this.host.close(p.pane);
       return true;
     });
-    r.handle('session.info', () => ({ ...this.terminalInfo(), panes: this.host.list(), startedAt: this.startedAt, version: this.version }));
+    r.handle('session.restart', async (p: { pane?: unknown } | null) => {
+      pane(p);
+      await this.host.restart(paneId(p));
+      return true;
+    });
+    r.handle('session.info', (p: { pane?: unknown } | null) => {
+      if (typeof p?.pane === 'string') pane(p);
+      return { ...this.terminalInfo(paneId(p)), panes: this.host.list(), startedAt: this.startedAt, version: this.version };
+    });
 
     // ---- the terminal's Claude, live (events come from `jaffer hook` inside Jaffer's own shell)
     r.handle('claude.event', (p: unknown) => {

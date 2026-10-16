@@ -3207,7 +3207,7 @@ describe('Jaffer UI end to end', () => {
     await sleep(500);
     expect(await page.$$('.term .xterm')).toHaveLength(1);
     expect(await page.$('.divider, .pane-head')).toBeNull();
-    await expect(page.evaluate(() => window.jaffer.call('pane.split'))).rejects.toThrow(/unknown method/);
+    // (1.4.0: the daemon has pane.split now, up to four terminals; the window opens none by itself. Task 2 rewrites this test for the split view.)
     expect(await page.evaluate(() => window.jaffer.call('pane.list'))).toHaveLength(1);
     // the one terminal fills its area (no leftover bands above or below)
     const box = await page.evaluate(() => {

@@ -58,7 +58,7 @@ async function fakeDaemon(answer: (method: string) => unknown = () => ({ ok: tru
 function hook(arg: string, input: string, extra: NodeJS.ProcessEnv = {}, keepOpen = false): Promise<{ status: number | null; stdout: string; ms: number }> {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const child = spawn(process.execPath, [cli, 'hook', arg], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, HOME: env.userHome, JAFFER_HOME: env.home, JAFFER_SESSION: '', JAFFER_NO_HOOKS: '', ...extra } });
+    const child = spawn(process.execPath, [cli, 'hook', arg], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, HOME: env.userHome, JAFFER_HOME: env.home, JAFFER_SESSION: '', JAFFER_NO_HOOKS: '', JAFFER_PANE: '', ...extra } });
     let stdout = '';
     child.stdout.on('data', (d) => (stdout += d));
     const guard = setTimeout(() => child.kill('SIGKILL'), 15_000);
@@ -93,6 +93,18 @@ describe('jaffer hook <event>', () => {
     expect(received.filter((m) => m.method === 'claude.event')).toHaveLength(10);
     expect(received.map((m) => m.method).filter((m) => m !== 'claude.event')).toEqual([]); // nothing else is asked
     expect(received[0]!.params).toMatchObject({ session_id: 'sess-1', tool_name: 'Bash' });
+  });
+
+  // 1.4.0: up to four terminals; which one the claude runs in comes from the shell's JAFFER_PANE, and nothing else is added
+  it('adds the terminal it runs in (JAFFER_PANE) as jaffer_pane, only a short plain id; an odd value is left out', async () => {
+    await fakeDaemon();
+    await hook('pre-tool-use', PAYLOAD, { JAFFER_SESSION: '1', JAFFER_PANE: 'p2' });
+    expect(received[0]!.params).toEqual({ ...JSON.parse(PAYLOAD), jaffer_pane: 'p2' });
+    for (const bad of ['', 'p2; rm -rf ~', 'x'.repeat(17), 'p 2', 'p\u202e2']) {
+      received = [];
+      expect(await hook('pre-tool-use', PAYLOAD, { JAFFER_SESSION: '1', JAFFER_PANE: bad }), bad).toMatchObject({ status: 0, stdout: '' });
+      expect(received[0]!.params, bad).toEqual(JSON.parse(PAYLOAD));
+    }
   });
 
   it('outside a Jaffer session (a claude run in another terminal) it sends nothing', async () => {

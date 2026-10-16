@@ -8,6 +8,7 @@ import { parseArgs } from './args';
 import { claudeStatus, setupClaude, teardownClaude } from '../core/integrations/claude';
 import { resetJaffer } from '../core/reset';
 import { APPROVAL_WAIT_MS, decisionOutput } from '../core/claude/approvals';
+import { isPaneId } from '../shared/session-id';
 
 const paths = makePaths();
 const args = process.argv.slice(2);
@@ -109,6 +110,9 @@ async function main(): Promise<void> {
         /* no payload */
       }
       if (!Object.keys(payload).length) return;
+      // which of Jaffer's terminals this claude runs in (the shell's JAFFER_PANE), and nothing else added: a short plain id or none
+      if (isPaneId(process.env.JAFFER_PANE)) payload.jaffer_pane = process.env.JAFFER_PANE;
+      else delete payload.jaffer_pane;
       const client = await tryConnect(paths, 600);
       try {
         await client?.call('claude.event', payload, 800).catch(() => undefined);

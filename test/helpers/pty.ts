@@ -17,6 +17,7 @@ export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; 
     version: 'test',
     baseEnv: { PATH: process.env.PATH, HOME: env.userHome, LANG: 'en_US.UTF-8', PS1: '$ ', ELECTRON_RUN_AS_NODE: '1' },
     login: false,
+    pane: 'main',
   });
   return new PtySession({ file: spawn.file, args: spawn.args, cwd: opts.cwd ?? env.userHome, env: spawn.env, cols: opts.cols ?? 100, rows: opts.rows ?? 30 });
 }

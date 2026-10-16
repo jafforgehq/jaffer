@@ -52,6 +52,8 @@ export interface SpawnOptions {
   baseEnv: NodeJS.ProcessEnv;
   version: string;
   login?: boolean;
+  /** Which terminal the shell is (`main`, `p2`..`p4`): `JAFFER_PANE`, so the `claude` in it says where it runs (its hooks pass it on). */
+  pane: string;
 }
 
 export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
@@ -67,6 +69,7 @@ export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
   env.TERM_PROGRAM_VERSION = o.version;
   if (!env.LANG || !/UTF-?8/i.test(env.LANG)) env.LANG = 'en_US.UTF-8';
   env.JAFFER_SESSION = '1';
+  env.JAFFER_PANE = o.pane;
   env.BASH_SILENCE_DEPRECATION_WARNING = '1'; // macOS's bash 3.2 otherwise nags about zsh on every start
   env.JAFFER_HOME = o.paths.home;
   env.JAFFER_SOCK = o.paths.socket;

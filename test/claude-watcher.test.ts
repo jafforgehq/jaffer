@@ -320,6 +320,44 @@ describe('ClaudeWatcher', () => {
     expect(only().state).toBe('idle');
   });
 
+  // 1.4.0: up to four terminals, each with its own Claude. The hook CLI adds the terminal's id (`jaffer_pane`, from JAFFER_PANE).
+  it('keeps the terminal a session runs in (jaffer_pane): a short plain id only, the latest one heard; anything else is not kept', () => {
+    w.handle(fx('SessionStart', { jaffer_pane: 'p2' }));
+    expect(only().pane).toBe('p2');
+    for (const bad of ['p2; rm -rf ~', 'x'.repeat(17), '', 'p\u202e2', 7, null, ['p3'], { p: 'p3' }]) {
+      w.handle(fx('UserPromptSubmit', { jaffer_pane: bad }));
+      expect(only().pane, JSON.stringify(bad)).toBe('p2');
+    }
+    w.handle(fx('Stop', { jaffer_pane: 'p3' })); // (resumed in another terminal)
+    expect(only().pane).toBe('p3');
+    expect(w.view()[0]!.pane).toBe('p3');
+  });
+
+  it('endPane ends only the sessions of that terminal, and those whose terminal is not known (an older hook): another terminal\'s Claude goes on', () => {
+    w.handle(fx('UserPromptSubmit', { session_id: 'in-main', jaffer_pane: 'main' }));
+    w.handle(fx('UserPromptSubmit', { session_id: 'in-p2', jaffer_pane: 'p2' }));
+    w.handle(fx('UserPromptSubmit', { session_id: 'unknown' }));
+    w.endPane('p2');
+    const state = (id: string) => w.sessions().find((x) => x.id === id)!.state;
+    expect([state('in-main'), state('in-p2'), state('unknown')]).toEqual(['working', 'ended', 'ended']);
+    w.endPane('p3');
+    expect(state('in-main')).toBe('working');
+    w.endPane('main');
+    expect(state('in-main')).toBe('ended');
+  });
+
+  it('userAnswered(pane): typing in one terminal answers only the Claude that waits there (and one whose terminal is not known); with no pane, all', () => {
+    for (const [id, pane] of [['in-main', 'main'], ['in-p2', 'p2'], ['unknown', undefined]] as const) {
+      w.handle(fx('PreToolUse', { ...bash('rm -rf build', `toolu_${id}`), session_id: id, ...(pane ? { jaffer_pane: pane } : {}) }));
+      w.handle(fx('Notification', { session_id: id }));
+    }
+    const state = (id: string) => w.sessions().find((x) => x.id === id)!.state;
+    w.userAnswered('main');
+    expect([state('in-main'), state('in-p2'), state('unknown')]).toEqual(['working', 'needs-you', 'working']);
+    w.userAnswered();
+    expect(state('in-p2')).toBe('working');
+  });
+
   it('endAll ends every session', () => {
     w.handle(fx('UserPromptSubmit', { session_id: 'a' }));
     w.handle(fx('Stop', { session_id: 'b' }));
@@ -332,7 +370,7 @@ describe('ClaudeWatcher', () => {
   it('keeps nothing the person wrote or Claude answered: no prompt, command, reply, folder or tool argument; only tool names, counts, timings, failures and the paths it edits (never a sensitive one)', () => {
     const home = '/home/me/secret-project';
     const words = ['PROMPT-SECRET-WORDS', 'cat /home/me/.ssh/id_rsa', '.ssh', 'id_rsa', 'REPLY-SECRET-WORDS', home, TOKEN, 'plan-the-heist', 'heist-description', 'OLD-TEXT', 'NEW-TEXT', 'FILE-CONTENT', 'read-only.ts', 'ERROR-TEXT', 'PERMISSION-SECRET-COMMAND', 'SUGGESTION-SECRET', 'PermissionRequest'];
-    w.handle(fx('SessionStart', { cwd: home, model: 'claude-opus-5-5' }));
+    w.handle(fx('SessionStart', { cwd: home, model: 'claude-opus-5-5', jaffer_pane: 'p2' }));
     w.handle(fx('UserPromptSubmit', { prompt: `PROMPT-SECRET-WORDS ${TOKEN}`, cwd: home }));
     w.handle(fx('PreToolUse', bash('cat /home/me/.ssh/id_rsa')));
     w.handle(fx('PostToolUseFailure', { ...bash('cat /home/me/.ssh/id_rsa'), error: 'ERROR-TEXT' }));
@@ -354,12 +392,13 @@ describe('ClaudeWatcher', () => {
     w.handle(fx('Stop', { last_assistant_message: `REPLY-SECRET-WORDS ${TOKEN}` }));
     const state = JSON.stringify(w.sessions());
     for (const word of words) expect(state, word).not.toContain(word);
-    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['calls', 'counts', 'files', 'id', 'since', 'startedAt', 'state', 'subagents', 'transcriptPath', 'turnStartedAt', 'turns']); // what is set at all (JSON drops the undefined)
+    expect(Object.keys(JSON.parse(state)[0]).sort()).toEqual(['calls', 'counts', 'files', 'id', 'pane', 'since', 'startedAt', 'state', 'subagents', 'transcriptPath', 'turnStartedAt', 'turns']); // what is set at all (JSON drops the undefined; 1.4.0: `pane`, the terminal's id)
     for (const call of JSON.parse(state)[0].calls) for (const k of Object.keys(call)) expect(['name', 'category', 'startedAt', 'endedAt', 'failed', 'agentId', 'id']).toContain(k);
     expect(only().files).toEqual(['/work/app/src/a.ts']); // the one path it keeps: a file Claude edited, not one it read, not a key
     expect(only().calls.map((c) => [c.name, c.failed ?? false])).toEqual([['Bash', true], ['Read', false], ['Edit', false], ['Write', false], ['Agent', false]]);
     expect(only().counts).toEqual({ shell: 1, read: 1, write: 2, agent: 1 });
     expect(only().subagents).toEqual([{ id: 'bg-1', status: 'running', startedAt: 1_000 }]);
+    expect(only().pane).toBe('p2'); // the terminal it runs in (a short plain id), never its folder
   });
 
   it('what leaves the daemon (view) is the same sessions without the transcript path', () => {

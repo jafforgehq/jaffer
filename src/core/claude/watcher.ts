@@ -3,6 +3,7 @@ import { redactText } from '../../shared/redact';
 import { isSensitivePath } from '../../shared/sensitive-path';
 import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import type { TurnCost } from '../../shared/claude-cost';
+import { isPaneId } from '../../shared/session-id';
 
 /**
  * What the Claude Code running in Jaffer's terminal is doing, built from its hook events. Pure state: no I/O, so it is
@@ -28,11 +29,13 @@ export interface ClaudeCost {
 /**
  * What the rest of Jaffer may know about a Claude Code session: whether it works, waits or is done, its background agents, the
  * names, kinds, timings and failures of its tool calls, the paths of the files it edits or writes (redacted, never a sensitive one,
- * in memory only) and what its answers cost. Nothing else the person wrote or Claude answered is kept, not even redacted (no prompts,
- * replies, commands, folders or other tool arguments): nothing shows it, so nothing holds it.
+ * in memory only), what its answers cost and which of Jaffer's terminals it runs in. Nothing else the person wrote or Claude answered is
+ * kept, not even redacted (no prompts, replies, commands, folders or other tool arguments): nothing shows it, so nothing holds it.
  */
 export interface ClaudeSession {
   id: string;
+  /** The terminal it runs in (`main`, `p2`..`p4`: a short plain id the hook CLI adds from the shell's `JAFFER_PANE`); the latest heard. */
+  pane?: string;
   state: ClaudeState;
   since: number;
   /** When the session was first heard of. */
@@ -141,14 +144,22 @@ export class ClaudeWatcher {
     if (JSON.stringify(this.snapshot()) !== before) this.changes.emit(this.sessions());
   }
 
+  /** A terminal's shell or its `claude` ended: its sessions are over, and so are those whose terminal is not known (an older hook). */
+  endPane(pane: string): void {
+    const before = JSON.stringify(this.snapshot());
+    for (const { s } of this.map.values()) if (s.state !== 'ended' && (s.pane === undefined || s.pane === pane)) this.end(s);
+    if (JSON.stringify(this.snapshot()) !== before) this.changes.emit(this.sessions());
+  }
+
   /**
    * The user typed in the terminal while Claude waited for them: they are answering. Back to working, tool kept (an approval
-   * is followed by PostToolUse; a decline fires no hook and is noticed from the transcript, see interrupted).
+   * is followed by PostToolUse; a decline fires no hook and is noticed from the transcript, see interrupted). With `pane`, only the
+   * sessions of the terminal typed in (and those whose terminal is not known).
    */
-  userAnswered(): void {
+  userAnswered(pane?: string): void {
     const before = JSON.stringify(this.snapshot());
     for (const { s } of this.map.values()) {
-      if (s.state !== 'needs-you') continue;
+      if (s.state !== 'needs-you' || (pane !== undefined && s.pane !== undefined && s.pane !== pane)) continue;
       this.setState(s, 'working');
       s.notice = undefined;
     }
@@ -306,6 +317,7 @@ export class ClaudeWatcher {
 
     const s = this.session(id);
     if (str(o.transcript_path)) s.transcriptPath = str(o.transcript_path).slice(0, 400);
+    if (isPaneId(o.jaffer_pane)) s.pane = o.jaffer_pane;
 
     switch (ev) {
       case 'SessionStart':
