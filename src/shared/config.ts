@@ -56,6 +56,10 @@ export interface JafferConfig {
     turnSummary: boolean;
     /** Answer Claude Code's permission prompts from the notification (Allow / Deny): a twelfth hook, blocking, installed only while this is on. Off by default. */
     approvals: boolean;
+    /** (1.4.0) Minutes a day of Claude's work ("Claude worked … today") the Now card measures against; 0 is no budget. */
+    dailyWorkBudgetMin: number;
+    /** (1.4.0) The person's weekly budgets per folder, `"<folder>=<usd per week>"` (see `project-budgets.ts`). */
+    projectBudgets: string[];
   };
   terminal: {
     /** Command blocks: a mark beside every command's prompt (its exit, its times), jumping between prompts, the sticky command header, copying and saving a command's output. */
@@ -88,6 +92,14 @@ export interface JafferConfig {
   notifications: {
     /** "Claude finished" when a turn that took half a minute or more ends. */
     claudeFinished: boolean;
+    /** (1.4.0) At the app's start, once per finished week: what last week's answers cost and how long Claude worked. */
+    weeklyDigest: boolean;
+  };
+  /** (1.4.0) This week's and last week's estimated dollars and Claude's work time, and the week the digest last told about (numbers and ISO week ids only; see `usage-week.ts`). Kept by the daemon, not a setting. */
+  usage: {
+    week: { id: string; usd: number; workMs: number };
+    lastWeek: { id: string; usd: number; workMs: number };
+    digestWeek: string;
   };
   session: {
     /** Keep the Mac from idle sleep while Claude works (and while a long command runs). Takes no admin rights and lets go when the work stops. */
@@ -152,11 +164,12 @@ export const DEFAULT_CONFIG: JafferConfig = {
     blur: true,
   },
   shell: { path: '', args: [] },
-  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false },
+  claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false, dailyWorkBudgetMin: 0, projectBudgets: [] },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
   permissions: { explain: false, deepSearch: false, resumeTyping: true, trash: true },
   updates: { auto: true, seenVersion: '' },
-  notifications: { claudeFinished: true },
+  notifications: { claudeFinished: true, weeklyDigest: true },
+  usage: { week: { id: '', usd: 0, workMs: 0 }, lastWeek: { id: '', usd: 0, workMs: 0 }, digestWeek: '' },
   session: { stayAwake: true },
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false, dropdown: false },
   panel: { open: true, width: 300 },

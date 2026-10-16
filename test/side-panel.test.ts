@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nowCardModel, panelWidth } from '../src/renderer/panel';
+import { fmtMinutes, nowCardModel, panelWidth, todayTimeline } from '../src/renderer/panel';
 import { costFigure } from '../src/renderer/claude-ui';
 import type { ClaudeSession } from '../src/core/claude/watcher';
 
@@ -158,5 +158,54 @@ describe('the side panel (pure)', () => {
     expect(nowCardModel(session(), opts({ today: null })).worked).toBeUndefined();
     expect(nowCardModel(session({ state: 'working', turnStartedAt: NOW - 400 }), opts({ today: { usd: 0, workMs: 0 } })).worked).toBeUndefined(); // under a second in all
     expect(nowCardModel(session(), opts({ today: { usd: 1, workMs: Number.NaN } })).worked).toBeUndefined();
+  });
+
+  it('the context meter (1.4.0): how full the latest response left the window, warn from 80 %, danger from 92 %; the tokens alone for an unknown window; nothing without numbers', () => {
+    const ctx = (tokens: number, window?: number) => nowCardModel(session({ context: { tokens, ...(window ? { window } : {}), at: NOW } }), opts()).context;
+    expect(ctx(620_000, 1_000_000)).toEqual({ text: 'Context 62% of 1M', level: 'ok', fraction: 0.62 });
+    expect(ctx(160_000, 200_000)).toEqual({ text: 'Context 80% of 200k', level: 'warn', fraction: 0.8 });
+    expect(ctx(184_000, 200_000)?.level).toBe('danger');
+    expect(ctx(250_000, 200_000)).toEqual({ text: 'Context 100% of 200k', level: 'danger', fraction: 1 });
+    expect(ctx(124_000)).toEqual({ text: 'Context 124k tokens', level: 'ok', fraction: null });
+    expect(ctx(0, 200_000)).toBeUndefined();
+    expect(ctx(Number.NaN, 200_000)).toBeUndefined();
+    expect(nowCardModel(session(), opts()).context).toBeUndefined();
+    expect(nowCardModel(session({ context: 'x' as never }), opts()).context).toBeUndefined();
+    expect(nowCardModel(null, opts()).context).toBeUndefined();
+  });
+
+  it('the last 5 hours (1.4.0): tokens always, the money only with showCost, and what it is not; nothing for none', () => {
+    expect(nowCardModel(null, opts({ usage5h: { tokens: 3_200_000, usd: 4.5 } })).last5h).toBe("Last 5 h ≈ $4.50 · 3.2M tokens (estimate, not your plan's limit)");
+    expect(nowCardModel(session(), opts({ usage5h: { tokens: 3_200_000, usd: 4.5 }, cfg: { showCost: false } })).last5h).toBe("Last 5 h · 3.2M tokens (estimate, not your plan's limit)");
+    expect(nowCardModel(session(), opts({ usage5h: { tokens: 1200 } })).last5h).toBe("Last 5 h · 1.2k tokens (estimate, not your plan's limit)");
+    expect(nowCardModel(session(), opts({ usage5h: { tokens: 0, usd: 0 } })).last5h).toBeUndefined();
+    expect(nowCardModel(session(), opts({ usage5h: null })).last5h).toBeUndefined();
+    expect(nowCardModel(session(), opts()).last5h).toBeUndefined();
+  });
+
+  it('the daily work-time budget (1.4.0): the worked line gets the budget levels (warn from 80 %, danger past it); off for 0', () => {
+    const lvl = (workMs: number, min: number) => nowCardModel(session(), opts({ today: { usd: 0, workMs }, cfg: { dailyWorkBudgetMin: min } })).workedLevel;
+    expect(lvl(60 * 60_000, 0)).toBe('off');
+    expect(lvl(60 * 60_000, 120)).toBe('ok');
+    expect(lvl(96 * 60_000, 120)).toBe('warn');
+    expect(lvl(120 * 60_000, 120)).toBe('danger');
+    expect(fmtMinutes(180)).toBe('3 h');
+    expect(fmtMinutes(90)).toBe('1 h 30 min');
+    expect(fmtMinutes(45)).toBe('45 min');
+  });
+
+  it('today\'s timeline (1.4.0): the turns that ended today, newest first, at most 20: time of day, length, counts, files, cost (with showCost)', () => {
+    const now = new Date(2026, 9, 16, 15, 0).getTime();
+    const at = (h: number, m: number, day = 16) => new Date(2026, 9, day, h, m).getTime();
+    const turns = [
+      { id: 's1', durMs: 30_000, usd: 0.5, at: at(23, 50, 15), counts: '1 read', files: 0 }, // yesterday
+      { id: 's1', durMs: 72_000, usd: 0.04, at: at(9, 5), counts: '3 reads, 2 edits', files: 2 },
+      { id: 's1', durMs: 5_000, at: at(14, 30), counts: '', files: 1 },
+      { id: 's1', durMs: 1_000 }, // (no time: not placed)
+    ];
+    expect(todayTimeline(turns, now, true)).toEqual(['14:30 · 5s · 1 file', '09:05 · 1m 12s · 3 reads, 2 edits · 2 files · ≈ $0.04']);
+    expect(todayTimeline(turns, now, false)).toEqual(['14:30 · 5s · 1 file', '09:05 · 1m 12s · 3 reads, 2 edits · 2 files']);
+    expect(todayTimeline(Array.from({ length: 30 }, (_, i) => ({ id: 's', durMs: 1000, at: at(10, i) })), now, true)).toHaveLength(20);
+    expect(todayTimeline([], now, true)).toEqual([]);
   });
 });

@@ -17,9 +17,11 @@ import { STAY_AWAKE } from '../shared/stay-awake-config';
 import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { readTurnCost, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
+import { readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
 import { listConversations } from '../core/claude/history';
-import { dayTotal, type DayTotal } from '../shared/claude-cost';
+import { recentUsage } from '../core/claude/usage-window';
+import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
+import { rollWeek } from '../shared/usage-week';
 import { nextTypicalTurnMs } from '../shared/turn-median';
 import { readGitStatus, type GitStatus } from '../core/session/git-status';
 import { claudeAuth, ClaudeLogin } from '../core/integrations/claude-auth';
@@ -321,6 +323,7 @@ export class JafferService {
       const typical = nextTypicalTurnMs(prev, ms, this.recentTurns);
       if (typical !== prev) this.config.patch({ claude: { typicalTurnMs: typical } });
       this.today = dayTotal(this.today, Date.now(), 0, ms); // (before the Stop's own push: the window hears it with the state)
+      this.addToWeek(0, ms);
     });
     let approvals = this.config.get().claude.approvals;
     this.config.onChange.on((c) => {
@@ -436,9 +439,22 @@ export class JafferService {
       const size = transcriptSize(s.transcriptPath);
       if (size === this.liveSize.get(s.id)) continue; // nothing new was written
       this.liveSize.set(s.id, size);
-      const turn = readTurnCost(s.transcriptPath, start, size);
+      const { cost: turn, context } = readTurn(s.transcriptPath, start, size);
       if (turn) this.claudeWatcher.setLive(s.id, { input: turn.input + turn.cacheRead + turn.cacheWrite, output: turn.output, usd: turn.usd });
+      if (context) this.setContext(s.id, context);
     }
+  }
+
+  /** (1.4.0) The context meter: the latest response's input tokens and its model's window (the model's id stays here). */
+  private setContext(id: string, c: { tokens: number; model?: string }): void {
+    this.claudeWatcher.setContext(id, { tokens: c.tokens, window: contextWindow(c.model ?? '') });
+  }
+
+  /** (1.4.0) A counted answer's cost or a finished turn's time, added to this week's numbers in `config.json` (the weekly digest). */
+  private addToWeek(usd: number, workMs: number): void {
+    const prev = this.config.get().usage;
+    const next = rollWeek(prev, Date.now(), usd, workMs);
+    if (JSON.stringify(next) !== JSON.stringify(prev)) this.config.patch({ usage: next });
   }
 
   /**
@@ -463,20 +479,20 @@ export class JafferService {
     } else if (o.hook_event_name === 'Stop') {
       const start = this.turnStart.get(id);
       if (start === undefined || !file) return;
-      if (!this.config.get().claude.showCost) {
-        this.turnStart.set(id, transcriptSize(file));
-        return;
-      }
-      // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended
+      // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended; with the
+      // cost switched off only the context meter's numbers are taken from the same read
       const read = (retry: boolean): void => {
         if (this.counted.get(id) === start) return; // its Stop came twice: the answer was counted already
         const end = transcriptSize(file);
-        const turn = readTurnCost(file, start, end);
+        const { cost: turn, context } = readTurn(file, start, end);
+        if (context) this.setContext(id, context);
         if (turn) {
           this.counted.set(id, start);
           if (this.counted.size > 20) this.counted.delete(this.counted.keys().next().value!);
           if (this.turnStart.has(id)) this.turnStart.set(id, end); // (a session forgotten since, after its end, is not brought back)
+          if (!this.config.get().claude.showCost) return;
           this.today = dayTotal(this.today, Date.now(), turn.usd ?? 0);
+          this.addToWeek(turn.usd ?? 0, 0);
           this.claudeWatcher.setCost(id, turn);
         } else if (retry) this.later(1500, () => read(false));
       };
@@ -653,6 +669,8 @@ export class JafferService {
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
     // Past conversations, from Claude Code's own transcripts: ids, folders, times, titles for the 30 newest (redacted) and (with showCost) token counts, read on request, kept nowhere;
     // `include`: the pinned ones' ids (checked there), listed even when older than the 50 newest
+    // (1.4.0) The last 5 hours: the token counts and times of the responses in the transcripts written in that window, as numbers
+    r.handle('claude.usage5h', () => recentUsage(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), Date.now()));
     r.handle('claude.history', async (p: { include?: unknown } | null) => ({
       items: await listConversations({ claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), limit: 50, withCost: this.config.get().claude.showCost, include: p?.include }),
     }));

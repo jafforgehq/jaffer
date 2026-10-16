@@ -1,11 +1,12 @@
 import type { VNode } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
-import { activePane, cfg, clock, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast, turnsEnded } from '../state';
+import { activePane, cfg, clock, historyItems, homeDir, info, panelFocusSearch, patchConfig, toast, turnsEnded, usage5h } from '../state';
 import { conversationName, conversationRow, costByFolder, filterByFolder, groupConversations, topFolders } from '../../shared/history-label';
 import { parseNames, pinnedIds, removeName, setName, togglePin } from '../../shared/history-names';
 import type { TrashResult } from '../../main/trash-conversations';
 import { formatUsd } from '../../shared/claude-cost';
+import { budgetLevels, parseProjectBudgets } from '../../shared/project-budgets';
 import { resumeLine } from '../../shared/resume-action';
 import { copyToTerminal, loadHistory, resumeConversation } from '../resume';
 import { terminals } from './TerminalView';
@@ -79,6 +80,11 @@ export function Conversations(): VNode {
   const load = () => {
     const n = ++asked;
     setLoading(true);
+    // (1.4.0) the Now card's last 5 hours are read with the list: numbers only
+    void window.jaffer
+      .call<{ tokens?: unknown; usd?: unknown }>('claude.usage5h', {})
+      .then((r) => n === asked && (usage5h.value = typeof r?.tokens === 'number' ? { tokens: r.tokens, ...(typeof r.usd === 'number' ? { usd: r.usd } : {}) } : null))
+      .catch(() => undefined);
     loadHistory().then(
       () => {
         if (n !== asked) return;
@@ -124,6 +130,8 @@ export function Conversations(): VNode {
   const listed = useMemo(() => (active ? filterByFolder(items ?? [], q, home, names) : shown), [active, items, q, home, names, shown]);
   const flat = groups.flatMap((g) => g.items); // (the order the rows show in)
   const costs = useMemo(() => (showCost && costsOpen ? costByFolder(items ?? [], clock.value, home) : []), [showCost, costsOpen, items, clock.value, home]);
+  /** (1.4.0) The person's project budgets, by folder: this week's cost against each (the costed rows, the 30 newest). */
+  const budgets = useMemo(() => new Map(costsOpen ? budgetLevels(items ?? [], parseProjectBudgets(cfg.value?.claude?.projectBudgets, home), clock.value).map((b) => [b.cwd, b]) : []), [costsOpen, items, cfg.value?.claude?.projectBudgets, home, clock.value]);
   useEffect(() => {
     list.current?.querySelector('.conv-row[data-sel]')?.scrollIntoView({ block: 'nearest' });
   }, [sel]);
@@ -281,18 +289,27 @@ export function Conversations(): VNode {
                 <span>Today</span>
                 <span>This week</span>
               </div>
-              {costs.map((f) => (
-                <div key={f.cwd} class="conv-cost-row">
-                  <span title={f.dir}>{f.dir}</span>
-                  <span data-usd>≈ {formatUsd(f.today)}</span>
-                  <span data-usd>≈ {formatUsd(f.week)}</span>
-                </div>
-              ))}
+              {costs.map((f) => {
+                const b = budgets.get(f.cwd);
+                return (
+                  <div key={f.cwd} class="conv-cost-row" data-level={b?.level}>
+                    <span title={f.dir}>{f.dir}</span>
+                    <span data-usd>≈ {formatUsd(f.today)}</span>
+                    <span data-usd>
+                      ≈ {formatUsd(f.week)}
+                      {b ? ` of ${formatUsd(b.budget)}` : ''}
+                    </span>
+                  </div>
+                );
+              })}
             </>
           ) : (
             <div class="conv-cost-none">No costs in the last 7 days.</div>
           )}
-          <div class="conv-cost-note">An estimate at API list prices, from the 30 newest conversations (this week: the last 7 days).</div>
+          <div class="conv-cost-note">
+            An estimate at API list prices, from the 30 newest conversations (this week: the last 7 days).
+            {budgets.size > 0 && ' Budgets (Settings → Claude Code) count the same conversations: a folder turns yellow at 80 % of its budget, red past it.'}
+          </div>
         </div>
       )}
       <div class="conv-list" ref={list}>

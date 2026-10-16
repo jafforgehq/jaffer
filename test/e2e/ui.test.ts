@@ -4025,6 +4025,143 @@ describe('Jaffer UI end to end', () => {
     }
   }, 40_000);
 
+  it('the Now card, 1.4.0: the context meter (percent and levels, the tokens alone without a window, one toast at 85 % per session), the last 5 hours, the work-time budget (its level and one toast), the Today list after two finished turns, and project budgets tint the cost by folder', async () => {
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`); // (a window of its own: no turns, no toasts yet)
+    await page.waitForSelector('.term .xterm');
+    await endClaude();
+    const sid = (n: number) => `${String(n).padStart(8, '0')}-cccc-4ddd-8eee-ffff00002222`;
+    const T = Date.now();
+    // the window's calls for the list and the last 5 hours, stood in for (restored at the end)
+    await page.evaluate(
+      ([a, b, t]) => {
+        const w = window as any;
+        w.__ciReal = w.jaffer.call;
+        w.jaffer.call = (m: string, p: unknown) =>
+          m === 'claude.usage5h'
+            ? Promise.resolve({ tokens: 3_200_000, usd: 4.5, files: 2 })
+            : m === 'claude.history'
+              ? Promise.resolve({ items: [{ id: a, cwd: '/work/budget-a', startedAt: t - 7_200_000, endedAt: t - 3_600_000, durMs: 3_600_000, usd: 9 }, { id: b, cwd: '/work/budget-b', startedAt: t - 7_200_000, endedAt: t - 3_600_000, durMs: 3_600_000, usd: 2 }] })
+              : w.__ciReal(m, p);
+      },
+      [sid(1), sid(2), T] as const,
+    );
+    try {
+      if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await cfgPatch({ panel: { open: true } });
+      await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+      await page.click('.sp-convos .conv-refresh');
+      // the last 5 hours: read with the list, money with showCost, and what it is not
+      await until(async () => (await textOf('.now-5h')) === "Last 5 h ≈ $4.50 · 3.2M tokens (estimate, not your plan's limit)", 5_000, 'the last 5 hours');
+      expect(await page.getAttribute('.now-5h', 'title')).toMatch(/estimate/i);
+
+      // the context meter: the share of the window, warn from 80 %, danger from 92 %, a meter with its value; the tokens alone without a window
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 620_000, window: 1_000_000, at: T } }]);
+      await until(async () => (await textOf('.now-ctx > span')) === 'Context 62% of 1M', 5_000, 'the context meter');
+      expect(await page.getAttribute('.now-ctx', 'data-level')).toBe('ok');
+      expect(await page.getAttribute('.now-ctx-bar', 'role')).toBe('meter');
+      expect(await page.getAttribute('.now-ctx-bar', 'aria-valuenow')).toBe('62');
+      expect(await page.getAttribute('.now-ctx', 'title')).toMatch(/estimate/i);
+      expect(await toastCount('Context is 85% full')).toBe(0);
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 170_000, window: 200_000, at: T } }]);
+      await until(async () => (await page.getAttribute('.now-ctx', 'data-level')) === 'warn', 5_000, 'warn at 85 %');
+      await until(async () => (await toastCount('Context is 85% full. Claude compacts it automatically near the limit.')) === 1, 5_000, 'the toast at 85 %');
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 190_000, window: 200_000, at: T } }]);
+      await until(async () => (await page.getAttribute('.now-ctx', 'data-level')) === 'danger', 5_000, 'danger from 92 %');
+      await sleep(300);
+      expect(await toastCount('Context is 85% full')).toBe(1); // once per session
+      await shot('19d-context-meter');
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 124_000, at: T } }]);
+      await until(async () => (await textOf('.now-ctx > span')) === 'Context 124k tokens', 5_000, 'the tokens alone');
+      expect(await page.locator('.now-ctx-bar').count()).toBe(0);
+      await inject([{ id: 'ctx-1', state: 'idle' }]);
+      await until(async () => (await page.locator('.now-ctx').count()) === 0, 5_000, 'nothing without numbers');
+
+      // the work-time budget: the worked line's level, and one toast when it is passed
+      await cfgPatch({ claude: { dailyWorkBudgetMin: 60 } });
+      await inject([{ id: 'ctx-1', state: 'idle' }], { usd: 0, date: 'today', workMs: 50 * 60_000 });
+      await until(async () => (await page.getAttribute('.now-worked', 'data-level')) === 'warn', 5_000, 'warn at 80 %');
+      expect(await toastCount('daily limit')).toBe(0);
+      await inject([{ id: 'ctx-1', state: 'idle' }], { usd: 0, date: 'today', workMs: 61 * 60_000 });
+      await until(async () => (await page.getAttribute('.now-worked', 'data-level')) === 'danger', 5_000, 'danger past it');
+      await until(async () => (await toastCount('You have passed your daily limit of 1 h with Claude today.')) === 1, 5_000, 'the toast');
+      await inject([{ id: 'ctx-1', state: 'idle' }], { usd: 0, date: 'today', workMs: 70 * 60_000 });
+      await sleep(300);
+      expect(await toastCount('daily limit')).toBe(1); // once a day
+
+      // the Today list: none before a turn, then the two finished turns (newest first), collapsed until asked
+      expect(await page.locator('.now-tl').count()).toBe(0);
+      const finish = async (ago: number, usd: number, at: number) => {
+        await inject([{ id: 'tl-1', state: 'working', turnStartedAtAgo: ago, calls: [{ name: 'Read', category: 'read', startAgo: ago - 1000, endAgo: ago - 2000 }] }]);
+        await inject([{ id: 'tl-1', state: 'idle', turnStartedAtAgo: ago, cost: { usd, at }, calls: [{ name: 'Read', category: 'read', startAgo: ago - 1000, endAgo: ago - 2000 }] }]);
+      };
+      await finish(72_000, 0.04, 21);
+      await finish(30_000, 0.01, 22);
+      await until(async () => (await textOf('.now-tl-toggle')) === 'Today (2)', 5_000, 'the Today list');
+      expect(await page.getAttribute('.now-tl-toggle', 'aria-expanded')).toBe('false');
+      expect(await page.locator('.now-tl-list').count()).toBe(0);
+      await page.click('.now-tl-toggle');
+      await until(async () => (await page.locator('.now-tl-list li').count()) === 2, 5_000, 'the entries');
+      expect(await page.getAttribute('.now-tl-toggle', 'aria-expanded')).toBe('true');
+      const entries = await page.$$eval('.now-tl-list li', (els) => els.map((e) => e.textContent));
+      expect(entries[0]).toMatch(/^\d\d:\d\d · 30s · 1 read · ≈ \$0\.01$/);
+      expect(entries[1]).toMatch(/^\d\d:\d\d · 1m 12s · 1 read · ≈ \$0\.04$/);
+
+      // project budgets: the cost by folder tints a folder at 80 % and past it, with "of $X"; one toast per folder and week when passed
+      await cfgPatch({ claude: { projectBudgets: ['/work/budget-a=10', '/work/budget-b=10'] } });
+      await page.click('.sp-convos .conv-refresh');
+      if ((await page.getAttribute('.conv-cost-toggle', 'aria-expanded')) !== 'true') await page.click('.conv-cost-toggle');
+      const costRow = (dir: string) => page.locator('.conv-cost-row', { hasText: dir });
+      await until(async () => (await costRow('/work/budget-a').getAttribute('data-level')) === 'warn', 5_000, 'budget a at 90 %');
+      expect(await costRow('/work/budget-a').textContent()).toContain('≈ $9.00 of $10.00');
+      expect(await costRow('/work/budget-b').getAttribute('data-level')).toBe('ok');
+      expect(await textOf('.conv-cost-note')).toMatch(/30 newest conversations/);
+      expect(await toastCount('passed its weekly budget')).toBe(0);
+      await cfgPatch({ claude: { projectBudgets: ['/work/budget-a=8', '/work/budget-b=10'] } });
+      await until(async () => (await costRow('/work/budget-a').getAttribute('data-level')) === 'danger', 5_000, 'budget a passed');
+      await until(async () => (await toastCount('/work/budget-a passed its weekly budget')) === 1, 5_000, 'the budget toast');
+      await page.click('.sp-convos .conv-refresh');
+      await sleep(400);
+      expect(await toastCount('passed its weekly budget')).toBe(1); // once per folder and week
+      await shot('19e-budgets');
+      await page.click('.conv-cost-toggle');
+    } finally {
+      await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__ciReal; });
+      await cfgPatch({ claude: { dailyWorkBudgetMin: 0, projectBudgets: [] } });
+      await inject([]);
+    }
+  }, 60_000);
+
+  it('Settings → Claude Code, 1.4.0: the daily work-time budget, project budgets (one per line) and the weekly summary write their keys', async () => {
+    const field = (label: string) => page.locator('label.field', { hasText: label });
+    const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    try {
+      await page.locator('.settings-nav button', { hasText: 'Claude Code' }).click();
+      const work = field('Daily work-time budget').locator('input[type=number]');
+      await work.fill('90');
+      await work.press('Tab');
+      await until(async () => (await cfgNow()).claude.dailyWorkBudgetMin === 90, 8_000, 'the work budget');
+      await work.fill('-4');
+      await work.press('Tab');
+      await until(async () => (await cfgNow()).claude.dailyWorkBudgetMin === 0, 8_000, 'a negative budget to be none');
+      const lines = field('Project budgets').locator('textarea');
+      await lines.fill('~/code/api=20\n\n  /work/web=7.5  \nnot a budget');
+      await lines.press('Tab');
+      await until(async () => JSON.stringify((await cfgNow()).claude.projectBudgets) === JSON.stringify(['~/code/api=20', '/work/web=7.5', 'not a budget']), 8_000, 'the budget lines');
+      await field('Weekly summary').locator('.switch').click();
+      await until(async () => (await cfgNow()).notifications.weeklyDigest === false, 8_000, 'the digest off');
+      await field('Weekly summary').locator('.switch').click();
+      await until(async () => (await cfgNow()).notifications.weeklyDigest === true, 8_000, 'the digest on');
+      await lines.fill('');
+      await lines.press('Tab');
+      await until(async () => (await cfgNow()).claude.projectBudgets.length === 0, 8_000, 'no budgets again');
+    } finally {
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+      await cfgPatch({ claude: { dailyWorkBudgetMin: 0, projectBudgets: [] }, notifications: { weeklyDigest: true } });
+    }
+  }, 40_000);
+
   it('seasonal touches: the mole and the scenes dress by data-season (a fake season only with ?debug), off with the setting, none outside the dates', async () => {
     const page_ = (q: string) => page.goto(`${url}?${q}&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`).then(() => page.waitForSelector('.term .xterm'));
     try {
@@ -4695,7 +4832,7 @@ describe('Jaffer UI end to end', () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
     expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });
     expect(await page.locator('.ap-ask, .modal, .palette').count()).toBe(0);
-    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob)Real/); // (every wrapper restored)
+    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob|ci)Real/); // (every wrapper restored; 1.4.0: ci)
     const c = await page.evaluate(() => window.jaffer.call('config.get'));
     expect(c.claude.approvals).toBe(false);
     expect(c.updates.seenVersion).toBe(version);

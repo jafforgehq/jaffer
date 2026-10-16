@@ -11,7 +11,11 @@ import { effectiveSeen, unseenNotes, type ReleaseNote } from '../shared/whats-ne
 import type { GitStatus } from '../core/session/git-status';
 import type { Conversation } from '../core/claude/history';
 import type { ApprovalView } from '../core/claude/approvals';
-import { baseName, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
+import { baseName, countsText, fmtDuration, turnCounts, turnSummaryText } from './claude-ui';
+import { fmtMinutes } from './panel';
+import { budgetLevels, parseProjectBudgets } from '../shared/project-budgets';
+import { weekId } from '../shared/usage-week';
+import { formatUsd } from '../shared/claude-cost';
 import { FailTracker } from './fail-tracker';
 import { resolveTheme, type JafferTheme } from './themes';
 
@@ -228,8 +232,13 @@ async function loadClaudeState(): Promise<void> {
 // Everything below is memory only: it ends with the window.
 /** What the answers finished today cost (the daemon's estimate; it starts again at local midnight), for the daily budget, and how long they took. */
 export const claudeToday = signal<{ usd: number; date: string; workMs?: number } | null>(null);
-/** The last 20 finished turns: how long each took and, once it is known, what it cost (the cost chip's sparklines). */
-export const turnHistory = signal<{ id: string; durMs: number; usd?: number }[]>([]);
+/**
+ * The last 20 finished turns: how long each took and, once it is known, what it cost (the cost chip's sparklines); since 1.4.0 also when it
+ * ended, its calls by kind as text and how many files it edited (the Now card's Today list).
+ */
+export const turnHistory = signal<{ id: string; durMs: number; usd?: number; at?: number; counts?: string; files?: number }[]>([]);
+/** (1.4.0) The last 5 hours across the transcripts (`claude.usage5h`: tokens and estimated dollars), read with the panel's list; null: not read. */
+export const usage5h = signal<{ tokens: number; usd?: number } | null>(null);
 /** A turn just finished: the window's edge flashes once. */
 export const turnDone = signal(false);
 /**
@@ -276,6 +285,8 @@ export const timesAnswered = (sessionId: string, tool: string): number => answer
 /** Each Claude session as last pushed, by id: turns are counted per session, whichever terminal has the focus. */
 let seen = new Map<string, ClaudeSession>();
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
+/** (1.4.0) The sessions whose context passed 85 % (one toast each). */
+const contextWarned = new Set<string>();
 /** A finished turn's summary, waiting (up to 3 s) for the turn's cost; `where` names its terminal when several are open. */
 let pending: { id: string; durMs: number; counts: Record<string, number>; files: string[]; where: string; timer: ReturnType<typeof setTimeout> } | null = null;
 /** Bumped when any session's turn ends (working → idle): the past conversations read their list again. */
@@ -308,6 +319,12 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
 /** One session's change since its last push (`p`: null the first time it is seen). */
 function sessionChanged(s: ClaudeSession, p: ClaudeSession | null): void {
   if (p && s.compacting && !p.compacting) toast({ kind: 'info', text: `${whereOf(s)}Claude is compacting its context` });
+  const ctx = s.context;
+  if (ctx && typeof ctx.window === 'number' && ctx.window > 0 && ctx.tokens / ctx.window >= 0.85 && !contextWarned.has(s.id)) {
+    contextWarned.add(s.id);
+    if (contextWarned.size > 100) contextWarned.delete(contextWarned.values().next().value!);
+    toast({ kind: 'info', text: `${whereOf(s)}Context is 85% full. Claude compacts it automatically near the limit.` });
+  }
   const asked = p?.tool?.name;
   if (p?.state === 'needs-you' && s.state === 'working' && asked) answered.set(`${s.id}\n${asked}`, timesAnswered(s.id, asked) + 1);
   if (p?.state === 'working' && s.state === 'idle') turnsEnded.value++;
@@ -327,12 +344,12 @@ function turnFinished(s: ClaudeSession, usd: number | undefined, costKnown: bool
   doneTimer = setTimeout(() => (turnDone.value = false), 1200);
   const durMs = s.since - (s.turnStartedAt as number);
   if (!Number.isFinite(durMs) || durMs < 0) return; // (no times to tell how long it took: nothing to say)
-  turnHistory.value = [...turnHistory.value, { id: s.id, durMs, usd }].slice(-20);
-  if (pending) showSummary(undefined); // an earlier turn's summary still waiting: it goes as it is
-  if (cfg.value?.claude?.turnSummary === false || durMs < 10_000) return;
   const counts = turnCounts(s.calls, s.turnStartedAt);
   // (a turn without a prompt keeps the last prompt's files: only a turn that wrote lists them)
   const files = counts.write && Array.isArray(s.files) ? s.files : [];
+  turnHistory.value = [...turnHistory.value, { id: s.id, durMs, usd, at: s.since, counts: countsText(counts), files: files.length }].slice(-20);
+  if (pending) showSummary(undefined); // an earlier turn's summary still waiting: it goes as it is
+  if (cfg.value?.claude?.turnSummary === false || durMs < 10_000) return;
   pending = { id: s.id, durMs, counts, files, where: whereOf(s), timer: setTimeout(() => showSummary(undefined), 3000) };
   if (costKnown || cfg.value?.claude?.showCost === false) showSummary(usd);
 }
@@ -496,6 +513,30 @@ export const togglePanel = (via = 'other'): void => {
 };
 /** The past conversations the panel last read (`claude.history`: ids, folders, times, token costs), so it shows them at once when it opens again; null: never read. Memory only. */
 export const historyItems = signal<Conversation[] | null>(null);
+// (1.4.0) The budgets: one toast when the day's work time passes `claude.dailyWorkBudgetMin` (once a day), and one per folder and week
+// when a folder's cost passes its project budget (from the costed past conversations). Memory only.
+let workWarnedDay = '';
+effect(() => {
+  const min = cfg.value?.claude?.dailyWorkBudgetMin ?? 0;
+  const t = claudeToday.value;
+  if (!(min > 0) || !t || workWarnedDay === t.date || !((t.workMs ?? 0) >= min * 60_000)) return;
+  workWarnedDay = t.date;
+  toast({ kind: 'info', text: `You have passed your daily limit of ${fmtMinutes(min)} with Claude today.` });
+});
+const budgetWarned = new Set<string>();
+effect(() => {
+  const items = historyItems.value;
+  const c = cfg.value?.claude;
+  if (!items || c?.showCost === false) return;
+  const now = Date.now();
+  for (const b of budgetLevels(items, parseProjectBudgets(c?.projectBudgets, homeDir()), now)) {
+    const key = `${b.cwd}\n${weekId(now)}`;
+    if (b.level !== 'danger' || budgetWarned.has(key)) continue;
+    budgetWarned.add(key);
+    toast({ kind: 'info', text: `${tildePath(b.cwd)} passed its weekly budget: ≈ ${formatUsd(b.usd)} of ${formatUsd(b.budget)} in the last 7 days (an estimate).` });
+  }
+});
+
 /** Bumped by ⇧⌘O: the panel's search takes the keyboard (once per bump, also when the bump opened the panel). */
 export const panelFocusSearch = signal(0);
 /** ⇧⌘O, the menu bar's All Past Conversations…: the panel opens (when closed) with its search focused. */

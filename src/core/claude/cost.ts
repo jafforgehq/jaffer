@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { summarizeLines, type TurnCost } from '../../shared/claude-cost';
+import { summarizeTurn, type TurnCost } from '../../shared/claude-cost';
 
 /**
  * Hooks are async, so the Stop of a session's last answer can arrive after its SessionEnd (`claude -p` ends at once): where that answer
@@ -26,10 +26,15 @@ export function transcriptSize(file: string | undefined): number {
  * is unreadable.
  */
 export function readTurnCost(file: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): TurnCost | undefined {
+  return readTurn(file, fromOffset, toOffset, maxBytes).cost;
+}
+
+/** (1.4.0) `readTurnCost`, and from the same read the context of the latest response (its input tokens and its model's id, for the context meter). */
+export function readTurn(file: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): ReturnType<typeof summarizeTurn> {
   try {
     const size = Math.min(fs.statSync(file).size, toOffset);
     // a transcript shorter than where the turn began was replaced: nothing to say about it
-    if (size <= fromOffset) return undefined;
+    if (size <= fromOffset) return {};
     const from = Math.max(fromOffset, size - maxBytes);
     // a window cut short starts one byte early, to see whether it begins on a line boundary or in the middle of a line
     const cut = from > fromOffset;
@@ -44,8 +49,8 @@ export function readTurnCost(file: string, fromOffset: number, toOffset: number 
     const text = buf.toString('utf8');
     const lines = text.split('\n');
     if (cut && !text.startsWith('\n')) lines.shift(); // it began inside a line: that piece is not a whole line
-    return summarizeLines(lines);
+    return summarizeTurn(lines);
   } catch {
-    return undefined;
+    return {};
   }
 }

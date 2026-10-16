@@ -43,4 +43,12 @@ describe('FocusHold: what a focus session holds back, and the one sentence when 
     f.hold('bogus' as never);
     expect(f.release()).toBeNull();
   });
+
+  it('the weekly summary (1.4.0) is a kind of its own, said last', () => {
+    const f = new FocusHold();
+    f.start();
+    f.hold('digest');
+    f.hold('finished');
+    expect(f.release()).toBe('While you were focused: Claude finished once, the weekly summary');
+  });
 });

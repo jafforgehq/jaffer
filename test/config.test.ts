@@ -302,7 +302,7 @@ describe('a config file or patch with values of the wrong kind', () => {
     const cfg = load({ session: null, updates: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
     expect(cfg.session).toEqual(DEFAULT_CONFIG.session);
     expect(cfg.updates).toEqual(DEFAULT_CONFIG.updates);
-    expect(cfg.notifications).toEqual({ claudeFinished: true });
+    expect(cfg.notifications).toEqual(DEFAULT_CONFIG.notifications); // (1.4.0: and weeklyDigest)
     expect(cfg.appearance.pet).toBe(true);
     expect(cfg.appearance.fontSize).toBe(13);
     expect(cfg.shell.args).toEqual([]);
@@ -462,5 +462,31 @@ describe('permissions (1.4.0)', () => {
     expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: true, deepSearch: false, resumeTyping: false, trash: true });
     fs.writeFileSync(env.paths.config, JSON.stringify({ permissions: 'off' }));
     expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+  });
+});
+
+describe('1.4.0: the work-time budget, project budgets, the weekly numbers and the weekly digest', () => {
+  const week = { id: '', usd: 0, workMs: 0 };
+  it('have their defaults (no budgets, empty weeks, the digest on), also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.claude).toMatchObject({ dailyWorkBudgetMin: 0, projectBudgets: [] });
+    expect(DEFAULT_CONFIG.usage).toEqual({ week, lastWeek: week, digestWeek: '' });
+    expect(DEFAULT_CONFIG.notifications.weeklyDigest).toBe(true);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, claude: { showCost: true }, notifications: { claudeFinished: false } }));
+    const c = new ConfigStore(env.paths).get();
+    expect(c.claude).toMatchObject({ dailyWorkBudgetMin: 0, projectBudgets: [] });
+    expect(c.usage).toEqual({ week, lastWeek: week, digestWeek: '' });
+    expect(c.notifications).toEqual({ claudeFinished: false, weeklyDigest: true });
+  });
+
+  it('a choice is kept; a value of the wrong kind (or a week that is no object) leaves what was there: numbers and ids only', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ claude: { dailyWorkBudgetMin: 180, projectBudgets: ['/work/api=20'] }, usage: { week: { id: '2026-W42', usd: 1.5, workMs: 60_000 }, digestWeek: '2026-W41' }, notifications: { weeklyDigest: false } });
+    store.patch({ claude: { dailyWorkBudgetMin: '60', projectBudgets: [1] }, usage: { week: { usd: 'lots' }, lastWeek: 'x', digestWeek: 7 }, notifications: { weeklyDigest: 'no' } } as never);
+    const c = new ConfigStore(env.paths).get();
+    expect(c.claude).toMatchObject({ dailyWorkBudgetMin: 180, projectBudgets: ['/work/api=20'] });
+    expect(c.usage).toEqual({ week: { id: '2026-W42', usd: 1.5, workMs: 60_000 }, lastWeek: week, digestWeek: '2026-W41' });
+    expect(c.notifications.weeklyDigest).toBe(false);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ usage: { week: 5, lastWeek: { id: 3, usd: 2 } } }));
+    expect(new ConfigStore(env.paths).get().usage).toEqual({ week, lastWeek: { id: '', usd: 2, workMs: 0 }, digestWeek: '' });
   });
 });

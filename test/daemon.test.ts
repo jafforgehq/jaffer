@@ -11,6 +11,7 @@ import type { RpcClient } from '../src/core/rpc';
 import { sleep } from '../src/shared/util';
 import { findClaude, installHooks } from '../src/core/integrations/claude';
 import { STOP_AFTER_END_GRACE_MS } from '../src/core/claude/cost';
+import { weekId } from '../src/shared/usage-week';
 import type { ClaudeSession } from '../src/core/claude/watcher';
 
 const CLAUDE = await findClaude().catch(() => null);
@@ -610,6 +611,24 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     }
   });
 
+  it('claude.usage5h (1.4.0): the tokens and estimated dollars of the last 5 hours across the transcripts, numbers only; links, subfolders and older lines left out', async () => {
+    const c = await connect();
+    const dir = path.join(env.userHome, '.claude', 'projects', '-usage-5h');
+    fs.mkdirSync(path.join(dir, 'f0000000-1111-4222-8333-444455556666', 'subagents'), { recursive: true });
+    const line = (id: string, ago: number, output: number) => `${JSON.stringify({ type: 'assistant', timestamp: new Date(Date.now() - ago).toISOString(), message: { id, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET-REPLY' }], usage: { input_tokens: 0, output_tokens: output } } })}\n`;
+    const before = await c.call('claude.usage5h', {});
+    fs.writeFileSync(path.join(dir, 'e0000000-1111-4222-8333-444455556666.jsonl'), line('u1', 3_600_000, 100_000) + line('u0', 6 * 3_600_000, 9_000_000));
+    fs.writeFileSync(path.join(dir, 'f0000000-1111-4222-8333-444455556666', 'subagents', 'agent-1.jsonl'), line('u2', 60_000, 9_000_000));
+    fs.writeFileSync(path.join(env.root, 'elsewhere.jsonl'), line('u3', 60_000, 9_000_000));
+    fs.symlinkSync(path.join(env.root, 'elsewhere.jsonl'), path.join(dir, 'd0000000-1111-4222-8333-444455556666.jsonl'));
+    const r = await c.call('claude.usage5h', {});
+    expect(r.tokens - before.tokens).toBe(100_000);
+    expect(r.usd - (before.usd ?? 0)).toBeCloseTo(1, 9);
+    expect(Object.keys(r).sort()).toEqual(['files', 'tokens', 'usd']);
+    expect(JSON.stringify(r)).not.toContain('SECRET');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('claude.history takes include (1.2.0, the pinned ones): a conversation older than the 50 newest is listed too, with its title and no cost; bad ids are ignored', async () => {
     const c = await connect();
     const dir = path.join(env.userHome, '.claude', 'projects', '-history-include');
@@ -1051,6 +1070,53 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect(await worked()).toBe(w2);
     await c.call('claude.event', ev('SessionEnd', base));
   }, 20_000);
+
+  it('the context meter (1.4.0): after an answer, the tokens the latest response read in and its model\'s window, also with the cost switched off; numbers only', async () => {
+    const transcript = path.join(env3.root, 'sess-ctx.jsonl');
+    const reply = (id: string, model: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model, content: [{ type: 'text', text: 'SECRET words' }], usage } })}\n`;
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-ctx', transcript_path: transcript };
+    const ctx = async () => (await states()).find((s) => s.id === 'sess-ctx')?.context;
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'go' }));
+    fs.appendFileSync(transcript, reply('x1', 'claude-opus-5-5', { input_tokens: 5, output_tokens: 99_999, cache_read_input_tokens: 600_000 }) + reply('x2', 'claude-opus-5-5', { input_tokens: 3, output_tokens: 10, cache_read_input_tokens: 620_000, cache_creation_input_tokens: 1000 }));
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await ctx())?.tokens === 621_003, 5_000);
+    expect(await ctx()).toEqual({ tokens: 621_003, window: 1_000_000, at: expect.any(Number) });
+    await c.call('config.patch', { claude: { showCost: false } });
+    try {
+      await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'again' }));
+      fs.appendFileSync(transcript, reply('x3', 'claude-haiku-4-5', { input_tokens: 40_000, output_tokens: 1 }));
+      await c.call('claude.event', ev('Stop', base));
+      await waitUntil(async () => (await ctx())?.tokens === 40_000, 5_000);
+      expect((await ctx())!.window).toBe(200_000);
+      expect((await states()).find((s) => s.id === 'sess-ctx')?.cost?.answers).toBe(1); // (the cost stays off)
+    } finally {
+      await c.call('config.patch', { claude: { showCost: true } });
+    }
+    expect(JSON.stringify(await states())).not.toContain('SECRET');
+    await c.call('claude.event', ev('SessionEnd', base));
+  });
+
+  it('the week (1.4.0): every counted answer adds its cost and every finished turn its time to usage.week (config.json: numbers and the week id only)', async (ctx) => {
+    const now = new Date();
+    if (weekId(now.getTime() + 60_000) !== weekId(now.getTime())) return ctx.skip(); // (a run across the start of a week)
+    const transcript = path.join(env3.root, 'sess-week.jsonl');
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-week', transcript_path: transcript };
+    const week = async () => (await c.call('config.get', {})).usage.week as { id: string; usd: number; workMs: number };
+    const w0 = await week();
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'go' }));
+    await sleep(1_100);
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { id: 'w1', model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 0, output_tokens: 10_000 } } })}\n`);
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await week()).usd - (w0.id === weekId(Date.now()) ? w0.usd : 0) > 0.0999, 5_000);
+    const w1 = await week();
+    expect(w1.id).toBe(weekId(Date.now()));
+    expect(w1.workMs - (w0.id === w1.id ? w0.workMs : 0)).toBeGreaterThanOrEqual(1_000);
+    const disk = JSON.parse(fs.readFileSync(env3.paths.config, 'utf8')).usage;
+    expect(disk.week).toEqual(w1);
+    await c.call('claude.event', ev('SessionEnd', base));
+  });
 
   it('the live figure follows the switches: nothing is read with the cost or its live part off', async () => {
     const transcript = path.join(env3.root, 'sess-nolive.jsonl');

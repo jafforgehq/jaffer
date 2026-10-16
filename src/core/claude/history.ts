@@ -48,11 +48,30 @@ const CACHE_MAX = 500;
  * looked at) even when they are older: listed after the others, with their title, a cost only when they are among the 30 newest.
  */
 export async function listConversations(opts: { claudeDir: string; limit?: number; withCost?: boolean; include?: unknown }): Promise<Conversation[]> {
+  const t = await transcriptFiles(opts.claudeDir);
+  if (!t) return []; // Claude Code never ran here
+  const { root, found } = t;
+  const limit = opts.limit ?? 50;
+  const include = new Set(Array.isArray(opts.include) ? opts.include.slice(0, 50).filter((x): x is string => typeof x === 'string' && isSessionId(x)) : []);
+  const out: Conversation[] = [];
+  for (const [i, f] of found.entries()) {
+    if (i >= limit && !include.has(f.id)) continue;
+    const conv = await readOne(root, f.file, f.id, i < limit && out.length < COSTED, opts.withCost === true, i < limit ? out.length < COSTED : true);
+    if (conv) out.push(conv);
+  }
+  return out;
+}
+
+/**
+ * The transcripts: `<root>/<folder>/<uuid>.jsonl`, regular files in real folders only (a link is not followed, a subfolder not entered),
+ * newest first; `root` is `realpath(<claudeDir>/projects)`. Undefined when there is no such folder.
+ */
+export async function transcriptFiles(claudeDir: string): Promise<{ root: string; found: { file: string; id: string; mtimeMs: number }[] } | undefined> {
   let root: string;
   try {
-    root = await fs.promises.realpath(path.join(opts.claudeDir, 'projects'));
+    root = await fs.promises.realpath(path.join(claudeDir, 'projects'));
   } catch {
-    return []; // Claude Code never ran here
+    return undefined;
   }
   const found: { file: string; id: string; mtimeMs: number }[] = [];
   for (const dir of await names(root)) {
@@ -67,15 +86,7 @@ export async function listConversations(opts: { claudeDir: string; limit?: numbe
     }
   }
   found.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const limit = opts.limit ?? 50;
-  const include = new Set(Array.isArray(opts.include) ? opts.include.slice(0, 50).filter((x): x is string => typeof x === 'string' && isSessionId(x)) : []);
-  const out: Conversation[] = [];
-  for (const [i, f] of found.entries()) {
-    if (i >= limit && !include.has(f.id)) continue;
-    const conv = await readOne(root, f.file, f.id, i < limit && out.length < COSTED, opts.withCost === true, i < limit ? out.length < COSTED : true);
-    if (conv) out.push(conv);
-  }
-  return out;
+  return { root, found };
 }
 
 /** What moving a conversation to the Trash takes: its transcript and, when there is one, its folder of the same name beside it. */

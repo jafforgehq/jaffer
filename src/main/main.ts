@@ -27,6 +27,7 @@ import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 import { editorUrl } from '../shared/editor-url';
 import { MENU_ITEMS } from '../shared/menu-spec';
 import { FocusHold, type HoldKind } from '../shared/focus-hold';
+import { digestDue, digestText, type UsageWeeks } from '../shared/usage-week';
 import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
 import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
@@ -372,6 +373,29 @@ function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
   notify(n.title, n.body, 'needs-you'); // (not held again: focus mode returned above)
 }
 
+/**
+ * (1.4.0) The weekly digest: once the window has loaded the first time, once per finished week (`usage.digestWeek`), one notification of
+ * last week's time with Claude and (with the cost shown) its estimated dollars; `notifications.weeklyDigest` switches it off. The numbers
+ * are the daemon's (`usage` in config.json).
+ */
+let digestAsked = false;
+async function weeklyDigest(): Promise<void> {
+  const c = client;
+  if (digestAsked || !c) return;
+  digestAsked = true;
+  try {
+    const cfg = await c.call<{ usage?: UsageWeeks; notifications?: { weeklyDigest?: boolean }; claude?: { showCost?: boolean } }>('config.get', {});
+    const w = cfg.usage ? digestDue(cfg.usage, Date.now()) : null;
+    if (!w) return;
+    await c.call('config.patch', { usage: { digestWeek: w.id } });
+    if (cfg.notifications?.weeklyDigest === false) return;
+    const n = digestText(w, cfg.claude?.showCost !== false);
+    notify(n.title, n.body, 'digest');
+  } catch {
+    /* the terminal is gone: there is next week */
+  }
+}
+
 /** A long command finished while you were looking at something else. */
 function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number }): void {
   const n = commandNotification(c, { windowFocused: !!win?.isFocused() });
@@ -591,7 +615,10 @@ function createWindow(): void {
     focus.release(); // (focus mode ends with the window: nothing is left to say it to)
   });
   // a page that loads again (a reload) starts without focus mode
-  win.webContents.on('did-finish-load', () => void focus.release());
+  win.webContents.on('did-finish-load', () => {
+    void focus.release();
+    void weeklyDigest();
+  });
   syncSystemStats();
   const save = () => {
     if (win && !win.isDestroyed() && keepsBounds({ minimized: win.isMinimized(), fullScreen: win.isFullScreen(), dropdown: dropdownOn(), hotkey: !!hotkey })) writeJson(windowFile, win.getBounds());

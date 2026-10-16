@@ -68,6 +68,12 @@ export interface ClaudeSession {
    * Stop and at the next prompt.
    */
   live?: { input: number; output: number; usd?: number; at: number };
+  /**
+   * (1.4.0) The context meter: what the latest response read in (new, cache written and cache read tokens; an estimate from the
+   * transcript's token counts), its model's window when known, and when it was read. Numbers only (never the model's id). Kept across
+   * turns; gone when Claude compacts.
+   */
+  context?: { tokens: number; window?: number; at: number };
 }
 /** The daemon's own view: where the transcript lives, and the ids that pair a call with its result, are for the daemon only and never go out with the state. */
 export interface TrackedSession extends ClaudeSession {
@@ -237,6 +243,16 @@ export class ClaudeWatcher {
     this.changes.emit(this.sessions());
   }
 
+  /** The daemon read the context of the latest response. Said only when it changed. */
+  setContext(sessionId: string, c: { tokens: number; window?: number }): void {
+    const s = this.map.get(sessionId)?.s;
+    if (!s || !Number.isFinite(c.tokens) || c.tokens < 0) return;
+    const window = typeof c.window === 'number' && c.window > 0 ? c.window : undefined;
+    if (s.context && s.context.tokens === c.tokens && s.context.window === window) return;
+    s.context = { tokens: c.tokens, ...(window ? { window } : {}), at: this.now() };
+    this.changes.emit(this.sessions());
+  }
+
   /** Newest change first; ended sessions older than five minutes are dropped. For the daemon itself: the transcript path is in it. */
   sessions(): TrackedSession[] {
     const t = this.now();
@@ -252,7 +268,7 @@ export class ClaudeWatcher {
   private snapshot(): TrackedSession[] {
     return [...this.map.values()]
       .sort((a, b) => b.touched - a.touched)
-      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, live: s.live && { ...s.live }, subagents: s.subagents.map((a) => ({ ...a })), calls: s.calls.map((c) => ({ ...c })), counts: { ...s.counts }, files: [...s.files] }));
+      .map(({ s }) => ({ ...s, tool: s.tool && { ...s.tool }, cost: s.cost && { ...s.cost, last: { ...s.cost.last } }, live: s.live && { ...s.live }, context: s.context && { ...s.context }, subagents: s.subagents.map((a) => ({ ...a })), calls: s.calls.map((c) => ({ ...c })), counts: { ...s.counts }, files: [...s.files] }));
   }
 
   /** The turn is over: a call with no result yet (Esc, a result that never came) ends now. */
@@ -420,6 +436,7 @@ export class ClaudeWatcher {
         break;
       case 'PreCompact':
         s.compacting = true;
+        s.context = undefined; // (what it held is about to shrink: the next read says how much is left)
         break;
     }
     if (stayEnded) {

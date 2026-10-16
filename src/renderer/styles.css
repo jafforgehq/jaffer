@@ -300,6 +300,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-cost-head > * { color: var(--faint); }
 .conv-cost-head > :first-child { font-family: inherit; }
 .conv-cost-none, .conv-cost-note { grid-column: 1 / -1; color: var(--faint); padding-top: 3px; }
+.conv-cost-row[data-level='warn'] > * { color: var(--warn); } .conv-cost-row[data-level='danger'] > * { color: var(--danger); }
 
 /* what is new: the release notes of the versions not yet seen, above the Now card, until dismissed */
 .wn-card { flex: 0 1 auto; max-height: 55%; margin: 8px 8px 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--raised); border: 1px solid var(--accent-line); display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); min-width: 0; min-height: 0; }
@@ -337,6 +338,20 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .now-today[data-level='warn'] { color: var(--warn); } .now-today[data-level='warn'] .now-budget i { background: var(--warn); }
 .now-today[data-level='danger'] { color: var(--danger); } .now-today[data-level='danger'] .now-budget i { background: var(--danger); }
 .now-worked { font-variant-numeric: tabular-nums; }
+.now-worked[data-level='warn'] { color: var(--warn); } .now-worked[data-level='danger'] { color: var(--danger); }
+.now-ctx { display: flex; flex-direction: column; gap: 4px; font-variant-numeric: tabular-nums; }
+.now-ctx-bar { position: relative; height: 3px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.now-ctx-bar i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--ok); }
+.now-ctx[data-level='warn'] { color: var(--warn); } .now-ctx[data-level='warn'] .now-ctx-bar i { background: var(--warn); }
+.now-ctx[data-level='danger'] { color: var(--danger); } .now-ctx[data-level='danger'] .now-ctx-bar i { background: var(--danger); }
+.now-5h { color: var(--faint); font-variant-numeric: tabular-nums; }
+.now-tl { display: flex; flex-direction: column; gap: 2px; }
+.now-tl-toggle { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--faint); font-size: 11px; cursor: pointer; }
+.now-tl-toggle::before { content: '▸ '; }
+.now-tl-toggle[aria-expanded='true']::before { content: '▾ '; }
+.now-tl-toggle:hover { color: var(--text); }
+.now-tl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.now-tl-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .now-turns { display: block; max-width: 100%; height: auto; }
 .now-turns rect { fill: var(--faint); }
 .now-turns rect[data-level='low'] { fill: var(--ok); } .now-turns rect[data-level='mid'] { fill: var(--warn); } .now-turns rect[data-level='high'] { fill: var(--danger); }
@@ -412,6 +427,7 @@ input[type='text'], input[type='password'], input[type='number'], input:not([typ
   background: var(--hover); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 0 10px; height: 30px; outline: none; user-select: text; -webkit-user-select: text; transition: border-color 0.12s, box-shadow 0.12s;
 }
 textarea { height: auto; padding: 7px 10px; }
+.field-ctl textarea.budget-lines { width: 240px; resize: vertical; font: 12px var(--font-mono); }
 select { padding-right: 24px; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 input::placeholder, textarea::placeholder { color: var(--faint); }

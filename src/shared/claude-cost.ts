@@ -111,17 +111,14 @@ export function responseCost(t: Tokens, model: string | undefined, opts: { fast?
   return ((t.input * price.input + t.output * price.output + t.cacheRead * price.cacheRead + t.cacheWrite5m * price.cacheWrite5m + t.cacheWrite1h * price.cacheWrite1h) / 1e6) * mult;
 }
 
-/**
- * The cost of the model responses in these transcript lines. Claude Code writes one line per content block of a response and
- * repeats the response's usage on each, so a response counts once (by message id; the largest count wins in case a line
- * was written before the response was complete).
- */
-export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
-  const byId = new Map<string, Seen>();
+/** One response, by its id: the largest numbers of its lines, and the time of its latest line (`timestamp`, when there is one). */
+function collect(lines: Iterable<string>): { byId: Map<string, Seen & { at?: number }>; lastId?: string } {
+  const byId = new Map<string, Seen & { at?: number }>();
   let n = 0;
+  let lastId: string | undefined;
   for (const line of lines) {
     if (!line.includes('"usage"')) continue;
-    let d: { type?: unknown; message?: Record<string, unknown>; requestId?: unknown };
+    let d: { type?: unknown; message?: Record<string, unknown>; requestId?: unknown; timestamp?: unknown };
     try {
       d = JSON.parse(line);
     } catch {
@@ -132,15 +129,36 @@ export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
     const seen = readUsage(d.message);
     if (!seen) continue;
     const id = typeof d.message.id === 'string' ? d.message.id : typeof d.requestId === 'string' ? d.requestId : `line-${n++}`;
+    const t = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN;
     const prev = byId.get(id);
-    byId.set(
-      id,
-      prev
+    const at = Math.max(prev?.at ?? -Infinity, Number.isFinite(t) ? t : -Infinity);
+    byId.set(id, {
+      ...(prev
         ? { ...seen, input: Math.max(prev.input, seen.input), output: Math.max(prev.output, seen.output), cacheRead: Math.max(prev.cacheRead, seen.cacheRead), cacheWrite5m: Math.max(prev.cacheWrite5m, seen.cacheWrite5m), cacheWrite1h: Math.max(prev.cacheWrite1h, seen.cacheWrite1h) }
-        : seen,
-    );
+        : seen),
+      ...(Number.isFinite(at) ? { at } : {}),
+    });
+    lastId = id;
   }
-  if (!byId.size) return undefined;
+  return { byId, lastId };
+}
+
+/**
+ * The cost of the model responses in these transcript lines. Claude Code writes one line per content block of a response and
+ * repeats the response's usage on each, so a response counts once (by message id; the largest count wins in case a line
+ * was written before the response was complete).
+ */
+export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
+  return summarizeTurn(lines).cost;
+}
+
+/**
+ * (1.4.0) The cost of these lines (as `summarizeLines`) and, from the same pass, the context of the latest response: what it read in
+ * (new input, cache written and cache read; never its output) and its model's id, for the context meter.
+ */
+export function summarizeTurn(lines: Iterable<string>): { cost?: TurnCost; context?: { tokens: number; model?: string } } {
+  const { byId, lastId } = collect(lines);
+  if (!byId.size) return {};
   const out: TurnCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: byId.size };
   let usd: number | undefined = 0;
   const weight = new Map<string, number>();
@@ -155,7 +173,31 @@ export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
   }
   out.model = [...weight.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   if (usd !== undefined) out.usd = usd;
-  return out;
+  const last = byId.get(lastId!)!;
+  return { cost: out, context: { tokens: last.input + last.cacheWrite5m + last.cacheWrite1h + last.cacheRead, ...(last.model ? { model: last.model } : {}) } };
+}
+
+/** (1.4.0) Each response of these lines once, with the time of its latest line (one without a time is left out), all its tokens and its price when its model has one. */
+export function usageByTime(lines: Iterable<string>): { at: number; tokens: number; usd?: number }[] {
+  return [...collect(lines).byId.values()]
+    .filter((s): s is Seen & { at: number } => s.at !== undefined)
+    .map((s) => {
+      const usd = responseCost(s, s.model, { fast: s.fast, us: s.us });
+      return { at: s.at, tokens: s.input + s.output + s.cacheRead + s.cacheWrite5m + s.cacheWrite1h, ...(usd !== undefined ? { usd } : {}) };
+    });
+}
+
+/**
+ * (1.4.0) How many tokens a model's context window holds, by its id: 1M for the families the docs give a million tokens (Fable 5.x,
+ * Mythos 5.x, Opus 5.x, Opus 4.7 and later 4.x, Sonnet 5.x, Haiku 5.x) and for an id with the `[1m]` suffix, 200k for any other Claude
+ * model, undefined for an id it cannot read (the meter then shows the tokens alone). Checked against Anthropic's docs of 2026-10-16:
+ * update it with the page, not from memory.
+ */
+export function contextWindow(model: string): number | undefined {
+  if (typeof model !== 'string' || !/^claude-[a-z]/.test(model)) return undefined;
+  if (model.endsWith('[1m]') || /^claude-(fable|mythos|opus|sonnet|haiku)-5(?:$|-|\[)/.test(model)) return 1_000_000;
+  const opus4 = /^claude-opus-4-(\d{1,2})(?:$|-|\[)/.exec(model);
+  return opus4 && Number(opus4[1]) >= 7 ? 1_000_000 : 200_000;
 }
 
 /** What the answers finished on one local day (`YYYY-MM-DD`) cost, in estimated dollars, and how long Claude worked on them. */

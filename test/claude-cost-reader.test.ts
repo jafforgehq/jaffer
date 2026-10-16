@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readTurnCost, transcriptSize } from '../src/core/claude/cost';
+import { readTurn, readTurnCost, transcriptSize } from '../src/core/claude/cost';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -84,5 +84,14 @@ describe('readTurnCost', () => {
     const turn = readTurnCost(file, 0)!;
     expect(JSON.stringify(turn)).not.toContain('SECRET');
     expect(Object.keys(turn).sort()).toEqual(['cacheRead', 'cacheWrite', 'input', 'messages', 'model', 'output', 'usd']);
+  });
+
+  it('readTurn (1.4.0): the same read gives the context of the latest response (what it read in, and its model), numbers and the model id only', () => {
+    fs.writeFileSync(file, user('my SECRET question') + reply('a1', 5) + `${JSON.stringify({ type: 'assistant', message: { id: 'a2', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'SECRET answer' }], usage: { input_tokens: 3, output_tokens: 9, cache_read_input_tokens: 70_000 } } })}\n`);
+    const r = readTurn(file, 0);
+    expect(r.context).toEqual({ tokens: 70_003, model: 'claude-opus-5-5' });
+    expect(r.cost).toEqual(readTurnCost(file, 0));
+    expect(JSON.stringify(r)).not.toContain('SECRET');
+    expect(readTurn(path.join(env.root, 'missing.jsonl'), 0)).toEqual({});
   });
 });

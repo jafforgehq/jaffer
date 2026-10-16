@@ -493,6 +493,19 @@ export function Settings(): VNode {
     el.value = String(usd);
     if (usd !== kept) set({ claude: { dailyBudgetUsd: usd } });
   };
+  /** (1.4.0) The daily work-time budget in whole minutes, 0..1440 (anything else keeps the setting), shown as kept, as the cost budget. */
+  const commitWorkBudget = (el: HTMLInputElement) => {
+    const kept = cfg.value?.claude?.dailyWorkBudgetMin ?? 0;
+    const v = Number(el.value);
+    const min = Number.isFinite(v) ? Math.round(Math.min(1440, Math.max(0, v))) : kept;
+    el.value = String(min);
+    if (min !== kept) set({ claude: { dailyWorkBudgetMin: min } });
+  };
+  /** (1.4.0) The project budgets: the textarea's non-empty lines, trimmed, at most 20 (each read when it is used: a bad line is skipped, never refused here). */
+  const commitProjectBudgets = (el: HTMLTextAreaElement) => {
+    const lines = el.value.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 4200).slice(0, 20);
+    if (lines.join('\n') !== (cfg.value?.claude?.projectBudgets ?? []).join('\n')) set({ claude: { projectBudgets: lines } });
+  };
   const [openAtLogin, setOpenAtLogin] = useState(false);
   useEffect(() => void window.jaffer.appInfo().then((i) => setOpenAtLogin(!!i.openAtLogin)).catch(() => undefined), []);
   const run = async (name: string, fn: () => Promise<unknown>, ok: string) => {
@@ -769,6 +782,17 @@ export function Settings(): VNode {
                   /* on change and on blur: whether the browser fires `change` for a value that was set from code differs between Chromium versions */
                   onChange={(e) => commitBudget(e.target as HTMLInputElement)} onBlur={(e) => commitBudget(e.target as HTMLInputElement)}
                 />
+              </Field>
+              <Field label="Daily work-time budget (minutes, 0 = off)" hint="the Now card's “Claude worked … today” turns yellow at 80 % and red past it, with one notice when it is passed; memory only, it starts again at midnight">
+                <input type="number" min={0} max={1440} step={15} value={c.claude?.dailyWorkBudgetMin ?? 0}
+                  onChange={(e) => commitWorkBudget(e.target as HTMLInputElement)} onBlur={(e) => commitWorkBudget(e.target as HTMLInputElement)}
+                />
+              </Field>
+              <Field label="Project budgets" hint="one per line, a folder and dollars per week: ~/code/api=20. Cost by folder tints a folder at 80 % and past it, from the 30 newest conversations (an estimate)">
+                <textarea class="budget-lines" rows={3} spellcheck={false} placeholder="~/code/api=20" value={(c.claude?.projectBudgets ?? []).join('\n')} onBlur={(e) => commitProjectBudgets(e.target as HTMLTextAreaElement)} />
+              </Field>
+              <Field label="Weekly summary" hint="at Jaffer's start, once a week: a notification of last week's time with Claude (and its estimated cost, with the cost shown)">
+                <Switch checked={c.notifications?.weeklyDigest !== false} onChange={(v) => set({ notifications: { weeklyDigest: v } })} />
               </Field>
               <Field label="Tool strip" hint="a thin line under the title bar: this turn's tool calls, coloured by kind, red when one failed">
                 <Switch checked={c.claude?.toolStrip !== false} onChange={(v) => set({ claude: { toolStrip: v } })} />

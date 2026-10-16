@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayTotal, formatTokens, formatUsd, priceOf, responseCost, summarizeLines } from '../src/shared/claude-cost';
+import { contextWindow, dayTotal, formatTokens, formatUsd, priceOf, responseCost, summarizeLines, summarizeTurn, usageByTime } from '../src/shared/claude-cost';
 
 const line = (id: string, model: string, usage: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ type: 'assistant', requestId: `req_${id}`, message: { id, model, role: 'assistant', content: [{ type: 'text', text: 'hi' }], usage }, ...extra });
@@ -160,5 +160,47 @@ describe('dayTotal.workMs: the time of the turns finished today (Claude worked .
     expect(dayTotal(t, at(9, 1), 0, Number.NaN).workMs).toBe(2000);
     expect(dayTotal(t, at(9, 1), 0, -5000).workMs).toBe(2000);
     expect(dayTotal(t, at(9, 1), 0, Infinity).workMs).toBe(2000);
+  });
+});
+
+describe('contextWindow (1.4.0): how many tokens a model can hold, by its id (checked against the docs of 2026-10-16)', () => {
+  it('1M for the families with a million-token window, also dated snapshots and the [1m] suffix', () => {
+    for (const m of ['claude-fable-5-1', 'claude-fable-5', 'claude-mythos-5', 'claude-mythos-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8-20260101', 'claude-opus-4-9', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-sonnet-4-6[1m]', 'claude-opus-5-5[1m]']) expect(contextWindow(m), m).toBe(1_000_000);
+  });
+
+  it('200k for the other Claude models, none for an id it cannot read', () => {
+    for (const m of ['claude-opus-4-6', 'claude-opus-4-5', 'claude-opus-4-1', 'claude-opus-4', 'claude-opus-4-20250514', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5-20251001', 'claude-haiku-3-5', 'claude-opus-6']) expect(contextWindow(m), m).toBe(200_000);
+    for (const m of ['', '<synthetic>', 'gpt-5', 'claude', 'opus', undefined as never, 42 as never]) expect(contextWindow(m), String(m)).toBeUndefined();
+  });
+});
+
+describe('summarizeTurn (1.4.0): the cost and the context of the latest response, in one pass', () => {
+  it('the context is what the latest response read in (new, cache written, cache read; never its output), with its model', () => {
+    const r = summarizeTurn([line('m1', 'claude-sonnet-5-5', { input_tokens: 5, output_tokens: 900, cache_read_input_tokens: 1000, cache_creation_input_tokens: 100 }), line('m2', 'claude-opus-5-5', { input_tokens: 7, output_tokens: 50, cache_read_input_tokens: 120_000, cache_creation: { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 2000 } })]);
+    expect(r.context).toEqual({ tokens: 7 + 120_000 + 300 + 2000, model: 'claude-opus-5-5' });
+    expect(r.cost).toEqual(summarizeLines([line('m1', 'claude-sonnet-5-5', { input_tokens: 5, output_tokens: 900, cache_read_input_tokens: 1000, cache_creation_input_tokens: 100 }), line('m2', 'claude-opus-5-5', { input_tokens: 7, output_tokens: 50, cache_read_input_tokens: 120_000, cache_creation: { ephemeral_5m_input_tokens: 300, ephemeral_1h_input_tokens: 2000 } })]));
+  });
+
+  it('a response written in several lines counts its largest numbers; synthetic messages and other lines are no context; none without a response', () => {
+    const r = summarizeTurn([line('m1', 'claude-sonnet-5-5', { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 10 }), line('m1', 'claude-sonnet-5-5', { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 400 }), line('s1', '<synthetic>', { input_tokens: 0, output_tokens: 0 }), JSON.stringify({ type: 'user', message: { role: 'user', content: 'q "usage"' } })]);
+    expect(r.context).toEqual({ tokens: 405, model: 'claude-sonnet-5-5' });
+    expect(summarizeTurn(['', '{bad "usage"'])).toEqual({});
+  });
+});
+
+describe('usageByTime (1.4.0): each response once, with when it was written, for the last 5 hours', () => {
+  it('one entry per response: its time (the latest of its lines), all its tokens, its price when the model has one', () => {
+    const u = { input_tokens: 10, output_tokens: 500, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 2000 };
+    const out = usageByTime([
+      line('m1', 'claude-sonnet-5-5', u, { timestamp: '2026-10-16T10:00:00.000Z' }),
+      line('m1', 'claude-sonnet-5-5', u, { timestamp: '2026-10-16T10:00:01.000Z' }),
+      line('m2', 'claude-newest-9', u, { timestamp: '2026-10-16T11:00:00.000Z' }),
+      line('m3', 'claude-sonnet-5-5', u), // no time: not placed
+      line('m4', 'claude-sonnet-5-5', u, { timestamp: 'yesterday' }),
+    ]);
+    expect(out).toEqual([
+      { at: Date.parse('2026-10-16T10:00:01.000Z'), tokens: 42_510, usd: expect.closeTo((10 * 2 + 500 * 10 + 40_000 * 0.2 + 2000 * 2.5) / 1e6, 9) },
+      { at: Date.parse('2026-10-16T11:00:00.000Z'), tokens: 42_510 },
+    ]);
   });
 });

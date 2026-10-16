@@ -1,5 +1,5 @@
-/** What a notification was about: Claude needs you, Claude finished, a long command finished or failed, the terminal's own notification. */
-export type HoldKind = 'needs-you' | 'finished' | 'command' | 'failed' | 'terminal';
+/** What a notification was about: Claude needs you, Claude finished, a long command finished or failed, the terminal's own notification, the weekly summary (1.4.0). */
+export type HoldKind = 'needs-you' | 'finished' | 'command' | 'failed' | 'terminal' | 'digest';
 
 const SAYING: Record<HoldKind, (n: number) => string> = {
   finished: (n) => `Claude finished ${times(n)}`,
@@ -7,6 +7,7 @@ const SAYING: Record<HoldKind, (n: number) => string> = {
   command: (n) => `${n} command${n === 1 ? '' : 's'} finished`,
   failed: (n) => `${n} command${n === 1 ? '' : 's'} failed`,
   terminal: (n) => `${n} terminal notification${n === 1 ? '' : 's'}`,
+  digest: () => 'the weekly summary',
 };
 const times = (n: number): string => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 

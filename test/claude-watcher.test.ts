@@ -793,6 +793,33 @@ describe('ClaudeWatcher: the session clock', () => {
     t = 7_000;
     w.handle(fx('PreToolUse', bash('npm test')));
     expect(only()).toMatchObject({ startedAt: 7_000, turns: 0 });
+    // 1.4.0: the context meter (the daemon reads it from the transcript's token counts): numbers only, never the model's name or a word
+    w.setContext('sess-1', { tokens: 1234, window: 200_000 });
+    expect(Object.keys(only().context!).sort()).toEqual(['at', 'tokens', 'window']);
+    expect(Object.values(only().context!).every((v) => typeof v === 'number')).toBe(true);
+  });
+});
+
+describe('ClaudeWatcher: the context meter (1.4.0)', () => {
+  it('keeps the numbers the daemon read (tokens, the window when known, when), says so only when they changed, and forgets them when Claude compacts', () => {
+    w.handle(fx('UserPromptSubmit'));
+    const seen: ClaudeSession[][] = [];
+    w.changes.on((s) => seen.push(s));
+    t = 3_000;
+    w.setContext('sess-1', { tokens: 50_000, window: 200_000 });
+    expect(only().context).toEqual({ tokens: 50_000, window: 200_000, at: 3_000 });
+    w.setContext('sess-1', { tokens: 50_000, window: 200_000 });
+    expect(seen).toHaveLength(1);
+    w.setContext('sess-1', { tokens: 60_000 }); // a model whose window is not known
+    expect(w.view()[0]!.context).toEqual({ tokens: 60_000, at: 3_000 });
+    w.setContext('sess-1', { tokens: Number.NaN, window: 200_000 });
+    w.setContext('sess-1', { tokens: -1 });
+    w.setContext('nobody', { tokens: 1 });
+    expect(seen).toHaveLength(2);
+    w.handle(fx('Stop'));
+    expect(only().context?.tokens).toBe(60_000); // (it stays across turns: the next read replaces it)
+    w.handle(fx('PreCompact'));
+    expect(only().context).toBeUndefined();
   });
 });
 

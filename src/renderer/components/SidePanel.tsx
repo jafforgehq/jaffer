@@ -1,8 +1,8 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { activePane, approvals, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick, turnHistory } from '../state';
+import { activePane, approvals, cfg, claudeToday, clock, currentClaude, layoutHold, panelOpen, patchPanel, tick, turnHistory, usage5h } from '../state';
 import { COST_ESTIMATE } from '../claude-ui';
-import { nowCardModel, panelWidth } from '../panel';
+import { nowCardModel, panelWidth, todayTimeline } from '../panel';
 import { Conversations } from './Conversations';
 import { WhatsNew } from './WhatsNew';
 import { terminals } from './TerminalView';
@@ -20,7 +20,9 @@ export function NowCard(): VNode {
   const c = cfg.value?.claude;
   // (the second clock only runs while Claude works; otherwise the slow one keeps the agents' times roughly current)
   const now = s?.state === 'working' ? tick.value : (void clock.value, Date.now());
-  const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0, turns: turnHistory.value });
+  const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0, turns: turnHistory.value, usage5h: usage5h.value });
+  const timeline = todayTimeline(turnHistory.value, now, c?.showCost !== false);
+  const [tlOpen, setTlOpen] = useState(false);
   // a permission prompt waiting for a click (approvals): asked here too, and the terminal has no prompt to answer yet
   const ap = approvals.value[0];
   if (ap) m.hint = undefined;
@@ -54,7 +56,26 @@ export function NowCard(): VNode {
           )}
         </div>
       )}
-      {m.worked && <div class="now-worked">{m.worked}</div>}
+      {m.context && (
+        <div class="now-ctx" data-level={m.context.level} title="An estimate from the token counts of the latest response: how much of the context window it used">
+          <span>{m.context.text}</span>
+          {m.context.fraction !== null && (
+            <span class="now-ctx-bar" role="meter" aria-label="Context used (estimate)" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(m.context.fraction * 100)}>
+              <i style={{ width: pct(m.context.fraction) }} />
+            </span>
+          )}
+        </div>
+      )}
+      {m.worked && (
+        <div class="now-worked" data-level={m.workedLevel}>
+          {m.worked}
+        </div>
+      )}
+      {m.last5h && (
+        <div class="now-5h" title="An estimate from the token counts in Claude Code's transcripts of the last 5 hours, at API list prices; your plan's limits are counted by Anthropic, not here">
+          {m.last5h}
+        </div>
+      )}
       {m.bars && (
         <svg class="now-turns" viewBox={`0 0 ${m.bars.w} ${m.bars.h}`} width={m.bars.w} height={m.bars.h} role="img" aria-label={m.bars.label}>
           {m.bars.bars.map((b, i) => (
@@ -63,6 +84,20 @@ export function NowCard(): VNode {
             </rect>
           ))}
         </svg>
+      )}
+      {timeline.length > 0 && (
+        <div class="now-tl">
+          <button class="now-tl-toggle" aria-expanded={tlOpen} onClick={() => setTlOpen(!tlOpen)}>
+            Today ({timeline.length})
+          </button>
+          {tlOpen && (
+            <ol class="now-tl-list">
+              {timeline.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ol>
+          )}
+        </div>
       )}
       {m.agents.length > 0 && (
         <ul class="now-agents">
