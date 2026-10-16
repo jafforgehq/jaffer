@@ -118,7 +118,7 @@ function collect(lines: Iterable<string>): { byId: Map<string, Seen & { at?: num
   let lastId: string | undefined;
   for (const line of lines) {
     if (!line.includes('"usage"')) continue;
-    let d: { type?: unknown; message?: Record<string, unknown>; requestId?: unknown; timestamp?: unknown };
+    let d: { type?: unknown; message?: Record<string, unknown>; requestId?: unknown; timestamp?: unknown; isSidechain?: unknown };
     try {
       d = JSON.parse(line);
     } catch {
@@ -138,7 +138,7 @@ function collect(lines: Iterable<string>): { byId: Map<string, Seen & { at?: num
         : seen),
       ...(Number.isFinite(at) ? { at } : {}),
     });
-    lastId = id;
+    if (d.isSidechain !== true) lastId = id; // (a subagent's response costs, but it is not the main conversation's context)
   }
   return { byId, lastId };
 }
@@ -173,17 +173,20 @@ export function summarizeTurn(lines: Iterable<string>): { cost?: TurnCost; conte
   }
   out.model = [...weight.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   if (usd !== undefined) out.usd = usd;
-  const last = byId.get(lastId!)!;
-  return { cost: out, context: { tokens: last.input + last.cacheWrite5m + last.cacheWrite1h + last.cacheRead, ...(last.model ? { model: last.model } : {}) } };
+  const last = lastId === undefined ? undefined : byId.get(lastId)!;
+  return { cost: out, ...(last ? { context: { tokens: last.input + last.cacheWrite5m + last.cacheWrite1h + last.cacheRead, ...(last.model ? { model: last.model } : {}) } } : {}) };
 }
 
-/** (1.4.0) Each response of these lines once, with the time of its latest line (one without a time is left out), all its tokens and its price when its model has one. */
-export function usageByTime(lines: Iterable<string>): { at: number; tokens: number; usd?: number }[] {
-  return [...collect(lines).byId.values()]
-    .filter((s): s is Seen & { at: number } => s.at !== undefined)
-    .map((s) => {
+/**
+ * (1.4.0) Each response of these lines once: its id (to count it once across files: a resumed conversation repeats responses in its new
+ * file), the time of its latest line (one without a time is left out), all its tokens and its price when its model has one.
+ */
+export function usageByTime(lines: Iterable<string>): { id: string; at: number; tokens: number; usd?: number }[] {
+  return [...collect(lines).byId.entries()]
+    .filter((e): e is [string, Seen & { at: number }] => e[1].at !== undefined)
+    .map(([id, s]) => {
       const usd = responseCost(s, s.model, { fast: s.fast, us: s.us });
-      return { at: s.at, tokens: s.input + s.output + s.cacheRead + s.cacheWrite5m + s.cacheWrite1h, ...(usd !== undefined ? { usd } : {}) };
+      return { id, at: s.at, tokens: s.input + s.output + s.cacheRead + s.cacheWrite5m + s.cacheWrite1h, ...(usd !== undefined ? { usd } : {}) };
     });
 }
 

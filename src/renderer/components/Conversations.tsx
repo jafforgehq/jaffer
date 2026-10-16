@@ -148,8 +148,9 @@ export function Conversations(): VNode {
   const load = () => {
     const n = ++asked;
     setLoading(true);
-    // (1.4.0) the Now card's last 5 hours are read with the list: numbers only
-    void window.jaffer
+    // (1.4.0) the Now card's last 5 hours are read with the list: numbers only, and only with the cost shown
+    if (cfg.value?.claude?.showCost !== false)
+      void window.jaffer
       .call<{ tokens?: unknown; usd?: unknown }>('claude.usage5h', {})
       .then((r) => n === asked && (usage5h.value = typeof r?.tokens === 'number' ? { tokens: r.tokens, ...(typeof r.usd === 'number' ? { usd: r.usd } : {}) } : null))
       .catch(() => undefined);

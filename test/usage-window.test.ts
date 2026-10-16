@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { recentUsage, MAX_FILES } from '../src/core/claude/usage-window';
+import { recentUsage, MAX_FILES, scanStats } from '../src/core/claude/usage-window';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -76,6 +76,37 @@ describe('recentUsage: the tokens (and estimated dollars) of the responses of th
     expect((await recentUsage(claudeDir, NOW + 0.2 * H)).tokens).toBe(20); // a aged out, the file unchanged
     fs.appendFileSync(file, reply('c', 0, { input_tokens: 0, output_tokens: 5 }));
     expect((await recentUsage(claudeDir, NOW)).tokens).toBe(35);
+  });
+
+  it('reads a 24 MB transcript from its end in chunks and stops at the first response older than the window', async () => {
+    const old: string[] = [];
+    for (let i = 0; old.length * 260 < 24 * 1024 * 1024; i++) old.push(reply(`old-${i}`, 6 * H, { input_tokens: 1, output_tokens: 1 }));
+    plant(project, old.join('') + reply('new-1', H, { input_tokens: 0, output_tokens: 40 }) + reply('new-2', 0, { input_tokens: 0, output_tokens: 2 }));
+    scanStats.bytes = 0;
+    const t0 = performance.now();
+    expect((await recentUsage(claudeDir, NOW)).tokens).toBe(42);
+    expect(scanStats.bytes).toBeLessThanOrEqual(2 * 1024 * 1024); // (one chunk, or two at most: never the 24 MB)
+    expect(performance.now() - t0).toBeLessThan(1_500);
+  });
+
+  it('overlapping calls share one scan (one answer, one read)', async () => {
+    plant(project, reply('s1', H, { input_tokens: 0, output_tokens: 5 }));
+    scanStats.bytes = 0;
+    const [a, b] = await Promise.all([recentUsage(claudeDir, NOW), recentUsage(claudeDir, NOW)]);
+    expect(a).toBe(b);
+    expect(a.tokens).toBe(5);
+    const once = scanStats.bytes;
+    expect(once).toBeGreaterThan(0);
+    scanStats.bytes = 0;
+    await Promise.all([recentUsage(path.join(env.root, 'other'), NOW), recentUsage(path.join(env.root, 'other'), NOW)]);
+    expect(scanStats.bytes).toBe(0);
+  });
+
+  it('a response a resumed conversation repeats in its new file counts once', async () => {
+    const same = reply('dup-1', H, { input_tokens: 0, output_tokens: 100 });
+    plant(project, same + reply('a-1', H, { input_tokens: 0, output_tokens: 1 }));
+    plant(project, same + reply('b-1', H / 2, { input_tokens: 0, output_tokens: 2 }), 1000);
+    expect((await recentUsage(claudeDir, NOW)).tokens).toBe(103);
   });
 
   for (const mb of [1, 8]) {

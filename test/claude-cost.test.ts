@@ -186,6 +186,13 @@ describe('summarizeTurn (1.4.0): the cost and the context of the latest response
     expect(r.context).toEqual({ tokens: 405, model: 'claude-sonnet-5-5' });
     expect(summarizeTurn(['', '{bad "usage"'])).toEqual({});
   });
+
+  it('a subagent\'s line (isSidechain) counts for the cost but is not the main conversation\'s context', () => {
+    const r = summarizeTurn([line('m1', 'claude-opus-5-5', { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 90_000 }), line('m2', 'claude-haiku-4-5', { input_tokens: 500, output_tokens: 1 }, { isSidechain: true })]);
+    expect(r.context).toEqual({ tokens: 90_010, model: 'claude-opus-5-5' });
+    expect(r.cost!.messages).toBe(2);
+    expect(summarizeTurn([line('m2', 'claude-haiku-4-5', { input_tokens: 500, output_tokens: 1 }, { isSidechain: true })]).context).toBeUndefined();
+  });
 });
 
 describe('usageByTime (1.4.0): each response once, with when it was written, for the last 5 hours', () => {
@@ -199,8 +206,8 @@ describe('usageByTime (1.4.0): each response once, with when it was written, for
       line('m4', 'claude-sonnet-5-5', u, { timestamp: 'yesterday' }),
     ]);
     expect(out).toEqual([
-      { at: Date.parse('2026-10-16T10:00:01.000Z'), tokens: 42_510, usd: expect.closeTo((10 * 2 + 500 * 10 + 40_000 * 0.2 + 2000 * 2.5) / 1e6, 9) },
-      { at: Date.parse('2026-10-16T11:00:00.000Z'), tokens: 42_510 },
+      { id: 'm1', at: Date.parse('2026-10-16T10:00:01.000Z'), tokens: 42_510, usd: expect.closeTo((10 * 2 + 500 * 10 + 40_000 * 0.2 + 2000 * 2.5) / 1e6, 9) },
+      { id: 'm2', at: Date.parse('2026-10-16T11:00:00.000Z'), tokens: 42_510 },
     ]);
   });
 });

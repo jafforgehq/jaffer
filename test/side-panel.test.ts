@@ -165,19 +165,20 @@ describe('the side panel (pure)', () => {
     expect(ctx(620_000, 1_000_000)).toEqual({ text: 'Context 62% of 1M', level: 'ok', fraction: 0.62 });
     expect(ctx(160_000, 200_000)).toEqual({ text: 'Context 80% of 200k', level: 'warn', fraction: 0.8 });
     expect(ctx(184_000, 200_000)?.level).toBe('danger');
-    expect(ctx(250_000, 200_000)).toEqual({ text: 'Context 100% of 200k', level: 'danger', fraction: 1 });
+    expect(ctx(250_000, 200_000)).toEqual({ text: 'Context 250k tokens', level: 'ok', fraction: null }); // (more than the table's window: the table is wrong for this model, so no share is claimed)
     expect(ctx(124_000)).toEqual({ text: 'Context 124k tokens', level: 'ok', fraction: null });
     expect(ctx(0, 200_000)).toBeUndefined();
     expect(ctx(Number.NaN, 200_000)).toBeUndefined();
     expect(nowCardModel(session(), opts()).context).toBeUndefined();
     expect(nowCardModel(session({ context: 'x' as never }), opts()).context).toBeUndefined();
     expect(nowCardModel(null, opts()).context).toBeUndefined();
+    expect(nowCardModel(session({ context: { tokens: 620_000, window: 1_000_000, at: NOW } }), opts({ cfg: { showCost: false } })).context).toBeUndefined(); // (the cost switch: nothing of the transcripts shows)
   });
 
-  it('the last 5 hours (1.4.0): tokens always, the money only with showCost, and what it is not; nothing for none', () => {
+  it('the last 5 hours (1.4.0): the tokens and (when priced) the money, and what it is not; nothing for none, nothing with showCost off', () => {
     expect(nowCardModel(null, opts({ usage5h: { tokens: 3_200_000, usd: 4.5 } })).last5h).toBe("Last 5 h ≈ $4.50 · 3.2M tokens (estimate, not your plan's limit)");
-    expect(nowCardModel(session(), opts({ usage5h: { tokens: 3_200_000, usd: 4.5 }, cfg: { showCost: false } })).last5h).toBe("Last 5 h · 3.2M tokens (estimate, not your plan's limit)");
-    expect(nowCardModel(session(), opts({ usage5h: { tokens: 1200 } })).last5h).toBe("Last 5 h · 1.2k tokens (estimate, not your plan's limit)");
+    expect(nowCardModel(session(), opts({ usage5h: { tokens: 3_200_000, usd: 4.5 }, cfg: { showCost: false } })).last5h).toBeUndefined(); // (the cost switch: nothing of the transcripts shows)
+    expect(nowCardModel(session(), opts({ usage5h: { tokens: 1200 } })).last5h).toBe("Last 5 h · 1.2k tokens (estimate, not your plan's limit)"); // (no price known: tokens only)
     expect(nowCardModel(session(), opts({ usage5h: { tokens: 0, usd: 0 } })).last5h).toBeUndefined();
     expect(nowCardModel(session(), opts({ usage5h: null })).last5h).toBeUndefined();
     expect(nowCardModel(session(), opts()).last5h).toBeUndefined();

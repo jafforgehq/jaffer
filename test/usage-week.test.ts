@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { digestDue, digestText, rollWeek, weekId, type UsageWeeks } from '../src/shared/usage-week';
+import { digestDue, digestLine, digestText, rollWeek, weekId, type UsageWeeks } from '../src/shared/usage-week';
 
 const at = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min).getTime(); // local time, as the person's clock
 const empty = (): UsageWeeks => ({ week: { id: '', usd: 0, workMs: 0 }, lastWeek: { id: '', usd: 0, workMs: 0 }, digestWeek: '' });
@@ -80,5 +80,10 @@ describe('digestText', () => {
     expect(digestText({ id: '2026-W42', usd: 12.4, workMs: 45_000_000 }, false)).toEqual({ title: 'Last week with Claude', body: '12h 30m' });
     expect(digestText({ id: '2026-W42', usd: 2, workMs: 0 }, true).body).toBe('≈ $2.00');
     expect(digestText({ id: '2026-W42', usd: 2, workMs: 0 }, false).body).toBe('Claude Code worked with you last week.');
+  });
+
+  it('digestLine: the one line of the window\'s toast, from the same words', () => {
+    expect(digestLine({ id: '2026-W42', usd: 12.4, workMs: 45_000_000 }, true)).toBe('Last week with Claude: ≈ $12.40, 12h 30m');
+    expect(digestLine({ id: '2026-W42', usd: 12.4, workMs: 45_000_000 }, false)).toBe('Last week with Claude: 12h 30m');
   });
 });

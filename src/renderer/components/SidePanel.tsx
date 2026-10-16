@@ -93,7 +93,9 @@ export function NowCard(): VNode {
           {tlOpen && (
             <ol class="now-tl-list">
               {timeline.map((t, i) => (
-                <li key={i}>{t}</li>
+                <li key={i} title={t}>
+                  {t}
+                </li>
               ))}
             </ol>
           )}

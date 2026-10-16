@@ -480,10 +480,14 @@ export class JafferService {
     } else if (o.hook_event_name === 'Stop') {
       const start = this.turnStart.get(id);
       if (start === undefined || !file) return;
-      // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended; with the
-      // cost switched off only the context meter's numbers are taken from the same read
+      // the cost switch also covers the context meter: off, nothing of the transcript is read
+      if (!this.config.get().claude.showCost) {
+        this.turnStart.set(id, transcriptSize(file));
+        return;
+      }
+      // a response Claude gives without a new prompt (a background agent finished) is measured from where the last one ended
       const read = (retry: boolean): void => {
-        if (this.counted.get(id) === start) return; // its Stop came twice: the answer was counted already
+        if (this.counted.get(id) === start || !this.config.get().claude.showCost) return; // its Stop came twice: the answer was counted already (or the switch went off meanwhile)
         const end = transcriptSize(file);
         const { cost: turn, context } = readTurn(file, start, end);
         if (context) this.setContext(id, context);
@@ -491,7 +495,6 @@ export class JafferService {
           this.counted.set(id, start);
           if (this.counted.size > 20) this.counted.delete(this.counted.keys().next().value!);
           if (this.turnStart.has(id)) this.turnStart.set(id, end); // (a session forgotten since, after its end, is not brought back)
-          if (!this.config.get().claude.showCost) return;
           this.today = dayTotal(this.today, Date.now(), turn.usd ?? 0);
           this.addToWeek(turn.usd ?? 0, 0);
           this.claudeWatcher.setCost(id, turn);
@@ -670,8 +673,9 @@ export class JafferService {
     r.handle('claude.hooks', () => ({ events: Object.fromEntries(HOOK_EVENTS.map((e) => [e, this.hookSeen.get(e) ?? null])) }));
     // Past conversations, from Claude Code's own transcripts: ids, folders, times, titles for the 30 newest (redacted) and (with showCost) token counts, read on request, kept nowhere;
     // `include`: the pinned ones' ids (checked there), listed even when older than the 50 newest
-    // (1.4.0) The last 5 hours: the token counts and times of the responses in the transcripts written in that window, as numbers
-    r.handle('claude.usage5h', () => recentUsage(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), Date.now()));
+    // (1.4.0) The last 5 hours: the token counts and times of the responses in the transcripts written in that window, as numbers; with the
+    // cost switched off nothing is read
+    r.handle('claude.usage5h', () => (this.config.get().claude.showCost ? recentUsage(process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), Date.now()) : { tokens: 0, files: 0 }));
     r.handle('claude.history', async (p: { include?: unknown } | null) => ({
       items: await listConversations({ claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), limit: 50, withCost: this.config.get().claude.showCost, include: p?.include }),
     }));

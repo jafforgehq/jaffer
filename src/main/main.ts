@@ -27,7 +27,7 @@ import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 import { editorUrl } from '../shared/editor-url';
 import { MENU_ITEMS } from '../shared/menu-spec';
 import { FocusHold, type HoldKind } from '../shared/focus-hold';
-import { digestDue, digestText, type UsageWeeks } from '../shared/usage-week';
+import { digestDue, digestLine, digestText, type UsageWeeks } from '../shared/usage-week';
 import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
 import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
@@ -375,7 +375,8 @@ function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
 
 /**
  * (1.4.0) The weekly digest: once the window has loaded the first time, once per finished week (`usage.digestWeek`), one notification of
- * last week's time with Claude and (with the cost shown) its estimated dollars; `notifications.weeklyDigest` switches it off. The numbers
+ * last week's time with Claude and (with the cost shown) its estimated dollars, and the same line as a toast in the window (`app.digest`)
+ * with a button that opens the side panel; `notifications.weeklyDigest` switches both off. The numbers
  * are the daemon's (`usage` in config.json).
  */
 let digestAsked = false;
@@ -391,6 +392,8 @@ async function weeklyDigest(): Promise<void> {
     if (cfg.notifications?.weeklyDigest === false) return;
     const n = digestText(w, cfg.claude?.showCost !== false);
     notify(n.title, n.body, 'digest');
+    // and in the window: a toast with the same words and a button that opens the side panel
+    sendToRenderer('jaffer:event', 'app.digest', { text: digestLine(w, cfg.claude?.showCost !== false) });
   } catch {
     /* the terminal is gone: there is next week */
   }

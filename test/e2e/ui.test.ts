@@ -4306,9 +4306,25 @@ describe('Jaffer UI end to end', () => {
       await sleep(300);
       expect(await toastCount('Context is 85% full')).toBe(1); // once per session
       await shot('19d-context-meter');
+      // a compaction brings the meter down: the next time it fills, the toast comes again (once)
+      await page.evaluate(() => document.querySelectorAll<HTMLButtonElement>('.toast button[aria-label="Dismiss"]').forEach((b) => b.click()));
+      await until(async () => (await toastCount('Context is 85% full')) === 0, 3_000, 'the toasts dismissed');
+      await inject([{ id: 'ctx-1', state: 'working', compacting: true, context: { tokens: 190_000, window: 200_000, at: T } }]);
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 40_000, window: 200_000, at: T } }]);
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 175_000, window: 200_000, at: T } }]);
+      await until(async () => (await toastCount('Context is 85% full')) === 1, 5_000, 'the toast again after a compaction');
       await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 124_000, at: T } }]);
       await until(async () => (await textOf('.now-ctx > span')) === 'Context 124k tokens', 5_000, 'the tokens alone');
       expect(await page.locator('.now-ctx-bar').count()).toBe(0);
+      // more than the window the table knows: the tokens alone, no share claimed
+      await inject([{ id: 'ctx-1', state: 'idle', context: { tokens: 250_000, window: 200_000, at: T } }]);
+      await until(async () => (await textOf('.now-ctx > span')) === 'Context 250k tokens', 5_000, 'no share past the window');
+      expect(await page.getAttribute('.now-ctx', 'data-level')).toBe('ok');
+      // the cost switch covers the transcripts' numbers: off, no meter and no last 5 hours
+      await cfgPatch({ claude: { showCost: false } });
+      await until(async () => (await page.locator('.now-ctx, .now-5h').count()) === 0, 5_000, 'no meter and no 5 h line with the cost off');
+      await cfgPatch({ claude: { showCost: true } });
+      await until(async () => (await page.locator('.now-ctx').count()) === 1 && (await page.locator('.now-5h').count()) === 1, 5_000, 'both back');
       await inject([{ id: 'ctx-1', state: 'idle' }]);
       await until(async () => (await page.locator('.now-ctx').count()) === 0, 5_000, 'nothing without numbers');
 
@@ -4341,6 +4357,7 @@ describe('Jaffer UI end to end', () => {
       const entries = await page.$$eval('.now-tl-list li', (els) => els.map((e) => e.textContent));
       expect(entries[0]).toMatch(/^\d\d:\d\d · 30s · 1 read · ≈ \$0\.01$/);
       expect(entries[1]).toMatch(/^\d\d:\d\d · 1m 12s · 1 read · ≈ \$0\.04$/);
+      expect(await page.$$eval('.now-tl-list li', (els) => els.map((e) => e.getAttribute('title')))).toEqual(entries); // (the whole line on hover, also when the panel cuts it)
 
       // project budgets: the cost by folder tints a folder at 80 % and past it, with "of $X"; one toast per folder and week when passed
       await cfgPatch({ claude: { projectBudgets: ['/work/budget-a=10', '/work/budget-b=10'] } });
@@ -4360,7 +4377,18 @@ describe('Jaffer UI end to end', () => {
       expect(await toastCount('passed its weekly budget')).toBe(1); // once per folder and week
       await shot('19e-budgets');
       await page.click('.conv-cost-toggle');
+
+      // the weekly digest (main sends it once a finished week): a toast with the notification's words and a button that opens the panel
+      await cfgPatch({ panel: { open: false } });
+      await page.waitForSelector('.side-panel', { state: 'detached' });
+      await page.evaluate(() => (window as any).__event('app.digest', { text: 'Last week with Claude: ≈ $12.40, 12h 30m' }));
+      const digest = page.locator('.toast', { hasText: 'Last week with Claude: ≈ $12.40, 12h 30m' });
+      await digest.waitFor();
+      await digest.locator('button', { hasText: 'Open panel' }).click();
+      await page.waitForSelector('.side-panel');
+      expect((await page.evaluate(() => window.jaffer.call('config.get'))).panel.open).toBe(true);
     } finally {
+      await cfgPatch({ panel: { open: true } });
       await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__ciReal; });
       await cfgPatch({ claude: { dailyWorkBudgetMin: 0, projectBudgets: [] } });
       await inject([]);
@@ -4392,8 +4420,14 @@ describe('Jaffer UI end to end', () => {
       await lines.fill('');
       await lines.press('Tab');
       await until(async () => (await cfgNow()).claude.projectBudgets.length === 0, 8_000, 'no budgets again');
-    } finally {
+      expect(await field('Show what each answer cost').locator('small').textContent()).toMatch(/^Reads token counts from your conversation files to show cost, context and recent usage/);
+      // an edit kept although Settings closes at once (Esc, no blur first)
+      await lines.fill('/work/esc=3');
       await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+      await until(async () => JSON.stringify((await cfgNow()).claude.projectBudgets) === JSON.stringify(['/work/esc=3']), 8_000, 'the edit kept after Esc');
+    } finally {
+      if (await page.locator('.settings').count()) await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
       await cfgPatch({ claude: { dailyWorkBudgetMin: 0, projectBudgets: [] }, notifications: { weeklyDigest: true } });
     }

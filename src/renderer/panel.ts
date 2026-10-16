@@ -35,9 +35,9 @@ export interface NowCardModel {
   worked?: string;
   /** (1.4.0) The worked time against `claude.dailyWorkBudgetMin` (the cost budget's levels; `off` without a budget). */
   workedLevel: 'off' | 'ok' | 'warn' | 'danger';
-  /** (1.4.0) The context meter: how full the latest response left the context window (an estimate; `fraction` null when the window is not known). */
+  /** (1.4.0) The context meter: how full the latest response left the context window (an estimate; `fraction` null when the window is not known; only with `showCost`). */
   context?: { text: string; level: 'ok' | 'warn' | 'danger'; fraction: number | null };
-  /** (1.4.0) "Last 5 h ≈ $4.50 · 3.2M tokens (…)": the responses of the last 5 hours across the transcripts (the money only with `showCost`). */
+  /** (1.4.0) "Last 5 h ≈ $4.50 · 3.2M tokens (…)": the responses of the last 5 hours across the transcripts (only with `showCost`; the money when priced). */
   last5h?: string;
   /** The running background agents, numbered (their ids are opaque: never shown). */
   agents: string[];
@@ -76,14 +76,15 @@ export function nowCardModel(
   if (worked >= 1000) m.worked = `Claude worked ${fmtDuration(worked)} today`;
   m.workedLevel = budgetLevel(worked, Math.max(0, cfg?.dailyWorkBudgetMin ?? 0) * 60_000);
   const u = usage5h;
-  if (u && Number.isFinite(u.tokens) && u.tokens > 0) {
-    const money = showCost && typeof u.usd === 'number' && Number.isFinite(u.usd) ? ` ≈ ${formatUsd(u.usd)}` : '';
+  if (showCost && u && Number.isFinite(u.tokens) && u.tokens > 0) {
+    const money = typeof u.usd === 'number' && Number.isFinite(u.usd) ? ` ≈ ${formatUsd(u.usd)}` : '';
     m.last5h = `Last 5 h${money} · ${formatTokens(u.tokens)} tokens (estimate, not your plan's limit)`;
   }
   if (!s) return m;
-  const c = s.context && typeof s.context === 'object' ? s.context : undefined;
+  const c = showCost && s.context && typeof s.context === 'object' ? s.context : undefined;
   if (c && Number.isFinite(c.tokens) && c.tokens > 0) {
-    const f = typeof c.window === 'number' && c.window > 0 ? Math.min(1, c.tokens / c.window) : null;
+    // (more than the table's window: the table is wrong for this model, so no share is claimed)
+    const f = typeof c.window === 'number' && c.window > 0 && c.tokens <= c.window ? c.tokens / c.window : null;
     m.context = f === null ? { text: `Context ${formatTokens(c.tokens)} tokens`, level: 'ok', fraction: null } : { text: `Context ${Math.round(f * 100)}% of ${formatTokens(c.window!)}`, level: f >= 0.92 ? 'danger' : f >= 0.8 ? 'warn' : 'ok', fraction: f };
   }
   m.state = s.state === 'working' || s.state === 'needs-you' ? s.state : 'idle';

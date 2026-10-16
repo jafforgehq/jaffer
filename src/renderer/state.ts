@@ -318,9 +318,12 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
 
 /** One session's change since its last push (`p`: null the first time it is seen). */
 function sessionChanged(s: ClaudeSession, p: ClaudeSession | null): void {
-  if (p && s.compacting && !p.compacting) toast({ kind: 'info', text: `${whereOf(s)}Claude is compacting its context` });
+  if (p && s.compacting && !p.compacting) {
+    toast({ kind: 'info', text: `${whereOf(s)}Claude is compacting its context` });
+    contextWarned.delete(s.id); // (a compaction brings the meter down: the next time it fills, it says so again)
+  }
   const ctx = s.context;
-  if (ctx && typeof ctx.window === 'number' && ctx.window > 0 && ctx.tokens / ctx.window >= 0.85 && !contextWarned.has(s.id)) {
+  if (cfg.value?.claude?.showCost !== false && ctx && typeof ctx.window === 'number' && ctx.window > 0 && ctx.tokens / ctx.window >= 0.85 && !contextWarned.has(s.id)) {
     contextWarned.add(s.id);
     if (contextWarned.size > 100) contextWarned.delete(contextWarned.values().next().value!);
     toast({ kind: 'info', text: `${whereOf(s)}Context is 85% full. Claude compacts it automatically near the limit.` });
@@ -438,6 +441,10 @@ export async function bootstrap(): Promise<void> {
     } else if (event === 'claude.state') setClaude(data);
     else if (event === 'claude.approvals') setApprovals(data);
     else if (event === 'update.state') updateState.value = data;
+    else if (event === 'app.digest' && typeof data?.text === 'string') {
+      // (1.4.0) the weekly digest, from main: its line, and the side panel a click away
+      toast({ kind: 'info', text: data.text.slice(0, 200), actions: [{ label: 'Open panel', run: () => void (panelOpen() || patchPanel({ open: true })) }] });
+    }
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle' && typeof data?.pane === 'string') {
       if (data.lifecycle === 'closed') removePane(data.pane);

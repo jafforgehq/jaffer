@@ -502,10 +502,14 @@ export function Settings(): VNode {
     if (min !== kept) set({ claude: { dailyWorkBudgetMin: min } });
   };
   /** (1.4.0) The project budgets: the textarea's non-empty lines, trimmed, at most 20 (each read when it is used: a bad line is skipped, never refused here). */
+  const budgetEdit = useRef<{ el: HTMLTextAreaElement; t: ReturnType<typeof setTimeout> } | null>(null);
   const commitProjectBudgets = (el: HTMLTextAreaElement) => {
+    clearTimeout(budgetEdit.current?.t);
+    budgetEdit.current = null;
     const lines = el.value.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 4200).slice(0, 20);
     if (lines.join('\n') !== (cfg.value?.claude?.projectBudgets ?? []).join('\n')) set({ claude: { projectBudgets: lines } });
   };
+  useEffect(() => () => void (budgetEdit.current && commitProjectBudgets(budgetEdit.current.el)), []); // (an edit still waiting when Settings closes is kept)
   const [openAtLogin, setOpenAtLogin] = useState(false);
   useEffect(() => void window.jaffer.appInfo().then((i) => setOpenAtLogin(!!i.openAtLogin)).catch(() => undefined), []);
   const run = async (name: string, fn: () => Promise<unknown>, ok: string) => {
@@ -771,7 +775,7 @@ export function Settings(): VNode {
               <Field label="Tell me when Claude finishes" hint="a notification when a turn that took half a minute or more ends while Jaffer is in the background">
                 <Switch checked={c.notifications?.claudeFinished !== false} onChange={(v) => set({ notifications: { claudeFinished: v } })} />
               </Field>
-              <Field label="Show what each answer cost" hint="a small figure in the title bar after every answer: an estimate from token counts at API prices, not a bill">
+              <Field label="Show what each answer cost" hint="Reads token counts from your conversation files to show cost, context and recent usage: an estimate at API prices, not a bill">
                 <Switch checked={c.claude?.showCost !== false} onChange={(v) => set({ claude: { showCost: v } })} />
               </Field>
               <Field label="Live cost while Claude works" hint="the figure grows while Claude answers (greyed), read from the token counts every 2 seconds">
@@ -789,7 +793,10 @@ export function Settings(): VNode {
                 />
               </Field>
               <Field label="Project budgets" hint="one per line, a folder and dollars per week: ~/code/api=20. Cost by folder tints a folder at 80 % and past it, from the 30 newest conversations (an estimate)">
-                <textarea class="budget-lines" rows={3} spellcheck={false} placeholder="~/code/api=20" value={(c.claude?.projectBudgets ?? []).join('\n')} onBlur={(e) => commitProjectBudgets(e.target as HTMLTextAreaElement)} />
+                <textarea class="budget-lines" rows={3} spellcheck={false} placeholder="~/code/api=20" defaultValue={(c.claude?.projectBudgets ?? []).join('\n')} 
+                  /* every edit is kept 400 ms after the typing stops, so closing Settings with Esc keeps it */
+                  onInput={(e) => { const el = e.target as HTMLTextAreaElement; clearTimeout(budgetEdit.current?.t); budgetEdit.current = { el, t: setTimeout(() => commitProjectBudgets(el), 400) }; }}
+                  onBlur={(e) => commitProjectBudgets(e.target as HTMLTextAreaElement)} />
               </Field>
               <Field label="Weekly summary" hint="at Jaffer's start, once a week: a notification of last week's time with Claude (and its estimated cost, with the cost shown)">
                 <Switch checked={c.notifications?.weeklyDigest !== false} onChange={(v) => set({ notifications: { weeklyDigest: v } })} />

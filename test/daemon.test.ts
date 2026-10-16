@@ -629,6 +629,20 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('claude.usage5h with the cost switched off (1.4.0): an empty answer, no transcript read', async () => {
+    const c = await connect();
+    const dir = path.join(env.userHome, '.claude', 'projects', '-usage-5h-off');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'e1000000-1111-4222-8333-444455556666.jsonl'), `${JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id: 'z1', model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 0, output_tokens: 777 } } })}\n`);
+    await c.call('config.patch', { claude: { showCost: false } });
+    try {
+      expect(await c.call('claude.usage5h', {})).toEqual({ tokens: 0, files: 0 });
+    } finally {
+      await c.call('config.patch', { claude: { showCost: true } });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('claude.history takes include (1.2.0, the pinned ones): a conversation older than the 50 newest is listed too, with its title and no cost; bad ids are ignored', async () => {
     const c = await connect();
     const dir = path.join(env.userHome, '.claude', 'projects', '-history-include');
@@ -1116,7 +1130,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await c.call('claude.event', ev('SessionEnd', base));
   }, 20_000);
 
-  it('the context meter (1.4.0): after an answer, the tokens the latest response read in and its model\'s window, also with the cost switched off; numbers only', async () => {
+  it('the context meter (1.4.0): after an answer, the tokens the latest response read in and its model\'s window; with the cost switched off nothing is read; numbers only', async () => {
     const transcript = path.join(env3.root, 'sess-ctx.jsonl');
     const reply = (id: string, model: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model, content: [{ type: 'text', text: 'SECRET words' }], usage } })}\n`;
     fs.writeFileSync(transcript, '');
@@ -1127,17 +1141,28 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await c.call('claude.event', ev('Stop', base));
     await waitUntil(async () => (await ctx())?.tokens === 621_003, 5_000);
     expect(await ctx()).toEqual({ tokens: 621_003, window: 1_000_000, at: expect.any(Number) });
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'again' }));
+    fs.appendFileSync(transcript, reply('x3', 'claude-haiku-4-5', { input_tokens: 40_000, output_tokens: 1 }));
+    await c.call('claude.event', ev('Stop', base));
+    await waitUntil(async () => (await ctx())?.tokens === 40_000, 5_000);
+    expect((await ctx())!.window).toBe(200_000);
+    // the cost switched off: the transcript is not read for anything, so another session gets no context at all
+    const quiet = path.join(env3.root, 'sess-ctx-off.jsonl');
+    fs.writeFileSync(quiet, '');
     await c.call('config.patch', { claude: { showCost: false } });
     try {
-      await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'again' }));
-      fs.appendFileSync(transcript, reply('x3', 'claude-haiku-4-5', { input_tokens: 40_000, output_tokens: 1 }));
-      await c.call('claude.event', ev('Stop', base));
-      await waitUntil(async () => (await ctx())?.tokens === 40_000, 5_000);
-      expect((await ctx())!.window).toBe(200_000);
-      expect((await states()).find((s) => s.id === 'sess-ctx')?.cost?.answers).toBe(1); // (the cost stays off)
+      await c.call('claude.event', ev('UserPromptSubmit', { session_id: 'sess-ctx-off', transcript_path: quiet, prompt: 'quiet' }));
+      fs.appendFileSync(quiet, reply('q1', 'claude-opus-5-5', { input_tokens: 9, output_tokens: 1, cache_read_input_tokens: 50_000 }));
+      await c.call('claude.event', ev('Stop', { session_id: 'sess-ctx-off', transcript_path: quiet }));
+      await sleep(2_500); // past the read (300 ms) and its one retry
+      const off = (await states()).find((s) => s.id === 'sess-ctx-off');
+      expect(off).toBeDefined();
+      expect(off!.context).toBeUndefined();
+      expect(off!.cost).toBeUndefined();
     } finally {
       await c.call('config.patch', { claude: { showCost: true } });
     }
+    await c.call('claude.event', ev('SessionEnd', { session_id: 'sess-ctx-off' }));
     expect(JSON.stringify(await states())).not.toContain('SECRET');
     await c.call('claude.event', ev('SessionEnd', base));
   });

@@ -71,3 +71,9 @@ export function digestText(w: UsageWeek, showCost: boolean): { title: string; bo
   const parts = [showCost && w.usd > 0 ? `≈ ${formatUsd(w.usd)}` : '', w.workMs >= 1000 ? fmtDuration(w.workMs) : ''].filter(Boolean);
   return { title: 'Last week with Claude', body: parts.join(', ') || 'Claude Code worked with you last week.' };
 }
+
+/** The window's toast for the digest: "Last week with Claude: ≈ $12.40, 12h 30m" (the same words as the notification). */
+export function digestLine(w: UsageWeek, showCost: boolean): string {
+  const t = digestText(w, showCost);
+  return `${t.title}: ${t.body}`;
+}
