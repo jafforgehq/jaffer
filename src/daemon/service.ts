@@ -22,7 +22,7 @@ import { conversationStorage, listConversations, OLD_DAYS, oldConversations } fr
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
 import { readSetup } from '../core/claude/setup';
-import { runMcpList, type McpCheck } from '../core/claude/mcp';
+import { runMcpList, stopMcpChecks, type McpCheck } from '../core/claude/mcp';
 import { buildExplainPrompt, explainSupported, lastReply, runExplain, type ExplainResult } from '../core/claude/explain';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
@@ -90,8 +90,8 @@ export class JafferService {
   /** Permission prompts waiting for a click on Allow or Deny (`claude.approvals`), in memory only: what is shown of each, never its input. */
   private approvals = new Map<string, { view: ApprovalView; done: (decision: 'allow' | 'deny' | null) => void }>();
   private claudePushTimer: NodeJS.Timeout | null = null;
-  /** (1.4.0) The one `claude mcp list` under way (a second ask while it runs gets the same answer). */
-  private mcpCheck: Promise<McpCheck> | null = null;
+  /** (1.4.0) The `claude mcp list` under way per folder (by its real path): a second ask for that folder while it runs gets the same answer. */
+  private mcpChecks = new Map<string, Promise<McpCheck>>();
   /** (1.4.0) The one Explain under way, when each session's last one ended (5 s between two), and whether this `claude` can run the helper. */
   private explaining: Promise<ExplainResult> | null = null;
   private explainedAt = new Map<string, number>();
@@ -182,6 +182,7 @@ export class JafferService {
     if (this.liveTimer) clearInterval(this.liveTimer);
     for (const g of this.git.values()) if (g.timer) clearTimeout(g.timer);
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
+    stopMcpChecks(); // (and a `claude mcp list` with the servers it started)
     this.host?.dispose();
     await this.rpc.close();
     try {
@@ -706,12 +707,28 @@ export class JafferService {
     // names in .mcp.json), from its files only; never ~/.claude.json, never a hook's command
     r.handle('claude.setup', (p: { cwd?: unknown } | null) => readSetup({ home: this.userHome, claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), cwd: this.setupFolder(p?.cwd) }));
     // (1.4.0) Only on the person's click (*Check MCP servers*): `claude mcp list` starts their servers to ask them; names and states come back
-    r.handle('claude.mcp', (p: { cwd?: unknown } | null) => {
-      const cwd = this.setupFolder(p?.cwd);
-      this.mcpCheck ??= this.probeClaude()
-        .then(() => runMcpList(this.claudeBin, cwd, this.claudeEnv()))
-        .finally(() => (this.mcpCheck = null));
-      return this.mcpCheck;
+    // (only the app's own connection: a click there is the only way in; no folder means the home folder, a folder that is not there is an
+    // error, never the home folder instead; the answer names the folder it ran in)
+    r.handle('claude.mcp', (p: { cwd?: unknown } | null, conn) => {
+      if (!this.isApp(conn)) throw new RpcError('Only the app checks MCP servers.', 'EPERM');
+      const asked = p?.cwd;
+      const cwd = asked === undefined || asked === null || asked === '' ? this.userHome : this.setupFolder(asked, null);
+      if (!cwd) return { servers: [], ok: false, reason: 'error', ...(typeof asked === 'string' && asked.length <= 4096 && !/\p{Cc}/u.test(asked) ? { cwd: asked } : {}) };
+      let key = cwd;
+      try {
+        key = fs.realpathSync(cwd);
+      } catch {
+        /* (the folder as named) */
+      }
+      let run = this.mcpChecks.get(key);
+      if (!run) {
+        run = this.probeClaude()
+          .then(() => runMcpList(this.claudeBin, cwd, this.claudeEnv()))
+          .then((r) => ({ ...r, cwd }))
+          .finally(() => this.mcpChecks.delete(key));
+        this.mcpChecks.set(key, run);
+      }
+      return run;
     });
 
     // (1.4.0) Explain, only while this daemon's own permissions.explain is on (never the page's word): the latest answer of a session it
@@ -804,9 +821,11 @@ export class JafferService {
     }
   }
 
-  /** The folder the window named for the Setup list: an existing absolute folder of at most 4096 characters without control characters, else the home folder. */
-  private setupFolder(cwd: unknown): string {
-    return typeof cwd === 'string' && cwd.length <= 4096 && path.isAbsolute(cwd) && !/\p{Cc}/u.test(cwd) && isDir(cwd) ? cwd : this.userHome;
+  /** The folder the window named for the Setup list: an existing absolute folder of at most 4096 characters without control characters, else the home folder (or `fallback`). */
+  private setupFolder(cwd: unknown): string;
+  private setupFolder(cwd: unknown, fallback: null): string | null;
+  private setupFolder(cwd: unknown, fallback: string | null = this.userHome): string | null {
+    return typeof cwd === 'string' && cwd.length <= 4096 && path.isAbsolute(cwd) && !/\p{Cc}/u.test(cwd) && isDir(cwd) ? cwd : fallback;
   }
 
   private userEnv(): NodeJS.ProcessEnv {

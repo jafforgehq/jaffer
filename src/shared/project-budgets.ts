@@ -8,7 +8,10 @@ const MAX = 20;
 /** A folder as the folder chips have it: `~` expanded, no trailing slash. */
 function folder(raw: string, home: string): string {
   const p = raw === '~' || raw.startsWith('~/') ? home + raw.slice(1) : raw;
-  return p.length > 1 ? p.replace(/\/+$/, '') || '/' : p;
+  if (p.length <= 1) return p;
+  let e = p.length; // (a loop, not /\/+$/: that backtracks over every run of slashes not at the end)
+  while (e > 0 && p[e - 1] === '/') e--;
+  return p.slice(0, e) || '/';
 }
 
 /** The budgets of the setting's lines: an absolute (or `~`) folder, `=`, a positive number of dollars; bad lines skipped, the first per folder, at most 20. */

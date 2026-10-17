@@ -4504,13 +4504,16 @@ describe('Jaffer UI end to end', () => {
         const w = window as any;
         w.__sxCalls = [];
         w.__sxReal = w.jaffer.call;
-        w.jaffer.call = (m: string, p: any) => (w.__sxCalls.push(m === 'pty.write' ? `pty.write ${JSON.stringify(p?.data)}` : m), w.__sxReal(m, p));
+        w.jaffer.call = (m: string, p: any) => (w.__sxCalls.push(m === 'pty.write' ? `pty.write ${JSON.stringify(p?.data)}` : m), m === 'claude.setup' && w.__sxFail ? Promise.reject(new Error('no')) : w.__sxReal(m, p));
       });
+      // (the app's own connection says it is the app, and only it may run the check: the bridge's connection stands in for it)
+      await page.evaluate(() => (window as any).__sxReal('hello', { client: 'app', protocol: 1 }));
       const calls = () => page.evaluate(() => (window as any).__sxCalls as string[]);
 
       await page.click('.sx-setup .sx-head');
       expect(await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')).toBe('true');
-      await page.waitForSelector('.sx-body[data-loaded] .sx-group[data-group="hooks"]');
+      expect(await page.getAttribute('.sx-setup .sx-head', 'aria-controls')).toBe('sx-body');
+      await page.waitForSelector('#sx-body[data-loaded] .sx-group[data-group="hooks"]');
       expect(await page.$$eval('.sx-group .sx-ghead span:first-child', (els) => els.map((e) => e.textContent))).toEqual(['MCP servers', 'Skills', 'Rules and memory', 'Plugins', 'Subagents', 'Hooks']);
       expect(await items('mcp')).toEqual([{ name: 'srv-file', state: 'unknown', danger: false, note: 'not checked', tag: null }]);
       expect(await page.textContent('.sx-hint')).toBe('This starts your MCP servers briefly to see if they answer.');
@@ -4557,6 +4560,8 @@ describe('Jaffer UI end to end', () => {
 
       // the other terminal: its folder's list, the check's answer gone; back again: A's list, not checked any more
       await menu('focus-terminal-2');
+      await until(async () => (await page.evaluate(() => (window as any).__jaffer.activePane())) === 'p2', 5_000, 'p2 focused');
+      expect((await items('mcp')).map((m) => m.name)).not.toContain('srv-file'); // (A's list is gone at once)
       await until(async () => JSON.stringify(await items('mcp')) === JSON.stringify([{ name: 'srv-b', state: 'unknown', danger: false, note: 'not checked', tag: null }]), 8_000, "B's MCP servers");
       expect(await count('skills')).toBe('7');
       expect(await count('plugins')).toBe('2');
@@ -4571,7 +4576,13 @@ describe('Jaffer UI end to end', () => {
       expect(seen.filter((m) => m === 'claude.setup').length).toBeGreaterThanOrEqual(3);
       expect(seen.some((m) => /config\.patch/.test(m))).toBe(false); // (read only: nothing changes a setting)
 
-      // collapsed again, it is gone
+      // collapsed again, it is gone; a read that fails says so (not "Reading…" for ever)
+      await page.click('.sx-setup .sx-head');
+      expect(await page.locator('.sx-body').count()).toBe(0);
+      await page.evaluate(() => ((window as any).__sxFail = true));
+      await page.click('.sx-setup .sx-head');
+      await until(async () => (await page.textContent('.sx-body')) === 'Could not read the setup of this folder.', 5_000, 'the failed read said');
+      await page.evaluate(() => ((window as any).__sxFail = false));
       await page.click('.sx-setup .sx-head');
       expect(await page.locator('.sx-body').count()).toBe(0);
     } finally {

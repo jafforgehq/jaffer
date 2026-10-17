@@ -208,6 +208,33 @@ describe('readSetup: what Claude Code is set up with, from its files only', () =
     expect(gone.mcpFile).toEqual([]);
   });
 
+  it('frontmatter lines of spaces that end in CR, LF, U+2028 or U+2029 (240 KB) are quick through readSetup: a skill, an agent and a rule', async () => {
+    for (const end of ['\r', '\n', ' ', ' ']) {
+      const text = `---\n${`a:${' '.repeat(16_300)}${end}`.repeat(15)}\n---\n`;
+      expect(text.length).toBeGreaterThan(240_000);
+      w(path.join(claudeDir, 'skills/slow/SKILL.md'), text);
+      w(path.join(claudeDir, 'agents/slow.md'), text);
+      w(path.join(proj, '.claude/rules/slow.md'), text);
+      const t = Date.now();
+      const s = await read();
+      expect(Date.now() - t, JSON.stringify(end)).toBeLessThan(100);
+      expect(s.skills.map((k) => k.name)).toEqual(['slow']);
+      const t2 = Date.now();
+      frontmatter(text);
+      expect(Date.now() - t2, JSON.stringify(end)).toBeLessThan(100);
+    }
+  });
+
+  it('outside the home folder only the folder\'s own CLAUDE.md files are read, not its parents\'', async () => {
+    const out = path.join(env.root, 'outside', 'proj');
+    w(path.join(env.root, 'outside', 'CLAUDE.md'), 'parent\n');
+    w(path.join(env.root, 'CLAUDE.md'), 'root\n');
+    w(path.join(out, 'CLAUDE.md'), 'own\n');
+    w(path.join(out, 'CLAUDE.local.md'), 'mine\n');
+    const s = await read(out);
+    expect(s.rules.map((r) => r.path)).toEqual([path.join(out, 'CLAUDE.md'), path.join(out, 'CLAUDE.local.md')]);
+  });
+
   it('frontmatter reads the head only: 1 MB and 8 MB lines are quick', () => {
     for (const n of [1, 8]) {
       const big = 'k'.repeat(n * 1024 * 1024);

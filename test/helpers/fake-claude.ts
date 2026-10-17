@@ -15,7 +15,7 @@ import path from 'node:path';
  * starting the real TUI, so a test can see that something started Claude Code without a TUI taking over the shell.
  * `claude mcp list` (1.4.0) prints the file mcp-list (`setMcpList`) and notes its folder in mcp.cwd and the Jaffer variables it got in
  * mcp.env; it never reaches the real claude. Modes: "mcp-slow" waits a second first, "mcp-hang" starts a child (its pid in mcp.child) and
- * waits for it, "mcp-fail" exits 1 after printing.
+ * waits for it, "mcp-orphan" leaves such a child behind (not on its output) and ends, "mcp-fail" exits 1 after printing.
  * `claude --help` (1.4.0, Explain) prints the options Explain needs (mode "explain-old": a help without them). `claude -p …` never
  * reaches the real claude: it notes its arguments (one per line) in explain.argv, its folder in explain.cwd and what was in it in
  * explain.ls, its stdin in explain.stdin and the variables it got in explain.env, prints a secret on stderr and then the file
@@ -69,6 +69,7 @@ if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
   case "$M" in
     mcp-slow) sleep 1 ;;
     mcp-hang) sleep 30 & echo $! > "$D/mcp.child"; wait; exit 0 ;;
+    mcp-orphan) sleep 30 >/dev/null 2>&1 & echo $! > "$D/mcp.child" ;;
   esac
   [ -f "$D/mcp-list" ] && cat "$D/mcp-list"
   [ "$M" = mcp-fail ] && exit 1

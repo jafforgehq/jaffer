@@ -16,6 +16,8 @@ export interface McpCheck {
   servers: McpServer[];
   ok: boolean;
   reason?: 'no-claude' | 'timeout' | 'error';
+  /** (the daemon's answer) The folder it ran in. */
+  cwd?: string;
 }
 
 export const MCP_LABEL: Record<McpStatus, string> = {
@@ -42,10 +44,16 @@ function statusOf(text: string): McpStatus {
 /** The servers of `claude mcp list`'s text, tolerantly: a line is "<name>: …" with a state word or a " - " before the state; others are skipped. */
 export function parseMcpList(text: string): McpServer[] {
   const out: McpServer[] = [];
-  // (colours out first; a name ends at the first ": ", so a plugin's "plugin:x:y" stays whole)
-  for (const raw of text.slice(0, OUT_MAX).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').split(/\r\n|\r|\n/)) {
+  // (links and titles (OSC, with what they carry) and colours (CSI) out first; a name ends at the first ": ", so a plugin's "plugin:x:y"
+  // stays whole)
+  const plain = text
+    .slice(0, OUT_MAX)
+    .replace(/\x1b\][^\x07\x1b]{0,4096}(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  for (const raw of plain.split(/\r\n|\r|\n/)) {
     if (out.length >= MAX_SERVERS) break;
     const line = raw.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
+    if (line.startsWith('Error')) continue; // (what went wrong, not a server)
     let i = line.indexOf(': ');
     if (i < 0) i = line.indexOf(':');
     const head = line.slice(0, i).trim();
@@ -60,9 +68,26 @@ export function parseMcpList(text: string): McpServer[] {
   return out;
 }
 
+/** The process groups of the checks under way (their leaders' pids), so the daemon can end them when it stops. */
+const live = new Set<number>();
+
+function killGroup(pid: number | undefined): void {
+  try {
+    if (pid) process.kill(-pid, 'SIGKILL');
+  } catch {
+    /* gone already (ESRCH) */
+  }
+}
+
+/** Ends every check under way, with whatever it started (the daemon stopping). */
+export function stopMcpChecks(): void {
+  for (const pid of live) killGroup(pid);
+}
+
 /**
- * `claude mcp list` once, in `cwd`: no shell, without Jaffer's session variables, in its own process group (so the servers it starts go
- * with it), stopped (SIGKILL, the whole group) after `timeoutMs`; the first 64 KB of its output counts and the rest is drained unread.
+ * `claude mcp list` once, in `cwd`: no shell, without Jaffer's session variables, in its own process group, which is ended (SIGKILL) as
+ * soon as it exits, after `timeoutMs`, or by `stopMcpChecks`: a server it started never outlives it. The first 64 KB of its output counts
+ * and the rest is drained unread.
  */
 export function runMcpList(claude: string | null, cwd: string, env: NodeJS.ProcessEnv, timeoutMs = 25_000): Promise<McpCheck> {
   if (!claude) return Promise.resolve({ servers: [], ok: false, reason: 'no-claude' });
@@ -78,27 +103,28 @@ export function runMcpList(claude: string | null, cwd: string, env: NodeJS.Proce
       if (done) return;
       done = true;
       clearTimeout(timer);
+      killGroup(child?.pid);
+      if (child?.pid) live.delete(child.pid);
       const servers = reason === 'no-claude' ? [] : parseMcpList(out);
       resolve(reason ? { servers, ok: false, reason } : { servers, ok: true });
     };
-    let child: ReturnType<typeof spawn>;
+    let child: ReturnType<typeof spawn> | undefined;
     try {
       child = spawn(claude, ['mcp', 'list'], { cwd, env: e, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch {
       return resolve({ servers: [], ok: false, reason: 'no-claude' });
     }
+    const pid = child.pid;
+    if (pid) live.add(pid);
     const timer = setTimeout(() => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* gone already */
-      }
-      finish(exit === 0 ? undefined : 'timeout'); // (it ended, but something it started kept the output open)
+      killGroup(pid);
+      finish(exit === 0 ? undefined : 'timeout'); // (it ended, but its output stayed open)
     }, timeoutMs);
     child.stdout!.setEncoding('utf8');
     child.stdout!.on('data', (d: string) => void (out.length < OUT_MAX && (out = (out + d).slice(0, OUT_MAX))));
     child.on('error', (err: NodeJS.ErrnoException) => finish(err.code === 'ENOENT' || err.code === 'EACCES' ? 'no-claude' : 'error'));
-    child.on('exit', (code) => void (exit = code));
+    // (ended: whatever it started goes with it, which also lets go of the output)
+    child.on('exit', (code) => ((exit = code), killGroup(pid)));
     child.on('close', (code) => finish(code === 0 ? undefined : 'error'));
   });
 }

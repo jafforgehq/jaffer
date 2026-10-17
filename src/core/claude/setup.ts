@@ -98,13 +98,14 @@ export async function readSetup(o: { home: string; claudeDir: string; cwd: strin
   await addRule(claudeDir, path.join(claudeDir, 'CLAUDE.md'), 'user');
   const managed = o.managedDir ?? MANAGED_DIR;
   await addRule(managed, path.join(managed, 'CLAUDE.md'), 'managed');
-  // the folder and its parents, up to the home folder (or the root), at most 12 up
+  // the folder and its parents up to the home folder (at most 12 up); a folder outside the home folder: its own files only
   for (let d = cwd, i = 0; i <= MAX_UP; i++) {
     await addRule(d, path.join(d, 'CLAUDE.md'), 'project');
     await addRule(d, path.join(d, '.claude', 'CLAUDE.md'), 'project');
     await addRule(d, path.join(d, 'CLAUDE.local.md'), 'local');
     const up = path.dirname(d);
-    if (d === home || up === d) break;
+    // under the home folder: up to it; elsewhere: the folder's own files only
+    if (d === home || up === d || !(cwd === home || cwd.startsWith(home + path.sep))) break;
     d = up;
   }
   let ruleFiles = 0;
@@ -162,13 +163,17 @@ export function frontmatter(text: string): Record<string, string> {
   if (end < 0) return {};
   const out: Record<string, string> = {};
   let key: string | undefined;
-  for (const line of head.slice(head.indexOf('\n') + 1, end + 1).split(/\r?\n/)) {
-    const m = /^([A-Za-z_][\w-]{0,39}):(?:[ \t]+(.*))?$/.exec(line.slice(0, 4 * COMMAND_HEAD));
-    if (m) {
-      key = m[1]!;
-      const v = (m[2] ?? '').trim();
-      out[key] = /^[|>][-+]?$/.test(v) ? '' : v.replace(/^(["'])(.*)\1$/, '$2');
-    } else if (key && /^(?:[ \t]|- )/.test(line)) out[key] = `${out[key]} ${line.slice(0, 4 * COMMAND_HEAD).trim()}`.trim();
+  for (const raw of head.slice(head.indexOf('\n') + 1, end + 1).split(/\r?\n/)) {
+    // (by hand, no regex over the value: a long run of spaces before a CR or a U+2028 would make a `(.*)$` pattern backtrack)
+    const line = raw.slice(0, 4 * COMMAND_HEAD);
+    const c = line.indexOf(':');
+    const k = c > 0 && c <= 40 ? line.slice(0, c) : '';
+    if (/^[A-Za-z_][\w-]*$/.test(k) && (c + 1 === line.length || line[c + 1] === ' ' || line[c + 1] === '\t')) {
+      key = k;
+      let v = line.slice(c + 1).trim();
+      if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v.endsWith(v[0])) v = v.slice(1, -1);
+      out[key] = /^[|>][-+]?$/.test(v) ? '' : v;
+    } else if (key && (line[0] === ' ' || line[0] === '\t' || line.startsWith('- '))) out[key] = `${out[key]} ${line.trim()}`.trim();
     else key = undefined;
   }
   return out;

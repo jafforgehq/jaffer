@@ -826,22 +826,37 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect((await c.call('setup.claude.auth', {})).loginError).toBeUndefined();
   });
 
-  it('claude.mcp (1.4.0): `claude mcp list` in the asked folder (else the home folder), parsed to names and states; one at a time: a second ask while one runs gets the same answer', async () => {
+  it('claude.mcp (1.4.0): only the app asks; `claude mcp list` in the asked folder, parsed to names and states, with the folder it ran in; a folder that is not there is an error (never the home folder instead); no folder: the home folder; one at a time per folder: the same folder shares a run, two folders run apart', async () => {
     fake.setMode('ok');
     fake.setMcpList('Checking MCP server health…\n\ngh: npx -y server --token SECRET-TOKEN - ✓ Connected\nlin: https://example.com/SECRET (HTTP) - ⚠ Needs authentication\n');
     const proj = path.join(env2.userHome, 'mcp-proj');
     fs.mkdirSync(proj, { recursive: true });
+    const runs = () => fake.calls().filter((l) => l.startsWith('mcp list')).length;
+    // a client that did not say it is the app: refused, nothing runs
+    const other = (await tryConnect(env2.paths))!;
+    await expect(other.call('claude.mcp', { cwd: proj })).rejects.toThrow(/Only the app/);
+    other.close();
+    expect(runs()).toBe(0);
+    await c.call('hello', { client: 'app', protocol: 1 });
     const r = await c.call('claude.mcp', { cwd: proj });
-    expect(r).toEqual({ ok: true, servers: [{ name: 'gh', status: 'connected', label: 'Connected' }, { name: 'lin', status: 'needs-auth', label: 'Needs sign-in' }] });
+    expect(r).toEqual({ ok: true, cwd: proj, servers: [{ name: 'gh', status: 'connected', label: 'Connected' }, { name: 'lin', status: 'needs-auth', label: 'Needs sign-in' }] });
     expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(proj));
     expect(JSON.stringify(r)).not.toContain('SECRET');
-    await c.call('claude.mcp', { cwd: 'relative/dir' });
+    let before = runs();
+    expect(await c.call('claude.mcp', { cwd: 'relative/dir' })).toEqual({ servers: [], ok: false, reason: 'error', cwd: 'relative/dir' });
+    expect(await c.call('claude.mcp', { cwd: path.join(proj, 'gone') })).toEqual({ servers: [], ok: false, reason: 'error', cwd: path.join(proj, 'gone') });
+    expect(await c.call('claude.mcp', { cwd: `${proj}\n` })).toEqual({ servers: [], ok: false, reason: 'error' });
+    expect(runs()).toBe(before);
+    expect((await c.call('claude.mcp', {})).cwd).toBe(env2.userHome);
     expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env2.userHome));
     fake.setMode('mcp-slow');
-    const before = fake.calls().filter((l) => l.startsWith('mcp list')).length;
-    const [a, b] = await Promise.all([c.call('claude.mcp', { cwd: proj }), c.call('claude.mcp', { cwd: env2.userHome })]);
+    before = runs();
+    const [a, b] = await Promise.all([c.call('claude.mcp', { cwd: proj }), c.call('claude.mcp', { cwd: proj })]);
     expect(a).toEqual(b);
-    expect(fake.calls().filter((l) => l.startsWith('mcp list')).length).toBe(before + 1);
+    expect(runs()).toBe(before + 1);
+    const [x, y] = await Promise.all([c.call('claude.mcp', { cwd: proj }), c.call('claude.mcp', { cwd: env2.userHome })]);
+    expect([x.cwd, y.cwd]).toEqual([proj, env2.userHome]);
+    expect(runs()).toBe(before + 3);
     fake.setMode('ok');
   });
 
@@ -895,6 +910,26 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
       await c.call('config.patch', { permissions: { explain: false } });
       for (const n of [1, 2, 3]) await c.call('claude.event', { session_id: sid(n), hook_event_name: 'SessionEnd' });
     }
+  });
+
+  it('claude.mcp (1.4.0): a check under way ends with the daemon, and so does what it started (the last test here: it ends the daemon)', async () => {
+    fs.rmSync(path.join(fake.dir, 'mcp.child'), { force: true });
+    fake.setMode('mcp-hang');
+    void c.call('claude.mcp', { cwd: env2.userHome }).catch(() => undefined);
+    await waitUntil(() => fake.read('mcp.child') !== '', 10_000);
+    const child = Number(fake.read('mcp.child'));
+    const alive = () => {
+      try {
+        process.kill(child, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(alive()).toBe(true);
+    await c.call('app.shutdown', {});
+    await waitUntil(() => !alive(), 5_000);
+    fake.setMode('ok');
   });
 });
 

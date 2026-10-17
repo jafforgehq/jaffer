@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MCP_LABEL, parseMcpList, runMcpList } from '../src/core/claude/mcp';
+import { MCP_LABEL, parseMcpList, runMcpList, stopMcpChecks } from '../src/core/claude/mcp';
 import { fakeClaude } from './helpers/fake-claude';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -48,6 +48,26 @@ describe('parseMcpList: the text of `claude mcp list`, line by line', () => {
     expect(parseMcpList('')).toEqual([]);
     expect(parseMcpList('No MCP servers configured. Use `claude mcp add` to add a server.')).toEqual([]);
     expect(parseMcpList('Error: something went wrong')).toEqual([]); // (no state word and no " - ": not a server line)
+  });
+
+  it('OSC sequences (links, titles) are dropped with what they carry, as well as CSI colours; lines that start with Error are not servers', () => {
+    const r = parseMcpList(
+      [
+        '\x1b]8;;https://example.com/SECRET-LINK\x07github\x1b]8;;\x07: npx - ✓ Connected',
+        '\x1b]0;SECRET-TITLE\x1b\\docs: x - ⚠ Needs authentication',
+        'Error: something - ✓ Connected',
+        'Errors: x - ✗ Failed to connect',
+      ].join('\n'),
+    );
+    expect(r.map((s) => [s.name, s.status])).toEqual([
+      ['github', 'connected'],
+      ['docs', 'needs-auth'],
+    ]);
+    expect(JSON.stringify(r)).not.toContain('SECRET');
+    const t = Date.now();
+    parseMcpList(`\x1b]${'a'.repeat(1024 * 1024)}`);
+    parseMcpList(`\x1b]${'\x1b]a'.repeat(300_000)}`);
+    expect(Date.now() - t).toBeLessThan(250);
   });
 
   it('bounded: 1 MB and 8 MB lines (only the first 64 KB is read)', () => {
@@ -114,6 +134,42 @@ describe('runMcpList: `claude mcp list` once, in a folder, bounded', () => {
     };
     for (let i = 0; i < 40 && alive(); i++) await new Promise((res) => setTimeout(res, 50));
     expect(alive()).toBe(false);
+  });
+
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const gone = async (pid: number) => {
+    for (let i = 0; i < 40 && alive(pid); i++) await new Promise((res) => setTimeout(res, 50));
+    return !alive(pid);
+  };
+
+  it('a claude that ends but leaves something it started running: its process group is ended too', async () => {
+    fake.setMcpList('a: x - ✓ Connected');
+    fake.setMode('mcp-orphan');
+    const r = await runMcpList(fake.bin, env.userHome, process.env);
+    expect(r).toMatchObject({ ok: true });
+    const child = Number(fake.read('mcp.child'));
+    expect(child).toBeGreaterThan(0);
+    expect(await gone(child)).toBe(true);
+  });
+
+  it('stopMcpChecks (the daemon stopping) ends a check under way with its process group', async () => {
+    fake.setMode('mcp-hang');
+    const p = runMcpList(fake.bin, env.userHome, process.env);
+    for (let i = 0; i < 100 && !fake.read('mcp.child'); i++) await new Promise((res) => setTimeout(res, 50));
+    const child = Number(fake.read('mcp.child'));
+    expect(child).toBeGreaterThan(0);
+    const t = Date.now();
+    stopMcpChecks();
+    expect((await p).ok).toBe(false);
+    expect(Date.now() - t).toBeLessThan(3000);
+    expect(await gone(child)).toBe(true);
   });
 
   it('more than 64 KB of output: the first 64 KB counts, it is not an error', async () => {

@@ -46,4 +46,13 @@ describe('budgetLevels: the last 7 days of each budget folder against its budget
     expect(budgetLevels(null as never, budgets, NOW).map((b) => b.level)).toEqual(['ok', 'ok', 'ok', 'ok']);
     expect(budgetLevels(rows, [], NOW)).toEqual([]);
   });
+
+  it('a line of slashes that does not end in one is quick (no backtracking run before the end)', () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `/${'/'.repeat(4000)}x${i}=5`);
+    const t = Date.now();
+    const b = parseProjectBudgets(lines, '/Users/maya');
+    expect(Date.now() - t).toBeLessThan(100);
+    expect(b).toHaveLength(20);
+    expect(parseProjectBudgets(['/a///=1', '///=2', '~/=3'], '/Users/maya')).toEqual([{ cwd: '/a', usd: 1 }, { cwd: '/', usd: 2 }, { cwd: '/Users/maya', usd: 3 }]);
+  });
 });

@@ -38,7 +38,8 @@ const MCP_SAID = {
 export function Setup(): VNode {
   const open = setupOpen.value;
   const cwd = info.value.cwd;
-  const [data, setData] = useState<SetupInfo | null>(null);
+  // (what was read, and for which folder: another folder's list is never shown, not even for a moment; info null: the read failed)
+  const [read, setRead] = useState<{ cwd: string; info: SetupInfo | null } | null>(null);
   const [mcp, setMcp] = useState<{ cwd: string; busy: boolean; result?: McpCheck } | null>(null);
   const [all, setAll] = useState<Set<string>>(new Set());
   const cwdNow = useRef(cwd);
@@ -50,10 +51,10 @@ export function Setup(): VNode {
     const t = setTimeout(
       () =>
         void window.jaffer.call<SetupInfo>('claude.setup', { cwd }).then(
-          (r) => n === asked && setData(r),
-          () => n === asked && setData(null),
+          (r) => n === asked && setRead({ cwd, info: r }),
+          () => n === asked && setRead({ cwd, info: null }),
         ),
-      data ? 200 : 0, // (a folder change waits a moment: a cd chain reads once)
+      read ? 200 : 0, // (a folder change waits a moment: a cd chain reads once)
     );
     return () => clearTimeout(t);
   }, [open, cwd]);
@@ -64,11 +65,14 @@ export function Setup(): VNode {
     const at = cwd;
     setMcp({ cwd: at, busy: true });
     void window.jaffer.call<McpCheck>('claude.mcp', { cwd: at }).then(
-      (result) => cwdNow.current === at && setMcp({ cwd: at, busy: false, result }),
+      // (an answer for another folder than the one asked about counts as a failed check)
+      (result) => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: result.cwd === at || at === '' ? result : { servers: [], ok: false, reason: 'error' } }),
       () => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: { servers: [], ok: false, reason: 'error' } }),
     );
   };
 
+  const data = read?.cwd === cwd ? read.info : null;
+  const failed = read?.cwd === cwd && !read.info;
   const checked = mcp?.cwd === cwd ? mcp.result : undefined;
   const mcpItems: Item[] = (data?.mcpFile ?? []).map((m) => {
     const s = checked?.servers.find((x) => x.name === m.name);
@@ -98,12 +102,12 @@ export function Setup(): VNode {
 
   return (
     <section class="sx-setup" aria-label="Setup">
-      <button class="sx-head" aria-expanded={open} onClick={() => (setupOpen.value = !open)}>
+      <button class="sx-head" aria-expanded={open} aria-controls="sx-body" onClick={() => (setupOpen.value = !open)}>
         Setup
       </button>
       {open && (
-        <div class="sx-body" data-loaded={data ? '' : undefined}>
-          {!data && <div class="sx-none">Reading…</div>}
+        <div class="sx-body" id="sx-body" data-loaded={data ? '' : undefined}>
+          {!data && <div class="sx-none">{failed ? 'Could not read the setup of this folder.' : 'Reading…'}</div>}
           {groups.map((g) => {
             const folded = g.items.length > FOLD && !all.has(g.key);
             return (
