@@ -79,7 +79,7 @@ export interface TurnCost {
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
 
-interface Seen extends Tokens {
+export interface Seen extends Tokens {
   model?: string;
   fast: boolean;
   us: boolean;
@@ -111,11 +111,20 @@ export function responseCost(t: Tokens, model: string | undefined, opts: { fast?
   return ((t.input * price.input + t.output * price.output + t.cacheRead * price.cacheRead + t.cacheWrite5m * price.cacheWrite5m + t.cacheWrite1h * price.cacheWrite1h) / 1e6) * mult;
 }
 
-/** One response, by its id: the largest numbers of its lines, and the time of its latest line (`timestamp`, when there is one). */
-function collect(lines: Iterable<string>): { byId: Map<string, Seen & { at?: number }>; lastId?: string } {
-  const byId = new Map<string, Seen & { at?: number }>();
-  let n = 0;
-  let lastId: string | undefined;
+/** (1.4.1) What `tallyLines` has seen so far, kept by the live reader across reads so that lines can be fed a few at a time. */
+export interface Tally {
+  /** One response, by its id: the largest numbers of its lines, and the time of its latest line (`timestamp`, when there is one). */
+  byId: Map<string, Seen & { at?: number }>;
+  lastId?: string;
+  /** How many lines without an id were seen (each is a response of its own). */
+  n: number;
+}
+
+export const newTally = (): Tally => ({ byId: new Map(), n: 0 });
+
+/** These lines added to `t` (a new tally by default): the same result whether lines come all at once or in pieces. */
+export function tallyLines(lines: Iterable<string>, t: Tally = newTally()): Tally {
+  const byId = t.byId;
   for (const line of lines) {
     if (!line.includes('"usage"')) continue;
     let d: { type?: unknown; message?: Record<string, unknown>; requestId?: unknown; timestamp?: unknown; isSidechain?: unknown };
@@ -128,19 +137,19 @@ function collect(lines: Iterable<string>): { byId: Map<string, Seen & { at?: num
     if (d.message.model === '<synthetic>') continue; // Claude Code's own error and notice messages, not a model response
     const seen = readUsage(d.message);
     if (!seen) continue;
-    const id = typeof d.message.id === 'string' ? d.message.id : typeof d.requestId === 'string' ? d.requestId : `line-${n++}`;
-    const t = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN;
+    const id = typeof d.message.id === 'string' ? d.message.id : typeof d.requestId === 'string' ? d.requestId : `line-${t.n++}`;
+    const ts = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN;
     const prev = byId.get(id);
-    const at = Math.max(prev?.at ?? -Infinity, Number.isFinite(t) ? t : -Infinity);
+    const at = Math.max(prev?.at ?? -Infinity, Number.isFinite(ts) ? ts : -Infinity);
     byId.set(id, {
       ...(prev
         ? { ...seen, input: Math.max(prev.input, seen.input), output: Math.max(prev.output, seen.output), cacheRead: Math.max(prev.cacheRead, seen.cacheRead), cacheWrite5m: Math.max(prev.cacheWrite5m, seen.cacheWrite5m), cacheWrite1h: Math.max(prev.cacheWrite1h, seen.cacheWrite1h) }
         : seen),
       ...(Number.isFinite(at) ? { at } : {}),
     });
-    if (d.isSidechain !== true) lastId = id; // (a subagent's response costs, but it is not the main conversation's context)
+    if (d.isSidechain !== true) t.lastId = id; // (a subagent's response costs, but it is not the main conversation's context)
   }
-  return { byId, lastId };
+  return t;
 }
 
 /**
@@ -157,7 +166,11 @@ export function summarizeLines(lines: Iterable<string>): TurnCost | undefined {
  * (new input, cache written and cache read; never its output) and its model's id, for the context meter.
  */
 export function summarizeTurn(lines: Iterable<string>): { cost?: TurnCost; context?: { tokens: number; model?: string } } {
-  const { byId, lastId } = collect(lines);
+  return summarizeTally(tallyLines(lines));
+}
+
+/** (1.4.1) `summarizeTurn` of the lines a tally has seen. */
+export function summarizeTally({ byId, lastId }: Tally): { cost?: TurnCost; context?: { tokens: number; model?: string } } {
   if (!byId.size) return {};
   const out: TurnCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: byId.size };
   let usd: number | undefined = 0;
@@ -182,7 +195,7 @@ export function summarizeTurn(lines: Iterable<string>): { cost?: TurnCost; conte
  * file), the time of its latest line (one without a time is left out), all its tokens and its price when its model has one.
  */
 export function usageByTime(lines: Iterable<string>): { id: string; at: number; tokens: number; usd?: number }[] {
-  return [...collect(lines).byId.entries()]
+  return [...tallyLines(lines).byId.entries()]
     .filter((e): e is [string, Seen & { at: number }] => e[1].at !== undefined)
     .map(([id, s]) => {
       const usd = responseCost(s, s.model, { fast: s.fast, us: s.us });

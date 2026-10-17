@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { summarizeTurn, type TurnCost } from '../../shared/claude-cost';
+import { StringDecoder } from 'node:string_decoder';
+import { newTally, summarizeTally, summarizeTurn, tallyLines, type Tally, type TurnCost } from '../../shared/claude-cost';
 
 /**
  * Hooks are async, so the Stop of a session's last answer can arrive after its SessionEnd (`claude -p` ends at once): where that answer
@@ -52,5 +53,108 @@ export function readTurn(file: string, fromOffset: number, toOffset: number = In
     return summarizeTurn(lines);
   } catch {
     return {};
+  }
+}
+
+/** (1.4.1) The live figure reads at most this much of a transcript a tick (every 2 s); a longer stretch is read on the next ticks. */
+export const LIVE_TICK_BYTES = 4 * 1024 * 1024;
+/** ... in pieces of this size, with a turn of the event loop between two: the daemon relays every terminal. */
+const LIVE_CHUNK_BYTES = 128 * 1024;
+
+interface LiveState {
+  file: string;
+  /** Where the turn began (the session's `turnStart`). */
+  start: number;
+  dev: number;
+  ino: number;
+  /** Read up to here. */
+  offset: number;
+  /** The last line read so far, not yet ended by a newline; the decoder holds a character cut by a read. */
+  tail: string;
+  decoder: StringDecoder;
+  /** The first read began inside a line (a turn longer than `MAX_READ`): everything up to the first newline is dropped. */
+  skip: boolean;
+  tally: Tally;
+}
+
+/**
+ * (1.4.1) What the answer being written has cost so far, per session, read incrementally: each read takes only the bytes appended
+ * since the last one (asynchronously, at most `tickBytes`), and only whole lines count, through the same tally as a full read
+ * (`summarizeTurn`), so the numbers are the same. A transcript that shrank below where it was read, or was replaced by another file,
+ * is read again from the turn's start. Only the token counts are kept (the tally), never the text. Stop's count of the whole answer is
+ * still the full read (`readTurn`).
+ */
+export class LiveCost {
+  private states = new Map<string, LiveState>();
+  private tickBytes: number;
+  private chunkBytes: number;
+
+  constructor(o: { tickBytes?: number; chunkBytes?: number } = {}) {
+    this.tickBytes = o.tickBytes ?? LIVE_TICK_BYTES;
+    this.chunkBytes = o.chunkBytes ?? LIVE_CHUNK_BYTES;
+  }
+
+  /** What session `id`'s answer, begun at `start` in `file`, has cost so far; undefined when nothing new was read (or it cannot be). */
+  async read(id: string, file: string, start: number): Promise<ReturnType<typeof summarizeTurn> | undefined> {
+    let fh: fs.promises.FileHandle;
+    try {
+      fh = await fs.promises.open(file, 'r');
+    } catch {
+      return undefined;
+    }
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return undefined;
+      let s = this.states.get(id);
+      if (!s || s.file !== file || s.start !== start || s.dev !== st.dev || s.ino !== st.ino || st.size < s.offset) {
+        // a new turn, or the transcript shrank or was replaced: from the turn's start, and of a very long one only its end (as `readTurn`)
+        const from = Math.max(start, st.size - MAX_READ);
+        const cut = from > start;
+        s = { file, start, dev: st.dev, ino: st.ino, offset: cut ? from - 1 : from, tail: '', decoder: new StringDecoder('utf8'), skip: cut, tally: newTally() };
+        this.states.set(id, s);
+      }
+      if (st.size <= s.offset) return undefined;
+      const end = Math.min(st.size, s.offset + this.tickBytes);
+      const buf = Buffer.alloc(Math.min(this.chunkBytes, end - s.offset));
+      while (s.offset < end) {
+        const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, end - s.offset), s.offset);
+        if (bytesRead === 0) break;
+        s.offset += bytesRead;
+        this.add(s, s.decoder.write(buf.subarray(0, bytesRead)));
+        if (s.offset < end) await new Promise((r) => setImmediate(r));
+      }
+      return summarizeTally(s.tally);
+    } catch {
+      return undefined;
+    } finally {
+      await fh.close().catch(() => undefined);
+    }
+  }
+
+  private add(s: LiveState, text: string): void {
+    if (s.skip) {
+      const i = text.indexOf('\n');
+      if (i < 0) return;
+      s.skip = false;
+      text = text.slice(i + 1);
+    }
+    const nl = text.lastIndexOf('\n');
+    if (nl < 0) {
+      s.tail += text;
+      return;
+    }
+    tallyLines((s.tail + text.slice(0, nl)).split('\n'), s.tally);
+    s.tail = text.slice(nl + 1);
+  }
+
+  /** Where session `id` was read up to (tests). */
+  offset(id: string): number | undefined {
+    return this.states.get(id)?.offset;
+  }
+
+  /** Forget every session but these. */
+  keep(ids: Iterable<string>): void {
+    const keep = new Set(ids);
+    for (const id of this.states.keys()) if (!keep.has(id)) this.states.delete(id);
   }
 }

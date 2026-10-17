@@ -17,7 +17,7 @@ import { STAY_AWAKE } from '../shared/stay-awake-config';
 import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
+import { LiveCost, readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
 import { conversationStorage, listConversations, OLD_DAYS, oldConversations } from '../core/claude/history';
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
@@ -80,9 +80,10 @@ export class JafferService {
   private counted = new Map<string, number>();
   /** What the answers finished today cost and how long they took, in memory only: it starts again at local midnight and when the app quits. */
   private today: DayTotal = dayTotal(undefined, Date.now());
-  /** Reads the answers being written every 2 s while a session works; the transcript's size at the last read, so an unchanged one is not read again. */
+  /** Reads the answers being written every 2 s while a session works: only what was appended since the last read (1.4.1), and never two reads at once. */
   private liveTimer: NodeJS.Timeout | null = null;
-  private liveSize = new Map<string, number>();
+  private liveCost = new LiveCost();
+  private liveReading = false;
   /** The lengths of the last turns Claude finished (at most 15): their median is `claude.typicalTurnMs`. */
   private recentTurns: number[] = [];
   /** Per terminal: the repository of its shell's folder as `git status` saw it at its last prompt (for the folder pill). */
@@ -428,31 +429,42 @@ export class JafferService {
 
   /**
    * While a session works, and the cost figure with its live part is on: what the answer has cost so far, read every 2 s from where its
-   * prompt began (the same bounded read as at Stop). Not while Claude waits for the person: the last figure stays until it works again.
+   * prompt began (1.4.1: only what was appended since the last read, asynchronously, at most 4 MB a tick; `LiveCost`). Not while Claude
+   * waits for the person: the last figure stays until it works again.
    */
   private refreshLive(): void {
     const c = this.config.get().claude;
     const on = !this.stopping && c.showCost && c.liveCost && this.claudeWatcher.sessions().some((s) => s.state === 'working');
     if (on && !this.liveTimer) {
-      this.liveTimer = setInterval(() => this.readLive(), LIVE_COST_MS);
+      this.liveTimer = setInterval(() => void this.readLive(), LIVE_COST_MS);
       this.liveTimer.unref?.();
     } else if (!on && this.liveTimer) {
       clearInterval(this.liveTimer);
       this.liveTimer = null;
-      this.liveSize.clear();
+      // (while Claude waits, where each answer was read to is kept: it goes on from there; with the switch off nothing is kept)
+      if (this.stopping || !c.showCost || !c.liveCost) this.liveCost.keep([]);
     }
   }
 
-  private readLive(): void {
-    for (const s of this.claudeWatcher.sessions()) {
-      const start = this.turnStart.get(s.id);
-      if (s.state !== 'working' || start === undefined || !s.transcriptPath) continue;
-      const size = transcriptSize(s.transcriptPath);
-      if (size === this.liveSize.get(s.id)) continue; // nothing new was written
-      this.liveSize.set(s.id, size);
-      const { cost: turn, context } = readTurn(s.transcriptPath, start, size);
-      if (turn) this.claudeWatcher.setLive(s.id, { input: turn.input + turn.cacheRead + turn.cacheWrite, output: turn.output, usd: turn.usd });
-      if (context) this.setContext(s.id, context);
+  private async readLive(): Promise<void> {
+    if (this.liveReading) return; // the last tick is still reading: this one is skipped
+    this.liveReading = true;
+    try {
+      const sessions = this.claudeWatcher.sessions();
+      this.liveCost.keep(sessions.filter((s) => s.state !== 'ended' && this.turnStart.has(s.id)).map((s) => s.id));
+      for (const s of sessions) {
+        const start = this.turnStart.get(s.id);
+        if (this.stopping || s.state !== 'working' || start === undefined || !s.transcriptPath) continue;
+        const r = await this.liveCost.read(s.id, s.transcriptPath, start);
+        // (meanwhile the turn may have ended, a new one begun or the switch gone off: then this read says nothing)
+        const c = this.config.get().claude;
+        if (!r || this.stopping || !c.showCost || !c.liveCost || this.turnStart.get(s.id) !== start) continue;
+        const { cost: turn, context } = r;
+        if (turn) this.claudeWatcher.setLive(s.id, { input: turn.input + turn.cacheRead + turn.cacheWrite, output: turn.output, usd: turn.usd });
+        if (context) this.setContext(s.id, context);
+      }
+    } finally {
+      this.liveReading = false;
     }
   }
 

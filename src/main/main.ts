@@ -18,6 +18,7 @@ import { VERSION } from '../core/version';
 import { RELEASE_NOTES } from '../generated/release-notes';
 import { effectiveSeen, unseenNotes } from '../shared/whats-new';
 import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { CRASH_DIALOG, CRASH_RELOADS, crashAction } from '../shared/crash-policy';
 import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, quitState, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { UpdateController, type UpdaterLike } from './updates';
 import { updaterLog } from './updater-log';
@@ -622,6 +623,26 @@ function createWindow(): void {
     void focus.release();
     void weeklyDigest();
   });
+  // (1.4.1) A page that crashed, or still hangs after HANG_MS, is reloaded: the terminals run on in the daemon, and the page attaches
+  // to them again. Also while the window is hidden (showing it again would otherwise show a dead page). `crashAction` decides.
+  let hang: NodeJS.Timeout | null = null;
+  const calm = () => {
+    if (hang) clearTimeout(hang);
+    hang = null;
+  };
+  win.webContents.on('render-process-gone', (_e, d) => {
+    calm();
+    if (Date.now() - selfCrashedAt < SELF_CRASH_MS) return; // (the crash we caused to reload a hung page: it is reloading already)
+    void onPageGone(d.reason);
+  });
+  win.on('unresponsive', () => {
+    hang ??= setTimeout(() => {
+      hang = null;
+      void onPageGone('unresponsive');
+    }, HANG_MS);
+  });
+  win.on('responsive', calm);
+  win.on('closed', calm);
   syncSystemStats();
   const save = () => {
     if (win && !win.isDestroyed() && keepsBounds({ minimized: win.isMinimized(), fullScreen: win.isFullScreen(), dropdown: dropdownOn(), hotkey: !!hotkey })) writeJson(windowFile, win.getBounds());
@@ -654,6 +675,56 @@ function createWindow(): void {
     if (isWebUrl(url)) void shell.openExternal(url);
   });
   void win.loadFile(path.join(distRoot, 'renderer', 'index.html'));
+}
+
+/** (1.4.1) A page that still hangs this long after `unresponsive` is reloaded. */
+const HANG_MS = 10_000;
+/** A crash we caused (`forcefullyCrashRenderer`, to reload a hung page) is not counted as another one for this long. */
+const SELF_CRASH_MS = 5_000;
+let selfCrashedAt = 0;
+/** When the page was reloaded after a crash or a hang (the last few): too many in a minute ask instead (`crashAction`). */
+const crashReloads: number[] = [];
+let crashAsking = false;
+
+function reloadPage(w: BrowserWindow, hung: boolean): void {
+  if (hung) {
+    // a hung page cannot reload itself: its renderer is ended first, and the reload then starts a new one
+    selfCrashedAt = Date.now();
+    w.webContents.forcefullyCrashRenderer();
+  }
+  w.webContents.reload();
+}
+
+/** The window's page crashed (`reason`, from `render-process-gone`) or hangs (`unresponsive`): reload it, or after too many crashes ask. */
+async function onPageGone(reason: string): Promise<void> {
+  const w = win;
+  if (quitting || crashAsking || !w || w.isDestroyed()) return; // (a page ended by the quit is not a crash)
+  if (!app.isPackaged) console.error(`jaffer: the window's page is gone (${reason})`);
+  const action = crashAction({ reason, recent: crashReloads, now: Date.now() });
+  if (action === 'ignore') return;
+  if (action === 'reload') {
+    crashReloads.push(Date.now());
+    if (crashReloads.length > CRASH_RELOADS) crashReloads.shift();
+    reloadPage(w, reason === 'unresponsive');
+    return;
+  }
+  crashAsking = true;
+  let r: Electron.MessageBoxReturnValue;
+  try {
+    const opts = { type: 'warning' as const, ...CRASH_DIALOG, buttons: [...CRASH_DIALOG.buttons] };
+    r = w.isVisible() ? await dialog.showMessageBox(w, opts) : await dialog.showMessageBox(opts);
+  } finally {
+    crashAsking = false;
+  }
+  if (quitting || w.isDestroyed()) return;
+  if (r.response === 0) {
+    crashReloads.length = 0;
+    reloadPage(w, reason === 'unresponsive');
+  } else {
+    // the person chose Quit in a question about the crash: nothing more to ask (as after a crash of the terminal)
+    quitConfirmed = true;
+    app.quit();
+  }
 }
 
 function showWindow(): void {
