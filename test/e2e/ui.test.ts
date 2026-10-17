@@ -5392,8 +5392,6 @@ describe('Jaffer UI end to end', () => {
     expect(await (await markOf('echo after-reset-93')).getAttribute('data-state')).toBe('ok'); // and blocks go on from there
   }, 40_000);
 
-  // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
-  // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
   // ---- 1.4.0 Learn: the glossary, the ⓘ buttons, the tour and first-time tips
   const keysInTerminal = () => until(async () => page.evaluate(() => !!document.activeElement?.classList.contains('xterm-helper-textarea')), 3_000, 'the terminal to have the keys again');
   const onDisk = () => JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
@@ -5529,12 +5527,23 @@ describe('Jaffer UI end to end', () => {
       await page.waitForSelector('.settings');
       await page.click('.settings-nav button:has-text("Privacy and permissions")');
       expect(await page.$$eval('.settings .pv-list .lr-info', (els) => els.map((e) => (e as HTMLElement).dataset.id))).toEqual(['transcript', 'permission-prompt']);
-      expect(await page.locator('.settings label.field:has(button)').count()).toBe(0); // (a field with an ⓘ is no label: a click on its words would press it)
+      // a field with an ⓘ keeps its label (the ⓘ sits outside it): the switch is named by its words, and a click on them toggles it
+      const deep = page.getByRole('checkbox', { name: 'Search the text of past conversations', exact: true });
+      const asks = page.getByRole('checkbox', { name: 'Answer permission prompts from the notification', exact: true });
+      expect([await deep.count(), await asks.count()]).toEqual([1, 1]);
+      expect(await page.locator('.settings label.field:has(button), .settings label:has(.lr-info)').count()).toBe(0);
+      const before = (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.deepSearch;
+      await page.locator('.settings .pv-list label', { hasText: 'Search the text of past conversations' }).click();
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.deepSearch === !before, 5_000, 'a click on the words to toggle the switch');
+      await page.locator('.settings .pv-list label', { hasText: 'Search the text of past conversations' }).click();
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.deepSearch === before, 5_000, 'and back');
       await page.click('.settings .pv-list .lr-info[data-id="permission-prompt"]');
       await page.waitForSelector('.lr-pop[data-id="permission-prompt"]');
       await page.keyboard.press('Escape');
       await page.waitForSelector('.lr-pop', { state: 'detached' });
       expect(await page.locator('.settings').count()).toBe(1);
+      await page.click('.settings-nav button:has-text("Appearance")');
+      expect(await page.getByRole('combobox', { name: 'Companion size', exact: true }).count()).toBe(1);
       await page.keyboard.press('Escape');
       await page.waitForSelector('.settings', { state: 'detached' });
     } finally {
@@ -5696,7 +5705,7 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
-  it('first-time tips (1.4.0): the first compaction raises one "What is compaction?" toast (Explain opens the glossary there), a second none, tips.seen keeps it on disk; another tip within 90 s waits; Turn tips off stops them; Settings → Help switches them and Show tips again clears what was seen', async () => {
+  it('first-time tips (1.4.0): the first compaction raises one "What is compaction?" toast (Explain opens the glossary there), a second none, tips.seen keeps it on disk; another tip within 90 s waits, and none while the window is away; Don\'t show tips stops them; Settings → Help switches them and Show tips again clears what was seen', async () => {
     await fresh();
     await endClaude();
     const tips = (q: string) => page.locator('.toast', { hasText: q }).count();
@@ -5708,7 +5717,7 @@ describe('Jaffer UI end to end', () => {
       await sendHook('PreCompact', { session_id: 'tip-1' });
       await until(async () => (await tips('What is compaction?')) === 1, 5_000, 'the compaction tip');
       const toastOf = page.locator('.toast', { hasText: 'What is compaction?' });
-      expect(await toastOf.locator('.toast-act').allTextContents()).toEqual(['Explain', 'Turn tips off']);
+      expect(await toastOf.locator('.toast-act').allTextContents()).toEqual(['Explain', "Don't show tips"]);
       expect(await page.locator('.toast-text', { hasText: 'Claude is compacting its context' }).count()).toBe(1); // (the compaction's own toast, as before)
       await until(async () => onDisk().tips.seen.includes('compaction'), 5_000, 'tips.seen on disk');
       await shot('42-tip');
@@ -5732,12 +5741,21 @@ describe('Jaffer UI end to end', () => {
       await sleep(500);
       expect(await tips('What is a permission prompt?')).toBe(0);
       expect(onDisk().tips.seen).toEqual(['compaction']);
-      // a new window (the 90 s are the window's): the permission tip; Turn tips off
+      // a new window (the 90 s are the window's), but away (not focused): no tip, nothing counted as seen
       await inject([]);
       await fresh();
+      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await inject([{ id: 'tip-3', state: 'idle' }]);
+      await inject([{ id: 'tip-3', state: 'needs-you', tool: { name: 'Bash' } }]);
+      await sleep(500);
+      expect(await tips('What is a permission prompt?')).toBe(0);
+      expect(onDisk().tips.seen).toEqual(['compaction']);
+      // back in front: the permission tip (a new prompt); Don't show tips
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await inject([]);
       await inject([{ id: 'tip-3', state: 'needs-you', tool: { name: 'Bash' } }]);
       await until(async () => (await tips('What is a permission prompt?')) === 1, 5_000, 'the permission tip');
-      await page.locator('.toast', { hasText: 'What is a permission prompt?' }).locator('.toast-act', { hasText: 'Turn tips off' }).click();
+      await page.locator('.toast', { hasText: 'What is a permission prompt?' }).locator('.toast-act', { hasText: "Don't show tips" }).click();
       await until(async () => onDisk().tips.enabled === false, 5_000, 'tips off on disk');
       expect(onDisk().tips.seen).toEqual(['compaction', 'permission']);
       await inject([]);
@@ -5768,6 +5786,8 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
+  // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
   it('the run leaves nothing of the 1.2.0 tests behind: no approval waits, no stand-in for the window\'s calls, the seen version, the switches and the panel as a first start leaves them', async () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
     expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });

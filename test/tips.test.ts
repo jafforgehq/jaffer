@@ -3,7 +3,7 @@ import { TIP_GAP_MS, TIPS, shouldTip, type TipId } from '../src/shared/tips';
 import { glossaryEntry } from '../src/shared/glossary';
 
 const on = { enabled: true, seen: [] as string[] };
-const free = { now: 1_000_000, lastAt: 0, busy: false };
+const free = { now: 1_000_000, lastAt: 0, busy: false, away: false };
 
 describe('first-time tips (1.4.0)', () => {
   it('six tips, each a one-sentence "What is …?" teaser that names a glossary entry', () => {
@@ -17,6 +17,7 @@ describe('first-time tips (1.4.0)', () => {
     expect(TIPS.permission.glossary).toBe('permission-prompt');
     expect(TIPS.context.glossary).toBe('context-window');
     expect(TIPS.budget.glossary).toBe('cost-estimate');
+    expect(TIPS.context.text).toMatch(/about 80% full/);
   });
 
   it('a tip shows once ever: not when its id is in tips.seen, nor with tips off, nor for an unknown id', () => {
@@ -28,10 +29,11 @@ describe('first-time tips (1.4.0)', () => {
     expect(shouldTip('compaction', undefined, free)).toBe(false); // (no config yet: nothing)
   });
 
-  it('at most one tip in 90 s, and none while first run or the tour is up', () => {
+  it('at most one tip in 90 s, and none while first run or the tour is up, or while the window is away', () => {
     expect(TIP_GAP_MS).toBe(90_000);
     expect(shouldTip('compaction', on, { ...free, lastAt: free.now - 89_999 })).toBe(false);
     expect(shouldTip('compaction', on, { ...free, lastAt: free.now - 90_000 })).toBe(true);
     expect(shouldTip('compaction', on, { ...free, busy: true })).toBe(false);
+    expect(shouldTip('compaction', on, { ...free, away: true })).toBe(false); // (the window not focused or not visible: nobody would see it)
   });
 });

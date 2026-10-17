@@ -26,6 +26,17 @@ describe('the glossary (1.4.0)', () => {
     expect(`${glossaryEntry('cost-estimate')!.short} ${glossaryEntry('cost-estimate')!.more}`).toMatch(/not billed per token/i);
   });
 
+  it('says no more than is true: hooks may answer a permission prompt (after a click), Claude Code asks when its rules do not already allow, a plan is for approval, compaction by itself only with auto-compact', () => {
+    const all = (id: string) => `${glossaryEntry(id)!.short} ${glossaryEntry(id)!.more}`;
+    expect(all('hook')).not.toMatch(/change nothing/i);
+    expect(all('hook')).toMatch(/allow or deny after your click/i);
+    expect(glossaryEntry('permission-prompt')!.short).toMatch(/rules don't already allow/i);
+    expect(glossaryEntry('permission-prompt')!.short).not.toMatch(/before (it|Claude) acts/i);
+    expect(all('plan-mode')).toMatch(/for your approval/i);
+    expect(glossaryEntry('context-window')!.more).toMatch(/while auto-compact is on/i);
+    expect(glossaryEntry('compaction')!.more).toMatch(/auto-compact/i);
+  });
+
   it('search: a case-insensitive substring of the title, the short line or more; empty is everything; a long query is cut, not scanned', () => {
     expect(searchGlossary('')).toEqual(GLOSSARY);
     expect(searchGlossary('   ')).toEqual(GLOSSARY);

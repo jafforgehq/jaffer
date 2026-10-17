@@ -143,9 +143,11 @@ let tipAt = 0;
 export function takeTip(id: TipId): Pick<Toast, 'text' | 'actions'> | null {
   const c = cfg.value;
   const now = Date.now();
-  if (!c || !shouldTip(id, c.tips, { now, lastAt: tipAt, busy: overlay.value === 'onboarding' || tourStep.value !== null })) return null;
+  // (away: a tip that comes from one moment (a compaction) is dropped; one that comes from a state (a helper running) is asked again at the next push)
+  const away = !windowFocused.value || document.visibilityState !== 'visible';
+  if (!c || !shouldTip(id, c.tips, { now, lastAt: tipAt, busy: overlay.value === 'onboarding' || tourStep.value !== null, away })) return null;
   tipAt = now;
-  const seen = [...c.tips.seen.filter((x) => Object.hasOwn(TIPS, x) && x !== id), id];
+  const seen = [...new Set([...c.tips.seen.filter((x) => Object.hasOwn(TIPS, x)), id])].slice(-Object.keys(TIPS).length);
   cfg.value = { ...c, tips: { ...c.tips, seen } };
   void patchConfig({ tips: { seen } }).catch(() => undefined);
   const t = TIPS[id];
@@ -153,7 +155,7 @@ export function takeTip(id: TipId): Pick<Toast, 'text' | 'actions'> | null {
     text: t.text,
     actions: [
       { label: 'Explain', run: () => openGlossary(t.glossary) },
-      { label: 'Turn tips off', run: () => setTips({ enabled: false }) },
+      { label: "Don't show tips", run: () => setTips({ enabled: false }) },
     ],
   };
 }
@@ -161,7 +163,7 @@ function tip(id: TipId): void {
   const t = takeTip(id);
   if (t) toast({ kind: 'info', ...t });
 }
-/** Settings → Help's Show tips switch and Show tips again (`seen: []`), and a tip's Turn tips off. */
+/** Settings → Help's Show tips switch and Show tips again (`seen: []`), and a tip's Don't show tips. */
 export function setTips(p: Partial<JafferConfig['tips']>): void {
   const c = cfg.value;
   if (c) cfg.value = { ...c, tips: { ...c.tips, ...p } };
@@ -620,8 +622,12 @@ effect(() => {
     const key = `${b.cwd}\n${weekId(now)}`;
     if (b.level !== 'danger' || budgetWarned.has(key)) continue;
     budgetWarned.add(key);
-    const t = takeTip('budget'); // (the first time: the tip rides on this toast)
-    toast({ kind: 'info', text: `${tildePath(b.cwd)} passed its weekly budget: ≈ ${formatUsd(b.usd)} of ${formatUsd(b.budget)} in the last 7 days (an estimate).${t ? ` ${t.text}` : ''}`, actions: t?.actions });
+    const text = `${tildePath(b.cwd)} passed its weekly budget: ≈ ${formatUsd(b.usd)} of ${formatUsd(b.budget)} in the last 7 days (an estimate).`;
+    // (outside this effect: the tip writes the config this effect reads; the first time, the tip rides on this toast)
+    queueMicrotask(() => {
+      const t = takeTip('budget');
+      toast({ kind: 'info', text: t ? `${text} ${t.text}` : text, actions: t?.actions });
+    });
   }
 });
 

@@ -35,6 +35,9 @@ describe('the tour (1.4.0)', () => {
     expect(privacy.lines).toHaveLength(5);
     for (const l of privacy.lines!) expect(l.split(/(?<=[.!?])\s+/).filter(Boolean)).toHaveLength(1);
     expect(TOUR_STEPS.find((s) => s.id === 'split')!.text).toMatch(/⇧⌘W/);
+    // the Setup step says it reads files, and that the MCP check starts the servers
+    expect(TOUR_STEPS.find((s) => s.id === 'setup')!.text).toMatch(/read from its files/i);
+    expect(TOUR_STEPS.find((s) => s.id === 'setup')!.text).toMatch(/Check MCP servers starts your servers briefly/);
     // what a step needs made visible first: the panel for its sections, Setup expanded, Settings open
     expect(Object.fromEntries(TOUR_STEPS.filter((s) => s.needs).map((s) => [s.id, s.needs]))).toEqual({ now: 'panel', conversations: 'panel', setup: 'setup', privacy: 'settings', learn: 'panel' });
     for (const s of TOUR_STEPS) if (s.glossary) expect(glossaryEntry(s.glossary), s.id).toBeDefined();

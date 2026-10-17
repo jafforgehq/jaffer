@@ -57,10 +57,10 @@ function Modal({ title, onClose, children, wide, xwide, center }: { title?: stri
   );
 }
 
-function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }): VNode {
+function Switch({ checked, onChange, disabled, id }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; id?: string }): VNode {
   return (
     <span class="switch">
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange((e.target as HTMLInputElement).checked)} />
+      <input type="checkbox" id={id} checked={checked} disabled={disabled} onChange={(e) => onChange((e.target as HTMLInputElement).checked)} />
       <i />
     </span>
   );
@@ -471,19 +471,32 @@ export function Pins(): VNode | null {
 
 // ------------------------------------------------------------------ settings
 
-function Field({ label, hint, children, buttons, info }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean; info?: string }): VNode {
+/** A setting's row. `info` (an ⓘ beside the words) needs `id`, the control's id: the words stay its label, with the ⓘ outside it. */
+function Field({ label, hint, children, buttons, info, id }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean; info?: string; id?: string }): VNode {
+  if (info)
+    return (
+      <div class="field">
+        <span class="field-label">
+          <span class="lr-label">
+            <label htmlFor={id}>{label}</label>
+            <InfoButton id={info} />
+          </span>
+          {hint && <small>{hint}</small>}
+        </span>
+        <span class="field-ctl">{children}</span>
+      </div>
+    );
   const body = (
     <>
       <span class="field-label">
         {label}
-        {info && <InfoButton id={info} />}
         {hint && <small>{hint}</small>}
       </span>
       <span class="field-ctl">{children}</span>
     </>
   );
   // A <label> forwards a click on its words to its first button, which would press "Reinstall" or "Reset…" for a stray click.
-  return buttons || info ? <div class="field">{body}</div> : <label class="field">{body}</label>;
+  return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
 type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'help' | 'updates' | 'reset';
@@ -502,8 +515,8 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
       >
         <Switch checked={p?.explain === true} onChange={(v) => set({ permissions: { explain: v } })} />
       </Field>
-      <Field label="Search the text of past conversations" info="transcript" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">
-        <Switch checked={p?.deepSearch === true} onChange={(v) => set({ permissions: { deepSearch: v } })} />
+      <Field label="Search the text of past conversations" info="transcript" id="pv-deep-search" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">
+        <Switch id="pv-deep-search" checked={p?.deepSearch === true} onChange={(v) => set({ permissions: { deepSearch: v } })} />
       </Field>
       <Field label="Type the resume line for you" hint="Clicking a past conversation types claude --resume into an idle terminal. Off: it only copies the command.">
         <Switch checked={p?.resumeTyping !== false} onChange={(v) => set({ permissions: { resumeTyping: v } })} />
@@ -511,8 +524,8 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
       <Field label="Move conversations to the Trash" hint="Lets you remove past conversations from the panel. Always asks first; never deletes for good.">
         <Switch checked={p?.trash !== false} onChange={(v) => set({ permissions: { trash: v } })} />
       </Field>
-      <Field label="Answer permission prompts from the notification" info="permission-prompt" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
-        <Switch checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
+      <Field label="Answer permission prompts from the notification" info="permission-prompt" id="pv-approvals" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
+        <Switch id="pv-approvals" checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
       </Field>
       <div class="pv-locked" role="note" aria-label="Always locked">
         <b>
@@ -724,8 +737,8 @@ export function Settings({ at }: { at?: Section } = {}): VNode {
                   );
                 })}
               </div>
-              <Field label="Companion size" info="companion" hint="Makes the mole or the scene bigger or smaller in the corner.">
-                <select value={PET_SIZES.find((s) => petScale(c.appearance.petSize) === s.scale)?.id ?? 'normal'} onChange={(e) => set({ appearance: { petSize: (e.target as HTMLSelectElement).value } })}>
+              <Field label="Companion size" info="companion" id="ap-pet-size" hint="Makes the mole or the scene bigger or smaller in the corner.">
+                <select id="ap-pet-size" value={PET_SIZES.find((s) => petScale(c.appearance.petSize) === s.scale)?.id ?? 'normal'} onChange={(e) => set({ appearance: { petSize: (e.target as HTMLSelectElement).value } })}>
                   {PET_SIZES.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}

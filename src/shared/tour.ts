@@ -60,7 +60,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: 'setup',
     target: 'setup',
     title: 'Setup',
-    text: "What Claude Code is set up with in this folder: MCP servers, skills, rules, plugins and hooks. It only reads; it changes nothing.",
+    text: 'What Claude Code is set up with in this folder, read from its files: MCP servers, skills, rules, plugins and hooks. Check MCP servers starts your servers briefly to see if they answer.',
     needs: 'setup',
   },
   {

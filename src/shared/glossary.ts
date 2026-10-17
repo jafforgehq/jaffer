@@ -33,13 +33,13 @@ export const GLOSSARY: GlossaryEntry[] = [
     id: 'context-window',
     title: 'Context window',
     short: 'The context window is how much Claude can keep in mind at once: your messages, its replies, the files it read and the results of its tools, counted in tokens.',
-    more: "When it gets close to full, Claude Code compacts the conversation by itself to make room. Jaffer's context meter in the Now card is an estimate from the token counts of the latest response: it turns yellow from 80% and red from 92%.",
+    more: "While auto-compact is on, Claude Code compacts the conversation by itself when it gets close to full, to make room. Jaffer's context meter in the Now card is an estimate from the token counts of the latest response: it turns yellow from 80% and red from 92%.",
   },
   {
     id: 'compaction',
     title: 'Compaction',
     short: 'Compaction is how Claude Code makes room: it replaces the older part of the conversation with a summary, so the session can go on.',
-    more: 'It happens by itself near the limit of the context window, and you can start it yourself with /compact. Details from early in the session may be shortened, so say again what still matters. While it runs, the ring in the title bar turns dotted.',
+    more: 'With auto-compact on, it happens by itself near the limit of the context window, and you can start it yourself with /compact. Details from early in the session may be shortened, so say again what still matters. While it runs, the ring in the title bar turns dotted.',
   },
   {
     id: 'token',
@@ -63,7 +63,7 @@ export const GLOSSARY: GlossaryEntry[] = [
     id: 'hook',
     title: 'Hook',
     short: 'A hook is a command Claude Code runs at a set moment, for example before a tool runs or when a turn ends.',
-    more: "Hooks are set in Claude Code's settings files. When you connect Jaffer, it adds its own hooks so it can follow what Claude does in Jaffer's terminal; they only report and change nothing. The Setup list shows how many hooks each event has.",
+    more: "Hooks are set in Claude Code's settings files. When you connect Jaffer, it adds its own hooks so it can follow what Claude does in Jaffer's terminal: they report what Claude does, and the optional permission hook (off unless you switch it on) can answer allow or deny after your click. The Setup list shows how many hooks each event has.",
   },
   {
     id: 'mcp',
@@ -92,14 +92,14 @@ export const GLOSSARY: GlossaryEntry[] = [
   {
     id: 'permission-prompt',
     title: 'Permission prompt',
-    short: 'Before Claude does something that could change things, such as running a command or editing a file, Claude Code asks you to allow or deny it.',
+    short: "When Claude wants to do something its rules don't already allow, such as running a command or editing a file, Claude Code asks you to allow or deny it.",
     more: 'You answer in the terminal. With Answer permission prompts from the notification on (Settings → Privacy and permissions), Jaffer can show the request too; Allow there needs your own click with the whole request shown. Jaffer never answers for you.',
   },
   {
     id: 'plan-mode',
     title: 'Plan mode',
-    short: 'In plan mode Claude looks around and writes a plan first, without editing files, so you can check the plan before any work starts.',
-    more: 'In Claude Code, Shift+Tab switches between its modes, plan mode among them. When the plan looks right, you tell Claude to go ahead.',
+    short: 'In plan mode Claude looks around and writes a plan first, without editing files, and presents it for your approval before any work starts.',
+    more: 'In Claude Code, Shift+Tab switches between its modes, plan mode among them. When the plan looks right, you approve it and Claude goes ahead.',
   },
   {
     id: 'transcript',

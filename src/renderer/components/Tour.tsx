@@ -60,7 +60,8 @@ export function Tour(): VNode | null {
       const r = el.getBoundingClientRect();
       const x = Math.max(0, r.left - PAD);
       const y = Math.max(0, r.top - PAD);
-      setHole({ x, y, w: Math.max(0, Math.min(window.innerWidth, r.right + PAD) - x), h: Math.max(0, Math.min(window.innerHeight, r.bottom + PAD) - y) });
+      const next = { x, y, w: Math.max(0, Math.min(window.innerWidth, r.right + PAD) - x), h: Math.max(0, Math.min(window.innerHeight, r.bottom + PAD) - y) };
+      setHole((h) => (h && h.x === next.x && h.y === next.y && h.w === next.w && h.h === next.h ? h : next)); // (unchanged: no render per scroll)
     };
     const ro = new ResizeObserver(measure);
     const find = () => {
