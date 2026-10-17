@@ -892,6 +892,25 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
       expect(r).toEqual({ ok: true, gated: true, cwd: env2.userHome, servers: [{ name: 'user-srv', status: 'connected', label: 'Connected' }] });
       expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env2.userHome));
     }
+    // user-level settings that pre-approve project servers gate every folder with a .mcp.json (the user's own settings file, planted in the temp HOME)
+    fs.rmSync(path.join(proj, '.claude/settings.json'), { force: true });
+    fs.rmSync(path.join(proj, '.claude/settings.local.json'), { force: true });
+    const userSettings = path.join(env2.userHome, '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(userSettings), { recursive: true });
+    const hadUser = fs.existsSync(userSettings);
+    const keep = hadUser ? fs.readFileSync(userSettings) : null;
+    try {
+      fs.writeFileSync(userSettings, '{"enabledMcpjsonServers":["evil"]}');
+      fs.writeFileSync(path.join(fake.dir, 'mcp.cwd'), '');
+      r = await c.call('claude.mcp', { cwd: proj });
+      expect(r).toMatchObject({ ok: true, gated: true, cwd: env2.userHome });
+      expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env2.userHome));
+    } finally {
+      if (keep) fs.writeFileSync(userSettings, keep);
+      else fs.rmSync(userSettings, { force: true });
+    }
+    r = await c.call('claude.mcp', { cwd: proj });
+    expect(r.gated).toBeUndefined();
     // the home folder itself is never "gated" (nothing to avoid)
     r = await c.call('claude.mcp', {});
     expect(r.gated).toBeUndefined();

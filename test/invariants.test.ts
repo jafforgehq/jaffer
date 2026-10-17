@@ -151,6 +151,44 @@ describe('invariants of CLAUDE.md', () => {
     expect(hits(/\bopenPath\b(?!\s*[:(])/, (f) => f.startsWith('src/main/'))).toEqual([]); // (never passed on as a value)
   });
 
+  // "Permission handlers (1.4.1): the window's session grants exactly one web permission, `clipboard-sanitized-write`, and only to the app's own
+  // webContents; every other permission, `clipboard-read` included, is refused in both the request and the check handler. Don't add another."
+  it('the permission handlers grant only clipboard-sanitized-write', () => {
+    expect(hits(/\bsetPermissionRequestHandler\(/)).toHaveLength(1);
+    expect(hits(/\bsetPermissionCheckHandler\(/)).toHaveLength(1);
+    expect(hits(/\bsetDevicePermissionHandler\(|\bsetDisplayMediaRequestHandler\(|\bsetBluetoothPairingHandler\(|\bsetUSBProtocolHandler\(/)).toEqual([]);
+    const main = code.get('src/main/main.ts')!;
+    const decide = main.match(/const pagePermission = ([^\n]*);\n/)?.[1];
+    expect(decide, 'the one decision function').toBeTruthy();
+    expect([...decide!.matchAll(/'([^']*)'|"([^"]*)"|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3])).toEqual(['clipboard-sanitized-write']); // (the only permission named)
+    expect(decide).toMatch(/wc === win\.webContents/); // (only the app's own page)
+    // both handlers only ever answer with that function: no `true`, no other test
+    expect(main).toMatch(/setPermissionRequestHandler\(\(wc, permission, cb\) => cb\(pagePermission\(wc, permission\)\)\);/);
+    expect(main).toMatch(/setPermissionCheckHandler\(\(wc, permission\) => pagePermission\(wc, permission\)\);/);
+    expect(main.match(/\bpagePermission\b/g)).toHaveLength(3); // (the definition and the two handlers: no other use)
+  });
+
+  // "`jaffer:open-external` (http(s) only) ... Nothing printed in the terminal is ever run, and only web links are opened": every
+  // `shell.openExternal(` call site is known (file and argument); a new one fails until it is added here with the reason it is safe
+  it('shell.openExternal is called only from the known sites', () => {
+    const calls = [...code].flatMap(([f, src]) => [...src.matchAll(/\bshell\.openExternal\(([^)]*)\)/g)].map((m) => `${f}: ${m[1]}`));
+    expect(calls.sort()).toEqual(
+      [
+        'src/main/main.ts: RELEASES_URL', // (the update dialogs: a constant)
+        'src/main/main.ts: RELEASES_URL',
+        "src/main/main.ts: 'https://github.com/jafforgehq/jaffer'", // (the menu bar item's Help line: a constant)
+        'src/main/main.ts: url', // (window.open and will-navigate: only after `isWebUrl(url)`)
+        'src/main/main.ts: url',
+        'src/main/main.ts: url', // (`jaffer:open-external`: only `/^https?:\/\//` after `trusted(e)`)
+        'src/main/main.ts: url', // (`jaffer:open-path`: `editorUrl(...)`, whose scheme is on the editor allow-list)
+      ].sort(),
+    );
+    expect(hits(/\bopenExternal\b(?!\s*[:(])/, (f) => f.startsWith('src/main/') && f !== 'src/main/preload.ts')).toEqual([]); // (never passed on as a value)
+    const main = code.get('src/main/main.ts')!;
+    expect(main).toMatch(/if \(isWebUrl\(url\)\) void shell\.openExternal\(url\);[^]*if \(isWebUrl\(url\)\) void shell\.openExternal\(url\);/);
+    expect(main).toMatch(/trusted\(e\) && \/\^https\?:\\\/\\\/\/\.test\(url\)\) void shell\.openExternal\(url\)/);
+  });
+
   // "The page may use these IPC channels of main, and each checks `trusted(e)` (the sender is the app's own page)"
   it('every ipcMain.handle calls trusted( in its own handler, and no IPC is taken in another way', () => {
     expect(hits(/\bipcMain\.handle\(/).length).toBeGreaterThanOrEqual(13);

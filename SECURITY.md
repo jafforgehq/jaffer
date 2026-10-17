@@ -16,12 +16,13 @@ Jaffer is a terminal for one person on their own Mac. The model is local trust:
 
 - **The window is sandboxed.** The page runs with `sandbox`, `contextIsolation` and no Node access, under a strict Content Security Policy, and can show only its own page. It reaches the rest of the app through a short list of IPC channels, each of which checks that the sender is that page. It may call only the terminal-host methods it uses, and it gets no web permission (camera, microphone, notifications, clipboard reads) except writing the clipboard. That list and those switches are defense in depth against a compromised page: they are not a boundary against another program of yours (below).
 - **Nothing printed in the terminal is run or opened by itself.** A path is revealed in Finder or handed to an editor link; a link opens in the browser only on ⌘-click, and only `http(s)`. A program may write the clipboard (OSC 52), never read it.
-- **Jaffer types into the shell only what the person asked for** (`claude`, or the line that resumes a past conversation, at an idle prompt). It never answers Claude Code's own questions, and an "Allow" from the notification needs a real click on a request shown in full.
+- **Jaffer types into the shell only what the person asked for** (`claude`, or the line that resumes a past conversation, at an idle prompt). It never answers Claude Code's own questions. With the opt-in permission prompts, *Allow* exists only in the side panel's Now card, needs a real click and a request shown in full; the notification offers *Show* and *Deny* only.
 - **Claude Code's files are read narrowly.** Every read of a transcript is confined to Claude Code's `projects` folder: a link that leads outside it is refused, a link inside it is followed, and only regular `.jsonl` files are opened. Always on: ids, folders, times, token counts (with the cost shown) and a title. Some features read more, keep it nowhere and show only what they say:
   - *Explain* (opt-in): Claude's last reply.
   - *Deep search* (opt-in): the text of the messages, scanned for the words you typed.
   - The stop-line scan (while Claude works): the line Claude Code writes when you decline a prompt or press Esc.
-- Claude Code's login (`~/.claude.json`, the keychain) is never read. The only write is moving conversations the person picked to the Trash, after a question.
+- Claude Code's login (`~/.claude.json`, the keychain) is never read. **The only write to Claude Code's conversation files is moving the conversations you picked to the Trash, after a question** (never a permanent delete).
+- **Jaffer writes its own hooks into Claude Code's `~/.claude/settings.json`**: from the first-run switch, *Settings → Connect*, `jaffer setup claude` (the page's `setup.claude.install`), and the permission-request hook whenever that switch changes. Only entries tagged as Jaffer's own are ever changed. *Disconnect*, *Reset* and the first-start clean-up of an older install remove what Jaffer wrote: its hooks, its block in `~/.claude/CLAUDE.md`, the skills it published, and its MCP server (`claude mcp remove jaffer`); never your own settings.
 - **Secrets are redacted** before anything from a command or a hook is shown, and a sensitive command is not named at all.
 - **No telemetry.** Jaffer keeps no command history, output or transcript text on disk.
 
@@ -29,8 +30,8 @@ Jaffer is a terminal for one person on their own Mac. The model is local trust:
 
 - Jaffer's own update check, to GitHub (only the signed release checks; nothing installs without a click; the feed is not changeable by an environment variable).
 - What Claude Code itself does when Jaffer runs it for you:
-  - asking it whether you are signed in;
-  - *Check MCP servers* (only on your click), which connects to your servers. Servers a project names in its `.mcp.json` and you have not approved are not started by Claude Code (checked on 2.1.302). A repository's own settings can approve them in advance, so when they do, Jaffer runs the check from your home folder instead and says so;
+  - asking it whether you are signed in, and the *Sign in* button (`claude auth login`, which opens your browser);
+  - *Check MCP servers* (only on your click), which connects to your servers. Servers a project names in its `.mcp.json` and you have not approved are not started by Claude Code (checked on 2.1.302). Settings can approve them in advance: a repository's own `.claude/settings.json` or `settings.local.json`, or your own user-level ones (`enableAllProjectMcpServers`, `enabledMcpjsonServers`). When any of them does, and the folder has a `.mcp.json`, Jaffer runs the check from your home folder instead and says so;
   - the *Explain* helper's model call, which sends Claude's last reply through your own Claude Code.
 - Whatever the programs in the terminal send, Claude Code included: that is theirs, not Jaffer's.
 

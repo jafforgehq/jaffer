@@ -279,20 +279,25 @@ async function readJson(base: string, p: string): Promise<Record<string, any> | 
 }
 
 /**
- * (1.4.1) Does this folder's `.mcp.json` come with settings that pre-approve its servers (`mcpGate`)? Reads `.claude/settings.json` and
- * `.claude/settings.local.json` of the folder only (head 256 KB, confined, no links out, a FIFO not waited on; never `~/.claude.json`).
+ * (1.4.1) Does this folder's `.mcp.json` come with settings that pre-approve its servers (`mcpGate`)? Reads the folder's
+ * `.claude/settings.json` and `.claude/settings.local.json` and, since the final review, the USER-level `settings.json` and
+ * `settings.local.json` of each folder in `userDirs` (Claude Code's own folder, and `~/.claude`): a pre-approval there reaches every
+ * project. Head 256 KB, confined to the folder it is in (a link may lead elsewhere inside it, never out), a FIFO not waited on; never
+ * `~/.claude.json`.
  */
-export async function mcpGateFor(cwd: string): Promise<boolean> {
+export async function mcpGateFor(cwd: string, userDirs: readonly string[] = []): Promise<boolean> {
   const exists = (p: string) => fs.promises.lstat(p).then(() => true, (e: NodeJS.ErrnoException) => e.code !== 'ENOENT' && e.code !== 'ENOTDIR'); // (any other error: it is there, we cannot tell)
   if (!(await exists(path.join(cwd, '.mcp.json')))) return false;
   const heads: (string | null | undefined)[] = [];
-  for (const f of ['settings.json', 'settings.local.json']) {
-    const p = path.join(cwd, '.claude', f);
-    if (!(await exists(p))) heads.push(undefined);
-    else {
-      const r = await readHead(cwd, p, HEAD);
-      heads.push(r && r.size <= HEAD ? r.text : null);
+  const head = async (base: string, p: string) => {
+    if (!(await exists(p))) {
+      heads.push(undefined);
+      return;
     }
-  }
+    const r = await readHead(base, p, HEAD);
+    heads.push(r && r.size <= HEAD ? r.text : null);
+  };
+  for (const f of ['settings.json', 'settings.local.json']) await head(cwd, path.join(cwd, '.claude', f));
+  for (const d of new Set(userDirs)) for (const f of ['settings.json', 'settings.local.json']) await head(d, path.join(d, f));
   return mcpGate(heads, true);
 }

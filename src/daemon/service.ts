@@ -75,6 +75,8 @@ export class JafferService {
   private rejectionWatches = new Map<string, () => void>();
   /** Where each session's transcript stood when its current prompt was sent: the answer is what was written after. */
   private turnStart = new Map<string, number>();
+  /** (1.4.1) Sessions whose prompt has been heard but whose start offset is not recorded yet (queued behind a Stop's read): `readLive` leaves them alone, or it would show the previous turn plus this one. */
+  private startPending = new Map<string, number>();
   private costTimers = new Set<NodeJS.Timeout>();
   /** Where the answer whose cost was counted last began, per session: a Stop heard twice is still one answer. */
   private counted = new Map<string, number>();
@@ -462,7 +464,7 @@ export class JafferService {
       const budget = { left: LIVE_TICK_BYTES }; // (one for every session of this tick)
       for (const s of this.claudeWatcher.sessions()) {
         const start = this.turnStart.get(s.id);
-        if (this.stopping || s.state !== 'working' || start === undefined || !s.transcriptPath) continue;
+        if (this.stopping || s.state !== 'working' || start === undefined || !s.transcriptPath || this.startPending.has(s.id)) continue;
         const r = await this.liveCost.read(s.id, s.transcriptPath, start, budget);
         // (meanwhile the turn may have ended, a new one begun or the switch gone off: then this read says nothing)
         const c = this.config.get().claude;
@@ -497,7 +499,14 @@ export class JafferService {
     // queue keeps the order in which it is used
     const o = p && typeof p === 'object' ? (p as Record<string, unknown>) : undefined;
     const begun = o?.hook_event_name === 'UserPromptSubmit' ? transcriptSize(this.costFile(o), this.claudeDir()) : undefined;
-    this.serially(() => this.trackCostNow(p, begun));
+    const sid = begun && typeof o?.session_id === 'string' ? o.session_id.slice(0, 80) : '';
+    if (sid) this.startPending.set(sid, (this.startPending.get(sid) ?? 0) + 1);
+    this.serially(() => this.trackCostNow(p, begun)).finally(() => {
+      if (!sid) return;
+      const n = (this.startPending.get(sid) ?? 1) - 1;
+      if (n > 0) this.startPending.set(sid, n);
+      else this.startPending.delete(sid);
+    });
     return begun ?? Promise.resolve();
   }
 
@@ -767,7 +776,7 @@ export class JafferService {
           return d; // (the folder as named)
         }
       };
-      const gated = real(folder) !== real(this.userHome) && (await mcpGateFor(folder));
+      const gated = real(folder) !== real(this.userHome) && (await mcpGateFor(folder, [this.claudeDir(), path.join(this.userHome, '.claude')]));
       const cwd = gated ? this.userHome : folder;
       const key = real(cwd);
       let run = this.mcpChecks.get(key);

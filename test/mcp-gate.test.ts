@@ -59,6 +59,36 @@ describe('mcpGateFor (1.4.1): the folder\'s files, read bounded and confined', (
     fs.mkdirSync(path.join(proj, '.claude/settings.json'));
     expect(await mcpGateFor(proj)).toBe(true);
   });
+  it('user-level settings (Claude Code\'s own folder, either file) that pre-approve project servers gate every folder with a .mcp.json; the same doubt and malformed rules; no .mcp.json, no gate', async () => {
+    const user = path.join(env.userHome, '.claude');
+    fs.mkdirSync(user, { recursive: true });
+    expect(await mcpGateFor(proj, [user])).toBe(false);
+    fs.writeFileSync(path.join(user, 'settings.json'), '{"enableAllProjectMcpServers":true}');
+    expect(await mcpGateFor(proj, [user])).toBe(false); // (no .mcp.json in the folder)
+    w('.mcp.json', '{}');
+    expect(await mcpGateFor(proj, [user])).toBe(true);
+    expect(await mcpGateFor(proj, [])).toBe(false); // (a caller that names no user folder sees only the project's)
+    fs.rmSync(path.join(user, 'settings.json'));
+    fs.writeFileSync(path.join(user, 'settings.local.json'), '{"enabledMcpjsonServers":["a"]}');
+    expect(await mcpGateFor(proj, [user, user])).toBe(true);
+    fs.writeFileSync(path.join(user, 'settings.local.json'), '{"enabledMcpjsonServers": [');
+    expect(await mcpGateFor(proj, [user])).toBe(false); // (malformed: ignored)
+    fs.writeFileSync(path.join(user, 'settings.local.json'), ' '.repeat(300 * 1024) + '{}');
+    expect(await mcpGateFor(proj, [user])).toBe(true); // (oversized: a doubt)
+    fs.rmSync(path.join(user, 'settings.local.json'));
+    fs.writeFileSync(path.join(env.root, 'outside.json'), '{}');
+    fs.symlinkSync(path.join(env.root, 'outside.json'), path.join(user, 'settings.json'));
+    expect(await mcpGateFor(proj, [user])).toBe(true); // (a link out of the folder: a doubt)
+  });
+  it('a ~/.claude that is itself a link (a dotfiles repository) is read through it', async () => {
+    const repo = path.join(env.root, 'dotfiles');
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, 'settings.json'), '{"enableAllProjectMcpServers":true}');
+    const user = path.join(env.userHome, '.claude');
+    fs.symlinkSync(repo, user);
+    w('.mcp.json', '{}');
+    expect(await mcpGateFor(proj, [user])).toBe(true);
+  });
   it('a malformed settings file is ignored', async () => {
     w('.mcp.json', '{}');
     w('.claude/settings.json', '{"enableAllProjectMcpServers": tru');
