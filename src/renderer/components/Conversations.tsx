@@ -477,6 +477,12 @@ export function Conversations(): VNode {
             <>
               <div class="st-total">
                 {formatBytes(storage.totalBytes)} in {storage.count} conversation{storage.count === 1 ? '' : 's'}
+                {storage.partial && (
+                  <span class="st-partial" title="Measuring stopped at its limit (20000 files or 3 s): the sizes are of what it measured">
+                    {' '}
+                    (partial)
+                  </span>
+                )}
               </div>
               {storage.biggest.map((b) => (
                 <div key={b.id} class="st-row" data-id={b.id}>

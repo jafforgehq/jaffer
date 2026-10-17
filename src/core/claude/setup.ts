@@ -28,11 +28,17 @@ const JSON_MAX = 1024 * 1024;
 const MAX_ENTRIES = 500;
 const MAX_ITEMS = 200;
 const MAX_RULES = 50;
+/** The most names the `rules` folders' walk looks at, in all. */
+const MAX_WALK = 2000;
 const MAX_UP = 12;
 const STATES: readonly string[] = ['on', 'name-only', 'user-invocable-only', 'off'];
 export const MANAGED_DIR = '/Library/Application Support/ClaudeCode';
+/** The newest read: an older one still walking the rules returns early with what it has (the panel only wants the newest). */
+let newest = 0;
 
 export async function readSetup(o: { home: string; claudeDir: string; cwd: string; managedDir?: string }): Promise<SetupInfo> {
+  const mine = ++newest;
+  const stale = () => mine !== newest;
   const { home, claudeDir, cwd } = o;
   const dot = path.join(cwd, '.claude');
   // the folder is the home folder: its .claude is the user's, listed once
@@ -109,9 +115,16 @@ export async function readSetup(o: { home: string; claudeDir: string; cwd: strin
     d = up;
   }
   let ruleFiles = 0;
+  let walked = 0;
+  const visited = new Set<string>();
+  // confined to the rules folder itself (a link inside it to the project, or above, is not walked), each real folder once (no cycle),
+  // 2000 names in all
   const walkRules = async (base: string, dir: string, depth: number): Promise<void> => {
+    const r = await real(dir);
+    if (!r || visited.has(r)) return;
+    visited.add(r);
     for (const n of await list(base, dir)) {
-      if (ruleFiles >= MAX_RULES) return;
+      if (ruleFiles >= MAX_RULES || ++walked > MAX_WALK || stale()) return;
       const p = path.join(dir, n);
       if (n.endsWith('.md')) {
         ruleFiles++;
@@ -119,8 +132,13 @@ export async function readSetup(o: { home: string; claudeDir: string; cwd: strin
       } else if (depth < 8 && (await isDir(base, p))) await walkRules(base, p, depth + 1);
     }
   };
-  if (!same) await walkRules(cwd, path.join(dot, 'rules'), 0);
-  await walkRules(claudeDir, path.join(claudeDir, 'rules'), 0);
+  const rulesOf = async (base: string, dir: string) => {
+    const r = await within(base, dir); // (the rules folder itself must be inside its folder)
+    if (r) await walkRules(r, dir, 0);
+  };
+  if (!same) await rulesOf(cwd, path.join(dot, 'rules'));
+  await rulesOf(claudeDir, path.join(claudeDir, 'rules'));
+  if (stale()) return { skills, plugins, rules, agents: [], hooks: [], mcpFile: [] };
 
   const agents: SetupInfo['agents'] = [];
   for (const [scope, base, dir] of scopes('agents')) {

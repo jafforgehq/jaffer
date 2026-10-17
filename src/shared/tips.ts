@@ -6,7 +6,7 @@
 export const TIPS = {
   compaction: { glossary: 'compaction', text: 'Claude is making room in its context. What is compaction?' },
   subagent: { glossary: 'subagent', text: 'Claude started a helper. What is a subagent?' },
-  permission: { glossary: 'permission-prompt', text: 'Claude Code is asking before it acts. What is a permission prompt?' },
+  permission: { glossary: 'permission-prompt', text: "Claude Code asks when its rules don't already allow the action. What is a permission prompt?" },
   context: { glossary: 'context-window', text: 'The context is about 80% full. What is the context window?' },
   longturn: { glossary: 'turn', text: 'That turn took over 5 minutes. What is a turn?' },
   budget: { glossary: 'cost-estimate', text: 'What is a cost estimate?' },

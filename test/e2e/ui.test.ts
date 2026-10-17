@@ -4913,6 +4913,29 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.term .xterm');
   });
 
+  it('a terminal host that comes back with fewer terminals: only the terminals it has attach again (a gone one never asks, no "No such pane")', async () => {
+    const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    await menu('split-terminal');
+    await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+    await sleep(600);
+    const second = (await panesNow()).find((id) => id !== 'main')!;
+    // the host came back with only its first terminal: its list answers a little later, and every attach is recorded
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__upReal = w.jaffer.call;
+      w.__upAttach = [];
+      w.jaffer.call = (m: string, p: any) =>
+        m === 'pane.list' ? new Promise((r) => setTimeout(() => r([{ id: 'main' }]), 300)) : (m === 'session.attach' && w.__upAttach.push(p?.pane), w.__upReal(m, p));
+    });
+    await page.evaluate(() => (window as any).__event('daemon.up', {}));
+    await until(async () => JSON.stringify(await panesNow()) === JSON.stringify(['main']), 5_000, 'only the first terminal left');
+    await sleep(500);
+    expect(await page.evaluate(() => (window as any).__upAttach)).toEqual(['main']);
+    expect(await page.textContent('.panes')).not.toContain('No such pane');
+    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__upReal; });
+    await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), second);
+  });
+
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
     await page.click('.term');
     await page.keyboard.type('cat <<EOF');

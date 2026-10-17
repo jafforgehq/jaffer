@@ -137,11 +137,16 @@ export interface Storage {
   totalBytes: number;
   count: number;
   biggest: { id: string; title?: string; cwd?: string; bytes: number; endedAt: number }[];
+  /** The walk ran out of its budget (entries or time): the sizes are of what it measured. */
+  partial?: true;
 }
 
 const STORAGE_TTL = 30_000;
 /** The most entries counted in one conversation's folder (subagent transcripts, tool results). */
 const DIR_MAX = 5000;
+/** One walk's budget: entries looked at in all (transcripts and their folders' entries) and its time. */
+const WALK_ENTRIES = 20_000;
+const WALK_MS = 3000;
 let storageSeen: { stamp: string; at: number; value: Storage } | undefined;
 /** A walk under way, by folder: overlapping calls share it. */
 const storageRunning = new Map<string, Promise<Storage>>();
@@ -149,30 +154,44 @@ const storageRunning = new Map<string, Promise<Storage>>();
 /**
  * (1.4.0) The size of each `<id>.jsonl` (confined as for the list) plus its sibling real folder `<id>/` (links skipped, at most 5000
  * entries walked), their total and the 10 biggest with their folder and end (the head and tail read of the list, cached) and their title
- * only when the list already has it: no other text is read. Kept 30 s while the project folders did not change. Changes nothing.
+ * only when the list already has it: no other text is read. At most 20000 entries and 3 s in all (`limits`, lowered by tests): past
+ * that it says `partial`. Kept 30 s while the project folders did not change. Changes nothing.
  */
-export function conversationStorage(claudeDir: string, now = Date.now()): Promise<Storage> {
+export function conversationStorage(claudeDir: string, now = Date.now(), limits: { entries?: number; ms?: number } = {}): Promise<Storage> {
   const running = storageRunning.get(claudeDir);
   if (running) return running;
-  const p = measure(claudeDir, now).finally(() => storageRunning.delete(claudeDir));
+  const p = measure(claudeDir, now, { left: limits.entries ?? WALK_ENTRIES, until: Date.now() + (limits.ms ?? WALK_MS) }).finally(() => storageRunning.delete(claudeDir));
   storageRunning.set(claudeDir, p);
   return p;
 }
 
-async function measure(claudeDir: string, now: number): Promise<Storage> {
+type Budget = { left: number; until: number };
+const spent = (b: Budget) => b.left <= 0 || Date.now() >= b.until;
+
+async function measure(claudeDir: string, now: number, budget: Budget): Promise<Storage> {
   const stamp = await projectsStamp(claudeDir);
   if (storageSeen?.stamp === stamp && now - storageSeen.at >= 0 && now - storageSeen.at < STORAGE_TTL) return storageSeen.value;
   const t = await transcriptFiles(claudeDir);
   if (!t) return { totalBytes: 0, count: 0, biggest: [] };
   const sized: { file: string; id: string; bytes: number }[] = [];
-  for (const f of t.found) sized.push({ file: f.file, id: f.id, bytes: f.size + (await dirBytes(t.root, path.join(path.dirname(f.file), f.id))) });
+  let partial = false;
+  for (const f of t.found) {
+    if (spent(budget)) {
+      partial = true;
+      break;
+    }
+    budget.left--;
+    sized.push({ file: f.file, id: f.id, bytes: f.size + (await dirBytes(t.root, path.join(path.dirname(f.file), f.id), budget)) });
+    await new Promise((r) => setImmediate(r)); // (the daemon also relays the terminals: let it between conversations)
+  }
+  partial ||= budget.left < 0;
   const biggest: Storage['biggest'] = [];
   for (const f of [...sized].sort((a, b) => b.bytes - a.bytes).slice(0, 10)) {
     const conv = await readOne(t.root, f.file, f.id, false, false, false);
     const title = cache.get(f.file)?.title;
     biggest.push({ id: f.id, ...(typeof title === 'string' ? { title } : {}), ...(conv?.cwd ? { cwd: conv.cwd } : {}), bytes: f.bytes, endedAt: conv?.endedAt ?? 0 });
   }
-  const value = { totalBytes: sized.reduce((a, f) => a + f.bytes, 0), count: sized.length, biggest };
+  const value: Storage = { totalBytes: sized.reduce((a, f) => a + f.bytes, 0), count: t.found.length, biggest, ...(partial ? { partial: true as const } : {}) };
   storageSeen = { stamp, at: now, value };
   return value;
 }
@@ -186,8 +205,8 @@ async function projectsStamp(claudeDir: string): Promise<string> {
   return parts.join('\0');
 }
 
-/** The bytes of the regular files in a real folder inside `root` and its real subfolders: links skipped, at most 5000 entries. */
-async function dirBytes(root: string, dir: string): Promise<number> {
+/** The bytes of the regular files in a real folder inside `root` and its real subfolders: links skipped, at most 5000 entries (and what is left of the walk's budget: past it, `left` goes below 0). */
+async function dirBytes(root: string, dir: string, budget: Budget): Promise<number> {
   if (!(await fs.promises.lstat(dir).catch(() => null))?.isDirectory() || (await fs.promises.realpath(dir).catch(() => '')) !== dir || !dir.startsWith(root + path.sep)) return 0;
   let bytes = 0;
   let seen = 0;
@@ -196,6 +215,11 @@ async function dirBytes(root: string, dir: string): Promise<number> {
     const d = todo.pop()!;
     for (const n of await names(d)) {
       if (++seen > DIR_MAX) break;
+      if (spent(budget)) {
+        budget.left = -1; // (says partial)
+        return bytes;
+      }
+      budget.left--;
       const p = path.join(d, n);
       const st = await fs.promises.lstat(p).catch(() => null);
       if (st?.isFile()) bytes += st.size;

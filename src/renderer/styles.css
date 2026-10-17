@@ -328,6 +328,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .conv-deep-note { flex: none; margin: -2px 4px 6px; color: var(--faint); font-size: 11px; }
 /* (1.4.0) storage */
 .st-panel { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content; column-gap: 6px; align-items: center; margin: 0 4px 8px; font-size: 11px; color: var(--muted); }
+.st-partial { color: var(--faint); }
 .st-total { grid-column: 1 / -1; padding-bottom: 3px; color: var(--text); font-variant-numeric: tabular-nums; }
 .st-row { display: contents; }
 .st-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }

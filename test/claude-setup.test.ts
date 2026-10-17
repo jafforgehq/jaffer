@@ -156,6 +156,32 @@ describe('readSetup: what Claude Code is set up with, from its files only', () =
     expect(s.rules).toEqual([]);
   });
 
+  it('the rules walk stays in the rules folder: a link inside it to the project (a big node_modules) is not walked, a cycle ends, 5000 entries stay bounded', async () => {
+    w(path.join(proj, '.claude/rules/a.md'), 'a\n');
+    for (let i = 0; i < 30; i++) w(path.join(proj, `node_modules/pkg${i}/README.md`), 'readme\n');
+    fs.symlinkSync(proj, path.join(proj, '.claude/rules/up'));
+    fs.symlinkSync(path.join(proj, '.claude/rules'), path.join(proj, '.claude/rules/loop'));
+    fs.symlinkSync(path.join(proj, '.claude/rules'), path.join(proj, '.claude/rules/loop2'));
+    let s = await read();
+    expect(s.rules.filter((r) => r.kind === 'rule').map((r) => r.path)).toEqual(['~/work/app/.claude/rules/a.md']);
+    // 10 folders of 500 entries: the walk stops at 2000 entries in all (the last folder's rule is not reached)
+    for (let d = 0; d < 10; d++) for (let k = 0; k < 500; k++) w(path.join(proj, `.claude/rules/d${d}/x${k}.txt`), '');
+    w(path.join(proj, '.claude/rules/zz/late.md'), 'late\n');
+    const t = Date.now();
+    s = await read();
+    expect(Date.now() - t).toBeLessThan(3000);
+    expect(s.rules.some((r) => r.path.endsWith('late.md'))).toBe(false);
+  }, 30_000);
+
+  it('a newer read supersedes an older one still walking: the older returns early with what it has', async () => {
+    for (let d = 0; d < 4; d++) for (let k = 0; k < 20; k++) w(path.join(proj, `.claude/rules/d${d}/r${k}.md`), 'r\n');
+    const older = read();
+    const newer = read();
+    const [o, n] = await Promise.all([older, newer]);
+    expect(n.rules.filter((r) => r.kind === 'rule').length).toBe(50);
+    expect(o.rules.filter((r) => r.kind === 'rule').length).toBeLessThan(50);
+  });
+
   it('the folder is the home folder: what is both user and project is listed once, as the user’s', async () => {
     w(path.join(claudeDir, 'CLAUDE.md'), 'u\n');
     w(path.join(claudeDir, 'skills/one/SKILL.md'), '---\nname: one\n---\n');

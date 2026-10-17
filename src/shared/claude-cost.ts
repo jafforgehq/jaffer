@@ -198,7 +198,8 @@ export function usageByTime(lines: Iterable<string>): { id: string; at: number; 
  */
 export function contextWindow(model: string): number | undefined {
   if (typeof model !== 'string' || !/^claude-[a-z]/.test(model)) return undefined;
-  if (model.endsWith('[1m]') || /^claude-(fable|mythos|opus|sonnet|haiku)-5(?:$|-|\[)/.test(model)) return 1_000_000;
+  if (model.endsWith('[1m]') || /^claude-(fable|mythos|opus|sonnet)-5(?:$|-|\[)/.test(model) || /^claude-haiku-5-5(?:$|-|\[)/.test(model)) return 1_000_000;
+  if (model.startsWith('claude-haiku-5')) return undefined; // (the docs name Haiku 5.5 only: another Haiku 5 gets tokens only)
   const opus4 = /^claude-opus-4-(\d{1,2})(?:$|-|\[)/.exec(model);
   return opus4 && Number(opus4[1]) >= 7 ? 1_000_000 : 200_000;
 }

@@ -539,10 +539,10 @@ export async function bootstrap(): Promise<void> {
     }
     else if (event === 'daemon.up') {
       daemonUp.value = true;
-      void refreshPanes();
       void loadClaudeState();
       void loadApprovals();
-      ptyBus.emit({ event: 'daemon.up', data: {} });
+      // the views attach again only once the window knows which terminals the host has (a gone one is removed first, never attached)
+      void refreshPanes().then(() => ptyBus.emit({ event: 'daemon.up', data: {} }));
     }
   });
   j.onFocus((f) => {

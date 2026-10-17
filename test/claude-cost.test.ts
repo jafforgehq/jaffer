@@ -165,7 +165,11 @@ describe('dayTotal.workMs: the time of the turns finished today (Claude worked .
 
 describe('contextWindow (1.4.0): how many tokens a model can hold, by its id (checked against the docs of 2026-10-16)', () => {
   it('1M for the families with a million-token window, also dated snapshots and the [1m] suffix', () => {
-    for (const m of ['claude-fable-5-1', 'claude-fable-5', 'claude-mythos-5', 'claude-mythos-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8-20260101', 'claude-opus-4-9', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-sonnet-4-6[1m]', 'claude-opus-5-5[1m]']) expect(contextWindow(m), m).toBe(1_000_000);
+    for (const m of ['claude-fable-5-1', 'claude-fable-5', 'claude-mythos-5', 'claude-mythos-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8-20260101', 'claude-opus-4-9', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-haiku-5-5-20261001', 'claude-sonnet-4-6[1m]', 'claude-opus-5-5[1m]']) expect(contextWindow(m), m).toBe(1_000_000);
+  });
+
+  it('of the Haiku 5 family only Haiku 5.5 is named in the docs: other claude-haiku-5 ids give tokens only (no window)', () => {
+    for (const m of ['claude-haiku-5', 'claude-haiku-5-1', 'claude-haiku-5-6', 'claude-haiku-5-20261001']) expect(contextWindow(m), m).toBeUndefined();
   });
 
   it('200k for the other Claude models, none for an id it cannot read', () => {

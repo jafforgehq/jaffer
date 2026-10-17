@@ -15,6 +15,7 @@ describe('first-time tips (1.4.0)', () => {
     }
     expect(TIPS.compaction.glossary).toBe('compaction');
     expect(TIPS.permission.glossary).toBe('permission-prompt');
+    expect(TIPS.permission.text).toMatch(/^Claude Code asks when its rules don't already allow the action\. /); // (not "before it acts": allowed actions run without a prompt)
     expect(TIPS.context.glossary).toBe('context-window');
     expect(TIPS.budget.glossary).toBe('cost-estimate');
     expect(TIPS.context.text).toMatch(/about 80% full/);

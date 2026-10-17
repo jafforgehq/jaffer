@@ -424,6 +424,23 @@ describe('conversationStorage (1.4.0): how much room the transcripts take, the 1
     expect(await conversationStorage(path.join(env.root, 'nowhere'))).toEqual({ totalBytes: 0, count: 0, biggest: [] });
   });
 
+  it('has an overall budget: past 20000 entries (lowered here) or its time, it gives what it measured and says partial', async () => {
+    for (let i = 1; i <= 3; i++) {
+      sized(uuid(i), 100, T0 + i);
+      const dir = path.join(projects, '-Users-me-code', uuid(i));
+      fs.mkdirSync(dir);
+      for (let k = 0; k < 40; k++) fs.writeFileSync(path.join(dir, `f${k}`), 'a');
+    }
+    const full = await conversationStorage(claudeDir, Date.now(), { entries: 100_000, ms: 60_000 });
+    expect(full.partial).toBeUndefined();
+    const cut = await conversationStorage(claudeDir, Date.now() + 40_000, { entries: 50, ms: 60_000 });
+    expect(cut.partial).toBe(true);
+    expect(cut.totalBytes).toBeLessThan(full.totalBytes);
+    expect(cut.count).toBe(3);
+    const late = await conversationStorage(claudeDir, Date.now() + 80_000, { entries: 100_000, ms: 0 });
+    expect(late.partial).toBe(true);
+  });
+
   it('overlapping calls share one walk', async () => {
     sized(uuid(1), 1000, T0);
     const [a, b] = await Promise.all([conversationStorage(claudeDir), conversationStorage(claudeDir)]);
