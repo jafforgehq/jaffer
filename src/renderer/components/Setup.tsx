@@ -2,6 +2,7 @@ import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { info, setupOpen } from '../state';
 import { formatBytes } from '../../shared/history-label';
+import { MCP_GATED_NOTE } from '../../shared/mcp-gate';
 import type { SetupInfo } from '../../core/claude/setup';
 import type { McpCheck, McpStatus } from '../../core/claude/mcp';
 import { InfoButton } from './InfoButton';
@@ -69,7 +70,7 @@ export function Setup(): VNode {
     setMcp({ cwd: at, busy: true });
     void window.jaffer.call<McpCheck>('claude.mcp', { cwd: at }).then(
       // (an answer for another folder than the one asked about counts as a failed check)
-      (result) => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: result.cwd === at || at === '' ? result : { servers: [], ok: false, reason: 'error' } }),
+      (result) => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: result.cwd === at || at === '' || result.gated ? result : { servers: [], ok: false, reason: 'error' } }),
       () => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: { servers: [], ok: false, reason: 'error' } }),
     );
   };
@@ -147,7 +148,8 @@ export function Setup(): VNode {
                     </button>
                     <div class="sx-hint">This starts your MCP servers briefly to see if they answer.</div>
                     {checked && !checked.ok && checked.reason && <div class="sx-said">{MCP_SAID[checked.reason]}</div>}
-                    {checked?.ok && checked.servers.length === 0 && <div class="sx-said">Claude Code lists no MCP servers here.</div>}
+                    {checked?.gated && <div class="sx-said">{MCP_GATED_NOTE}</div>}
+                    {checked?.ok && !checked.gated && checked.servers.length === 0 && <div class="sx-said">Claude Code lists no MCP servers here.</div>}
                   </div>
                 )}
               </div>

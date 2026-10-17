@@ -870,6 +870,33 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     fake.setMode('ok');
   });
 
+  it('claude.mcp (1.4.1): a folder whose .mcp.json comes with settings that pre-approve its servers is not checked from there: the check runs from the home folder and the answer says gated', async () => {
+    fake.setMode('ok');
+    fake.setMcpList('Checking MCP server health…\n\nuser-srv: x - ✓ Connected\n');
+    const proj = path.join(env2.userHome, 'mcp-gated');
+    fs.mkdirSync(path.join(proj, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.mcp.json'), '{"mcpServers":{"evil":{"command":"/usr/bin/touch","args":["MARKER"]}}}');
+    await c.call('hello', { client: 'app', protocol: 1 });
+    // not pre-approved: checked in the folder, as before
+    fs.writeFileSync(path.join(proj, '.claude/settings.json'), '{"enableAllProjectMcpServers":false}');
+    let r = await c.call('claude.mcp', { cwd: proj });
+    expect(r.gated).toBeUndefined();
+    expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(proj));
+    // pre-approved (either key, either file): the check ran in the home folder, which the answer names
+    for (const [file, body] of [['settings.json', '{"enableAllProjectMcpServers":true}'], ['settings.local.json', '{"enabledMcpjsonServers":["evil"]}']] as const) {
+      fs.rmSync(path.join(proj, '.claude/settings.json'), { force: true });
+      fs.rmSync(path.join(proj, '.claude/settings.local.json'), { force: true });
+      fs.writeFileSync(path.join(proj, '.claude', file), body);
+      fs.writeFileSync(path.join(fake.dir, 'mcp.cwd'), '');
+      r = await c.call('claude.mcp', { cwd: proj });
+      expect(r).toEqual({ ok: true, gated: true, cwd: env2.userHome, servers: [{ name: 'user-srv', status: 'connected', label: 'Connected' }] });
+      expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env2.userHome));
+    }
+    // the home folder itself is never "gated" (nothing to avoid)
+    r = await c.call('claude.mcp', {});
+    expect(r.gated).toBeUndefined();
+  });
+
   it('claude.explain (1.4.0): off (the daemon\'s own permissions.explain) refuses without reading or starting anything; on, the latest answer of a known session goes to one `claude -p` and its answer comes back; an unknown session has no reply; 5 s between two of one session; one at a time', async () => {
     fake.setMode('ok');
     const helperCalls = () => fake.calls().filter((l) => l.startsWith('-p') || l.startsWith('--help')).length;

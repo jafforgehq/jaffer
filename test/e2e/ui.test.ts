@@ -4630,6 +4630,40 @@ describe('Jaffer UI end to end', () => {
     }
   }, 90_000);
 
+  it('the Setup check (1.4.1): a folder whose settings pre-approve its project servers is not checked there: the check runs from the home folder and the panel says so', async () => {
+    const proj = path.join(env.userHome, 'setup-gated');
+    fs.mkdirSync(path.join(proj, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({ mcpServers: { 'srv-evil': { command: 'x' } } }));
+    fs.writeFileSync(path.join(proj, '.claude/settings.json'), JSON.stringify({ enableAllProjectMcpServers: true }));
+    fake.setMcpList('Checking MCP server health…\n\nuser-srv: x - ✓ Connected\n');
+    fake.setMode('ok');
+    fs.writeFileSync(path.join(fake.dir, 'mcp.cwd'), '');
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+    await page.evaluate(() => (window as any).jaffer.call('hello', { client: 'app', protocol: 1 }));
+    const cd = (dir: string) => page.evaluate((d) => window.jaffer.call('pty.write', { pane: 'main', data: `\x15cd '${d}'\r` }), dir);
+    const mainWas = (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd as string;
+    const panelWas = (await page.evaluate(() => window.jaffer.call('config.get'))).panel;
+    await cfgPatch({ panel: { open: true, width: 320 } });
+    try {
+      await cd(proj);
+      await until(async () => (await page.locator('.pane[data-pane="main"] .pn-chip .pn-name').textContent()) === 'setup-gated', 8_000, 'main in setup-gated');
+      await page.waitForSelector('.side-panel .sx-setup');
+      if ((await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')) !== 'true') await page.click('.sx-setup .sx-head');
+      await page.waitForSelector('#sx-body[data-loaded] .sx-group[data-group="mcp"]');
+      await page.click('.sx-check');
+      await until(async () => (await page.locator('.sx-mcp .sx-said').allTextContents()).includes("This folder's settings pre-approve its project servers, so Jaffer did not check them."), 10_000, 'the gated note');
+      expect(fake.read('mcp.cwd')).toBe(fs.realpathSync(env.userHome));
+      expect(await page.locator('.sx-mcp .sx-said').count()).toBe(1);
+    } finally {
+      if ((await page.getAttribute('.sx-setup .sx-head', 'aria-expanded').catch(() => null)) === 'true') await page.click('.sx-setup .sx-head');
+      await cd(mainWas);
+      await until(async () => (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd === mainWas, 8_000, 'main back in its folder');
+      await cfgPatch({ panel: panelWas });
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('Explain (1.4.0): with permissions.explain off there is no Explain button and claude.explain is never asked, and Ask Claude to explain only copies its prompt; on, after a finished turn the button asks the helper, the card shows its answer above Now and Dismiss takes it away; a failure is one calm line; nothing is typed', async () => {
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
     await page.waitForSelector('.term .xterm');

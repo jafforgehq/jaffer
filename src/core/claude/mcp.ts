@@ -18,6 +18,8 @@ export interface McpCheck {
   reason?: 'no-claude' | 'timeout' | 'error';
   /** (the daemon's answer) The folder it ran in. */
   cwd?: string;
+  /** (1.4.1) The folder's settings pre-approve its project servers, so the check ran in the home folder (`cwd`) instead: see mcp-gate.ts. */
+  gated?: boolean;
 }
 
 export const MCP_LABEL: Record<McpStatus, string> = {

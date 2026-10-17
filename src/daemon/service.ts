@@ -21,7 +21,7 @@ import { LIVE_TICK_BYTES, LiveCost, readTurn, STOP_AFTER_END_GRACE_MS, transcrip
 import { conversationStorage, listConversations, OLD_DAYS, oldConversations } from '../core/claude/history';
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
-import { readSetup } from '../core/claude/setup';
+import { mcpGateFor, readSetup } from '../core/claude/setup';
 import { runMcpList, stopMcpChecks, type McpCheck } from '../core/claude/mcp';
 import { buildExplainPrompt, explainSupport, lastReply, runExplain, stopExplains, type ExplainResult } from '../core/claude/explain';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
@@ -754,17 +754,22 @@ export class JafferService {
     // (1.4.0) Only on the person's click (*Check MCP servers*): `claude mcp list` starts their servers to ask them; names and states come back
     // (only the app's own connection: a click there is the only way in; no folder means the home folder, a folder that is not there is an
     // error, never the home folder instead; the answer names the folder it ran in)
-    r.handle('claude.mcp', (p: { cwd?: unknown } | null, conn) => {
+    r.handle('claude.mcp', async (p: { cwd?: unknown } | null, conn) => {
       if (!this.isApp(conn)) throw new RpcError('Only the app checks MCP servers.', 'EPERM');
       const asked = p?.cwd;
-      const cwd = asked === undefined || asked === null || asked === '' ? this.userHome : this.setupFolder(asked, null);
-      if (!cwd) return { servers: [], ok: false, reason: 'error', ...(typeof asked === 'string' && asked.length <= 4096 && !/\p{Cc}/u.test(asked) ? { cwd: asked } : {}) };
-      let key = cwd;
-      try {
-        key = fs.realpathSync(cwd);
-      } catch {
-        /* (the folder as named) */
-      }
+      const folder = asked === undefined || asked === null || asked === '' ? this.userHome : this.setupFolder(asked, null);
+      if (!folder) return { servers: [], ok: false, reason: 'error', ...(typeof asked === 'string' && asked.length <= 4096 && !/\p{Cc}/u.test(asked) ? { cwd: asked } : {}) };
+      // (1.4.1) A folder whose settings pre-approve its project servers is not asked: the check runs from the home folder (see mcp-gate.ts)
+      const real = (d: string) => {
+        try {
+          return fs.realpathSync(d);
+        } catch {
+          return d; // (the folder as named)
+        }
+      };
+      const gated = real(folder) !== real(this.userHome) && (await mcpGateFor(folder));
+      const cwd = gated ? this.userHome : folder;
+      const key = real(cwd);
       let run = this.mcpChecks.get(key);
       if (!run) {
         run = this.probeClaude()
@@ -773,7 +778,7 @@ export class JafferService {
           .finally(() => this.mcpChecks.delete(key));
         this.mcpChecks.set(key, run);
       }
-      return run;
+      return gated ? { ...(await run), gated: true } : run;
     });
 
     // (1.4.0) Explain, only while this daemon's own permissions.explain is on (never the page's word): the latest answer of a session it

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { tildeOf } from '../../shared/history-label';
+import { mcpGate } from '../../shared/mcp-gate';
 import { COMMAND_HEAD } from '../../shared/process-badge';
 import { redactText } from '../../shared/redact';
 
@@ -275,4 +276,23 @@ async function readJson(base: string, p: string): Promise<Record<string, any> | 
   } catch {
     return undefined;
   }
+}
+
+/**
+ * (1.4.1) Does this folder's `.mcp.json` come with settings that pre-approve its servers (`mcpGate`)? Reads `.claude/settings.json` and
+ * `.claude/settings.local.json` of the folder only (head 256 KB, confined, no links out, a FIFO not waited on; never `~/.claude.json`).
+ */
+export async function mcpGateFor(cwd: string): Promise<boolean> {
+  const exists = (p: string) => fs.promises.lstat(p).then(() => true, (e: NodeJS.ErrnoException) => e.code !== 'ENOENT' && e.code !== 'ENOTDIR'); // (any other error: it is there, we cannot tell)
+  if (!(await exists(path.join(cwd, '.mcp.json')))) return false;
+  const heads: (string | null | undefined)[] = [];
+  for (const f of ['settings.json', 'settings.local.json']) {
+    const p = path.join(cwd, '.claude', f);
+    if (!(await exists(p))) heads.push(undefined);
+    else {
+      const r = await readHead(cwd, p, HEAD);
+      heads.push(r && r.size <= HEAD ? r.text : null);
+    }
+  }
+  return mcpGate(heads, true);
 }

@@ -27,10 +27,10 @@ Jaffer is a terminal for one person on their own Mac. The model is local trust:
 
 ## What leaves the Mac
 
-- Jaffer's own update check, to GitHub (only the signed release checks; nothing installs without a click).
+- Jaffer's own update check, to GitHub (only the signed release checks; nothing installs without a click; the feed is not changeable by an environment variable).
 - What Claude Code itself does when Jaffer runs it for you:
   - asking it whether you are signed in;
-  - *Check MCP servers*, which connects to your servers;
+  - *Check MCP servers* (only on your click), which connects to your servers. Servers a project names in its `.mcp.json` and you have not approved are not started by Claude Code (checked on 2.1.302). A repository's own settings can approve them in advance, so when they do, Jaffer runs the check from your home folder instead and says so;
   - the *Explain* helper's model call, which sends Claude's last reply through your own Claude Code.
 - Whatever the programs in the terminal send, Claude Code included: that is theirs, not Jaffer's.
 

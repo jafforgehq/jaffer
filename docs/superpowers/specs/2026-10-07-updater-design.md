@@ -39,8 +39,8 @@ Claude Code included.
   in a dialog. Only a manual check shows an error.
 - The prompt text and the status text are built from the version string the feed returns, so they are clipped to a
   version-like token before they reach a dialog.
-- `JAFFER_UPDATE_URL` (a generic-provider base URL) overrides the feed. It exists to test the whole flow against a local
-  server; it does not weaken anything because the update must still be signed by the installed app's identity.
+- ~~`JAFFER_UPDATE_URL` (a generic-provider base URL) overrides the feed.~~ **Removed in 1.4.1** (it only worked in a signed
+  packaged app, where it was a test hook left live; the feed is now the GitHub release only, in every build).
 - The one-session rules in CLAUDE.md are untouched: no new window; the prompt is a native dialog.
 
 ## Release pipeline
@@ -70,7 +70,7 @@ Claude Code included.
 - Config: `updates.auto` defaults on, also for a config saved before the setting existed.
 - UI end to end: the Settings section, the switch, and *Check now* against the bridge stub.
 - Release: the packaged build contains `app-update.yml` and a `latest-mac.yml` listing both zips; **a real round trip**: a
-  signed build of one version updates to a signed build of the next from a local server (`JAFFER_UPDATE_URL`), including
+  signed build of one version updates to a signed build of the next from a local server (this used `JAFFER_UPDATE_URL`, removed in 1.4.1; today it needs a build with a different feed), including
   the prompt, the session ending, and the new version coming back up.
 
 ## Not in scope
