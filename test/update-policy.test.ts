@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bundleProblem, cleanVersion, feedOverride, isAllowedFeedUrl, isNewer, manualResult, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
+import { bundleProblem, cleanVersion, isNewer, manualResult, promptText, shouldAsk, signerKind } from '../src/shared/update-policy';
 
 describe('cleanVersion', () => {
   it('accepts release versions and rejects anything else', () => {
@@ -90,30 +90,6 @@ describe('manualResult', () => {
     expect(manualResult({ ...base, status: 'ready', version: '0.2.0' })).toBeNull();
     expect(manualResult({ ...base, status: 'checking' })).toBeNull();
     expect(manualResult({ ...base, status: 'idle' })).toBeNull();
-  });
-});
-
-describe('isAllowedFeedUrl', () => {
-  it('allows https anywhere and plain http only on this machine', () => {
-    expect(isAllowedFeedUrl('https://example.com/feed')).toBe(true);
-    expect(isAllowedFeedUrl('http://127.0.0.1:8765')).toBe(true);
-    expect(isAllowedFeedUrl('http://localhost:3000/updates')).toBe(true);
-    expect(isAllowedFeedUrl('http://[::1]:8000')).toBe(true);
-    expect(isAllowedFeedUrl('http://example.com/feed')).toBe(false);
-    expect(isAllowedFeedUrl('http://127.0.0.1.evil.com/')).toBe(false);
-    expect(isAllowedFeedUrl('file:///tmp/feed')).toBe(false);
-    expect(isAllowedFeedUrl('')).toBe(false);
-  });
-});
-
-describe('feedOverride (1.4.1)', () => {
-  it('honours JAFFER_UPDATE_URL only in a build that is not packaged, and only an allowed URL', () => {
-    expect(feedOverride('https://example.com/feed', false)).toBe('https://example.com/feed');
-    expect(feedOverride('http://127.0.0.1:8765', false)).toBe('http://127.0.0.1:8765');
-    expect(feedOverride('https://example.com/feed', true)).toBeUndefined(); // a packaged app always updates from GitHub
-    expect(feedOverride('http://example.com/feed', false)).toBeUndefined();
-    expect(feedOverride(undefined, false)).toBeUndefined();
-    expect(feedOverride('', false)).toBeUndefined();
   });
 });
 

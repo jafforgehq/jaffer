@@ -1120,7 +1120,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('a permission request is retracted when the transcript records that the user rejected it in the terminal', async () => {
-    const transcript = path.join(env3.root, 'sess-2.jsonl');
+    const transcript = planted('sess-2.jsonl');
     fs.writeFileSync(transcript, '{"type":"user","message":"hi"}\n');
     await c.call('claude.event', ev('PreToolUse', { session_id: 'sess-2', transcript_path: transcript, tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, tool_use_id: 'toolu_9' }));
     await c.call('claude.event', ev('Notification', { session_id: 'sess-2', transcript_path: transcript, message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }));
@@ -1130,7 +1130,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('typing in the terminal while Claude waits takes "Needs you" back to working, and a decline is still noticed afterwards', async () => {
-    const transcript = path.join(env3.root, 'sess-ans.jsonl');
+    const transcript = planted('sess-ans.jsonl');
     fs.writeFileSync(transcript, '{"type":"user","message":"hi"}\n');
     const base = { session_id: 'sess-ans', transcript_path: transcript };
     await c.call('claude.event', ev('PreToolUse', { ...base, tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 'toolu_a1' }));
@@ -1177,7 +1177,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('Esc while Claude works fires no Stop hook: the transcript shows it, and "Working" ends (words inside tool output do not count)', async () => {
-    const transcript = path.join(env3.root, 'sess-esc.jsonl');
+    const transcript = planted('sess-esc.jsonl');
     fs.writeFileSync(transcript, '{"type":"user","message":{"role":"user","content":"go"}}\n');
     const base = { session_id: 'sess-esc', transcript_path: transcript };
     await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'build the thing' }));
@@ -1220,6 +1220,31 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await cost())?.answers === 3, 5_000);
     expect((await cost())!.last.output).toBe(100);
   });
+
+  it('(1.4.1) a prompt that arrives while a big answer is being read records where it began, and its answer counts only its own lines', async () => {
+    const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'x'.repeat(200) }], usage: { input_tokens: 10, output_tokens: output } } })}\n`;
+    const big = planted('sess-big.jsonl');
+    fs.writeFileSync(big, '');
+    const bigBase = { session_id: 'sess-big', transcript_path: big };
+    await c.call('claude.event', ev('UserPromptSubmit', { ...bigBase, prompt: 'long' }));
+    let body = '';
+    for (let i = 0; i < 2000; i++) body += reply(`b${i}`, 1);
+    const fd = fs.openSync(big, 'a');
+    for (let i = 0; i < 40; i++) fs.writeSync(fd, body); // (~20 MB: its read takes a while)
+    fs.closeSync(fd);
+    await c.call('claude.event', ev('Stop', bigBase));
+    const next = planted('sess-next.jsonl');
+    fs.writeFileSync(next, reply('earlier', 9_000)); // an earlier answer in the same file
+    const nextBase = { session_id: 'sess-next', transcript_path: next };
+    await sleep(320); // (the big read has begun, or is queued)
+    await c.call('claude.event', ev('UserPromptSubmit', { ...nextBase, prompt: 'short' }));
+    fs.appendFileSync(next, reply('n1', 70)); // written as soon as the hook heard back
+    await c.call('claude.event', ev('Stop', nextBase));
+    const cost = async (id: string) => (await states()).find((s) => s.id === id)?.cost;
+    await waitUntil(async () => (await cost('sess-next'))?.answers === 1, 15_000);
+    expect((await cost('sess-next'))!.last.output).toBe(70);
+    await waitUntil(async () => (await cost('sess-big'))?.answers === 1, 15_000);
+  }, 40_000);
 
   it('(1.4.1) says nothing about the cost of a transcript_path outside <CLAUDE_CONFIG_DIR>/projects (the readers are confined)', async () => {
     const transcript = path.join(env3.root, 'sess-outside.jsonl');

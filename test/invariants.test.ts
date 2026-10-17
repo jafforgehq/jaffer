@@ -66,6 +66,48 @@ const hits = (re: RegExp, only?: (file: string) => boolean): string[] => {
   }
   return out;
 };
+/**
+ * The channels of `ipcMain.handle(` whose handler does not call `trusted(`: each handler's body is the call's own parentheses
+ * (strings skipped), cut at the next `ipcMain.handle(` whatever happens.
+ */
+function untrustedHandlers(src: string): string[] {
+  const out: string[] = [];
+  const starts = [...src.matchAll(/\bipcMain\.handle\(/g)].map((m) => m.index!);
+  for (const [k, at] of starts.entries()) {
+    const limit = starts[k + 1] ?? src.length;
+    let depth = 0;
+    let end = limit;
+    for (let i = at + 'ipcMain.handle'.length; i < limit; i++) {
+      const c = src[i]!;
+      if (c === "'" || c === '"' || c === '`') {
+        for (i++; i < limit && src[i] !== c; i++) if (src[i] === '\\') i++;
+      } else if (c === '(') depth++;
+      else if (c === ')' && --depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+    const body = src.slice(at, end);
+    if (!/\btrusted\(e\)/.test(body)) out.push(/^ipcMain\.handle\(\s*'([^']*)'/.exec(body)?.[1] ?? `@${at}`);
+  }
+  return out;
+}
+/** How a source could start a child through a shell (CLAUDE.md: every child is an argv array, no shell). Empty when it cannot. */
+function shellViolations(src: string): string[] {
+  const out: string[] = [];
+  const CP = `['"\`](?:node:)?child_process['"\`]`;
+  // only named imports of execFile and spawn (and types): no default or namespace import that could reach exec, no require
+  for (const m of src.matchAll(new RegExp(`\\bimport\\s+([^;]*?)\\s+from\\s*${CP}`, 'g'))) {
+    if (!/^(type\s+)?\{[^}]*\}$/.test(m[1]!)) out.push(m[0]);
+    else for (const n of m[1]!.replace(/^type\s+/, '').slice(1, -1).split(',').map((x) => x.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!).filter(Boolean)) if (!['execFile', 'spawn', 'ChildProcess', 'SpawnOptions'].includes(n)) out.push(n);
+  }
+  out.push(...(src.match(new RegExp(`\\b(require|import)\\s*\\(\\s*${CP}`, 'g')) ?? []));
+  out.push(...(src.match(/(?<![.\w])(exec|execSync)\s*\(/g) ?? []));
+  // no `shell:` option but `false` in a file that starts children, and none passed straight into a spawn anywhere
+  if (new RegExp(CP).test(src)) out.push(...(src.match(/\bshell\s*:(?!\s*false\b)/g) ?? []));
+  out.push(...(src.match(/\b(spawn|execFile|fork|spawnSync|execFileSync)\s*\([^;]*?\bshell\s*:(?!\s*false\b)/g) ?? []));
+  return out;
+}
 const perFile = (list: string[]) => list.reduce<Record<string, number>>((a, h) => ((a[h.split(':')[0]!] = (a[h.split(':')[0]!] ?? 0) + 1), a), {});
 
 describe('stripComments', () => {
@@ -110,15 +152,20 @@ describe('invariants of CLAUDE.md', () => {
   });
 
   // "The page may use these IPC channels of main, and each checks `trusted(e)` (the sender is the app's own page)"
-  it('every ipcMain.handle checks trusted( within its first lines', () => {
-    const handlers = hits(/\bipcMain\.handle\(/);
-    expect(handlers.length).toBeGreaterThanOrEqual(13);
-    for (const h of handlers) {
-      const [f, line] = h.split(':');
-      const body = code.get(f!)!.split('\n').slice(Number(line) - 1, Number(line) + 5).join('\n');
-      expect(body, h).toMatch(/\btrusted\(e\)/);
-    }
-    expect(hits(/\bipcMain\.on\(|\bipcMain\.handleOnce\(/)).toEqual([]);
+  it('every ipcMain.handle calls trusted( in its own handler, and no IPC is taken in another way', () => {
+    expect(hits(/\bipcMain\.handle\(/).length).toBeGreaterThanOrEqual(13);
+    for (const [f, src] of code) expect(untrustedHandlers(src), f).toEqual([]);
+    expect(hits(/\bipcMain\.(on|once|addListener|prependListener|prependOnceListener|handleOnce)\(|\.ipc\.(handle|handleOnce|on|once|addListener)\(/)).toEqual([]);
+  });
+
+  it('(the rule itself) finds a handler whose own body lost its trusted( check, also when the next one still has one', () => {
+    const main = code.get('src/main/main.ts')!;
+    expect(untrustedHandlers(main)).toEqual([]);
+    const at = main.indexOf("ipcMain.handle('jaffer:reveal'");
+    const cut = main.indexOf('trusted(e)', at);
+    const mutated = main.slice(0, cut) + 'true' + main.slice(cut + 'trusted(e)'.length);
+    expect(untrustedHandlers(mutated)).toEqual(['jaffer:reveal']);
+    expect(untrustedHandlers("ipcMain.handle('a', (e) => { if (x(')')) return; });\nconst later = trusted(e);")).toEqual(['a']);
   });
 
   // "`redactText` itself throws (`RangeError`) on a multi-megabyte single-run string: every caller that redacts untrusted text clips it
@@ -143,14 +190,13 @@ describe('invariants of CLAUDE.md', () => {
 
   // "Every child uses an argv array (no shell)" (git status, `claude`, caffeinate, launchctl): no shell, ever
   it('no child process runs through a shell', () => {
-    expect(hits(/\bshell\s*:\s*(true|['"`])/)).toEqual([]);
-    expect(hits(/(?<![.\w])(exec|execSync)\s*\(/)).toEqual([]);
-    for (const [f, src] of code) {
-      for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(node:)?child_process'/g)) {
-        for (const n of m[1]!.split(',').map((s) => s.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!)) expect(['execFile', 'spawn', 'ChildProcess', 'SpawnOptions'], `${f}: ${n}`).toContain(n);
-      }
-    }
-    expect(hits(/require\(\s*'(node:)?child_process'\s*\)/)).toEqual([]);
+    for (const [f, src] of code) expect(shellViolations(src), f).toEqual([]);
+  });
+
+  it('(the rule itself) catches a default or namespace import, a require, exec and a shell option', () => {
+    for (const b of ["import cp from 'node:child_process';", "import * as cp from 'child_process';", "const cp = require('child_process');", "const { exec } = await import('node:child_process');", "import { exec } from 'node:child_process';", "import { execFile } from 'node:child_process';\nexecFile('ls', [], { shell: true });", "spawn('ls', [], { shell: '/bin/sh' })"])
+      expect(shellViolations(b), b).not.toEqual([]);
+    for (const ok of ["import { execFile, spawn, type ChildProcess } from 'node:child_process';\nspawn('ls', [], { shell: false, cwd });", "interface Cfg { shell: { path: string } }"]) expect(shellViolations(ok), ok).toEqual([]);
   });
 
   // "Jaffer runs on Claude subscriptions only: there is no Anthropic API key anywhere ... and `ANTHROPIC_API_KEY` is ignored"

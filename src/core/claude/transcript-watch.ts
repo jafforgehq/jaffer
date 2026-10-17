@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { openTranscriptSync } from './transcript-open';
 
 const MARKER = '[Request interrupted by user';
 const REJECTED = 'User rejected tool use';
@@ -30,22 +31,21 @@ export function isStopLine(line: string): boolean {
   }
 }
 
-/** Was the transcript written to within `withinMs`? Claude Code writes it as it works, so a quiet file means a quiet Claude. */
-export function transcriptActive(file: string | undefined, withinMs: number): boolean {
-  if (!file) return false;
-  try {
-    return Date.now() - fs.statSync(file).mtimeMs < withinMs;
-  } catch {
-    return false;
-  }
+/** The stat of a transcript inside `<claudeDir>/projects` (1.4.1: through `openTranscriptSync`, as every reader), or null. */
+function statOf(file: string, claudeDir: string): fs.Stats | null {
+  const t = openTranscriptSync(claudeDir, file);
+  if (!t) return null;
+  fs.closeSync(t.fd);
+  return t.st;
 }
 
-function sizeOf(file: string): number {
-  try {
-    return fs.statSync(file).size;
-  } catch {
-    return 0;
-  }
+/**
+ * Was the transcript written to within `withinMs`? Claude Code writes it as it works, so a quiet file means a quiet Claude. One that
+ * is not a transcript inside `<claudeDir>/projects` counts as quiet.
+ */
+export function transcriptActive(file: string | undefined, claudeDir: string, withinMs: number): boolean {
+  const st = file ? statOf(file, claudeDir) : null;
+  return !!st && Date.now() - st.mtimeMs < withinMs;
 }
 
 /**
@@ -53,8 +53,8 @@ function sizeOf(file: string): number {
  * of its transcript for that line. Lines already in the file are ignored; `onStopped` is called once, then the watch stops
  * itself. Returns a function that stops it earlier.
  */
-export function watchInterruption(file: string, onStopped: () => void, opts: { intervalMs?: number } = {}): () => void {
-  let offset = sizeOf(file);
+export function watchInterruption(file: string, claudeDir: string, onStopped: () => void, opts: { intervalMs?: number } = {}): () => void {
+  let offset = statOf(file, claudeDir)?.size ?? 0;
   let partial = ''; // the unfinished last line of the previous read
   let stopped = false;
   const stop = () => {
@@ -63,8 +63,11 @@ export function watchInterruption(file: string, onStopped: () => void, opts: { i
   };
   const timer = setInterval(() => {
     if (stopped) return;
+    // (1.4.1) only a transcript inside <claudeDir>/projects is read (`openTranscriptSync`): anything else is never opened
+    const t = openTranscriptSync(claudeDir, file);
+    if (!t) return; // not there yet, or not a transcript: try again next time
     try {
-      const size = fs.statSync(file).size;
+      const size = t.st.size;
       if (size < offset) {
         offset = 0; // the file was replaced
         partial = '';
@@ -72,12 +75,7 @@ export function watchInterruption(file: string, onStopped: () => void, opts: { i
       if (size === offset) return;
       const from = Math.max(offset, size - MAX_READ);
       const buf = Buffer.alloc(size - from);
-      const fd = fs.openSync(file, 'r');
-      try {
-        fs.readSync(fd, buf, 0, buf.length, from);
-      } finally {
-        fs.closeSync(fd);
-      }
+      fs.readSync(t.fd, buf, 0, buf.length, from);
       offset = size;
       const lines = (partial + buf.toString('utf8')).split('\n');
       partial = lines.pop() ?? '';
@@ -86,7 +84,9 @@ export function watchInterruption(file: string, onStopped: () => void, opts: { i
         onStopped();
       }
     } catch {
-      /* not there yet, or unreadable: try again next time */
+      /* unreadable: try again next time */
+    } finally {
+      fs.closeSync(t.fd);
     }
   }, opts.intervalMs ?? 500);
   timer.unref?.();

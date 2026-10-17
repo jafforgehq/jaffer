@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openTranscript } from '../src/core/claude/transcript-open';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openTranscript, openTranscriptSync } from '../src/core/claude/transcript-open';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 /** (1.4.1) The one way a transcript is opened: inside `realpath(<claudeDir>/projects)`, a regular `.jsonl` file, no link at the end. */
@@ -16,13 +16,22 @@ beforeEach(() => {
   projects = path.join(claudeDir, 'projects');
   fs.mkdirSync(path.join(projects, '-p'), { recursive: true });
 });
-afterEach(() => env.cleanup());
+afterEach(() => {
+  vi.restoreAllMocks();
+  env.cleanup();
+});
 
 /** Opens, closes what came back, and says what it was. */
 async function open(file: string): Promise<number | null> {
   const t = await openTranscript(claudeDir, file);
-  if (!t) return null;
+  const s = openTranscriptSync(claudeDir, file); // (the sync twin, for the stop-line watch, says the same)
+  if (s) fs.closeSync(s.fd);
+  if (!t) {
+    expect(s).toBeNull();
+    return null;
+  }
   await t.fh.close();
+  expect(s?.st.size).toBe(t.size);
   return t.size;
 }
 
@@ -49,7 +58,7 @@ describe('openTranscript', () => {
     expect(await open(path.join(env.root, 'elsewhere.jsonl'))).toBeNull();
   });
 
-  it('refuses a link to a file outside, and a link inside (only a real file counts, as for the other readers)', async () => {
+  it('refuses a link to a file outside the projects folder, and follows a link inside it to a real file inside', async () => {
     const out = path.join(env.root, 'secret.jsonl');
     fs.writeFileSync(out, 'secret\n');
     fs.symlinkSync(out, path.join(projects, '-p', 'out.jsonl'));
@@ -89,5 +98,18 @@ describe('openTranscript', () => {
     await t.fh.close();
     // ...but a file of that real folder is not inside another Claude folder's projects
     expect(await open(path.join(realDir, 'projects', '-q', 'b.jsonl'))).toBeNull();
+  });
+
+  it('refuses a file swapped in between the check and the open (its device and inode are not those it checked)', async () => {
+    const file = path.join(projects, '-p', 'a.jsonl');
+    const other = path.join(projects, '-p', 'b.jsonl');
+    fs.writeFileSync(file, 'abc\n');
+    fs.writeFileSync(other, 'other\n');
+    const realOpen = fs.promises.open.bind(fs.promises);
+    vi.spyOn(fs.promises, 'open').mockImplementation(((_p: fs.PathLike, ...a: [never]) => realOpen(other, ...a)) as typeof fs.promises.open);
+    expect(await openTranscript(claudeDir, file)).toBeNull();
+    const realOpenSync = fs.openSync.bind(fs);
+    vi.spyOn(fs, 'openSync').mockImplementation(((_p: fs.PathLike, ...a: [never]) => realOpenSync(other, ...a)) as typeof fs.openSync);
+    expect(openTranscriptSync(claudeDir, file)).toBeNull();
   });
 });

@@ -17,7 +17,7 @@ import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { RELEASE_NOTES } from '../generated/release-notes';
 import { effectiveSeen, unseenNotes } from '../shared/whats-new';
-import { bundleProblem, feedOverride, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { bundleProblem, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { CRASH_DIALOG, CRASH_RELOADS, crashAction } from '../shared/crash-policy';
 import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, quitState, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { UpdateController, type UpdaterLike } from './updates';
@@ -529,8 +529,6 @@ async function setupUpdates(): Promise<void> {
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
     autoUpdater.logger = { info: (m: unknown) => updateLog(String(m)), warn: (m: unknown) => updateLog(`warn ${m}`), error: (m: unknown) => updateLog(`error ${m}`), debug: () => undefined };
-    const feed = feedOverride(process.env.JAFFER_UPDATE_URL, app.isPackaged); // (1.4.1) never in a packaged app
-    if (feed) autoUpdater.setFeedURL({ provider: 'generic', url: feed });
     autoUpdater.on('error', (e: Error) => recoverFromFailedInstall(e.message));
   }
   updates = new UpdateController({

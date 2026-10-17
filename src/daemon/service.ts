@@ -162,7 +162,7 @@ export class JafferService {
     // a turn that ended with no signal at all (Esc, an API error, a crash) must not stay "Working" for ever
     this.timers.push(
       setInterval(() => {
-        this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, s.tool ? 30 * 60_000 : 5 * 60_000));
+        this.claudeWatcher.sweep((s) => transcriptActive(s.transcriptPath, this.claudeDir(), s.tool ? 30 * 60_000 : 5 * 60_000));
         // past midnight today's total starts again, and the window hears it also when nothing else happens
         const today = dayTotal(this.today, Date.now());
         if (today.date !== this.today.date) {
@@ -492,8 +492,19 @@ export class JafferService {
    * What an answer cost: measured on the transcript from the prompt to the Stop hook, only the token counts are read. The last
    * lines may land just after the hook fires, so an empty read is tried once more.
    */
-  private trackCost(p: unknown): Promise<void> {
-    return this.serially(() => this.trackCostNow(p));
+  private trackCost(p: unknown): Promise<unknown> {
+    // (1.4.1) where a prompt began is read at once, not behind a Stop's read in the queue (the hook hears back once it is read); the
+    // queue keeps the order in which it is used
+    const o = p && typeof p === 'object' ? (p as Record<string, unknown>) : undefined;
+    const begun = o?.hook_event_name === 'UserPromptSubmit' ? transcriptSize(this.costFile(o), this.claudeDir()) : undefined;
+    this.serially(() => this.trackCostNow(p, begun));
+    return begun ?? Promise.resolve();
+  }
+
+  /** The transcript of a hook's session: the payload's, else the one the watcher knows. */
+  private costFile(o: Record<string, unknown>): string | undefined {
+    const id = typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '';
+    return typeof o.transcript_path === 'string' ? o.transcript_path : this.claudeWatcher.sessions().find((s) => s.id === id)?.transcriptPath;
   }
 
   private serially(fn: () => Promise<void>): Promise<void> {
@@ -505,14 +516,14 @@ export class JafferService {
     return process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude');
   }
 
-  private async trackCostNow(p: unknown): Promise<void> {
+  private async trackCostNow(p: unknown, begun?: Promise<number>): Promise<void> {
     if (!p || typeof p !== 'object') return;
     const o = p as Record<string, unknown>;
     const id = typeof o.session_id === 'string' ? o.session_id.slice(0, 80) : '';
     if (!id) return;
-    const file = typeof o.transcript_path === 'string' ? o.transcript_path : this.claudeWatcher.sessions().find((s) => s.id === id)?.transcriptPath;
+    const file = this.costFile(o);
     if (o.hook_event_name === 'UserPromptSubmit') {
-      this.turnStart.set(id, await transcriptSize(file, this.claudeDir()));
+      this.turnStart.set(id, await (begun ?? transcriptSize(file, this.claudeDir())));
       if (this.turnStart.size > 20) this.turnStart.delete(this.turnStart.keys().next().value!);
     } else if (o.hook_event_name === 'SessionEnd') {
       // Hooks are async: the Stop of the last answer may still be on its way (`claude -p` ends at once), so where it began is kept a
@@ -565,7 +576,7 @@ export class JafferService {
       const watching = this.rejectionWatches.has(s.id);
       const waiting = !!s.transcriptPath && (s.state === 'needs-you' || s.state === 'working');
       if (waiting && !watching) {
-        const stop = watchInterruption(s.transcriptPath!, () => {
+        const stop = watchInterruption(s.transcriptPath!, this.claudeDir(), () => {
           this.rejectionWatches.delete(s.id);
           this.claudeWatcher.interrupted(s.id);
         });
@@ -698,7 +709,7 @@ export class JafferService {
       const ev = (p as { hook_event_name?: unknown } | null)?.hook_event_name;
       if (typeof ev === 'string' && HOOK_EVENTS.includes(ev)) this.hookSeen.set(ev, Date.now());
       this.claudeWatcher.handle(p);
-      // (1.4.1) answered once the cost readers took this event in: where a prompt began is read before the hook hears back (as when it was read at once)
+      // (1.4.1) a prompt is answered once where it began was read (as when it was read at once): Claude writes on after the hook hears back
       await this.trackCost(p);
       return { ok: true };
     });
