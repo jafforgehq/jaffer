@@ -5,6 +5,7 @@ import path from 'node:path';
 import { COMMAND_HEAD } from '../../shared/process-badge';
 import { redactText } from '../../shared/redact';
 import { lines, readAt } from './history';
+import { openTranscript } from './transcript-open';
 
 /**
  * Explain (1.4.0, only with `permissions.explain`): the text of Claude's latest answer, read from the end of its transcript (clipped,
@@ -54,12 +55,10 @@ const fromWord = (s: string): string => {
 export async function lastReply(file: string, claudeDir: string): Promise<string | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
-    const root = await fs.promises.realpath(path.join(claudeDir, 'projects'));
-    const real = await fs.promises.realpath(file);
-    if (!real.startsWith(root + path.sep) || !real.endsWith('.jsonl')) return undefined;
-    fh = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const st = await fh.stat();
-    if (!st.isFile()) return undefined;
+    const opened = await openTranscript(claudeDir, file);
+    if (!opened) return undefined;
+    fh = opened.fh;
+    const st = { size: opened.size };
     const from = Math.max(0, st.size - TAIL);
     const ls = lines(await readAt(fh, from, st.size - from), from === 0, true);
     const parts: string[] = [];

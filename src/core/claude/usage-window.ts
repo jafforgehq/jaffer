@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { usageByTime } from '../../shared/claude-cost';
 import { MAX_READ } from './cost';
 import { transcriptFiles } from './history';
+import { openTranscript } from './transcript-open';
 
 /**
  * The last 5 hours (1.4.0): the tokens of the model responses written in the last 5 hours across Claude Code's transcripts, and what
@@ -41,7 +41,7 @@ async function scan(claudeDir: string, now: number): Promise<Usage> {
   const since = now - WINDOW_MS;
   const counted = new Set<string>();
   for (const f of (t?.found ?? []).filter((x) => x.mtimeMs > since).slice(0, MAX_FILES)) {
-    const entries = await readEntries(t!.root, f.file, since);
+    const entries = await readEntries(claudeDir, f.file, since);
     await yieldTurn();
     if (!entries) continue;
     files++;
@@ -56,14 +56,12 @@ async function scan(claudeDir: string, now: number): Promise<Usage> {
 }
 
 /** One transcript's responses newer than `since` (a cached read when its size and mtime did not change: what aged out goes). */
-async function readEntries(root: string, file: string, since: number): Promise<Entry[] | undefined> {
+async function readEntries(claudeDir: string, file: string, since: number): Promise<Entry[] | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
-    const real = await fs.promises.realpath(file);
-    if (!real.startsWith(root + path.sep)) return undefined;
-    fh = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    fh = (await openTranscript(claudeDir, file))?.fh;
+    if (!fh) return undefined;
     const st = await fh.stat();
-    if (!st.isFile()) return undefined;
     const stamp = `${st.size}:${st.mtimeMs}`;
     let seen = cache.get(file);
     if (seen?.stamp !== stamp) {

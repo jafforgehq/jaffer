@@ -17,7 +17,7 @@ import type { RpcClient } from '../core/rpc';
 import { VERSION } from '../core/version';
 import { RELEASE_NOTES } from '../generated/release-notes';
 import { effectiveSeen, unseenNotes } from '../shared/whats-new';
-import { bundleProblem, isAllowedFeedUrl, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
+import { bundleProblem, feedOverride, manualResult, RELEASES_URL, signerKind, type UpdateState } from '../shared/update-policy';
 import { CRASH_DIALOG, CRASH_RELOADS, crashAction } from '../shared/crash-policy';
 import { childExitAction, childExitText, LEGACY_DIALOG, LEGACY_NOT_ENDED, legacyDaemonAction, QUIT_BUTTONS, QUIT_CANCEL_ID, QUIT_DEFAULT_ID, quitNeedsConfirm, quitState, shouldAskOnQuit, type QuitAsk } from '../shared/quit-policy';
 import { UpdateController, type UpdaterLike } from './updates';
@@ -27,6 +27,7 @@ import { resetJaffer } from '../core/reset';
 import { SAVE_TEXT_MAX, safeFileName } from '../shared/save-text';
 import { editorUrl } from '../shared/editor-url';
 import { MENU_ITEMS } from '../shared/menu-spec';
+import { NOT_ALLOWED, pageMayCall } from '../shared/page-methods';
 import { FocusHold, type HoldKind } from '../shared/focus-hold';
 import { digestDue, digestLine, digestText, type UsageWeeks } from '../shared/usage-week';
 import { CLOSE_ASK, closeDecision, HIDE_HINT } from '../shared/close-action';
@@ -528,8 +529,8 @@ async function setupUpdates(): Promise<void> {
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
     autoUpdater.logger = { info: (m: unknown) => updateLog(String(m)), warn: (m: unknown) => updateLog(`warn ${m}`), error: (m: unknown) => updateLog(`error ${m}`), debug: () => undefined };
-    const feed = process.env.JAFFER_UPDATE_URL;
-    if (feed && isAllowedFeedUrl(feed)) autoUpdater.setFeedURL({ provider: 'generic', url: feed }); // for testing the flow against a local server
+    const feed = feedOverride(process.env.JAFFER_UPDATE_URL, app.isPackaged); // (1.4.1) never in a packaged app
+    if (feed) autoUpdater.setFeedURL({ provider: 'generic', url: feed });
     autoUpdater.on('error', (e: Error) => recoverFromFailedInstall(e.message));
   }
   updates = new UpdateController({
@@ -613,6 +614,12 @@ function createWindow(): void {
     backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
   });
+  // (1.4.1) The page needs no web permission (camera, microphone, notifications, clipboard reads, ...): all are refused. Its own
+  // notifications go through main. The one exception is writing the clipboard (Copy buttons, OSC 52, Copy as image), which may
+  // run outside a click (OSC 52, or after the image is drawn), so the page keeps it; reading the clipboard stays refused.
+  const pagePermission = (wc: Electron.WebContents | null, permission: string) => permission === 'clipboard-sanitized-write' && !!win && wc === win.webContents;
+  win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(pagePermission(wc, permission)));
+  win.webContents.session.setPermissionCheckHandler((wc, permission) => pagePermission(wc, permission));
   win.once('ready-to-show', () => win?.show());
   win.on('closed', () => {
     syncSystemStats();
@@ -1096,6 +1103,7 @@ function trusted(e: Electron.IpcMainInvokeEvent): boolean {
 
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
+  if (!pageMayCall(method)) throw new Error(NOT_ALLOWED); // (1.4.1) only the methods the page uses: never a hook's, never hello
   if (!client || !client.connected) throw new Error('The terminal is not running.');
   const long = method.startsWith('setup.') || method === 'claude.explain' || method === 'claude.mcp'; // (Explain's helper may take up to a minute; the MCP check 25 s plus finding claude)
   const r = await client.call(method, params, long ? 120_000 : 30_000);
@@ -1284,8 +1292,11 @@ async function smokeTest(): Promise<void> {
     const deadline = Date.now() + 40_000;
     while (Date.now() < deadline && !(await js<boolean>('!!document.querySelector(".term .xterm")'))) await sleep(200);
     if (!(await js<boolean>('!!document.querySelector(".term .xterm")'))) return fail('terminal never rendered');
-    const hello = await js<{ version: string; pid: number }>('window.jaffer.call("hello", {})');
+    const hello = (await client!.call('hello', {})) as { version: string; pid: number };
     if (hello.pid !== owned?.pid) return fail(`the terminal (pid ${hello.pid}) is not the app's own child (${owned?.pid})`);
+    // (1.4.1) the page may call only the methods it uses
+    const refused = await js<boolean>('window.jaffer.call("hello", {}).then(() => false, (e) => String(e).includes("Not allowed."))');
+    if (!refused) return fail('the page could call a method that is not on its list');
     const upd = await js<{ status: string; current: string }>('window.jaffer.updates.state()');
     if (upd.current !== hello.version) return fail(`update state is for ${upd.current}, the daemon is ${hello.version}`);
     await js('window.jaffer.call("config.patch", { onboarded: true })');
@@ -1296,7 +1307,7 @@ async function smokeTest(): Promise<void> {
     let seen = false;
     for (let i = 0; i < 40 && !seen; i++) {
       await sleep(250);
-      const snap = await js<{ data: string }>('window.jaffer.call("session.snapshot", {})');
+      const snap = (await client!.call('session.snapshot', {})) as { data: string };
       seen = snap.data.includes('smoke-42');
     }
     if (!seen) return fail('shell did not echo output');

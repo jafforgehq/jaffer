@@ -253,7 +253,7 @@ async function readHead(base: string, p: string, max: number): Promise<{ text: s
   if (!r) return undefined;
   let fh: fs.promises.FileHandle | undefined;
   try {
-    fh = await fs.promises.open(r, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    fh = await fs.promises.open(r, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); // (1.4.1: a FIFO opens at once, and is not a file)
     const st = await fh.stat();
     if (!st.isFile()) return undefined;
     const buf = Buffer.alloc(Math.min(max, st.size));

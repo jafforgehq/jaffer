@@ -32,6 +32,10 @@ beforeAll(async () => {
   execFileSync(process.execPath, [path.join(root, 'scripts/build.mjs'), '--only=cli'], { stdio: 'ignore' });
   env = makeEnv();
   fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
+  // (1.4.1) a home and a run folder an older build left readable by others: the daemon makes them private when it starts
+  fs.mkdirSync(env.paths.runDir, { recursive: true });
+  fs.chmodSync(env.home, 0o755);
+  fs.chmodSync(env.paths.runDir, 0o755);
   // The session shell finds a stand-in `claude` first (the person's own startup file, read after the system's): a test here that runs
   // `claude` in the session shell gets this one, never the `claude` this machine has. (The `claude` the daemon itself asks,
   // `claude auth status`, is found on the daemon's PATH, not the shell's.)
@@ -110,6 +114,12 @@ describe('jafferd + jaffer CLI (bundled, separate processes)', () => {
     await waitUntil(() => cmds.length > 0);
     expect(data.map((d) => d.data).join('')).toContain('persisted-marker-42');
     expect(cmds[0]).toMatchObject({ cmd: 'echo persisted-marker-42', exit: 0 });
+  });
+
+  it('(1.4.1) makes its home and run folder private (0700) on start, and its socket 0600', () => {
+    expect(fs.statSync(env.home).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(env.paths.runDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(env.paths.socket).mode & 0o777).toBe(0o600);
   });
 
   it('keeps the session alive across client disconnects (single always-on session)', async () => {
@@ -1017,6 +1027,12 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     });
   const ev = (name: string, over: object = {}) => ({ session_id: 'sess-1', hook_event_name: name, cwd: '/work/app', ...over });
   const states = async () => (await c.call('claude.state', {})).sessions as ClaudeSession[];
+  /** (1.4.1) A transcript where Claude Code keeps them: the cost readers read only inside `<CLAUDE_CONFIG_DIR>/projects`. */
+  const planted = (name: string) => {
+    const dir = path.join(env3.userHome, '.claude', 'projects', '-planted');
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, name);
+  };
 
   beforeAll(async () => {
     env3 = makeEnv();
@@ -1175,7 +1191,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('says what each answer cost, from the token counts in the transcript, and adds them up over the session', async () => {
-    const transcript = path.join(env3.root, 'sess-cost.jsonl');
+    const transcript = planted('sess-cost.jsonl');
     const reply = (id: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', role: 'assistant', content: [{ type: 'text', text: 'SECRET words that must not be kept' }], usage } })}\n`;
     // an earlier conversation in the same file is not part of this answer
     fs.writeFileSync(transcript, reply('old', { input_tokens: 1_000_000, output_tokens: 0 }));
@@ -1205,8 +1221,19 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     expect((await cost())!.last.output).toBe(100);
   });
 
+  it('(1.4.1) says nothing about the cost of a transcript_path outside <CLAUDE_CONFIG_DIR>/projects (the readers are confined)', async () => {
+    const transcript = path.join(env3.root, 'sess-outside.jsonl');
+    fs.writeFileSync(transcript, '');
+    const base = { session_id: 'sess-outside', transcript_path: transcript };
+    await c.call('claude.event', ev('UserPromptSubmit', { ...base, prompt: 'elsewhere' }));
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { id: 'o1', model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 10, output_tokens: 500 } } })}\n`);
+    await c.call('claude.event', ev('Stop', base));
+    await sleep(2_500); // (past the read and its retry)
+    expect((await states()).find((s) => s.id === 'sess-outside')?.cost).toBeUndefined();
+  });
+
   it('a Stop that arrives after SessionEnd (async hooks, `claude -p`) still says what the answer cost; after a grace nothing of the session is kept', async () => {
-    const transcript = path.join(env3.root, 'sess-late.jsonl');
+    const transcript = planted('sess-late.jsonl');
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 10, output_tokens: output } } })}\n`;
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-late', transcript_path: transcript };
@@ -1227,7 +1254,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   }, 30_000);
 
   it('says nothing about cost when it is switched off in Settings, and starts again when it is switched on', async () => {
-    const transcript = path.join(env3.root, 'sess-nocost.jsonl');
+    const transcript = planted('sess-nocost.jsonl');
     const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 1, output_tokens: 1000 } } })}\n`;
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-nocost', transcript_path: transcript };
@@ -1245,7 +1272,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('while Claude works, says what the answer has cost so far (read every 2 s from where the prompt began), pauses while it waits for the person, and Stop clears it', async () => {
-    const transcript = path.join(env3.root, 'sess-live.jsonl');
+    const transcript = planted('sess-live.jsonl');
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'SECRET words' }], usage: { input_tokens: 100, output_tokens: output } } })}\n`;
     fs.writeFileSync(transcript, reply('before', 1_000_000)); // an earlier answer in the same file is not this one
     const base = { session_id: 'sess-live', transcript_path: transcript };
@@ -1283,7 +1310,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     // the daemon's day is the local date: a run across local midnight would see two days (the clock is the daemon's own, a process of its own)
     const now = new Date();
     if (new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() < 60_000) return ctx.skip();
-    const transcript = path.join(env3.root, 'sess-today.jsonl');
+    const transcript = planted('sess-today.jsonl');
     const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 0, output_tokens: 10_000 } } })}\n`;
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-today', transcript_path: transcript };
@@ -1335,7 +1362,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   }, 20_000);
 
   it('the context meter (1.4.0): after an answer, the tokens the latest response read in and its model\'s window; with the cost switched off nothing is read; numbers only', async () => {
-    const transcript = path.join(env3.root, 'sess-ctx.jsonl');
+    const transcript = planted('sess-ctx.jsonl');
     const reply = (id: string, model: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model, content: [{ type: 'text', text: 'SECRET words' }], usage } })}\n`;
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-ctx', transcript_path: transcript };
@@ -1351,7 +1378,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
     await waitUntil(async () => (await ctx())?.tokens === 40_000, 5_000);
     expect((await ctx())!.window).toBe(200_000);
     // the cost switched off: the transcript is not read for anything, so another session gets no context at all
-    const quiet = path.join(env3.root, 'sess-ctx-off.jsonl');
+    const quiet = planted('sess-ctx-off.jsonl');
     fs.writeFileSync(quiet, '');
     await c.call('config.patch', { claude: { showCost: false } });
     try {
@@ -1374,7 +1401,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   it('the week (1.4.0): every counted answer adds its cost and every finished turn its time to usage.week (config.json: numbers and the week id only)', async (ctx) => {
     const now = new Date();
     if (weekId(now.getTime() + 60_000) !== weekId(now.getTime())) return ctx.skip(); // (a run across the start of a week)
-    const transcript = path.join(env3.root, 'sess-week.jsonl');
+    const transcript = planted('sess-week.jsonl');
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-week', transcript_path: transcript };
     const week = async () => (await c.call('config.get', {})).usage.week as { id: string; usd: number; workMs: number };
@@ -1393,7 +1420,7 @@ describe('the terminal Claude, live (bundled daemon, hooks through the real jaff
   });
 
   it('the live figure follows the switches: nothing is read with the cost or its live part off', async () => {
-    const transcript = path.join(env3.root, 'sess-nolive.jsonl');
+    const transcript = planted('sess-nolive.jsonl');
     const reply = (id: string) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', content: [], usage: { input_tokens: 1, output_tokens: 10 } } })}\n`;
     fs.writeFileSync(transcript, '');
     const base = { session_id: 'sess-nolive', transcript_path: transcript };

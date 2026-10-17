@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { newTally, summarizeTally, summarizeTurn, tallyLines, type Tally, type TurnCost } from '../../shared/claude-cost';
+import { openTranscript } from './transcript-open';
 
 /**
  * Hooks are async, so the Stop of a session's last answer can arrive after its SessionEnd (`claude -p` ends at once): where that answer
@@ -11,14 +11,14 @@ export const STOP_AFTER_END_GRACE_MS = 10_000;
 /** A long agentic answer can run to a few megabytes of transcript; beyond this only the end of it is read. */
 export const MAX_READ = 24 * 1024 * 1024;
 
-/** Where a transcript stands now, so a turn can be measured from here. 0 when it is not there (yet). */
-export function transcriptSize(file: string | undefined): number {
-  if (!file) return 0;
-  try {
-    return fs.statSync(file).size;
-  } catch {
-    return 0;
-  }
+/**
+ * Where a transcript stands now, so a turn can be measured from here. 0 when it is not there (yet), or not a transcript inside
+ * `<claudeDir>/projects` (1.4.1: every reader opens it through `openTranscript`).
+ */
+export async function transcriptSize(file: string | undefined, claudeDir: string): Promise<number> {
+  const t = file ? await openTranscript(claudeDir, file) : null;
+  await t?.fh.close().catch(() => undefined);
+  return t?.size ?? 0;
 }
 
 /**
@@ -26,14 +26,16 @@ export function transcriptSize(file: string | undefined): number {
  * in their `usage`, nothing else is kept (not the text, not the tool calls). Undefined when there is nothing to count or the file
  * is unreadable.
  */
-export function readTurnCost(file: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): TurnCost | undefined {
-  return readTurn(file, fromOffset, toOffset, maxBytes).cost;
+export async function readTurnCost(file: string, claudeDir: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): Promise<TurnCost | undefined> {
+  return (await readTurn(file, claudeDir, fromOffset, toOffset, maxBytes)).cost;
 }
 
 /** (1.4.0) `readTurnCost`, and from the same read the context of the latest response (its input tokens and its model's id, for the context meter). */
-export function readTurn(file: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): ReturnType<typeof summarizeTurn> {
+export async function readTurn(file: string, claudeDir: string, fromOffset: number, toOffset: number = Infinity, maxBytes: number = MAX_READ): Promise<ReturnType<typeof summarizeTurn>> {
+  const t = await openTranscript(claudeDir, file);
+  if (!t) return {};
   try {
-    const size = Math.min(fs.statSync(file).size, toOffset);
+    const size = Math.min(t.size, toOffset);
     // a transcript shorter than where the turn began was replaced: nothing to say about it
     if (size <= fromOffset) return {};
     const from = Math.max(fromOffset, size - maxBytes);
@@ -41,11 +43,10 @@ export function readTurn(file: string, fromOffset: number, toOffset: number = In
     const cut = from > fromOffset;
     const start = cut ? from - 1 : from;
     const buf = Buffer.alloc(size - start);
-    const fd = fs.openSync(file, 'r');
-    try {
-      fs.readSync(fd, buf, 0, buf.length, start);
-    } finally {
-      fs.closeSync(fd);
+    for (let at = 0; at < buf.length; ) {
+      const { bytesRead } = await t.fh.read(buf, at, buf.length - at, start + at);
+      if (bytesRead === 0) break;
+      at += bytesRead;
     }
     const text = buf.toString('utf8');
     const lines = text.split('\n');
@@ -53,6 +54,8 @@ export function readTurn(file: string, fromOffset: number, toOffset: number = In
     return summarizeTurn(lines);
   } catch {
     return {};
+  } finally {
+    await t.fh.close().catch(() => undefined);
   }
 }
 
@@ -88,10 +91,13 @@ interface LiveState {
  */
 export class LiveCost {
   private states = new Map<string, LiveState>();
+  private claudeDir: string;
   private tickBytes: number;
   private chunkBytes: number;
 
-  constructor(o: { tickBytes?: number; chunkBytes?: number } = {}) {
+  /** `claudeDir`: Claude Code's folder; only transcripts inside its `projects` are read (`openTranscript`). */
+  constructor(o: { claudeDir: string; tickBytes?: number; chunkBytes?: number }) {
+    this.claudeDir = o.claudeDir;
     this.tickBytes = o.tickBytes ?? LIVE_TICK_BYTES;
     this.chunkBytes = o.chunkBytes ?? LIVE_CHUNK_BYTES;
   }
@@ -101,12 +107,8 @@ export class LiveCost {
    * `budget`: the bytes the tick may still read, shared by the sessions of one tick (what this read takes is taken from it).
    */
   async read(id: string, file: string, start: number, budget: { left: number } = { left: this.tickBytes }): Promise<ReturnType<typeof summarizeTurn> | undefined> {
-    let fh: fs.promises.FileHandle;
-    try {
-      fh = await fs.promises.open(file, 'r');
-    } catch {
-      return undefined;
-    }
+    const fh = (await openTranscript(this.claudeDir, file))?.fh;
+    if (!fh) return undefined;
     try {
       const st = await fh.stat();
       if (!st.isFile()) return undefined;

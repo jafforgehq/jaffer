@@ -757,7 +757,9 @@ describe('Jaffer UI end to end', () => {
 
   it('what each answer cost: a quiet figure in the title bar after every answer, with the session total, and Settings turns it off', async () => {
     fs.mkdirSync(shots, { recursive: true });
-    const transcript = path.join(shots, 'cost-transcript.jsonl');
+    // (1.4.1) where Claude Code keeps transcripts: the cost readers read only inside <CLAUDE_CONFIG_DIR>/projects
+    fs.mkdirSync(path.join(env.userHome, '.claude', 'projects', '-cost'), { recursive: true });
+    const transcript = path.join(env.userHome, '.claude', 'projects', '-cost', 'cost-transcript.jsonl');
     const reply = (id: string, usage: object) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', role: 'assistant', content: [{ type: 'text', text: 'done' }], usage } })}\n`;
     fs.writeFileSync(transcript, '');
     for (const s of (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions) await sendHook('SessionEnd', { session_id: s.id });

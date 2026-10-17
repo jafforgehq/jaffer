@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,10 +9,15 @@ import { makeEnv, type TestEnv } from './helpers/env';
 /** (1.4.1) The live cost figure reads only what was appended since its last read, and comes to the same numbers as a full read. */
 
 let env: TestEnv;
+let claudeDir: string;
+let dir: string;
 let file: string;
 beforeEach(() => {
   env = makeEnv();
-  file = path.join(env.root, 'session.jsonl');
+  claudeDir = path.join(env.userHome, '.claude');
+  dir = path.join(claudeDir, 'projects', '-p');
+  fs.mkdirSync(dir, { recursive: true });
+  file = path.join(dir, 'session.jsonl');
 });
 afterEach(() => env.cleanup());
 
@@ -62,7 +68,7 @@ describe('LiveCost', () => {
       const bytes = Buffer.from(before + turn);
       const start = Buffer.byteLength(before);
       fs.writeFileSync(file, bytes.subarray(0, start));
-      const live = new LiveCost({ tickBytes: 64 + Math.floor(r() * 4096), chunkBytes: 1 + Math.floor(r() * 256) });
+      const live = new LiveCost({ claudeDir, tickBytes: 64 + Math.floor(r() * 4096), chunkBytes: 1 + Math.floor(r() * 256) });
       let at = start;
       let last: Awaited<ReturnType<LiveCost['read']>>;
       while (at < bytes.length) {
@@ -81,7 +87,7 @@ describe('LiveCost', () => {
   it('a response streamed over lines read in different ticks counts once (by its id, the largest numbers win)', async () => {
     const line = (output: number) => `${JSON.stringify({ type: 'assistant', message: { id: 'm1', model: 'claude-sonnet-5-5', usage: { input_tokens: 10, output_tokens: output } } })}\n`;
     fs.writeFileSync(file, line(5));
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     expect((await live.read('s', file, 0))!.cost).toMatchObject({ output: 5, messages: 1 });
     fs.appendFileSync(file, line(300));
     expect((await live.read('s', file, 0))!.cost).toMatchObject({ input: 10, output: 300, messages: 1 });
@@ -90,8 +96,8 @@ describe('LiveCost', () => {
   });
 
   it('nothing new to say about an unchanged, empty or missing file', async () => {
-    const live = new LiveCost();
-    expect(await live.read('s', path.join(env.root, 'missing.jsonl'), 0)).toBeUndefined();
+    const live = new LiveCost({ claudeDir });
+    expect(await live.read('s', path.join(dir, 'missing.jsonl'), 0)).toBeUndefined();
     fs.writeFileSync(file, '');
     expect(await live.read('s', file, 0)).toBeUndefined();
     fs.writeFileSync(file, `${JSON.stringify({ type: 'assistant', message: { id: 'a', model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: 2 } } })}\n`);
@@ -104,7 +110,7 @@ describe('LiveCost', () => {
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: output } } })}\n`;
     const before = reply('old', 1_000_000);
     fs.writeFileSync(file, before + reply('a', 100) + reply('b', 200) + reply('c', 300));
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     const start = Buffer.byteLength(before);
     expect((await live.read('s', file, start))!.cost!.output).toBe(600);
     fs.truncateSync(file, start); // (fs.truncate keeps the inode: only the size says it)
@@ -115,9 +121,9 @@ describe('LiveCost', () => {
   it('a transcript replaced by another file (a new inode) starts again from the turn’s start, even when it is longer', async () => {
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: output } } })}\n`;
     fs.writeFileSync(file, reply('a', 100));
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     expect((await live.read('s', file, 0))!.cost!.output).toBe(100);
-    const other = path.join(env.root, 'other.jsonl');
+    const other = path.join(dir, 'other.jsonl');
     fs.writeFileSync(other, reply('x', 1) + reply('y', 2) + reply('z', 4));
     fs.renameSync(other, file);
     expect((await drain(live, 's', file, 0))!.cost).toMatchObject({ output: 7, messages: 3 });
@@ -126,7 +132,7 @@ describe('LiveCost', () => {
   it('a new turn (another start) or a forgotten session starts from nothing', async () => {
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: output } } })}\n`;
     fs.writeFileSync(file, reply('a', 100));
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     await live.read('s', file, 0);
     const end = fs.statSync(file).size;
     fs.appendFileSync(file, reply('b', 5));
@@ -141,7 +147,7 @@ describe('LiveCost', () => {
     const line = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } })}\n`;
     fs.writeFileSync(file, line.repeat(Math.ceil((10 * 1024 * 1024) / line.length)));
     const size = fs.statSync(file).size;
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     let prev = 0;
     for (let i = 0; i < 3; i++) {
       await live.read('s', file, 0);
@@ -156,7 +162,7 @@ describe('LiveCost', () => {
   it('a line without a newline is never kept past 8 MB: it is dropped up to its newline, and the lines after it count again', async () => {
     const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: output } } })}\n`;
     fs.writeFileSync(file, `${reply('a', 100)}{"type":"user","message":{"content":"`);
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     expect((await live.read('s', file, 0))!.cost).toMatchObject({ output: 100, messages: 1 });
     // a 30 MB line, written while the answer goes on, not ended yet
     const piece = 'z'.repeat(1024 * 1024);
@@ -177,7 +183,7 @@ describe('LiveCost', () => {
   it('one budget of 4 MB a tick is shared by every session', async () => {
     const line = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } })}\n`;
     fs.writeFileSync(file, line.repeat(Math.ceil((3 * 1024 * 1024) / line.length)));
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     const ids = ['a', 'b', 'c', 'd'];
     const total = () => ids.reduce((n, id) => n + (live.offset(id) ?? 0), 0);
     let prev = 0;
@@ -194,13 +200,13 @@ describe('LiveCost', () => {
     const r = rng(7);
     let body = '';
     while (body.length < 2 * 1024 * 1024) body += transcript(r, 200) + `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ö'.repeat(5000) }] } })}\n`;
-    const big = path.join(env.root, 'big.jsonl');
+    const big = path.join(dir, 'big.jsonl');
     const fd = fs.openSync(big, 'w');
     while (fs.fstatSync(fd).size < MAX_READ + 1024 * 1024) fs.writeSync(fd, body);
     fs.closeSync(fd);
     const size = fs.statSync(big).size;
     const ids = ['a', 'b', 'c', 'd'];
-    const live = new LiveCost();
+    const live = new LiveCost({ claudeDir });
     // a beat on every turn of the event loop: between two beats at most one piece may have been read (and parsed). (A session's first
     // offset is where its read begins, of a turn this long only its end: that is not read yet)
     const seen = new Map<string, number>();
@@ -244,7 +250,7 @@ describe('LiveCost', () => {
     } finally {
       on = false;
     }
-    const full = readTurn(big, 0, size);
+    const full = await readTurn(big, claudeDir, 0, size);
     expect(results.size).toBe(4);
     for (const x of results.values()) expect(x).toEqual(full);
     expect(most).toBeLessThanOrEqual(LIVE_CHUNK_BYTES);
@@ -252,6 +258,22 @@ describe('LiveCost', () => {
     expect(beats).toBeGreaterThanOrEqual(Math.floor(bytes / LIVE_CHUNK_BYTES));
     expect(gap).toBeLessThan(500); // (a loose bound: a Mac busy with other work can pause any process)
   }, 60_000);
+});
+
+describe('the live reader is confined (1.4.1)', () => {
+  it('reads nothing of a transcript outside <claudeDir>/projects, a link out of it, or a FIFO', async () => {
+    const line = `${JSON.stringify({ type: 'assistant', message: { id: 'm1', model: 'claude-sonnet-5-5', usage: { input_tokens: 10, output_tokens: 5 } } })}\n`;
+    const outside = path.join(env.root, 'outside.jsonl');
+    fs.writeFileSync(outside, line);
+    const live = new LiveCost({ claudeDir });
+    expect(await live.read('s', outside, 0)).toBeUndefined();
+    fs.symlinkSync(outside, file);
+    expect(await live.read('s', file, 0)).toBeUndefined();
+    fs.unlinkSync(file);
+    execFileSync('mkfifo', [file]);
+    expect(await live.read('s', file, 0)).toBeUndefined();
+    expect(live.offset('s')).toBeUndefined();
+  });
 });
 
 describe('no sync file call on the live path', () => {

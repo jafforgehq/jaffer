@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -139,6 +140,13 @@ describe('readSetup: what Claude Code is set up with, from its files only', () =
     expect(s.rules).toEqual([{ path: '~/work/app/CLAUDE.md', kind: 'project', bytes: 5, scoped: false }]);
     expect(s.skills).toEqual([]);
     expect(s.agents).toEqual([]);
+  });
+
+  it('(1.4.1) a FIFO where a settings, .mcp.json or CLAUDE.md file would be is not waited on (opening one would block a thread for ever)', async () => {
+    fs.mkdirSync(path.join(proj, '.claude'), { recursive: true });
+    for (const f of ['.mcp.json', 'CLAUDE.md', '.claude/settings.json', '.claude/settings.local.json']) execFileSync('mkfifo', [path.join(proj, f)]);
+    const r = await Promise.race([read(), new Promise<'hung'>((res) => setTimeout(() => res('hung'), 3_000))]);
+    expect(r).not.toBe('hung');
   });
 
   it('follows a link only while it stays inside the folder it was found in', async () => {

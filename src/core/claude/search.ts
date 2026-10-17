@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { lines, readAt, transcriptFiles } from './history';
+import { openTranscript } from './transcript-open';
 
 /**
  * Deep search (1.4.0, only with `permissions.deepSearch`): which past conversations hold a text, and how often. It looks only at the
@@ -41,21 +41,20 @@ export async function searchConversations(claudeDir: string, q: unknown, opts: {
       partial = true;
       break;
     }
-    const n = await countFile(t!.root, f.file, needle, raw);
+    const n = await countFile(claudeDir, f.file, needle, raw);
     if (n) hits.set(f.id, Math.min(MAX_COUNT, (hits.get(f.id) ?? 0) + n));
     await new Promise((r) => setImmediate(r)); // (the daemon also relays the terminals: let it between files)
   }
   return { hits: [...hits].map(([id, count]) => ({ id, count })), partial };
 }
 
-async function countFile(root: string, file: string, needle: string, raw: string): Promise<number> {
+async function countFile(claudeDir: string, file: string, needle: string, raw: string): Promise<number> {
   let fh: fs.promises.FileHandle | undefined;
   try {
-    const real = await fs.promises.realpath(file);
-    if (!real.startsWith(root + path.sep)) return 0;
-    fh = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const st = await fh.stat();
-    if (!st.isFile()) return 0;
+    const opened = await openTranscript(claudeDir, file);
+    if (!opened) return 0;
+    fh = opened.fh;
+    const st = { size: opened.size };
     const ls =
       st.size <= 2 * HALF
         ? lines(await readAt(fh, 0, st.size), true, true)

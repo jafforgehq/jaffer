@@ -85,6 +85,11 @@ export function isAllowedFeedUrl(u: string): boolean {
   return /^https:\/\/\S+$/i.test(u) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?(\/\S*)?$/i.test(u);
 }
 
+/** (1.4.1) The feed JAFFER_UPDATE_URL names, honoured only in a build that is not packaged: a packaged app always updates from GitHub. */
+export function feedOverride(feed: string | undefined, packaged: boolean): string | undefined {
+  return !packaged && feed && isAllowedFeedUrl(feed) ? feed : undefined;
+}
+
 /** Why an app that cannot replace itself should not check for updates (null when it can). The install would fail after the session had ended. */
 export function bundleProblem(bundlePath: string, writableParent: boolean): string | null {
   if (bundlePath.includes('/AppTranslocation/')) return 'Jaffer is running from a temporary location. Move it to your Applications folder and open it again to turn updates on.';

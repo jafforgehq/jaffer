@@ -5,6 +5,7 @@ import { COMMAND_HEAD } from '../../shared/process-badge';
 import { redactText } from '../../shared/redact';
 import { isSessionId } from '../../shared/session-id';
 import { MAX_READ } from './cost';
+import { openTranscript } from './transcript-open';
 
 /**
  * Past Claude Code conversations, from the transcripts Claude Code keeps in `<claudeDir>/projects/<folder>/<session id>.jsonl`. Read
@@ -50,13 +51,13 @@ const CACHE_MAX = 500;
 export async function listConversations(opts: { claudeDir: string; limit?: number; withCost?: boolean; include?: unknown }): Promise<Conversation[]> {
   const t = await transcriptFiles(opts.claudeDir);
   if (!t) return []; // Claude Code never ran here
-  const { root, found } = t;
+  const { found } = t;
   const limit = opts.limit ?? 50;
   const include = new Set(Array.isArray(opts.include) ? opts.include.slice(0, 50).filter((x): x is string => typeof x === 'string' && isSessionId(x)) : []);
   const out: Conversation[] = [];
   for (const [i, f] of found.entries()) {
     if (i >= limit && !include.has(f.id)) continue;
-    const conv = await readOne(root, f.file, f.id, i < limit && out.length < COSTED, opts.withCost === true, i < limit ? out.length < COSTED : true);
+    const conv = await readOne(opts.claudeDir, f.file, f.id, i < limit && out.length < COSTED, opts.withCost === true, i < limit ? out.length < COSTED : true);
     if (conv) out.push(conv);
   }
   return out;
@@ -187,7 +188,7 @@ async function measure(claudeDir: string, now: number, budget: Budget): Promise<
   partial ||= budget.left < 0;
   const biggest: Storage['biggest'] = [];
   for (const f of [...sized].sort((a, b) => b.bytes - a.bytes).slice(0, 10)) {
-    const conv = await readOne(t.root, f.file, f.id, false, false, false);
+    const conv = await readOne(claudeDir, f.file, f.id, false, false, false);
     const title = cache.get(f.file)?.title;
     biggest.push({ id: f.id, ...(typeof title === 'string' ? { title } : {}), ...(conv?.cwd ? { cwd: conv.cwd } : {}), bytes: f.bytes, endedAt: conv?.endedAt ?? 0 });
   }
@@ -248,15 +249,13 @@ async function names(dir: string): Promise<string[]> {
   return fs.promises.readdir(dir).catch(() => []);
 }
 
-async function readOne(root: string, file: string, id: string, newest: boolean, wantCost: boolean, titled: boolean): Promise<Conversation | undefined> {
+async function readOne(claudeDir: string, file: string, id: string, newest: boolean, wantCost: boolean, titled: boolean): Promise<Conversation | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
-    // confined to the projects folder: the real path stays inside it, and the file is opened without following a link swapped in since
-    const real = await fs.promises.realpath(file);
-    if (!real.startsWith(root + path.sep)) return undefined;
-    fh = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // confined to the projects folder (`openTranscript`)
+    fh = (await openTranscript(claudeDir, file))?.fh;
+    if (!fh) return undefined;
     const st = await fh.stat();
-    if (!st.isFile()) return undefined;
     const stamp = `${st.size}:${st.mtimeMs}`;
     let seen = cache.get(file);
     if (seen?.stamp !== stamp) {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Emitter } from '../src/shared/emitter';
 import { makePaths, resolveHome } from '../src/shared/paths';
-import { errMsg, ensureDir, readJson, writeFileAtomic, writeJson } from '../src/shared/util';
+import { errMsg, ensureDir, readJson, tightenDir, writeFileAtomic, writeJson } from '../src/shared/util';
 import { makeEnv, type TestEnv } from './helpers/env';
 
 let env: TestEnv;
@@ -78,6 +78,38 @@ describe('files', () => {
   it('ensureDir is happy with a folder that is already there', () => {
     ensureDir(f('x'));
     expect(() => ensureDir(f('x'))).not.toThrow();
+  });
+});
+
+describe('tightenDir (1.4.1)', () => {
+  const mode = (p: string) => fs.statSync(p).mode & 0o777;
+  it('makes a folder of this user that others can read private (0700), and leaves a private or stricter one alone', async () => {
+    const open = path.join(env.root, 'open');
+    fs.mkdirSync(open);
+    fs.chmodSync(open, 0o755);
+    await tightenDir(open);
+    expect(mode(open)).toBe(0o700);
+    const strict = path.join(env.root, 'strict');
+    fs.mkdirSync(strict);
+    fs.chmodSync(strict, 0o500);
+    await tightenDir(strict);
+    expect(mode(strict)).toBe(0o500);
+    fs.chmodSync(strict, 0o700);
+  });
+
+  it('never follows a link, and never throws (a missing folder, a file)', async () => {
+    const target = path.join(env.root, 'target');
+    fs.mkdirSync(target);
+    fs.chmodSync(target, 0o755);
+    fs.symlinkSync(target, path.join(env.root, 'link'));
+    await tightenDir(path.join(env.root, 'link'));
+    expect(mode(target)).toBe(0o755);
+    const file = path.join(env.root, 'file');
+    fs.writeFileSync(file, 'x');
+    fs.chmodSync(file, 0o644);
+    await tightenDir(file);
+    expect(mode(file)).toBe(0o644);
+    await expect(tightenDir(path.join(env.root, 'missing'))).resolves.toBeUndefined();
   });
 });
 

@@ -139,14 +139,25 @@ export class RpcServer {
     this.server = net.createServer((socket) => this.accept(socket));
     await new Promise<void>((resolve, reject) => {
       this.server!.once('error', reject);
-      this.server!.listen(socketPath, () => {
-        try {
-          fs.chmodSync(socketPath, 0o600);
-        } catch {
-          /* best effort */
-        }
-        resolve();
-      });
+      // (1.4.1) the socket file is created 0600 (`listen` makes it before it returns: the umask is ours only that long), and chmod'ed again
+      let umask: number | undefined;
+      try {
+        umask = process.umask(0o177);
+      } catch {
+        /* (a worker thread may not set it: the chmod below still does) */
+      }
+      try {
+        this.server!.listen(socketPath, () => {
+          try {
+            fs.chmodSync(socketPath, 0o600);
+          } catch {
+            /* best effort */
+          }
+          resolve();
+        });
+      } finally {
+        if (umask !== undefined) process.umask(umask);
+      }
     });
   }
 

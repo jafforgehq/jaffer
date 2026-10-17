@@ -322,7 +322,9 @@ describe.skipIf(!OUT)('README screenshots', () => {
   it('the mole follows the Claude in the terminal: at work, waiting for you, then done', async () => {
     const session = path.join(repo, 'src/auth/session.ts');
     // where Claude Code would write the conversation: the answer's token counts are read from it (nothing else)
-    const transcript = path.join(tmp, 'demo-transcript.jsonl');
+    // (1.4.1: inside <CLAUDE_CONFIG_DIR>/projects, the only place the cost readers read)
+    fs.mkdirSync(path.join(userHome, '.claude', 'projects', '-demo'), { recursive: true });
+    const transcript = path.join(userHome, '.claude', 'projects', '-demo', 'demo-transcript.jsonl');
     fs.writeFileSync(transcript, '');
     /** One Claude Code hook event, as `jaffer hook` would deliver it from inside this terminal. */
     const hook = (name: string, over: Record<string, unknown> = {}) => page.evaluate((p) => window.jaffer.call('claude.event', p), { session_id: 'demo-1', hook_event_name: name, cwd: repo, transcript_path: transcript, ...over });
