@@ -674,6 +674,13 @@ export function Settings({ at }: { at?: Section } = {}): VNode {
                   <option value="underline">Underline</option>
                 </select>
               </Field>
+              <Field label="Screen reader support" hint="Exposes terminal text to VoiceOver. Slower with lots of output. Auto turns it on when macOS reports a screen reader.">
+                <select value={['on', 'off'].includes(c.terminal?.screenReader) ? c.terminal.screenReader : 'auto'} onChange={(e) => set({ terminal: { screenReader: (e.target as HTMLSelectElement).value } })}>
+                  <option value="auto">Auto</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </Field>
               <Field label="Option key acts as Meta" hint="word movement and Claude Code shortcuts">
                 <Switch checked={c.appearance.optionAsMeta} onChange={(v) => set({ appearance: { optionAsMeta: v } })} />
               </Field>

@@ -10,9 +10,11 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, activeTheme, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, activeTheme, assistiveTech, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
+import { safeLinkUrl } from '../../shared/safe-link';
+import { screenReaderOn } from '../../shared/screen-reader';
 import { redactText } from '../../shared/redact';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { windowOpacity, xtermTheme } from '../themes';
@@ -35,6 +37,26 @@ export const terminals = new Map<string, TermHandle>();
 export const FIND_OPTS = { decorations: { matchBackground: '#ffcc0055', matchOverviewRuler: '#ffcc00', activeMatchBackground: '#ff8a4c88', activeMatchColorOverviewRuler: '#ff8a4c' } };
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
+
+let webOnlyNoted = false;
+/**
+ * (1.4.1) OSC 8 links (`ESC ] 8 ; ; uri`): a ⌘-click opens an http(s) link in the browser, like a printed URL; anything else does nothing
+ * and the window says so once. xterm's own default would ask with `confirm()` and open an empty window.
+ */
+const linkHandler = {
+  allowNonHttpProtocols: false,
+  activate(event: MouseEvent, uri: string) {
+    if (!event.metaKey) return;
+    const url = safeLinkUrl(uri);
+    if (url) void window.jaffer.openExternal(url);
+    else if (!webOnlyNoted) {
+      webOnlyNoted = true;
+      toast({ kind: 'info', text: 'Only web links open from the terminal.' }, 4000);
+    }
+  },
+  hover() {},
+  leave() {},
+};
 
 /** `base` joined with a relative path, `.` and `..` resolved (no file system: the app checks that the result exists). */
 function joinPath(base: string, rel: string): string {
@@ -91,6 +113,8 @@ export function TerminalView({ pane }: { pane: string }) {
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
       overviewRuler: { width: 10 }, // search matches are marked there
+      linkHandler,
+      screenReaderMode: screenReaderOn(c.terminal?.screenReader ?? 'auto', assistiveTech.value),
       theme: xtermTheme(theme, windowOpacity(a)),
     });
     const fit = new FitAddon();
@@ -351,6 +375,7 @@ export function TerminalView({ pane }: { pane: string }) {
         }
       });
     });
+    const stopReader = effect(() => void (term.options.screenReaderMode = screenReaderOn(cfg.value?.terminal?.screenReader ?? 'auto', assistiveTech.value)));
     const stopFocus = effect(() => {
       if (activePane.value === pane && !overlay.value && windowFocused.value && daemonUp.value) term.focus();
     });
@@ -362,6 +387,7 @@ export function TerminalView({ pane }: { pane: string }) {
       clearTimeout(resizeTimer); // (a closed terminal sends no resize)
       stop();
       stopFocus();
+      stopReader();
       stopHold();
       off();
       ro.disconnect();

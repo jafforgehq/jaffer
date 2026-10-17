@@ -182,15 +182,26 @@ describe('terminal.blocks', () => {
   });
 });
 
-const TERMINAL_DEFAULTS = { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true };
+const TERMINAL_DEFAULTS = { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true, screenReader: 'auto' };
 
 describe('terminal: paste guard, ruler, editor links, images, port links', () => {
   it('have their defaults, keep a choice, and refuse a value of the wrong kind', () => {
     const store = new ConfigStore(env.paths);
     store.patch({ terminal: { pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false } });
-    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false, screenReader: 'auto' });
     store.patch({ terminal: { pasteGuard: 'yes', ruler: '80', editorUrl: 7, images: 1, portLinks: null } as never });
-    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false });
+    expect(new ConfigStore(env.paths).get().terminal).toEqual({ blocks: true, pasteGuard: false, ruler: 100, editorUrl: 'vscode://file/{path}:{line}:{col}', images: false, portLinks: false, screenReader: 'auto' });
+  });
+});
+
+describe('terminal.screenReader (1.4.1)', () => {
+  it('is the text auto by default; a text is kept, a value of another kind is not', () => {
+    expect(DEFAULT_CONFIG.terminal.screenReader).toBe('auto');
+    const store = new ConfigStore(env.paths);
+    store.patch({ terminal: { screenReader: 'on' } });
+    expect(new ConfigStore(env.paths).get().terminal.screenReader).toBe('on');
+    store.patch({ terminal: { screenReader: true } } as never);
+    expect(new ConfigStore(env.paths).get().terminal.screenReader).toBe('on');
   });
 });
 

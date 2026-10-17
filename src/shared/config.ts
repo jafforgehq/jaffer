@@ -74,6 +74,8 @@ export interface JafferConfig {
     images: boolean;
     /** A chip in the title bar for a local server the running command mentions (`localhost:5173`); a click opens it in the browser. */
     portLinks: boolean;
+    /** (1.4.1) Exposes the terminal's text to VoiceOver: `auto` (when macOS reports a screen reader), `on` or `off`. Any other text counts as `auto`. */
+    screenReader: string;
   };
   /** What Jaffer may read or do (1.4.0), each switch in Settings → Privacy and permissions and at the end of first run. `claude.approvals` is the fifth. */
   permissions: {
@@ -172,7 +174,7 @@ export const DEFAULT_CONFIG: JafferConfig = {
   },
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false, dailyWorkBudgetMin: 0, projectBudgets: [] },
-  terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true },
+  terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true, screenReader: 'auto' },
   permissions: { explain: false, deepSearch: false, resumeTyping: true, trash: true },
   updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true, weeklyDigest: true },

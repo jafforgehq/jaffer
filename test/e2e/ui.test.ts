@@ -5829,6 +5829,108 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  // 1.4.1 (spec item 3): screen reader support follows terminal.screenReader and what macOS reports
+  it('screen reader: on exposes the terminal text to VoiceOver in every pane, off does not, auto follows the app.accessibility event, and the Settings select writes the key', async () => {
+    const trees = () => page.locator('.term .xterm-accessibility').count();
+    const assistive = (on: boolean) => page.evaluate((v) => (window as any).__event('app.accessibility', v), on);
+    try {
+      await assistive(false);
+      await cfgPatch({ terminal: { screenReader: 'auto' } });
+      await sleep(200);
+      expect(await trees()).toBe(0); // (auto, nothing reported: off)
+      await assistive(true);
+      await until(async () => (await trees()) === 1, 5_000, 'auto to follow a screen reader being reported');
+      await assistive(false);
+      await until(async () => (await trees()) === 0, 5_000, 'auto to follow the screen reader going away');
+      await cfgPatch({ terminal: { screenReader: 'on' } });
+      await until(async () => (await trees()) === 1, 5_000, 'on to expose the text');
+      await cfgPatch({ terminal: { screenReader: 'off' } });
+      await assistive(true);
+      await sleep(300);
+      expect(await trees()).toBe(0); // (off wins over a reported screen reader)
+      await cfgPatch({ terminal: { screenReader: 'banana' } });
+      await until(async () => (await trees()) === 1, 5_000, 'an unknown value to count as auto');
+      await assistive(false);
+      await until(async () => (await trees()) === 0, 5_000, 'an unknown value to follow the screen reader going away');
+      // every pane, also one opened after the setting
+      await cfgPatch({ terminal: { screenReader: 'on' } });
+      await menu('split-terminal');
+      await until(async () => (await page.locator('.panes > .pane').count()) === 2, 10_000, 'a second pane');
+      await until(async () => (await trees()) === 2, 5_000, 'both panes to expose their text');
+      await menu('close-terminal');
+      await until(async () => (await page.locator('.panes > .pane').count()) === 1, 10_000, 'the second pane to close');
+      // the select
+      await cfgPatch({ terminal: { screenReader: 'auto' } });
+      await openSettings('Appearance');
+      const field = page.locator('label.field', { hasText: 'Screen reader support' });
+      expect(await field.locator('select option').allTextContents()).toEqual(['Auto', 'On', 'Off']);
+      expect(await field.textContent()).toContain('Exposes terminal text to VoiceOver. Slower with lots of output. Auto turns it on when macOS reports a screen reader.');
+      expect(await field.locator('select').inputValue()).toBe('auto');
+      await field.locator('select').selectOption('on');
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).terminal.screenReader === 'on', 5_000, 'the select to reach the config');
+      await until(async () => (await trees()) === 1, 5_000, 'the select to expose the text');
+      await closeSettings();
+    } finally {
+      await assistive(false);
+      await cfgPatch({ terminal: { screenReader: 'auto' } });
+      if ((await page.locator('.panes > .pane').count()) > 1) await menu('close-terminal');
+      await until(async () => (await trees()) === 0, 5_000, 'the screen reader tree to go away again');
+    }
+  }, 60_000);
+
+  // 1.4.1 (spec item 4): OSC 8 links open only with ⌘, only http(s), through openExternal
+  it('OSC 8 links: ⌘-click opens an http(s) link, a click alone and every other link do nothing, anything else says so once', async () => {
+    const opened = () => page.evaluate(() => (window as any).__opened as string | undefined);
+    const reset = () => page.evaluate(() => ((window as any).__opened = undefined));
+    const activate = (meta: boolean, uri: string) =>
+      page.evaluate(([m, u]) => (window as any).__jaffer.terminals.get('main').term.options.linkHandler.activate({ metaKey: m } as MouseEvent, u, { start: { x: 1, y: 1 }, end: { x: 2, y: 1 } }), [meta, uri] as const);
+    const note = () => page.locator('.toast-text', { hasText: 'Only web links open from the terminal.' }).count();
+    await page.click('.term');
+    await enter(`printf '\\e]8;;https://example.com/x\\e\\\\LINKTEXT\\e]8;;\\e\\\\\\n'`);
+    const where = await until(
+      () =>
+        page.evaluate(() => {
+          const b = (window as any).__jaffer.terminals.get('main').term.buffer.active;
+          for (let y = b.length - 1; y >= 0; y--) if (b.getLine(y)!.translateToString(true) === 'LINKTEXT') return { row: y - b.viewportY };
+          return null;
+        }),
+      10_000,
+      'the printed link text',
+    );
+    const click = async (meta: boolean) => {
+      const box = (await page.locator('.term .xterm-screen').boundingBox())!;
+      const dims = await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term._core._renderService.dimensions.css.cell);
+      await page.mouse.move(box.x + 3.5 * dims.width, box.y + (where.row + 0.5) * dims.height);
+      await sleep(250); // (the link is found on hover)
+      if (meta) await page.keyboard.down('Meta');
+      await page.mouse.down();
+      await page.mouse.up();
+      if (meta) await page.keyboard.up('Meta');
+    };
+    await reset();
+    await click(false);
+    await sleep(300);
+    expect(await opened()).toBeUndefined();
+    await click(true);
+    await until(async () => (await opened()) === 'https://example.com/x', 3_000, 'the OSC 8 link to open on ⌘-click');
+    // the handler itself
+    await reset();
+    await activate(false, 'https://example.com/y');
+    expect(await opened()).toBeUndefined(); // (no ⌘)
+    expect(await note()).toBe(0); // (and nothing said about it)
+    await activate(true, 'http://example.com/z');
+    expect(await opened()).toBe('http://example.com/z');
+    await reset();
+    await activate(true, 'javascript:alert(1)');
+    await activate(true, 'file:///etc/passwd');
+    await activate(true, 'https://user:pass@example.com/');
+    await activate(true, 'https://example.com/' + 'a'.repeat(2100));
+    await activate(true, 'vscode://file/etc/passwd');
+    expect(await opened()).toBeUndefined();
+    expect(await note()).toBe(1); // (once, however many)
+    expect(await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.options.linkHandler.allowNonHttpProtocols)).toBe(false);
+  }, 40_000);
+
   // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
   // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
   it('the run leaves nothing of the 1.2.0 tests behind: no approval waits, no stand-in for the window\'s calls, the seen version, the switches and the panel as a first start leaves them', async () => {

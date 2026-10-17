@@ -43,6 +43,8 @@ export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'r
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
+/** (1.4.1) macOS says a screen reader or other assistive technology is on (main sends `app.accessibility`). */
+export const assistiveTech = signal(false);
 export const ready = signal(false);
 /** The focused terminal (1.4.0: one of up to four): the keyboard, the menus, the find bar, resume and ⇧⌘C act on it. */
 export const activePane = signal('main');
@@ -521,6 +523,7 @@ export async function bootstrap(): Promise<void> {
     } else if (event === 'claude.state') setClaude(data);
     else if (event === 'claude.approvals') setApprovals(data);
     else if (event === 'update.state') updateState.value = data;
+    else if (event === 'app.accessibility') assistiveTech.value = data === true;
     else if (event === 'app.digest' && typeof data?.text === 'string') {
       // (1.4.0) the weekly digest, from main: its line, and the side panel a click away
       toast({ kind: 'info', text: data.text.slice(0, 200), actions: [{ label: 'Open panel', run: () => void (panelOpen() || patchPanel({ open: true })) }] });

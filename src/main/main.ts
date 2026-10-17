@@ -620,6 +620,7 @@ function createWindow(): void {
   });
   // a page that loads again (a reload) starts without focus mode
   win.webContents.on('did-finish-load', () => {
+    sendToRenderer('jaffer:event', 'app.accessibility', app.isAccessibilitySupportEnabled());
     void focus.release();
     void weeklyDigest();
   });
@@ -1254,6 +1255,8 @@ app.whenReady().then(async () => {
   }
   createWindow();
   app.on('activate', showWindow);
+  // (1.4.1) VoiceOver or another assistive technology starts or stops: the terminal's screen reader mode follows (Settings → Appearance)
+  app.on('accessibility-support-changed', (_e, enabled) => sendToRenderer('jaffer:event', 'app.accessibility', enabled));
   void setupUpdates();
   if (process.env.JAFFER_SMOKE) void smokeTest();
 });
