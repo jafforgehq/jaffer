@@ -633,7 +633,10 @@ function createWindow(): void {
   };
   win.webContents.on('render-process-gone', (_e, d) => {
     calm();
-    if (Date.now() - selfCrashedAt < SELF_CRASH_MS) return; // (the crash we caused to reload a hung page: it is reloading already)
+    if (selfCrashed) {
+      selfCrashed = false; // (the crash we caused to reload a hung page: it is reloading already)
+      return;
+    }
     void onPageGone(d.reason);
   });
   win.on('unresponsive', () => {
@@ -680,9 +683,8 @@ function createWindow(): void {
 
 /** (1.4.1) A page that still hangs this long after `unresponsive` is reloaded. */
 const HANG_MS = 10_000;
-/** A crash we caused (`forcefullyCrashRenderer`, to reload a hung page) is not counted as another one for this long. */
-const SELF_CRASH_MS = 5_000;
-let selfCrashedAt = 0;
+/** We crashed the renderer to reload a hung page (`forcefullyCrashRenderer`): the next `render-process-gone`, and only that one, is ours. */
+let selfCrashed = false;
 /** When the page was reloaded after a crash or a hang (the last few): too many in a minute ask instead (`crashAction`). */
 const crashReloads: number[] = [];
 let crashAsking = false;
@@ -690,7 +692,7 @@ let crashAsking = false;
 function reloadPage(w: BrowserWindow, hung: boolean): void {
   if (hung) {
     // a hung page cannot reload itself: its renderer is ended first, and the reload then starts a new one
-    selfCrashedAt = Date.now();
+    selfCrashed = true;
     w.webContents.forcefullyCrashRenderer();
   }
   w.webContents.reload();
@@ -713,7 +715,8 @@ async function onPageGone(reason: string): Promise<void> {
   let r: Electron.MessageBoxReturnValue;
   try {
     const opts = { type: 'warning' as const, ...CRASH_DIALOG, buttons: [...CRASH_DIALOG.buttons] };
-    r = w.isVisible() ? await dialog.showMessageBox(w, opts) : await dialog.showMessageBox(opts);
+    if (!w.isVisible()) showWindow(); // in front, as a sheet on the window (as the quit question): a hidden one would leave it behind other apps
+    r = await dialog.showMessageBox(w, opts);
   } finally {
     crashAsking = false;
   }

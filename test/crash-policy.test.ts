@@ -34,7 +34,7 @@ describe('crashAction', () => {
   it('the question: Reload is the default and what Esc does (a stray key must not end every terminal), Quit the other button', () => {
     expect(CRASH_DIALOG).toEqual({
       message: 'The window stopped responding.',
-      detail: 'Your terminals are still running. Reload the window, or quit Jaffer.',
+      detail: 'Your terminals are still running. Reload the window, or quit Jaffer (quitting ends them).',
       buttons: ['Reload', 'Quit'],
       defaultId: 0,
       cancelId: 0,

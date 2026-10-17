@@ -17,7 +17,7 @@ import { STAY_AWAKE } from '../shared/stay-awake-config';
 import { caffeinateHold } from '../core/session/caffeinate';
 import { isTerminalReport } from '../shared/terminal-reports';
 import { isClaudeCommand } from '../shared/process-badge';
-import { LiveCost, readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
+import { LIVE_TICK_BYTES, LiveCost, readTurn, STOP_AFTER_END_GRACE_MS, transcriptSize } from '../core/claude/cost';
 import { conversationStorage, listConversations, OLD_DAYS, oldConversations } from '../core/claude/history';
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
@@ -429,20 +429,23 @@ export class JafferService {
 
   /**
    * While a session works, and the cost figure with its live part is on: what the answer has cost so far, read every 2 s from where its
-   * prompt began (1.4.1: only what was appended since the last read, asynchronously, at most 4 MB a tick; `LiveCost`). Not while Claude
+   * prompt began (1.4.1: only what was appended since the last read, asynchronously, at most 4 MB a tick for all sessions together; `LiveCost`). Not while Claude
    * waits for the person: the last figure stays until it works again.
    */
   private refreshLive(): void {
     const c = this.config.get().claude;
-    const on = !this.stopping && c.showCost && c.liveCost && this.claudeWatcher.sessions().some((s) => s.state === 'working');
+    const sessions = this.claudeWatcher.sessions();
+    // where each answer was read to: kept while Claude waits for the person (it goes on from there), nothing with the switch off, and
+    // never for an ended session
+    if (this.stopping || !c.showCost || !c.liveCost) this.liveCost.keep([]);
+    else this.liveCost.keep(sessions.filter((s) => s.state !== 'ended' && this.turnStart.has(s.id)).map((s) => s.id));
+    const on = !this.stopping && c.showCost && c.liveCost && sessions.some((s) => s.state === 'working');
     if (on && !this.liveTimer) {
       this.liveTimer = setInterval(() => void this.readLive(), LIVE_COST_MS);
       this.liveTimer.unref?.();
     } else if (!on && this.liveTimer) {
       clearInterval(this.liveTimer);
       this.liveTimer = null;
-      // (while Claude waits, where each answer was read to is kept: it goes on from there; with the switch off nothing is kept)
-      if (this.stopping || !c.showCost || !c.liveCost) this.liveCost.keep([]);
     }
   }
 
@@ -450,12 +453,11 @@ export class JafferService {
     if (this.liveReading) return; // the last tick is still reading: this one is skipped
     this.liveReading = true;
     try {
-      const sessions = this.claudeWatcher.sessions();
-      this.liveCost.keep(sessions.filter((s) => s.state !== 'ended' && this.turnStart.has(s.id)).map((s) => s.id));
-      for (const s of sessions) {
+      const budget = { left: LIVE_TICK_BYTES }; // (one for every session of this tick)
+      for (const s of this.claudeWatcher.sessions()) {
         const start = this.turnStart.get(s.id);
         if (this.stopping || s.state !== 'working' || start === undefined || !s.transcriptPath) continue;
-        const r = await this.liveCost.read(s.id, s.transcriptPath, start);
+        const r = await this.liveCost.read(s.id, s.transcriptPath, start, budget);
         // (meanwhile the turn may have ended, a new one begun or the switch gone off: then this read says nothing)
         const c = this.config.get().claude;
         if (!r || this.stopping || !c.showCost || !c.liveCost || this.turnStart.get(s.id) !== start) continue;

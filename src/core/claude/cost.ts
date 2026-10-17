@@ -56,10 +56,12 @@ export function readTurn(file: string, fromOffset: number, toOffset: number = In
   }
 }
 
-/** (1.4.1) The live figure reads at most this much of a transcript a tick (every 2 s); a longer stretch is read on the next ticks. */
+/** (1.4.1) The live figure reads at most this much a tick (every 2 s), of all sessions' transcripts together; the rest on the next ticks. */
 export const LIVE_TICK_BYTES = 4 * 1024 * 1024;
 /** ... in pieces of this size, with a turn of the event loop between two: the daemon relays every terminal. */
-const LIVE_CHUNK_BYTES = 128 * 1024;
+export const LIVE_CHUNK_BYTES = 128 * 1024;
+/** A line not yet ended is kept up to this long (characters); a longer one (a huge tool result) is dropped up to its newline. */
+export const LIVE_TAIL_MAX = 8 * 1024 * 1024;
 
 interface LiveState {
   file: string;
@@ -72,14 +74,14 @@ interface LiveState {
   /** The last line read so far, not yet ended by a newline; the decoder holds a character cut by a read. */
   tail: string;
   decoder: StringDecoder;
-  /** The first read began inside a line (a turn longer than `MAX_READ`): everything up to the first newline is dropped. */
+  /** Everything up to the next newline is dropped: the first read began inside a line (a turn longer than `MAX_READ`), or the line grew past `LIVE_TAIL_MAX`. */
   skip: boolean;
   tally: Tally;
 }
 
 /**
  * (1.4.1) What the answer being written has cost so far, per session, read incrementally: each read takes only the bytes appended
- * since the last one (asynchronously, at most `tickBytes`), and only whole lines count, through the same tally as a full read
+ * since the last one (asynchronously, at most what is left of the tick's `budget`), and only whole lines count, through the same tally as a full read
  * (`summarizeTurn`), so the numbers are the same. A transcript that shrank below where it was read, or was replaced by another file,
  * is read again from the turn's start. Only the token counts are kept (the tally), never the text. Stop's count of the whole answer is
  * still the full read (`readTurn`).
@@ -94,8 +96,11 @@ export class LiveCost {
     this.chunkBytes = o.chunkBytes ?? LIVE_CHUNK_BYTES;
   }
 
-  /** What session `id`'s answer, begun at `start` in `file`, has cost so far; undefined when nothing new was read (or it cannot be). */
-  async read(id: string, file: string, start: number): Promise<ReturnType<typeof summarizeTurn> | undefined> {
+  /**
+   * What session `id`'s answer, begun at `start` in `file`, has cost so far; undefined when nothing new was read (or it cannot be).
+   * `budget`: the bytes the tick may still read, shared by the sessions of one tick (what this read takes is taken from it).
+   */
+  async read(id: string, file: string, start: number, budget: { left: number } = { left: this.tickBytes }): Promise<ReturnType<typeof summarizeTurn> | undefined> {
     let fh: fs.promises.FileHandle;
     try {
       fh = await fs.promises.open(file, 'r');
@@ -113,13 +118,14 @@ export class LiveCost {
         s = { file, start, dev: st.dev, ino: st.ino, offset: cut ? from - 1 : from, tail: '', decoder: new StringDecoder('utf8'), skip: cut, tally: newTally() };
         this.states.set(id, s);
       }
-      if (st.size <= s.offset) return undefined;
-      const end = Math.min(st.size, s.offset + this.tickBytes);
+      if (st.size <= s.offset || budget.left <= 0) return undefined;
+      const end = Math.min(st.size, s.offset + budget.left);
       const buf = Buffer.alloc(Math.min(this.chunkBytes, end - s.offset));
       while (s.offset < end) {
         const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, end - s.offset), s.offset);
         if (bytesRead === 0) break;
         s.offset += bytesRead;
+        budget.left -= bytesRead;
         this.add(s, s.decoder.write(buf.subarray(0, bytesRead)));
         if (s.offset < end) await new Promise((r) => setImmediate(r));
       }
@@ -140,7 +146,11 @@ export class LiveCost {
     }
     const nl = text.lastIndexOf('\n');
     if (nl < 0) {
-      s.tail += text;
+      if (s.tail.length + text.length > LIVE_TAIL_MAX) {
+        // (no response line is this long: what matters is the next line)
+        s.tail = '';
+        s.skip = true;
+      } else s.tail += text;
       return;
     }
     tallyLines((s.tail + text.slice(0, nl)).split('\n'), s.tally);
@@ -150,6 +160,11 @@ export class LiveCost {
   /** Where session `id` was read up to (tests). */
   offset(id: string): number | undefined {
     return this.states.get(id)?.offset;
+  }
+
+  /** How long the line not yet ended is, for session `id` (tests). */
+  tailLength(id: string): number | undefined {
+    return this.states.get(id)?.tail.length;
   }
 
   /** Forget every session but these. */

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LIVE_TICK_BYTES, LiveCost, MAX_READ, readTurn } from '../src/core/claude/cost';
+import { LIVE_CHUNK_BYTES, LIVE_TAIL_MAX, LIVE_TICK_BYTES, LiveCost, MAX_READ, readTurn } from '../src/core/claude/cost';
 import { summarizeTurn } from '../src/shared/claude-cost';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -153,7 +153,44 @@ describe('LiveCost', () => {
     expect(prev).toBe(size);
   });
 
-  it('4 sessions on a transcript longer than 24 MB: the event loop is never held 50 ms, and the numbers are those of the full (bounded) read', async () => {
+  it('a line without a newline is never kept past 8 MB: it is dropped up to its newline, and the lines after it count again', async () => {
+    const reply = (id: string, output: number) => `${JSON.stringify({ type: 'assistant', message: { id, model: 'claude-sonnet-5-5', usage: { input_tokens: 1, output_tokens: output } } })}\n`;
+    fs.writeFileSync(file, `${reply('a', 100)}{"type":"user","message":{"content":"`);
+    const live = new LiveCost();
+    expect((await live.read('s', file, 0))!.cost).toMatchObject({ output: 100, messages: 1 });
+    // a 30 MB line, written while the answer goes on, not ended yet
+    const piece = 'z'.repeat(1024 * 1024);
+    let tail = 0;
+    for (let i = 0; i < 30; i++) {
+      fs.appendFileSync(file, piece);
+      expect((await drain(live, 's', file, 0))!.cost).toMatchObject({ output: 100, messages: 1 });
+      tail = Math.max(tail, live.tailLength('s')!);
+    }
+    expect(tail).toBeLessThanOrEqual(LIVE_TAIL_MAX);
+    expect(LIVE_TAIL_MAX).toBe(8 * 1024 * 1024);
+    fs.appendFileSync(file, `"}}\n${reply('b', 5)}`);
+    const r = await drain(live, 's', file, 0);
+    expect(r!.cost).toMatchObject({ output: 105, messages: 2 });
+    expect(live.tailLength('s')).toBe(0);
+  }, 60_000);
+
+  it('one budget of 4 MB a tick is shared by every session', async () => {
+    const line = `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } })}\n`;
+    fs.writeFileSync(file, line.repeat(Math.ceil((3 * 1024 * 1024) / line.length)));
+    const live = new LiveCost();
+    const ids = ['a', 'b', 'c', 'd'];
+    const total = () => ids.reduce((n, id) => n + (live.offset(id) ?? 0), 0);
+    let prev = 0;
+    for (let tick = 0; tick < 3; tick++) {
+      const budget = { left: LIVE_TICK_BYTES };
+      for (const id of ids) await live.read(id, file, 0, budget);
+      expect(total() - prev).toBeLessThanOrEqual(LIVE_TICK_BYTES);
+      expect(total()).toBeGreaterThan(prev);
+      prev = total();
+    }
+  });
+
+  it('4 sessions on a transcript longer than 24 MB: a turn of the event loop after every piece read, and the numbers are those of the full (bounded) read', async () => {
     const r = rng(7);
     let body = '';
     while (body.length < 2 * 1024 * 1024) body += transcript(r, 200) + `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ö'.repeat(5000) }] } })}\n`;
@@ -162,40 +199,58 @@ describe('LiveCost', () => {
     while (fs.fstatSync(fd).size < MAX_READ + 1024 * 1024) fs.writeSync(fd, body);
     fs.closeSync(fd);
     const size = fs.statSync(big).size;
-    const full = readTurn(big, 0, size);
-    /** The daemon's ticks: every session in turn (as `readLive` does) until each has read everything; the longest the event loop waited. */
-    const run = async (): Promise<number> => {
-      const live = new LiveCost();
-      const results = new Map<string, Awaited<ReturnType<LiveCost['read']>>>();
-      let worst = 0;
-      let last = performance.now();
-      const beat = setInterval(() => {
-        const t = performance.now();
-        worst = Math.max(worst, t - last);
-        last = t;
-      }, 2);
-      try {
-        for (let more = true, ticks = 0; more; ticks++) {
-          expect(ticks).toBeLessThan(10); // (24 MB at 4 MB a tick)
-          more = false;
-          for (const id of ['a', 'b', 'c', 'd']) {
-            const x = await live.read(id, big, 0);
-            if (!x) continue;
-            more = true;
-            results.set(id, x);
-          }
-        }
-      } finally {
-        clearInterval(beat);
+    const ids = ['a', 'b', 'c', 'd'];
+    const live = new LiveCost();
+    // a beat on every turn of the event loop: between two beats at most one piece may have been read (and parsed). (A session's first
+    // offset is where its read begins, of a turn this long only its end: that is not read yet)
+    const seen = new Map<string, number>();
+    let beats = 0;
+    let most = 0;
+    let bytes = 0;
+    let gap = 0;
+    let at = performance.now();
+    let on = true;
+    const beat = () => {
+      if (!on) return;
+      let delta = 0;
+      for (const id of ids) {
+        const o = live.offset(id);
+        if (o === undefined) continue;
+        if (seen.has(id)) delta += o - seen.get(id)!;
+        seen.set(id, o);
       }
-      expect(results.size).toBe(4);
-      for (const x of results.values()) expect(x).toEqual(full);
-      return worst;
+      most = Math.max(most, delta);
+      bytes += delta;
+      gap = Math.max(gap, performance.now() - at);
+      at = performance.now();
+      beats++;
+      setImmediate(beat);
     };
-    // (a Mac busy with other work can pause any process for longer: a sync read of the whole turn could never pass, so 3 tries)
-    const worst: number[] = [];
-    for (let i = 0; i < 3 && !(Math.min(...worst) < 50); i++) worst.push(await run());
-    expect(Math.min(...worst)).toBeLessThan(50);
+    setImmediate(beat);
+    const results = new Map<string, Awaited<ReturnType<LiveCost['read']>>>();
+    try {
+      // the daemon's ticks: every session in turn with one shared budget (as `readLive` does), until each has read everything
+      for (let more = true, ticks = 0; more; ticks++) {
+        expect(ticks).toBeLessThan(40); // (4 × 24 MB at 4 MB a tick)
+        more = false;
+        const budget = { left: LIVE_TICK_BYTES };
+        for (const id of ids) {
+          const x = await live.read(id, big, 0, budget);
+          if (!x) continue;
+          more = true;
+          results.set(id, x);
+        }
+      }
+    } finally {
+      on = false;
+    }
+    const full = readTurn(big, 0, size);
+    expect(results.size).toBe(4);
+    for (const x of results.values()) expect(x).toEqual(full);
+    expect(most).toBeLessThanOrEqual(LIVE_CHUNK_BYTES);
+    expect(bytes).toBeGreaterThan(4 * (MAX_READ - LIVE_CHUNK_BYTES));
+    expect(beats).toBeGreaterThanOrEqual(Math.floor(bytes / LIVE_CHUNK_BYTES));
+    expect(gap).toBeLessThan(500); // (a loose bound: a Mac busy with other work can pause any process)
   }, 60_000);
 });
 

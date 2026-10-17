@@ -22,7 +22,7 @@ export function crashAction(o: { reason: string; recent: readonly number[]; now:
 /** The one question after too many crashes. Reload is the default and Esc: a stray key must not end every terminal. */
 export const CRASH_DIALOG = {
   message: 'The window stopped responding.',
-  detail: 'Your terminals are still running. Reload the window, or quit Jaffer.',
+  detail: 'Your terminals are still running. Reload the window, or quit Jaffer (quitting ends them).',
   buttons: ['Reload', 'Quit'],
   defaultId: 0,
   cancelId: 0,
