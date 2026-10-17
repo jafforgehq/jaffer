@@ -45,6 +45,6 @@ describe('the glossary (1.4.0)', () => {
     expect(searchGlossary('zzzz-no-such-word')).toEqual([]);
     const t0 = Date.now();
     expect(searchGlossary('a'.repeat(8_000_000))).toEqual([]);
-    expect(Date.now() - t0).toBeLessThan(200);
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });

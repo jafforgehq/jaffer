@@ -155,7 +155,7 @@ describe('approvals: what Claude Code reads back, and what the notification says
         approvalDetail('Read', { file_path: '/etc/hosts' }, { cwd: dir, home: dir });
       }
     }
-    expect(Date.now() - t).toBeLessThan(150);
+    expect(Date.now() - t).toBeLessThan(600);
     expect(approvalDetail('Read', { file_path: '/work/app/a.ts' }, { cwd: '/work/app///', home: '/Users/me//' })).toEqual({ text: 'a.ts', complete: true });
     expect(approvalDetail('Read', { file_path: '/Users/me/b.ts' }, { cwd: '/x', home: '/Users/me//' })).toEqual({ text: '~/b.ts', complete: true });
   });

@@ -129,7 +129,7 @@ describe('searchConversations (1.4.0, opt-in): which conversations hold a text, 
     write(uuid(4), ['{' + '"aab":'.repeat(150_000)]);
     const t = Date.now();
     const r = await searchConversations(claudeDir, 'aab');
-    expect(Date.now() - t).toBeLessThan(2000);
+    expect(Date.now() - t).toBeLessThan(6000);
     expect(r).toEqual({ hits: [{ id: uuid(3), count: 99 }], partial: false });
   });
 

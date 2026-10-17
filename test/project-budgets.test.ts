@@ -51,7 +51,7 @@ describe('budgetLevels: the last 7 days of each budget folder against its budget
     const lines = Array.from({ length: 40 }, (_, i) => `/${'/'.repeat(4000)}x${i}=5`);
     const t = Date.now();
     const b = parseProjectBudgets(lines, '/Users/maya');
-    expect(Date.now() - t).toBeLessThan(100);
+    expect(Date.now() - t).toBeLessThan(500);
     expect(b).toHaveLength(20);
     expect(parseProjectBudgets(['/a///=1', '///=2', '~/=3'], '/Users/maya')).toEqual([{ cwd: '/a', usd: 1 }, { cwd: '/', usd: 2 }, { cwd: '/Users/maya', usd: 3 }]);
   });

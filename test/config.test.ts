@@ -307,7 +307,7 @@ describe('a config file or patch with values of the wrong kind', () => {
     const cfg = load({ session: null, updates: 'oops', notifications: 5, appearance: { pet: 'off', fontSize: '13' }, shell: { args: [1, 2] } }).get();
     expect(cfg.session).toEqual(DEFAULT_CONFIG.session);
     expect(cfg.updates).toEqual(DEFAULT_CONFIG.updates);
-    expect(cfg.notifications).toEqual(DEFAULT_CONFIG.notifications); // (1.4.0: and weeklyDigest)
+    expect(cfg.notifications).toEqual({ claudeFinished: true, weeklyDigest: true }); // (the defaults, written out: 1.4.0 added weeklyDigest)
     expect(cfg.appearance.pet).toBe(true);
     expect(cfg.appearance.fontSize).toBe(13);
     expect(cfg.shell.args).toEqual([]);

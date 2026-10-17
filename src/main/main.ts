@@ -1022,7 +1022,7 @@ function trusted(e: Electron.IpcMainInvokeEvent): boolean {
 ipcMain.handle('jaffer:call', async (e, method: string, params: unknown) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   if (!client || !client.connected) throw new Error('The terminal is not running.');
-  const long = method.startsWith('setup.') || method === 'claude.explain'; // (Explain's helper may take up to a minute)
+  const long = method.startsWith('setup.') || method === 'claude.explain' || method === 'claude.mcp'; // (Explain's helper may take up to a minute; the MCP check 25 s plus finding claude)
   const r = await client.call(method, params, long ? 120_000 : 30_000);
   if (method === 'config.patch') {
     void syncHotkey();

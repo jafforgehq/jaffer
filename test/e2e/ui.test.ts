@@ -3058,53 +3058,56 @@ describe('Jaffer UI end to end', () => {
     const at = Date.now() - 20_000;
     const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: env.userHome, timestamp: new Date(t).toISOString(), ...extra });
     fs.writeFileSync(file, [line('user', at - 5000, { message: { role: 'user', content: 'Privacy probe p14' } }), line('assistant', at, { message: { id: 'p14', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__privReal = w.jaffer.call;
-      w.__privTyped = [];
-      w.jaffer.call = (m: string, p: any) => (m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__privTyped.push(p.data), Promise.resolve({})) : w.__privReal(m, p));
-    });
-    const typed = () => page.evaluate(() => (window as any).__privTyped as string[]);
-    const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1) as string | undefined);
-    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
-    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
-    await page.fill('.sp-convos .conv-search input', 'p14');
-    await page.click('.sp-convos .conv-refresh');
-    const row = page.locator(`.sp-convos .conv-row[data-id="${sid}"]`);
-    await until(async () => (await row.count()) === 1, 5_000, 'the planted conversation');
-    // both on (the defaults): the trash button and Remove… are there
-    expect(await page.locator('.sp-convos .conv-trash').count()).toBe(1);
-    expect(await page.locator('.sp-convos .conv-remove').count()).toBe(1);
+    try {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__privReal = w.jaffer.call;
+        w.__privTyped = [];
+        w.jaffer.call = (m: string, p: any) => (m === 'pty.write' && String(p?.data).includes('--resume') ? (w.__privTyped.push(p.data), Promise.resolve({})) : w.__privReal(m, p));
+      });
+      const typed = () => page.evaluate(() => (window as any).__privTyped as string[]);
+      const clipLast = () => page.evaluate(() => (window as any).__powerClip.written.at(-1) as string | undefined);
+      if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+      await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+      await page.fill('.sp-convos .conv-search input', 'p14');
+      await page.click('.sp-convos .conv-refresh');
+      const row = page.locator(`.sp-convos .conv-row[data-id="${sid}"]`);
+      await until(async () => (await row.count()) === 1, 5_000, 'the planted conversation');
+      // both on (the defaults): the trash button and Remove… are there
+      expect(await page.locator('.sp-convos .conv-trash').count()).toBe(1);
+      expect(await page.locator('.sp-convos .conv-remove').count()).toBe(1);
 
-    await patch({ permissions: { resumeTyping: false, trash: false } });
-    await until(async () => (await page.locator('.sp-convos .conv-trash, .sp-convos .conv-remove').count()) === 0, 5_000, 'the remove buttons to go');
-    await page.click('.term');
-    await sleep(300); // (the shell is at an idle prompt)
-    await row.click();
-    await until(async () => /claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff$/.test((await clipLast()) ?? ''), 3_000, 'the command on the clipboard');
-    await toastSaid('Typing is off in Settings → Privacy and permissions: command copied');
-    await sleep(400);
-    expect(await typed()).toEqual([]); // nothing was typed
-    // Delete on a focused row does nothing (no question, no call to main)
-    await page.evaluate(() => { const w = window as any; w.__trashed = []; });
-    await row.focus();
-    await page.keyboard.press('Delete');
-    await page.keyboard.press('Backspace');
-    await sleep(400);
-    expect(await page.evaluate(() => ((window as any).__trashed ?? []).length)).toBe(0);
-    expect(fs.existsSync(file)).toBe(true);
+      await patch({ permissions: { resumeTyping: false, trash: false } });
+      await until(async () => (await page.locator('.sp-convos .conv-trash, .sp-convos .conv-remove').count()) === 0, 5_000, 'the remove buttons to go');
+      await page.click('.term');
+      await sleep(300); // (the shell is at an idle prompt)
+      await row.click();
+      await until(async () => /claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff$/.test((await clipLast()) ?? ''), 3_000, 'the command on the clipboard');
+      await toastSaid('Typing is off in Settings → Privacy and permissions: command copied');
+      await sleep(400);
+      expect(await typed()).toEqual([]); // nothing was typed
+      // Delete on a focused row does nothing (no question, no call to main)
+      await page.evaluate(() => { const w = window as any; w.__trashed = []; });
+      await row.focus();
+      await page.keyboard.press('Delete');
+      await page.keyboard.press('Backspace');
+      await sleep(400);
+      expect(await page.evaluate(() => ((window as any).__trashed ?? []).length)).toBe(0);
+      expect(fs.existsSync(file)).toBe(true);
 
-    // back on: the same click types the resume line, and the trash buttons return
-    await patch({ permissions: { resumeTyping: true, trash: true } });
-    await until(async () => (await page.locator('.sp-convos .conv-trash').count()) === 1 && (await page.locator('.sp-convos .conv-remove').count()) === 1, 5_000, 'the remove buttons to return');
-    await page.click('.term');
-    await row.click();
-    await until(async () => (await typed()).length === 1, 3_000, 'the resume line typed');
-    expect((await typed())[0]).toMatch(/claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff\r$/);
-
-    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__privReal; });
-    await page.fill('.sp-convos .conv-search input', '');
-    fs.rmSync(dir, { recursive: true, force: true });
+      // back on: the same click types the resume line, and the trash buttons return
+      await patch({ permissions: { resumeTyping: true, trash: true } });
+      await until(async () => (await page.locator('.sp-convos .conv-trash').count()) === 1 && (await page.locator('.sp-convos .conv-remove').count()) === 1, 5_000, 'the remove buttons to return');
+      await page.click('.term');
+      await row.click();
+      await until(async () => (await typed()).length === 1, 3_000, 'the resume line typed');
+      expect((await typed())[0]).toMatch(/claude --resume 00000091-aaaa-4bbb-8ccc-ddddeeeeffff\r$/);
+    } finally {
+      await page.evaluate(() => { const w = window as any; if (w.__privReal) w.jaffer.call = w.__privReal; delete w.__privReal; });
+      await patch({ permissions: { resumeTyping: true, trash: true } });
+      await page.fill('.sp-convos .conv-search input', '').catch(() => undefined);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }, 60_000);
 
   it('past conversations, 1.4.0: tags (a menu per row, chips that filter with the folder and the search), hide and unhide (Hidden (N), left out of Remove… counts), and a removal takes their tags and hidden marks', async () => {
@@ -3132,123 +3135,125 @@ describe('Jaffer UI end to end', () => {
     const cfgNow = () => page.evaluate(() => window.jaffer.call('config.get'));
     const menuItems = () => page.$$eval('.ctx-menu [role="menuitem"]', (b) => b.map((x) => x.textContent));
     const openTags = async (n: number) => (await item(n).hover(), await item(n).locator('.conv-tag-btn').click(), await page.waitForSelector('.conv-tagmenu'));
-    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
-    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
-    await page.fill('.sp-convos .conv-search input', 'Tag talk');
-    await page.click('.sp-convos .conv-refresh');
-    await until(async () => (await ids()).length === 5, 5_000, 'the planted conversations');
-    expect(await page.locator('.sp-convos .conv-tag-chips').count()).toBe(0); // (no tags yet: no chips)
+    try {
+      if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+      await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+      await page.fill('.sp-convos .conv-search input', 'Tag talk');
+      await page.click('.sp-convos .conv-refresh');
+      await until(async () => (await ids()).length === 5, 5_000, 'the planted conversations');
+      expect(await page.locator('.sp-convos .conv-tag-chips').count()).toBe(0); // (no tags yet: no chips)
 
-    // the tag menu: "New tag…" has the keyboard, Enter adds (the menu stays), Esc closes it back to the row's tag button
-    expect(await item(1).locator('.conv-tag-btn').getAttribute('aria-label')).toBe('Tags');
-    await openTags(1);
-    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
-    // (fix round) the input is a group in the menu, not a menu item; the menu scrolls rather than leaving the window; keys of an input method's composition stay with it
-    expect(await page.locator('.conv-tagmenu [role="group"] .conv-tagnew').count()).toBe(1);
-    expect(await page.$eval('.conv-tagmenu', (m) => [getComputedStyle(m).overflowY, getComputedStyle(m).maxHeight !== 'none', m.getBoundingClientRect().top >= 0])).toEqual(['auto', true, true]);
-    await page.evaluate(() => {
-      for (const key of ['ArrowUp', 'Escape']) document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key, isComposing: true, bubbles: true, cancelable: true }));
-    });
-    await sleep(150);
-    expect(await page.locator('.conv-tagmenu').count()).toBe(1);
-    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
-    await page.keyboard.type('  Work ');
-    await page.keyboard.press('Enter');
-    await until(async () => JSON.stringify((await cfgNow()).history.tags) === JSON.stringify([`${sid(1)} Work`]), 3_000, 'the tag kept');
-    await until(async () => (await page.locator('.conv-tagmenu [role="menuitemcheckbox"][aria-checked="true"]').count()) === 1, 3_000, 'Work on in the menu');
-    await page.keyboard.type('urgent');
-    await page.keyboard.press('Enter');
-    await until(async () => (await cfgNow()).history.tags.length === 2, 3_000, 'the second tag');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
-    expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tag-btn'))).toBe(true);
-    await until(async () => JSON.stringify(await item(1).locator('.conv-tag').allTextContents()) === JSON.stringify(['Work', 'urgent']), 3_000, 'the tags on the row');
-    // another row: the tags in use are switches (↑ from the input reaches them); a click turns one on; a click elsewhere closes
-    await openTags(3);
-    expect(await page.$$eval('.conv-tagmenu [role="menuitemcheckbox"]', (b) => b.map((x) => [x.textContent, x.getAttribute('aria-checked')]))).toEqual([['urgent', 'false'], ['Work', 'false']]); // (as often used: by name)
-    await page.keyboard.press('ArrowUp');
-    expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Work');
-    await page.click('.conv-tagmenu [role="menuitemcheckbox"] >> text=Work');
-    await until(async () => (await cfgNow()).history.tags.includes(`${sid(3)} Work`), 3_000, 'Work on row 3');
-    await page.click('.sp-convos .conv-head > span');
-    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
-    // a fourth tag is refused with a toast
-    await patch({ history: { tags: [`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`, `${sid(3)} Work`] } });
-    await openTags(1);
-    await page.keyboard.type('fourth');
-    await page.keyboard.press('Enter');
-    await toastSaid('At most 3 tags a conversation.');
-    expect((await cfgNow()).history.tags).toHaveLength(4);
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+      // the tag menu: "New tag…" has the keyboard, Enter adds (the menu stays), Esc closes it back to the row's tag button
+      expect(await item(1).locator('.conv-tag-btn').getAttribute('aria-label')).toBe('Tags');
+      await openTags(1);
+      expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
+      // (fix round) the input is a group in the menu, not a menu item; the menu scrolls rather than leaving the window; keys of an input method's composition stay with it
+      expect(await page.locator('.conv-tagmenu [role="group"] .conv-tagnew').count()).toBe(1);
+      expect(await page.$eval('.conv-tagmenu', (m) => [getComputedStyle(m).overflowY, getComputedStyle(m).maxHeight !== 'none', m.getBoundingClientRect().top >= 0])).toEqual(['auto', true, true]);
+      await page.evaluate(() => {
+        for (const key of ['ArrowUp', 'Escape']) document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key, isComposing: true, bubbles: true, cancelable: true }));
+      });
+      await sleep(150);
+      expect(await page.locator('.conv-tagmenu').count()).toBe(1);
+      expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tagnew'))).toBe(true);
+      await page.keyboard.type('  Work ');
+      await page.keyboard.press('Enter');
+      await until(async () => JSON.stringify((await cfgNow()).history.tags) === JSON.stringify([`${sid(1)} Work`]), 3_000, 'the tag kept');
+      await until(async () => (await page.locator('.conv-tagmenu [role="menuitemcheckbox"][aria-checked="true"]').count()) === 1, 3_000, 'Work on in the menu');
+      await page.keyboard.type('urgent');
+      await page.keyboard.press('Enter');
+      await until(async () => (await cfgNow()).history.tags.length === 2, 3_000, 'the second tag');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+      expect(await page.evaluate(() => document.activeElement?.classList.contains('conv-tag-btn'))).toBe(true);
+      await until(async () => JSON.stringify(await item(1).locator('.conv-tag').allTextContents()) === JSON.stringify(['Work', 'urgent']), 3_000, 'the tags on the row');
+      // another row: the tags in use are switches (↑ from the input reaches them); a click turns one on; a click elsewhere closes
+      await openTags(3);
+      expect(await page.$$eval('.conv-tagmenu [role="menuitemcheckbox"]', (b) => b.map((x) => [x.textContent, x.getAttribute('aria-checked')]))).toEqual([['urgent', 'false'], ['Work', 'false']]); // (as often used: by name)
+      await page.keyboard.press('ArrowUp');
+      expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Work');
+      await page.click('.conv-tagmenu [role="menuitemcheckbox"] >> text=Work');
+      await until(async () => (await cfgNow()).history.tags.includes(`${sid(3)} Work`), 3_000, 'Work on row 3');
+      await page.click('.sp-convos .conv-head > span');
+      await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+      // a fourth tag is refused with a toast
+      await patch({ history: { tags: [`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`, `${sid(3)} Work`] } });
+      await openTags(1);
+      await page.keyboard.type('fourth');
+      await page.keyboard.press('Enter');
+      await toastSaid('At most 3 tags a conversation.');
+      expect((await cfgNow()).history.tags).toHaveLength(4);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
 
-    // the tag chips: the most used first, colours from the palette; a chip filters, with the folder chip and the search too
-    await until(async () => JSON.stringify(await page.locator('.sp-convos .conv-tag-chip').allTextContents()) === JSON.stringify(['Work', 'third', 'urgent']), 3_000, 'the tag chips');
-    expect(Number(await page.getAttribute('.sp-convos .conv-tag-chip >> nth=0', 'data-c'))).toBeLessThan(6);
-    await openTags(1);
-    await shot('16a-tags');
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
-    await page.click('.sp-convos .conv-tag-chip >> text=Work');
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 3)), 3_000, 'the Work chip');
-    await page.click(`.sp-convos .conv-chip[data-cwd="${zeta}"]`);
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(3)), 3_000, 'Work and zeta');
-    await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0'); // (All folders)
-    await page.fill('.sp-convos .conv-search input', 'Tag talk 1');
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'Work and the search');
-    await page.fill('.sp-convos .conv-search input', 'Tag talk');
-    await page.click('.sp-convos .conv-tag-chip >> text=Work');
-    await until(async () => (await ids()).length === 5, 3_000, 'the chip off again');
+      // the tag chips: the most used first, colours from the palette; a chip filters, with the folder chip and the search too
+      await until(async () => JSON.stringify(await page.locator('.sp-convos .conv-tag-chip').allTextContents()) === JSON.stringify(['Work', 'third', 'urgent']), 3_000, 'the tag chips');
+      expect(Number(await page.getAttribute('.sp-convos .conv-tag-chip >> nth=0', 'data-c'))).toBeLessThan(6);
+      await openTags(1);
+      await shot('16a-tags');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.conv-tagmenu', { state: 'detached' });
+      await page.click('.sp-convos .conv-tag-chip >> text=Work');
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 3)), 3_000, 'the Work chip');
+      await page.click(`.sp-convos .conv-chip[data-cwd="${zeta}"]`);
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(3)), 3_000, 'Work and zeta');
+      await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0'); // (All folders)
+      await page.fill('.sp-convos .conv-search input', 'Tag talk 1');
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'Work and the search');
+      await page.fill('.sp-convos .conv-search input', 'Tag talk');
+      await page.click('.sp-convos .conv-tag-chip >> text=Work');
+      await until(async () => (await ids()).length === 5, 3_000, 'the chip off again');
 
-    // hide: the row goes, Hidden (N) appears; Remove… does not count it (All listed, This folder)
-    expect(await page.locator('.sp-convos .conv-hidden-toggle').count()).toBe(0);
-    await item(2).hover();
-    expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Hide');
-    await item(2).locator('.conv-hide').click();
-    await until(async () => (await row(2).count()) === 0, 3_000, 'the hidden row to go');
-    expect((await cfgNow()).history.hidden).toEqual([sid(2)]);
-    expect(await page.textContent('.sp-convos .conv-hidden-toggle')).toBe('Hidden (1)');
-    await page.click(`.sp-convos .conv-chip[data-cwd="${eps}"]`);
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'the eps chip');
-    await page.click('.sp-convos .conv-remove');
-    await page.waitForSelector('.ctx-menu');
-    expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
-    await page.click('.sp-convos .conv-remove');
-    await page.waitForSelector('.ctx-menu', { state: 'detached' });
-    // Hidden (1) on: the hidden row is back, dimmed, with Unhide; Remove… still leaves it out
-    await page.click('.sp-convos .conv-hidden-toggle');
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 2)), 3_000, 'the hidden row shown');
-    expect(await item(2).getAttribute('data-hidden')).toBe('');
-    expect(await item(1).getAttribute('data-hidden')).toBeNull();
-    await page.click('.sp-convos .conv-remove');
-    await page.waitForSelector('.ctx-menu');
-    expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
-    await page.click('.sp-convos .conv-remove');
-    await page.waitForSelector('.ctx-menu', { state: 'detached' });
-    await item(2).hover();
-    expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Unhide');
-    await item(2).locator('.conv-hide').click();
-    await until(async () => (await cfgNow()).history.hidden.length === 0, 3_000, 'unhidden');
-    await until(async () => (await page.locator('.sp-convos .conv-hidden-toggle').count()) === 0, 3_000, 'no Hidden toggle');
-    expect(await item(2).getAttribute('data-hidden')).toBeNull();
+      // hide: the row goes, Hidden (N) appears; Remove… does not count it (All listed, This folder)
+      expect(await page.locator('.sp-convos .conv-hidden-toggle').count()).toBe(0);
+      await item(2).hover();
+      expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Hide');
+      await item(2).locator('.conv-hide').click();
+      await until(async () => (await row(2).count()) === 0, 3_000, 'the hidden row to go');
+      expect((await cfgNow()).history.hidden).toEqual([sid(2)]);
+      expect(await page.textContent('.sp-convos .conv-hidden-toggle')).toBe('Hidden (1)');
+      await page.click(`.sp-convos .conv-chip[data-cwd="${eps}"]`);
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1)), 3_000, 'the eps chip');
+      await page.click('.sp-convos .conv-remove');
+      await page.waitForSelector('.ctx-menu');
+      expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
+      await page.click('.sp-convos .conv-remove');
+      await page.waitForSelector('.ctx-menu', { state: 'detached' });
+      // Hidden (1) on: the hidden row is back, dimmed, with Unhide; Remove… still leaves it out
+      await page.click('.sp-convos .conv-hidden-toggle');
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify(want(1, 2)), 3_000, 'the hidden row shown');
+      expect(await item(2).getAttribute('data-hidden')).toBe('');
+      expect(await item(1).getAttribute('data-hidden')).toBeNull();
+      await page.click('.sp-convos .conv-remove');
+      await page.waitForSelector('.ctx-menu');
+      expect((await menuItems()).slice(0, 2)).toEqual(['This folder (1)', 'All listed (4)']);
+      await page.click('.sp-convos .conv-remove');
+      await page.waitForSelector('.ctx-menu', { state: 'detached' });
+      await item(2).hover();
+      expect(await item(2).locator('.conv-hide').getAttribute('aria-label')).toBe('Unhide');
+      await item(2).locator('.conv-hide').click();
+      await until(async () => (await cfgNow()).history.hidden.length === 0, 3_000, 'unhidden');
+      await until(async () => (await page.locator('.sp-convos .conv-hidden-toggle').count()) === 0, 3_000, 'no Hidden toggle');
+      expect(await item(2).getAttribute('data-hidden')).toBeNull();
 
-    // a removal takes the tags and the hidden mark of what went to the Trash, and nothing else's
-    await patch({ history: { hidden: [sid(3), sid(4)] } });
-    await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0');
-    await page.click('.sp-convos .conv-hidden-toggle');
-    await until(async () => (await ids()).length === 5, 3_000, 'all five, hidden ones shown');
-    fs.rmSync(files.get(3)!, { force: true });
-    await item(3).hover();
-    await item(3).locator('.conv-trash').click();
-    await toastSaid('Moved 1 conversation to the Trash');
-    await until(async () => (await cfgNow()).history.hidden.length === 1, 3_000, 'its hidden mark gone');
-    const h = (await cfgNow()).history;
-    expect(h.hidden).toEqual([sid(4)]);
-    expect(h.tags).toEqual([`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`]);
-
-    await patch({ history: { tags: [], hidden: [] } });
-    await page.fill('.sp-convos .conv-search input', '');
-    for (const proj of ['-p15-eps', '-p15-zeta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+      // a removal takes the tags and the hidden mark of what went to the Trash, and nothing else's
+      await patch({ history: { hidden: [sid(3), sid(4)] } });
+      await page.click('.sp-convos .conv-chips:not(.conv-tag-chips) .conv-chip >> nth=0');
+      await page.click('.sp-convos .conv-hidden-toggle');
+      await until(async () => (await ids()).length === 5, 3_000, 'all five, hidden ones shown');
+      fs.rmSync(files.get(3)!, { force: true });
+      await item(3).hover();
+      await item(3).locator('.conv-trash').click();
+      await toastSaid('Moved 1 conversation to the Trash');
+      await until(async () => (await cfgNow()).history.hidden.length === 1, 3_000, 'its hidden mark gone');
+      const h = (await cfgNow()).history;
+      expect(h.hidden).toEqual([sid(4)]);
+      expect(h.tags).toEqual([`${sid(1)} Work`, `${sid(1)} urgent`, `${sid(1)} third`]);
+    } finally {
+      await patch({ history: { tags: [], hidden: [] } });
+      await page.fill('.sp-convos .conv-search input', '').catch(() => undefined);
+      for (const proj of ['-p15-eps', '-p15-zeta']) fs.rmSync(path.join(env.userHome, '.claude', 'projects', proj), { recursive: true, force: true });
+    }
   }, 60_000);
 
   it('past conversations, 1.4.0: Storage lists the 10 biggest with a trash button (the app\'s removal), Remove… → Older than 30/60/90 days with their counts and ids (200 at a time), and deep search only with its permission: the hits filter the rows with N matches', async () => {
@@ -3280,82 +3285,86 @@ describe('Jaffer UI end to end', () => {
     const trashed = () => page.evaluate(() => ((window as any).__trashed ?? []) as string[][]);
     const menuItems = () => page.$$eval('.ctx-menu [role="menuitem"]', (b) => b.map((x) => x.textContent));
     const old = (days: number) => page.evaluate((d) => window.jaffer.call('claude.old', { days: d }), days) as Promise<{ ids: string[]; total: number }>;
-    if (!(await cfgNow()).panel.open) await menu('toggle-panel');
-    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
-    await page.fill('.sp-convos .conv-search input', 'Store');
-    await page.click('.sp-convos .conv-refresh');
-    await until(async () => (await ids()).length >= 6, 5_000, 'the planted conversations');
+    try {
+      if (!(await cfgNow()).panel.open) await menu('toggle-panel');
+      await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+      await page.fill('.sp-convos .conv-search input', 'Store');
+      await page.click('.sp-convos .conv-refresh');
+      await until(async () => (await ids()).length >= 6, 5_000, 'the planted conversations');
 
-    // Storage: the total, the 10 biggest (the planted 3 MB one first) with size and folder; its trash button goes through the app's removal
-    expect(await page.getAttribute('.sp-convos .st-toggle', 'aria-expanded')).toBe('false');
-    await page.click('.sp-convos .st-toggle');
-    await page.waitForSelector('.sp-convos .st-panel .st-row');
-    expect(await page.textContent('.sp-convos .st-total')).toMatch(/^[\d.]+ (KB|MB) in \d+ conversations$/);
-    expect(await page.getAttribute('.sp-convos .st-row >> nth=0', 'data-id')).toBe(sid(1));
-    expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-size')).toBe('3 MB');
-    expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-dir')).toMatch(/^~\/(\S+\/)?p16-store$/); // (the bridge's home is a folder above the test's HOME)
-    expect(await page.locator('.sp-convos .st-row').count()).toBeLessThanOrEqual(10);
-    await shot('16b-storage');
-    fs.rmSync(big);
-    await page.click('.sp-convos .st-row >> nth=0 >> .st-trash');
-    await toastSaid('Moved 1 conversation to the Trash');
-    expect((await trashed()).at(-1)).toEqual([sid(1)]);
-    await until(async () => (await page.locator(`.sp-convos .st-row[data-id="${sid(1)}"]`).count()) === 0, 5_000, 'the storage view read again');
-    await page.click('.sp-convos .st-toggle');
-    await page.waitForSelector('.sp-convos .st-panel', { state: 'detached' });
+      // Storage: the total, the 10 biggest (the planted 3 MB one first) with size and folder; its trash button goes through the app's removal
+      expect(await page.getAttribute('.sp-convos .st-toggle', 'aria-expanded')).toBe('false');
+      await page.click('.sp-convos .st-toggle');
+      await page.waitForSelector('.sp-convos .st-panel .st-row');
+      expect(await page.textContent('.sp-convos .st-total')).toMatch(/^[\d.]+ (KB|MB) in \d+ conversations$/);
+      expect(await page.getAttribute('.sp-convos .st-row >> nth=0', 'data-id')).toBe(sid(1));
+      expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-size')).toBe('3 MB');
+      expect(await page.textContent('.sp-convos .st-row >> nth=0 >> .st-dir')).toMatch(/^~\/(\S+\/)?p16-store$/); // (the bridge's home is a folder above the test's HOME)
+      expect(await page.locator('.sp-convos .st-row').count()).toBeLessThanOrEqual(10);
+      await shot('16b-storage');
+      fs.rmSync(big);
+      await page.click('.sp-convos .st-row >> nth=0 >> .st-trash');
+      await toastSaid('Moved 1 conversation to the Trash');
+      expect((await trashed()).at(-1)).toEqual([sid(1)]);
+      await until(async () => (await page.locator(`.sp-convos .st-row[data-id="${sid(1)}"]`).count()) === 0, 5_000, 'the storage view read again');
+      await page.click('.sp-convos .st-toggle');
+      await page.waitForSelector('.sp-convos .st-panel', { state: 'detached' });
 
-    // deep search: no switch without the permission (and the daemon refuses), then the switch; the hits filter the rows, with N matches
-    expect(await page.locator('.sp-convos .conv-deep').count()).toBe(0);
-    await expect(page.evaluate(() => window.jaffer.call('claude.search', { q: 'needle-word' }))).rejects.toThrow();
-    await patch({ permissions: { deepSearch: true } });
-    await page.waitForSelector('.sp-convos .conv-deep');
-    expect(await page.textContent('.sp-convos .conv-deep')).toBe('Search text');
-    await page.click('.sp-convos .conv-deep');
-    expect(await page.getAttribute('.sp-convos .conv-deep', 'aria-pressed')).toBe('true');
-    await page.fill('.sp-convos .conv-search input', 'NEEDLE-word');
-    await until(async () => JSON.stringify(await ids()) === JSON.stringify([sid(2), sid(4)].sort()), 5_000, 'the rows with the text');
-    expect(await row(2).locator('.conv-hits').textContent()).toBe('2 matches');
-    expect(await row(4).locator('.conv-hits').textContent()).toBe('1 match');
-    expect(await row(3).count()).toBe(0); // (only in a tool call: never searched)
-    await shot('16c-deep-search');
-    await page.fill('.sp-convos .conv-search input', 'ne');
-    await until(async () => ((await page.textContent('.sp-convos .conv-deep-note')) ?? '').includes('3 to 64'), 3_000, 'the note for a short query');
-    await page.click('.sp-convos .conv-deep');
-    await page.fill('.sp-convos .conv-search input', 'Store');
-    await until(async () => (await ids()).length >= 5 && (await page.locator('.sp-convos .conv-hits').count()) === 0, 3_000, 'the title search back');
-    await patch({ permissions: { deepSearch: false } });
-    await until(async () => (await page.locator('.sp-convos .conv-deep').count()) === 0, 3_000, 'the switch gone');
+      // deep search: no switch without the permission (and the daemon refuses), then the switch; the hits filter the rows, with N matches
+      expect(await page.locator('.sp-convos .conv-deep').count()).toBe(0);
+      await expect(page.evaluate(() => window.jaffer.call('claude.search', { q: 'needle-word' }))).rejects.toThrow();
+      await patch({ permissions: { deepSearch: true } });
+      await page.waitForSelector('.sp-convos .conv-deep');
+      expect(await page.textContent('.sp-convos .conv-deep')).toBe('Search text');
+      await page.click('.sp-convos .conv-deep');
+      expect(await page.getAttribute('.sp-convos .conv-deep', 'aria-pressed')).toBe('true');
+      await page.fill('.sp-convos .conv-search input', 'NEEDLE-word');
+      await until(async () => JSON.stringify(await ids()) === JSON.stringify([sid(2), sid(4)].sort()), 5_000, 'the rows with the text');
+      expect(await row(2).locator('.conv-hits').textContent()).toBe('2 matches');
+      expect(await row(4).locator('.conv-hits').textContent()).toBe('1 match');
+      expect(await row(3).count()).toBe(0); // (only in a tool call: never searched)
+      await shot('16c-deep-search');
+      await page.fill('.sp-convos .conv-search input', 'ne');
+      await until(async () => ((await page.textContent('.sp-convos .conv-deep-note')) ?? '').includes('3 to 64'), 3_000, 'the note for a short query');
+      await page.click('.sp-convos .conv-deep');
+      await page.fill('.sp-convos .conv-search input', 'Store');
+      await until(async () => (await ids()).length >= 5 && (await page.locator('.sp-convos .conv-hits').count()) === 0, 3_000, 'the title search back');
+      await patch({ permissions: { deepSearch: false } });
+      await until(async () => (await page.locator('.sp-convos .conv-deep').count()) === 0, 3_000, 'the switch gone');
 
-    // Remove… → Older than 30/60/90 days: counts of all the conversations on disk, a click asks the app for the oldest 200, a toast says how many more
-    const [o30, o60, o90] = [await old(30), await old(60), await old(90)];
-    expect(o90.total).toBeGreaterThanOrEqual(203);
-    expect(o90.ids).toHaveLength(200);
-    expect(o30.total).toBeGreaterThan(o60.total); // (the planted 40 and 70 days old ones)
-    expect(o60.total).toBeGreaterThan(o90.total);
-    // (fix round) the menu asks the daemon once for all three counts; a click asks once more, for that age's ids as they are now
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__oldReal = w.jaffer.call;
-      w.__oldCalls = [];
-      w.jaffer.call = (m: string, p: any) => (m === 'claude.old' && w.__oldCalls.push(p?.days), w.__oldReal(m, p));
-    });
-    const oldCalls = () => page.evaluate(() => (window as any).__oldCalls as number[]);
-    await page.click('.sp-convos .conv-remove');
-    await page.waitForSelector('.ctx-menu');
-    await until(async () => (await menuItems()).length === 4, 3_000, 'the Older than items');
-    await sleep(200);
-    expect((await oldCalls()).length).toBe(1);
-    expect((await menuItems()).slice(1)).toEqual([`Older than 30 days (${o30.total})`, `Older than 60 days (${o60.total})`, `Older than 90 days (${o90.total})`]);
-    expect(await page.textContent('.ctx-menu .ctx-note')).toContain('includes pinned and hidden');
-    await page.click(`.ctx-menu [role="menuitem"] >> text=Older than 90 days`);
-    await toastSaid(`${o90.total - 200} more: repeat`);
-    expect((await oldCalls()).slice(1)).toEqual([90]);
-    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__oldReal; });
-    expect((await trashed()).at(-1)).toEqual(o90.ids);
-    expect((await trashed()).at(-1)![0]).toBe(sid(1201)); // (the oldest first)
-
-    await page.fill('.sp-convos .conv-search input', '');
-    for (const d of [proj, oldProj]) fs.rmSync(d, { recursive: true, force: true });
+      // Remove… → Older than 30/60/90 days: counts of all the conversations on disk, a click asks the app for the oldest 200, a toast says how many more
+      const [o30, o60, o90] = [await old(30), await old(60), await old(90)];
+      expect(o90.total).toBeGreaterThanOrEqual(203);
+      expect(o90.ids).toHaveLength(200);
+      expect(o30.total).toBeGreaterThan(o60.total); // (the planted 40 and 70 days old ones)
+      expect(o60.total).toBeGreaterThan(o90.total);
+      // (fix round) the menu asks the daemon once for all three counts; a click asks once more, for that age's ids as they are now
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__oldReal = w.jaffer.call;
+        w.__oldCalls = [];
+        w.jaffer.call = (m: string, p: any) => (m === 'claude.old' && w.__oldCalls.push(p?.days), w.__oldReal(m, p));
+      });
+      const oldCalls = () => page.evaluate(() => (window as any).__oldCalls as number[]);
+      await page.click('.sp-convos .conv-remove');
+      await page.waitForSelector('.ctx-menu');
+      await until(async () => (await menuItems()).length === 4, 3_000, 'the Older than items');
+      await sleep(200);
+      expect((await oldCalls()).length).toBe(1);
+      expect((await menuItems()).slice(1)).toEqual([`Older than 30 days (${o30.total})`, `Older than 60 days (${o60.total})`, `Older than 90 days (${o90.total})`]);
+      expect(await page.textContent('.ctx-menu .ctx-note')).toContain('includes pinned and hidden');
+      await page.click(`.ctx-menu [role="menuitem"] >> text=Older than 90 days`);
+      await toastSaid(`${o90.total - 200} more: repeat`);
+      expect((await oldCalls()).slice(1)).toEqual([90]);
+      await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__oldReal; });
+      expect((await trashed()).at(-1)).toEqual(o90.ids);
+      expect((await trashed()).at(-1)![0]).toBe(sid(1201)); // (the oldest first)
+    } finally {
+      await page.evaluate(() => { const w = window as any; if (w.__oldReal) w.jaffer.call = w.__oldReal; delete w.__oldReal; });
+      await patch({ permissions: { deepSearch: false } });
+      await page.fill('.sp-convos .conv-search input', '').catch(() => undefined);
+      for (const d of [proj, oldProj]) fs.rmSync(d, { recursive: true, force: true });
+    }
   }, 60_000);
 
   it('the column ruler sits at its column, follows the text size, and goes when off; inline images switch off and on', async () => {
@@ -3650,337 +3659,346 @@ describe('Jaffer UI end to end', () => {
   it('terminals: split up to four, focus, close and restart', async () => {
     // (no Escape first: readline would read it and the next key as one Meta key, and eat the first letter typed)
     await clipStub();
-    const dirs = ['split-a', 'split-b', 'split-c', 'split-d'].map((d) => path.join(env.userHome, d));
-    for (const d of dirs) fs.mkdirSync(d, { recursive: true });
-    const ids = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
-    const focused = () => page.evaluate(() => (window as any).__jaffer.activePane() as string);
-    const outlined = () => page.$$eval('.pane[data-focused]', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
-    const textOf = (id: string) =>
-      page.evaluate((p) => {
-        const t = (window as any).__jaffer.terminals.get(p)?.term;
-        if (!t) return '';
-        const b = t.buffer.active;
-        let out = ''; // (wrapped rows joined: a long folder in the prompt wraps in a narrow terminal)
-        for (let i = 0; i < b.length; i++) {
-          const l = b.getLine(i)!;
-          out += (l.isWrapped ? '' : '\n') + l.translateToString(true);
+    const mainBefore = ((await page.evaluate(() => window.jaffer.call('pane.list'))) as { cwd: string }[])[0]!.cwd; // (main goes back there at the end)
+    try {
+      const dirs = ['split-a', 'split-b', 'split-c', 'split-d'].map((d) => path.join(env.userHome, d));
+      for (const d of dirs) fs.mkdirSync(d, { recursive: true });
+      const ids = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+      const focused = () => page.evaluate(() => (window as any).__jaffer.activePane() as string);
+      const outlined = () => page.$$eval('.pane[data-focused]', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+      const textOf = (id: string) =>
+        page.evaluate((p) => {
+          const t = (window as any).__jaffer.terminals.get(p)?.term;
+          if (!t) return '';
+          const b = t.buffer.active;
+          let out = ''; // (wrapped rows joined: a long folder in the prompt wraps in a narrow terminal)
+          for (let i = 0; i < b.length; i++) {
+            const l = b.getLine(i)!;
+            out += (l.isWrapped ? '' : '\n') + l.translateToString(true);
+          }
+          return out;
+        }, id);
+      const keyboardIn = () => page.evaluate(() => (document.activeElement?.closest('.pane') as HTMLElement | null)?.dataset.pane ?? null);
+      const focusOn = async (id: string) => {
+        await until(async () => (await focused()) === id && (await keyboardIn()) === id && (await outlined()).join() === ((await ids()).length > 1 ? id : ''), 5_000, `${id} to have the keyboard`);
+      };
+      const chipName = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-name`).textContent();
+      const closeBtn = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-x`);
+      const daemonPanes = () => page.evaluate(() => window.jaffer.call('pane.list')) as Promise<{ id: string; pid: number; cwd: string; cols: number; rows: number; busy: string | null; alive: boolean }[]>;
+      const prompts = (id: string) => until(async () => /❯/.test(await textOf(id)), 15_000, `the prompt in ${id}`);
+      const run = async (id: string, line: string, done: RegExp) => {
+        await focusOn(id);
+        await enter(line);
+        await until(async () => done.test(await textOf(id)), 10_000, `${line} in ${id}`);
+      };
+      /** Every pane where the grid puts it: equal parts of the `.panes` box, within 2 px, none overlapping. */
+      const geometry = async (n: number) => {
+        const g = await page.evaluate(() => {
+          const box = (e: Element) => {
+            const r = e.getBoundingClientRect();
+            return { x: r.x, y: r.y, w: r.width, h: r.height };
+          };
+          return { all: box(document.querySelector('.panes')!), count: (document.querySelector('.panes') as HTMLElement).dataset.count, cells: [...document.querySelectorAll('.panes > .pane')].map(box) };
+        });
+        expect(g.count).toBe(String(n));
+        expect(g.cells).toHaveLength(n);
+        const grid = paneGrid(n);
+        const P = g.all;
+        grid.cells.forEach((c, i) => {
+          const b = g.cells[i]!;
+          const want = { x: P.x + ((c.col - 1) * P.w) / grid.cols, y: P.y + ((c.row - 1) * P.h) / grid.rows, w: P.w / grid.cols, h: (c.rows * P.h) / grid.rows };
+          for (const k of ['x', 'y', 'w', 'h'] as const) expect(Math.abs(b[k] - want[k]), `pane ${i + 1} of ${n}: ${k} ${b[k]} vs ${want[k]}`).toBeLessThanOrEqual(2);
+        });
+        if (n === 1) {
+          // the one terminal's screen fills its pane (no leftover bands above or below)
+          const fill = await page.evaluate(() => ({ pane: document.querySelector('.pane')!.getBoundingClientRect().height, screen: document.querySelector('.pane .xterm-screen')!.getBoundingClientRect().height }));
+        expect(fill.pane).toBeGreaterThan(600); // (the one terminal takes the window's height, not a sliver)
+          expect(fill.screen).toBeGreaterThan(fill.pane - 60);
         }
-        return out;
-      }, id);
-    const keyboardIn = () => page.evaluate(() => (document.activeElement?.closest('.pane') as HTMLElement | null)?.dataset.pane ?? null);
-    const focusOn = async (id: string) => {
-      await until(async () => (await focused()) === id && (await keyboardIn()) === id && (await outlined()).join() === ((await ids()).length > 1 ? id : ''), 5_000, `${id} to have the keyboard`);
-    };
-    const chipName = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-name`).textContent();
-    const closeBtn = (id: string) => page.locator(`.pane[data-pane="${id}"] .pn-chip .pn-x`);
-    const daemonPanes = () => page.evaluate(() => window.jaffer.call('pane.list')) as Promise<{ id: string; pid: number; cwd: string; cols: number; rows: number; busy: string | null; alive: boolean }[]>;
-    const prompts = (id: string) => until(async () => /❯/.test(await textOf(id)), 15_000, `the prompt in ${id}`);
-    const run = async (id: string, line: string, done: RegExp) => {
-      await focusOn(id);
-      await enter(line);
-      await until(async () => done.test(await textOf(id)), 10_000, `${line} in ${id}`);
-    };
-    /** Every pane where the grid puts it: equal parts of the `.panes` box, within 2 px, none overlapping. */
-    const geometry = async (n: number) => {
-      const g = await page.evaluate(() => {
-        const box = (e: Element) => {
-          const r = e.getBoundingClientRect();
-          return { x: r.x, y: r.y, w: r.width, h: r.height };
-        };
-        return { all: box(document.querySelector('.panes')!), count: (document.querySelector('.panes') as HTMLElement).dataset.count, cells: [...document.querySelectorAll('.panes > .pane')].map(box) };
-      });
-      expect(g.count).toBe(String(n));
-      expect(g.cells).toHaveLength(n);
-      const grid = paneGrid(n);
-      const P = g.all;
-      grid.cells.forEach((c, i) => {
-        const b = g.cells[i]!;
-        const want = { x: P.x + ((c.col - 1) * P.w) / grid.cols, y: P.y + ((c.row - 1) * P.h) / grid.rows, w: P.w / grid.cols, h: (c.rows * P.h) / grid.rows };
-        for (const k of ['x', 'y', 'w', 'h'] as const) expect(Math.abs(b[k] - want[k]), `pane ${i + 1} of ${n}: ${k} ${b[k]} vs ${want[k]}`).toBeLessThanOrEqual(2);
-      });
-      if (n === 1) {
-        // the one terminal's screen fills its pane (no leftover bands above or below)
-        const fill = await page.evaluate(() => ({ pane: document.querySelector('.pane')!.getBoundingClientRect().height, screen: document.querySelector('.pane .xterm-screen')!.getBoundingClientRect().height }));
-        expect(fill.screen).toBeGreaterThan(fill.pane - 60);
-      }
-      for (let i = 0; i < n; i++)
-        for (let j = i + 1; j < n; j++) {
-          const a = g.cells[i]!;
-          const b = g.cells[j]!;
-          const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-          const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
-          expect(ox > 0.5 && oy > 0.5, `panes ${i + 1} and ${j + 1} of ${n} overlap`).toBe(false);
+        for (let i = 0; i < n; i++)
+          for (let j = i + 1; j < n; j++) {
+            const a = g.cells[i]!;
+            const b = g.cells[j]!;
+            const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+            const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+            expect(ox > 0.5 && oy > 0.5, `panes ${i + 1} and ${j + 1} of ${n} overlap`).toBe(false);
+          }
+      };
+      /** Each xterm's size is the size its shell has, and the screen fits the pane's box (one terminal per box, no leftover band). */
+      const sizes = async () => {
+        const shown = await page.evaluate(() =>
+          [...(window as any).__jaffer.terminals.entries()].map(([id, h]: [string, any]) => {
+            const term = document.querySelector(`.term[data-pane="${id}"]`)!.getBoundingClientRect();
+            const screen = document.querySelector(`.term[data-pane="${id}"] .xterm-screen`)!.getBoundingClientRect();
+            return { id, cols: h.term.cols, rows: h.term.rows, term: { w: term.width, h: term.height }, screen: { w: screen.width, h: screen.height } };
+          }),
+        );
+        const pty = await daemonPanes();
+        for (const s of shown) {
+          const p = pty.find((x) => x.id === s.id);
+          if (!p || p.cols !== s.cols || p.rows !== s.rows) return false;
+          if (s.screen.w > s.term.w || s.screen.h > s.term.h || s.screen.w < s.term.w - 60 || s.screen.h < s.term.h - 50) return false;
         }
-    };
-    /** Each xterm's size is the size its shell has, and the screen fits the pane's box (one terminal per box, no leftover band). */
-    const sizes = async () => {
-      const shown = await page.evaluate(() =>
-        [...(window as any).__jaffer.terminals.entries()].map(([id, h]: [string, any]) => {
-          const term = document.querySelector(`.term[data-pane="${id}"]`)!.getBoundingClientRect();
-          const screen = document.querySelector(`.term[data-pane="${id}"] .xterm-screen`)!.getBoundingClientRect();
-          return { id, cols: h.term.cols, rows: h.term.rows, term: { w: term.width, h: term.height }, screen: { w: screen.width, h: screen.height } };
-        }),
-      );
-      const pty = await daemonPanes();
-      for (const s of shown) {
-        const p = pty.find((x) => x.id === s.id);
-        if (!p || p.cols !== s.cols || p.rows !== s.rows) return false;
-        if (s.screen.w > s.term.w || s.screen.h > s.term.h || s.screen.w < s.term.w - 60 || s.screen.h < s.term.h - 50) return false;
-      }
-      return shown.length === pty.length && shown;
-    };
-    /** pty.resize calls per pane since `countResizes()`. */
-    const resizesBy = () => page.evaluate(() => (window as any).__resizes.reduce((m: Record<string, number>, r: { pane: string }) => ((m[r.pane] = (m[r.pane] ?? 0) + 1), m), {}) as Record<string, number>);
+        return shown.length === pty.length && shown;
+      };
+      /** pty.resize calls per pane since `countResizes()`. */
+      const resizesBy = () => page.evaluate(() => (window as any).__resizes.reduce((m: Record<string, number>, r: { pane: string }) => ((m[r.pane] = (m[r.pane] ?? 0) + 1), m), {}) as Record<string, number>);
 
-    // one terminal: no split controls of 1.3 and the old menu ids do nothing; it fills its area
-    expect(await ids()).toEqual(['main']);
-    expect(await page.$('button[title^="Split"], .divider, .pane-head')).toBeNull();
-    await menu('split-right');
-    await menu('split-down');
-    await sleep(400);
-    expect(await page.$$('.term .xterm')).toHaveLength(1);
-    expect(await daemonPanes()).toHaveLength(1);
-    await geometry(1);
-    expect((await page.locator('.pane').boundingBox())!.height).toBeGreaterThan(600);
-    expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
-    await page.click('.term');
-    await run('main', `cd '${dirs[0]}'`, /split-a ❯ *$/m);
-    await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the chip to follow cd');
-
-    // ⌘D: one more terminal in the focused one's folder takes the keyboard; the one whose box changed refits once (one pty.resize, not one per pixel)
-    let n = 1;
-    const shrinks: Record<string, string> = { p2: 'main', p3: 'p2', p4: 'main' }; // (2: side by side; 3: the right one splits; 4: the left one splits)
-    for (const id of ['p2', 'p3', 'p4']) {
-      await sleep(300);
-      await countResizes();
-      await menu('split-terminal');
-      n++;
-      await until(async () => (await ids()).length === n, 10_000, `${n} panes`);
-      expect(await ids()).toEqual(['main', 'p2', 'p3', 'p4'].slice(0, n));
-      await prompts(id);
-      await focusOn(id);
-      await until(async () => (await chipName(id)) === `split-${'abcd'[n - 2]}`, 5_000, `${id} to start in the folder of the one it was split from`);
-      await until(sizes, 5_000, `every terminal's size to match its box at ${n}`);
+      // one terminal: no split controls of 1.3 and the old menu ids do nothing; it fills its area
+      expect(await ids()).toEqual(['main']);
+      expect(await page.$('button[title^="Split"], .divider, .pane-head')).toBeNull();
+      await menu('split-right');
+      await menu('split-down');
       await sleep(400);
-      const r = await resizesBy();
-      for (const old of (await ids()).filter((x) => x !== id)) expect(r[old] ?? 0, `pty.resize of ${old} when ${id} came`).toBeLessThanOrEqual(1);
-      expect(r[shrinks[id]!], `${shrinks[id]} refits once when ${id} comes`).toBe(1);
-      expect(r[id] ?? 0, `${id} resizes at most once after it attached`).toBeLessThanOrEqual(1);
-      await geometry(n);
-      await run(id, `cd '${dirs[n - 1]}'`, new RegExp(`split-${'abcd'[n - 1]} ❯ *$`, 'm'));
-      await until(async () => (await chipName(id)) === `split-${'abcd'[n - 1]}`, 5_000, `${id}'s chip`);
+      expect(await page.$$('.term .xterm')).toHaveLength(1);
+      expect(await daemonPanes()).toHaveLength(1);
+      await geometry(1);
+      expect((await page.locator('.pane').boundingBox())!.height).toBeGreaterThan(600);
+      expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
+      await page.click('.term');
+      await run('main', `cd '${dirs[0]}'`, /split-a ❯ *$/m);
+      await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the chip to follow cd');
+
+      // ⌘D: one more terminal in the focused one's folder takes the keyboard; the one whose box changed refits once (one pty.resize, not one per pixel)
+      let n = 1;
+      const shrinks: Record<string, string> = { p2: 'main', p3: 'p2', p4: 'main' }; // (2: side by side; 3: the right one splits; 4: the left one splits)
+      for (const id of ['p2', 'p3', 'p4']) {
+        await sleep(300);
+        await countResizes();
+        await menu('split-terminal');
+        n++;
+        await until(async () => (await ids()).length === n, 10_000, `${n} panes`);
+        expect(await ids()).toEqual(['main', 'p2', 'p3', 'p4'].slice(0, n));
+        await prompts(id);
+        await focusOn(id);
+        await until(async () => (await chipName(id)) === `split-${'abcd'[n - 2]}`, 5_000, `${id} to start in the folder of the one it was split from`);
+        await until(sizes, 5_000, `every terminal's size to match its box at ${n}`);
+        await sleep(400);
+        const r = await resizesBy();
+        for (const old of (await ids()).filter((x) => x !== id)) expect(r[old] ?? 0, `pty.resize of ${old} when ${id} came`).toBeLessThanOrEqual(1);
+        expect(r[shrinks[id]!], `${shrinks[id]} refits once when ${id} comes`).toBe(1);
+        expect(r[id] ?? 0, `${id} resizes at most once after it attached`).toBeLessThanOrEqual(1);
+        await geometry(n);
+        await run(id, `cd '${dirs[n - 1]}'`, new RegExp(`split-${'abcd'[n - 1]} ❯ *$`, 'm'));
+        await until(async () => (await chipName(id)) === `split-${'abcd'[n - 1]}`, 5_000, `${id}'s chip`);
+      }
+      await shot('16-four-terminals');
+      // a fifth is refused with a toast
+      await menu('split-terminal');
+      await toastSaid('At most four terminals.');
+      await sleep(300);
+      expect(await ids()).toHaveLength(4);
+      expect(await daemonPanes()).toHaveLength(4);
+      // each chip: its folder, a close button, a dot only where a Claude runs
+      for (const [i, id] of ['main', 'p2', 'p3', 'p4'].entries()) {
+        expect(await chipName(id)).toBe(`split-${'abcd'[i]}`);
+        expect(await closeBtn(id).getAttribute('aria-label')).toBe('Close terminal');
+      }
+      expect(await page.locator('.titlebar button:not(.panel-toggle)').count()).toBe(0); // (the chips are in the panes, not the title bar)
+
+      // ⌘1..⌘4, ⌘] and ⌘[ (both wrap) move the keyboard and the outline
+      for (const [key, want] of [['focus-terminal-1', 'main'], ['focus-terminal-3', 'p3'], ['next-terminal', 'p4'], ['next-terminal', 'main'], ['prev-terminal', 'p4'], ['focus-terminal-2', 'p2']] as const) {
+        await menu(key);
+        await focusOn(want);
+      }
+      // typing goes only to the focused terminal
+      await enter('echo ONLY-IN-P2-$((40+51))');
+      await until(async () => /^ONLY-IN-P2-91/m.test(await textOf('p2')), 5_000, 'the marker in p2');
+      for (const id of ['main', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('ONLY-IN-P2');
+      // the title bar follows the focused terminal
+      await until(async () => /split-b/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p2');
+      await menu('focus-terminal-3');
+      await until(async () => /split-c/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p3');
+
+      // a paste of several lines asks, and Paste puts the lines into the terminal they were pasted into, wherever the focus is by then
+      await patch({ terminal: { pasteGuard: true } });
+      await menu('focus-terminal-2');
+      await focusOn('p2');
+      const pasted = Array.from({ length: 14 }, (_, i) => `echo PASTE-P2-${i + 1}`).join('\n') + '\n';
+      await page.evaluate((t) => {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', t);
+        document.querySelector('.term[data-pane="p2"] .xterm-helper-textarea')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      }, pasted);
+      await page.waitForSelector('.paste-bar');
+      expect(await page.textContent('.paste-bar b')).toBe('Paste 14 lines?');
+      await menu('focus-terminal-3');
+      await focusOn('p3');
+      await page.locator('.paste-bar .btn.primary').click();
+      await page.waitForSelector('.paste-bar', { state: 'detached' });
+      await focusOn('p3'); // (the keyboard stays with the focused terminal)
+      await page.evaluate(() => window.jaffer.call('pty.write', { pane: 'p2', data: '\r' })); // (a shell with bracketed paste holds pasted lines until Enter)
+      await until(async () => /^PASTE-P2-14/m.test(await textOf('p2')), 8_000, 'the pasted lines to run in p2');
+      expect(await textOf('p3')).not.toContain('PASTE-P2');
+
+      // a turn of a Claude in a terminal that is not focused still counts, and its summary says where; moving the focus counts nothing
+      await endClaude();
+      await menu('focus-terminal-1');
+      await focusOn('main');
+      const turns = () => page.evaluate(() => (window as any).__jaffer.turns() as number);
+      const t0 = await turns();
+      const fg = { id: 'fg-main', pane: 'main', state: 'working', turnStartedAtAgo: 5_000 };
+      const bg = { id: 'bg-p2', pane: 'p2', turnStartedAtAgo: 25_000 };
+      await inject([fg, { ...bg, state: 'working' }]);
+      await inject([fg, { ...bg, state: 'idle' }]);
+      await inject([fg, { ...bg, state: 'idle', cost: { usd: 0.02, at: 93 } }]);
+      await until(async () => (await turns()) === t0 + 1, 5_000, "p2's turn to count");
+      await until(async () => (await toastCount('split-b: Claude finished in 25s')) === 1, 5_000, "the summary naming p2's folder");
+      for (const k of ['focus-terminal-2', 'focus-terminal-1']) await menu(k);
+      await focusOn('main');
+      await sleep(500);
+      expect(await turns()).toBe(t0 + 1);
+      expect(await toastCount('Claude finished in')).toBe(1);
+      await inject([]);
+
+      // resume types only into the focused, idle terminal; a busy focused one gets nothing typed (copied, and why)
+      const sid = '00000093-aaaa-4bbb-8ccc-ddddeeeeffff';
+      const pdir = path.join(env.userHome, '.claude', 'projects', '-split-a');
+      fs.mkdirSync(pdir, { recursive: true });
+      const at = Date.now();
+      const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: dirs[0], timestamp: new Date(t).toISOString(), ...extra });
+      fs.writeFileSync(path.join(pdir, `${sid}.jsonl`), [line('user', at - 2000, { message: { role: 'user', content: 'split resume' } }), line('assistant', at, { message: { id: 'r93', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+      await menu('focus-terminal-2');
+      await run('p2', 'sleep 31', /sleep 31/);
+      await until(async () => (await daemonPanes()).find((p) => p.id === 'p2')?.busy === 'sleep 31', 5_000, 'p2 to be busy');
+      await menu('focus-terminal-1');
+      await run('main', 'claude() { echo "RESUMED-IN:$JAFFER_PANE:$*"; }; echo DEFINED-$((90+5))', /^DEFINED-95/m);
+      await menu('resume-last');
+      await until(async () => /^RESUMED-IN:main:--resume 00000093/m.test(await textOf('main')), 8_000, 'the resume in main');
+      for (const id of ['p2', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('RESUMED-IN');
+      await sleep(2100); // (the type-once lock)
+      await menu('focus-terminal-2');
+      await focusOn('p2');
+      const p2Before = await textOf('p2');
+      await menu('resume-last');
+      await toastSaid('sleep 31 is running: command copied');
+      expect(await page.evaluate(() => (window as any).__powerClip.written.at(-1))).toBe(`cd '${dirs[0]}' && claude --resume ${sid}`);
+      await sleep(400);
+      expect(await textOf('p2')).toBe(p2Before);
+      expect((await textOf('main')).match(/^RESUMED-IN:/gm)).toHaveLength(1); // (typed once, into main only)
+
+      // ✕ on a terminal that runs something asks first (under its chip); Cancel (the default) and Esc keep it
+      await closeBtn('p2').click();
+      const ask = page.locator('.pane[data-pane="p2"] .pn-confirm');
+      await ask.waitFor();
+      expect(await ask.textContent()).toContain('A command is running: sleep 31');
+      await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard');
+      await page.keyboard.press('Enter');
+      await ask.waitFor({ state: 'detached' });
+      await closeBtn('p2').click();
+      await ask.waitFor();
+      await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard again');
+      await page.keyboard.press('Escape');
+      await ask.waitFor({ state: 'detached' });
+      await sleep(300);
+      expect(await ids()).toHaveLength(4);
+      expect((await daemonPanes()).find((p) => p.id === 'p2')?.busy).toBe('sleep 31');
+      // ⇧⌘W is the same question for the focused terminal. Closed meanwhile from elsewhere, the question goes with it and the keyboard goes
+      // to a neighbour; the id opened again starts without the question
+      await menu('focus-terminal-2');
+      await focusOn('p2');
+      await menu('close-terminal');
+      await ask.waitFor();
+      await page.evaluate(() => window.jaffer.call('pane.close', { pane: 'p2' }));
+      await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close');
+      expect((await daemonPanes()).map((p) => p.id)).toEqual(['main', 'p3', 'p4']);
+      await focusOn('p3');
+      await geometry(3);
+      await until(sizes, 5_000, 'the sizes at 3 after a close');
+      expect(await page.evaluate(() => (window as any).__jaffer.terminals.has('p2'))).toBe(false);
+      await menu('split-terminal');
+      await until(async () => (await ids()).join() === 'main,p3,p4,p2', 5_000, 'p2 opened again, last');
+      await prompts('p2');
+      await sleep(300);
+      expect(await page.locator('.pn-confirm').count()).toBe(0);
+      // nothing runs: ✕ closes at once, and a double click sends one request
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__closes = 0;
+        const orig = w.jaffer.call;
+        w.jaffer.call = (m: string, p: unknown) => (m === 'pane.close' && w.__closes++, orig(m, p));
+        w.__closeSpyOff = () => (w.jaffer.call = orig);
+      });
+      await closeBtn('p2').dblclick();
+      await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close at once');
+      await sleep(400);
+      expect(await page.evaluate(() => (window as any).__closes)).toBe(1);
+      await page.evaluate(() => (window as any).__closeSpyOff());
+      await closeBtn('p4').click();
+      await until(async () => (await ids()).join() === 'main,p3', 5_000, 'p4 to close without a question');
+      expect(await page.locator('.pn-confirm').count()).toBe(0);
+      await geometry(2);
+
+      // the sticky command header sits over the focused terminal, and follows it when the window is resized
+      await focusOn('p3');
+      await run('p3', 'seq 1 400', /^400$/m);
+      await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollLines(-150));
+      await page.waitForSelector('.sticky-cmd');
+      const stickyOverP3 = async () => {
+        const st = (await page.locator('.sticky-cmd').boundingBox())!;
+        const p3 = (await page.locator('.pane[data-pane="p3"]').boundingBox())!;
+        return Math.abs(st.x - (p3.x + 12)) <= 2 && Math.abs(st.y - (p3.y + 6)) <= 2;
+      };
+      await until(stickyOverP3, 3_000, 'the header over p3');
+      await page.setViewportSize({ width: 1100, height: 860 });
+      await until(stickyOverP3, 3_000, 'the header to follow p3 after a resize');
+      await page.setViewportSize({ width: 1360, height: 860 });
+      await until(stickyOverP3, 3_000, 'the header to follow p3 back');
+      await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollToBottom());
+      await page.waitForSelector('.sticky-cmd', { state: 'detached' });
+      // the find bar searches the focused terminal; when the focus moves, the other terminal keeps no marks
+      const findMarks = (id: string) => page.locator(`.term[data-pane="${id}"] .xterm-find-result-decoration, .term[data-pane="${id}"] .xterm-find-active-result-decoration`).count();
+      await menu('find');
+      await page.waitForSelector('.findbar input');
+      await page.fill('.findbar input', '399');
+      await until(async () => (await findMarks('p3')) > 0, 5_000, 'the match marked in p3');
+      await menu('focus-terminal-1');
+      await until(async () => (await findMarks('p3')) === 0, 5_000, "p3's marks to go when the focus moves");
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.findbar', { state: 'detached' });
+      await focusOn('main');
+
+      // a Claude in a terminal (its hooks name the pane): closing that terminal ends that Claude only
+      await sendHook('UserPromptSubmit', { session_id: 'split-claude-p3', jaffer_pane: 'p3', prompt: 'hi' });
+      await sendHook('UserPromptSubmit', { session_id: 'split-claude-main', jaffer_pane: 'main', prompt: 'hi' });
+      const stateOf = async (id: string) => ((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions as { id: string; state: string }[]).find((s) => s.id === id)?.state;
+      await until(async () => (await page.locator('.pane[data-pane="p3"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'p3 chip to show its Claude working');
+      await until(async () => (await page.locator('.pane[data-pane="main"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'main chip to show its own Claude');
+      await closeBtn('p3').click();
+      const askClaude = page.locator('.pane[data-pane="p3"] .pn-confirm');
+      await askClaude.waitFor();
+      expect(await askClaude.textContent()).toContain('Claude is running here');
+      await askClaude.getByRole('button', { name: 'End terminal' }).click();
+      await until(async () => (await ids()).join() === 'main', 5_000, 'p3 to close');
+      await until(async () => (await stateOf('split-claude-p3')) === 'ended', 5_000, "p3's Claude to end");
+      expect(await stateOf('split-claude-main')).toBe('working');
+      await sendHook('SessionEnd', { session_id: 'split-claude-main' });
+      await sendHook('SessionEnd', { session_id: 'split-claude-p3' });
+      await focusOn('main');
+      await geometry(1);
+
+      // the last terminal's ✕ is Restart terminal: a fresh shell in the same folder, a blank screen
+      expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
+      await enter('echo before-the-restart-94');
+      await until(async () => /^before-the-restart-94/m.test(await textOf('main')), 5_000, 'the marker');
+      const pid = (await daemonPanes())[0]!.pid;
+      await closeBtn('main').click();
+      await until(async () => {
+        const p = (await daemonPanes())[0];
+        return p?.alive && p.pid !== pid;
+      }, 10_000, 'a fresh shell');
+      expect(await page.locator('.pn-confirm').count()).toBe(0);
+      await until(async () => !(await textOf('main')).includes('before-the-restart-94'), 10_000, 'the old screen to go');
+      await prompts('main');
+      expect(fs.realpathSync((await daemonPanes())[0]!.cwd)).toBe(fs.realpathSync(dirs[0]!));
+      await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the same folder');
+      expect(await ids()).toEqual(['main']);
+    } finally {
+      fs.rmSync(path.join(env.userHome, '.claude', 'projects', '-split-a'), { recursive: true, force: true });
+      await page.evaluate(() => { const w = window as any; w.__closeSpyOff?.(); delete w.__closeSpyOff; });
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await page.evaluate((d) => window.jaffer.call('pty.write', { pane: 'main', data: `cd '${d}'\r` }), mainBefore);
     }
-    await shot('16-four-terminals');
-    // a fifth is refused with a toast
-    await menu('split-terminal');
-    await toastSaid('At most four terminals.');
-    await sleep(300);
-    expect(await ids()).toHaveLength(4);
-    expect(await daemonPanes()).toHaveLength(4);
-    // each chip: its folder, a close button, a dot only where a Claude runs
-    for (const [i, id] of ['main', 'p2', 'p3', 'p4'].entries()) {
-      expect(await chipName(id)).toBe(`split-${'abcd'[i]}`);
-      expect(await closeBtn(id).getAttribute('aria-label')).toBe('Close terminal');
-    }
-    expect(await page.locator('.titlebar button:not(.panel-toggle)').count()).toBe(0); // (the chips are in the panes, not the title bar)
-
-    // ⌘1..⌘4, ⌘] and ⌘[ (both wrap) move the keyboard and the outline
-    for (const [key, want] of [['focus-terminal-1', 'main'], ['focus-terminal-3', 'p3'], ['next-terminal', 'p4'], ['next-terminal', 'main'], ['prev-terminal', 'p4'], ['focus-terminal-2', 'p2']] as const) {
-      await menu(key);
-      await focusOn(want);
-    }
-    // typing goes only to the focused terminal
-    await enter('echo ONLY-IN-P2-$((40+51))');
-    await until(async () => /^ONLY-IN-P2-91/m.test(await textOf('p2')), 5_000, 'the marker in p2');
-    for (const id of ['main', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('ONLY-IN-P2');
-    // the title bar follows the focused terminal
-    await until(async () => /split-b/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p2');
-    await menu('focus-terminal-3');
-    await until(async () => /split-c/.test((await page.textContent('.session-pill')) ?? ''), 5_000, 'the title bar to show p3');
-
-    // a paste of several lines asks, and Paste puts the lines into the terminal they were pasted into, wherever the focus is by then
-    await patch({ terminal: { pasteGuard: true } });
-    await menu('focus-terminal-2');
-    await focusOn('p2');
-    const pasted = Array.from({ length: 14 }, (_, i) => `echo PASTE-P2-${i + 1}`).join('\n') + '\n';
-    await page.evaluate((t) => {
-      const dt = new DataTransfer();
-      dt.setData('text/plain', t);
-      document.querySelector('.term[data-pane="p2"] .xterm-helper-textarea')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-    }, pasted);
-    await page.waitForSelector('.paste-bar');
-    expect(await page.textContent('.paste-bar b')).toBe('Paste 14 lines?');
-    await menu('focus-terminal-3');
-    await focusOn('p3');
-    await page.locator('.paste-bar .btn.primary').click();
-    await page.waitForSelector('.paste-bar', { state: 'detached' });
-    await focusOn('p3'); // (the keyboard stays with the focused terminal)
-    await page.evaluate(() => window.jaffer.call('pty.write', { pane: 'p2', data: '\r' })); // (a shell with bracketed paste holds pasted lines until Enter)
-    await until(async () => /^PASTE-P2-14/m.test(await textOf('p2')), 8_000, 'the pasted lines to run in p2');
-    expect(await textOf('p3')).not.toContain('PASTE-P2');
-
-    // a turn of a Claude in a terminal that is not focused still counts, and its summary says where; moving the focus counts nothing
-    await endClaude();
-    await menu('focus-terminal-1');
-    await focusOn('main');
-    const turns = () => page.evaluate(() => (window as any).__jaffer.turns() as number);
-    const t0 = await turns();
-    const fg = { id: 'fg-main', pane: 'main', state: 'working', turnStartedAtAgo: 5_000 };
-    const bg = { id: 'bg-p2', pane: 'p2', turnStartedAtAgo: 25_000 };
-    await inject([fg, { ...bg, state: 'working' }]);
-    await inject([fg, { ...bg, state: 'idle' }]);
-    await inject([fg, { ...bg, state: 'idle', cost: { usd: 0.02, at: 93 } }]);
-    await until(async () => (await turns()) === t0 + 1, 5_000, "p2's turn to count");
-    await until(async () => (await toastCount('split-b: Claude finished in 25s')) === 1, 5_000, "the summary naming p2's folder");
-    for (const k of ['focus-terminal-2', 'focus-terminal-1']) await menu(k);
-    await focusOn('main');
-    await sleep(500);
-    expect(await turns()).toBe(t0 + 1);
-    expect(await toastCount('Claude finished in')).toBe(1);
-    await inject([]);
-
-    // resume types only into the focused, idle terminal; a busy focused one gets nothing typed (copied, and why)
-    const sid = '00000093-aaaa-4bbb-8ccc-ddddeeeeffff';
-    const pdir = path.join(env.userHome, '.claude', 'projects', '-split-a');
-    fs.mkdirSync(pdir, { recursive: true });
-    const at = Date.now();
-    const line = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: dirs[0], timestamp: new Date(t).toISOString(), ...extra });
-    fs.writeFileSync(path.join(pdir, `${sid}.jsonl`), [line('user', at - 2000, { message: { role: 'user', content: 'split resume' } }), line('assistant', at, { message: { id: 'r93', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
-    await menu('focus-terminal-2');
-    await run('p2', 'sleep 31', /sleep 31/);
-    await until(async () => (await daemonPanes()).find((p) => p.id === 'p2')?.busy === 'sleep 31', 5_000, 'p2 to be busy');
-    await menu('focus-terminal-1');
-    await run('main', 'claude() { echo "RESUMED-IN:$JAFFER_PANE:$*"; }; echo DEFINED-$((90+5))', /^DEFINED-95/m);
-    await menu('resume-last');
-    await until(async () => /^RESUMED-IN:main:--resume 00000093/m.test(await textOf('main')), 8_000, 'the resume in main');
-    for (const id of ['p2', 'p3', 'p4']) expect(await textOf(id), id).not.toContain('RESUMED-IN');
-    await sleep(2100); // (the type-once lock)
-    await menu('focus-terminal-2');
-    await focusOn('p2');
-    const p2Before = await textOf('p2');
-    await menu('resume-last');
-    await toastSaid('sleep 31 is running: command copied');
-    expect(await page.evaluate(() => (window as any).__powerClip.written.at(-1))).toBe(`cd '${dirs[0]}' && claude --resume ${sid}`);
-    await sleep(400);
-    expect(await textOf('p2')).toBe(p2Before);
-    expect((await textOf('main')).match(/^RESUMED-IN:/gm)).toHaveLength(1); // (typed once, into main only)
-
-    // ✕ on a terminal that runs something asks first (under its chip); Cancel (the default) and Esc keep it
-    await closeBtn('p2').click();
-    const ask = page.locator('.pane[data-pane="p2"] .pn-confirm');
-    await ask.waitFor();
-    expect(await ask.textContent()).toContain('A command is running: sleep 31');
-    await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard');
-    await page.keyboard.press('Enter');
-    await ask.waitFor({ state: 'detached' });
-    await closeBtn('p2').click();
-    await ask.waitFor();
-    await until(async () => (await page.evaluate(() => document.activeElement?.textContent)) === 'Cancel', 3_000, 'Cancel to have the keyboard again');
-    await page.keyboard.press('Escape');
-    await ask.waitFor({ state: 'detached' });
-    await sleep(300);
-    expect(await ids()).toHaveLength(4);
-    expect((await daemonPanes()).find((p) => p.id === 'p2')?.busy).toBe('sleep 31');
-    // ⇧⌘W is the same question for the focused terminal. Closed meanwhile from elsewhere, the question goes with it and the keyboard goes
-    // to a neighbour; the id opened again starts without the question
-    await menu('focus-terminal-2');
-    await focusOn('p2');
-    await menu('close-terminal');
-    await ask.waitFor();
-    await page.evaluate(() => window.jaffer.call('pane.close', { pane: 'p2' }));
-    await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close');
-    expect((await daemonPanes()).map((p) => p.id)).toEqual(['main', 'p3', 'p4']);
-    await focusOn('p3');
-    await geometry(3);
-    await until(sizes, 5_000, 'the sizes at 3 after a close');
-    expect(await page.evaluate(() => (window as any).__jaffer.terminals.has('p2'))).toBe(false);
-    await menu('split-terminal');
-    await until(async () => (await ids()).join() === 'main,p3,p4,p2', 5_000, 'p2 opened again, last');
-    await prompts('p2');
-    await sleep(300);
-    expect(await page.locator('.pn-confirm').count()).toBe(0);
-    // nothing runs: ✕ closes at once, and a double click sends one request
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__closes = 0;
-      const orig = w.jaffer.call;
-      w.jaffer.call = (m: string, p: unknown) => (m === 'pane.close' && w.__closes++, orig(m, p));
-      w.__closeSpyOff = () => (w.jaffer.call = orig);
-    });
-    await closeBtn('p2').dblclick();
-    await until(async () => (await ids()).join() === 'main,p3,p4', 5_000, 'p2 to close at once');
-    await sleep(400);
-    expect(await page.evaluate(() => (window as any).__closes)).toBe(1);
-    await page.evaluate(() => (window as any).__closeSpyOff());
-    await closeBtn('p4').click();
-    await until(async () => (await ids()).join() === 'main,p3', 5_000, 'p4 to close without a question');
-    expect(await page.locator('.pn-confirm').count()).toBe(0);
-    await geometry(2);
-
-    // the sticky command header sits over the focused terminal, and follows it when the window is resized
-    await focusOn('p3');
-    await run('p3', 'seq 1 400', /^400$/m);
-    await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollLines(-150));
-    await page.waitForSelector('.sticky-cmd');
-    const stickyOverP3 = async () => {
-      const st = (await page.locator('.sticky-cmd').boundingBox())!;
-      const p3 = (await page.locator('.pane[data-pane="p3"]').boundingBox())!;
-      return Math.abs(st.x - (p3.x + 12)) <= 2 && Math.abs(st.y - (p3.y + 6)) <= 2;
-    };
-    await until(stickyOverP3, 3_000, 'the header over p3');
-    await page.setViewportSize({ width: 1100, height: 860 });
-    await until(stickyOverP3, 3_000, 'the header to follow p3 after a resize');
-    await page.setViewportSize({ width: 1360, height: 860 });
-    await until(stickyOverP3, 3_000, 'the header to follow p3 back');
-    await page.evaluate(() => (window as any).__jaffer.terminals.get('p3').term.scrollToBottom());
-    await page.waitForSelector('.sticky-cmd', { state: 'detached' });
-    // the find bar searches the focused terminal; when the focus moves, the other terminal keeps no marks
-    const findMarks = (id: string) => page.locator(`.term[data-pane="${id}"] .xterm-find-result-decoration, .term[data-pane="${id}"] .xterm-find-active-result-decoration`).count();
-    await menu('find');
-    await page.waitForSelector('.findbar input');
-    await page.fill('.findbar input', '399');
-    await until(async () => (await findMarks('p3')) > 0, 5_000, 'the match marked in p3');
-    await menu('focus-terminal-1');
-    await until(async () => (await findMarks('p3')) === 0, 5_000, "p3's marks to go when the focus moves");
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.findbar', { state: 'detached' });
-    await focusOn('main');
-
-    // a Claude in a terminal (its hooks name the pane): closing that terminal ends that Claude only
-    await sendHook('UserPromptSubmit', { session_id: 'split-claude-p3', jaffer_pane: 'p3', prompt: 'hi' });
-    await sendHook('UserPromptSubmit', { session_id: 'split-claude-main', jaffer_pane: 'main', prompt: 'hi' });
-    const stateOf = async (id: string) => ((await page.evaluate(() => window.jaffer.call('claude.state'))).sessions as { id: string; state: string }[]).find((s) => s.id === id)?.state;
-    await until(async () => (await page.locator('.pane[data-pane="p3"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'p3 chip to show its Claude working');
-    await until(async () => (await page.locator('.pane[data-pane="main"] .pn-dot[data-state="working"]').count()) === 1, 5_000, 'main chip to show its own Claude');
-    await closeBtn('p3').click();
-    const askClaude = page.locator('.pane[data-pane="p3"] .pn-confirm');
-    await askClaude.waitFor();
-    expect(await askClaude.textContent()).toContain('Claude is running here');
-    await askClaude.getByRole('button', { name: 'End terminal' }).click();
-    await until(async () => (await ids()).join() === 'main', 5_000, 'p3 to close');
-    await until(async () => (await stateOf('split-claude-p3')) === 'ended', 5_000, "p3's Claude to end");
-    expect(await stateOf('split-claude-main')).toBe('working');
-    await sendHook('SessionEnd', { session_id: 'split-claude-main' });
-    await sendHook('SessionEnd', { session_id: 'split-claude-p3' });
-    await focusOn('main');
-    await geometry(1);
-
-    // the last terminal's ✕ is Restart terminal: a fresh shell in the same folder, a blank screen
-    expect(await closeBtn('main').getAttribute('aria-label')).toBe('Restart terminal');
-    await enter('echo before-the-restart-94');
-    await until(async () => /^before-the-restart-94/m.test(await textOf('main')), 5_000, 'the marker');
-    const pid = (await daemonPanes())[0]!.pid;
-    await closeBtn('main').click();
-    await until(async () => {
-      const p = (await daemonPanes())[0];
-      return p?.alive && p.pid !== pid;
-    }, 10_000, 'a fresh shell');
-    expect(await page.locator('.pn-confirm').count()).toBe(0);
-    await until(async () => !(await textOf('main')).includes('before-the-restart-94'), 10_000, 'the old screen to go');
-    await prompts('main');
-    expect(fs.realpathSync((await daemonPanes())[0]!.cwd)).toBe(fs.realpathSync(dirs[0]!));
-    await until(async () => (await chipName('main')) === 'split-a', 5_000, 'the same folder');
-    expect(await ids()).toEqual(['main']);
   }, 120_000);
 
   it('the side panel: open by default beside the card; ⌘B, the menu, the title bar button, the palette and Settings toggle it, kept in panel.open; closed, nothing of it renders; it slides (not with motion off) and fades in focus mode', async () => {
@@ -4915,25 +4933,27 @@ describe('Jaffer UI end to end', () => {
 
   it('a terminal host that comes back with fewer terminals: only the terminals it has attach again (a gone one never asks, no "No such pane")', async () => {
     const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
-    await menu('split-terminal');
-    await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
-    await sleep(600);
-    const second = (await panesNow()).find((id) => id !== 'main')!;
-    // the host came back with only its first terminal: its list answers a little later, and every attach is recorded
-    await page.evaluate(() => {
-      const w = window as any;
-      w.__upReal = w.jaffer.call;
-      w.__upAttach = [];
-      w.jaffer.call = (m: string, p: any) =>
-        m === 'pane.list' ? new Promise((r) => setTimeout(() => r([{ id: 'main' }]), 300)) : (m === 'session.attach' && w.__upAttach.push(p?.pane), w.__upReal(m, p));
-    });
-    await page.evaluate(() => (window as any).__event('daemon.up', {}));
-    await until(async () => JSON.stringify(await panesNow()) === JSON.stringify(['main']), 5_000, 'only the first terminal left');
-    await sleep(500);
-    expect(await page.evaluate(() => (window as any).__upAttach)).toEqual(['main']);
-    expect(await page.textContent('.panes')).not.toContain('No such pane');
-    await page.evaluate(() => { const w = window as any; w.jaffer.call = w.__upReal; });
-    await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), second);
+    try {
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+      await sleep(600);
+      // the host came back with only its first terminal: its list answers a little later, and every attach is recorded
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__upReal = w.jaffer.call;
+        w.__upAttach = [];
+        w.jaffer.call = (m: string, p: any) =>
+          m === 'pane.list' ? new Promise((r) => setTimeout(() => r([{ id: 'main' }]), 300)) : (m === 'session.attach' && w.__upAttach.push(p?.pane), w.__upReal(m, p));
+      });
+      await page.evaluate(() => (window as any).__event('daemon.up', {}));
+      await until(async () => JSON.stringify(await panesNow()) === JSON.stringify(['main']), 5_000, 'only the first terminal left');
+      await sleep(500);
+      expect(await page.evaluate(() => (window as any).__upAttach)).toEqual(['main']);
+      expect(await page.textContent('.panes')).not.toContain('No such pane');
+    } finally {
+      await page.evaluate(() => { const w = window as any; if (w.__upReal) w.jaffer.call = w.__upReal; delete w.__upReal; });
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+    }
   });
 
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
@@ -5815,8 +5835,14 @@ describe('Jaffer UI end to end', () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
     expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });
     expect(await page.locator('.ap-ask, .modal, .palette').count()).toBe(0);
-    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob|ci|ex)Real/); // (every wrapper restored; 1.4.0: ci, ex)
+    expect(await page.evaluate(() => String((window as any).jaffer.call))).not.toMatch(/__(hist|rev|ap|ob|ci|ex|priv|old|sx|up)Real|__closes/); // (every wrapper restored; 1.4.0: ci, ex, priv, old, sx, up and the close spy)
+    // (1.4.0) one terminal, the permission switches, tags, hidden and budgets as they were, the tour done and tips off (the tests turned them so)
+    expect(await page.locator('.panes > .pane').count()).toBe(1);
+    expect(((await page.evaluate(() => window.jaffer.call('pane.list'))) as unknown[]).length).toBe(1);
     const c = await page.evaluate(() => window.jaffer.call('config.get'));
+    expect(c.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    expect([c.history.tags, c.history.hidden, c.claude.projectBudgets]).toEqual([[], [], []]);
+    expect([c.tour.done, c.tips.enabled]).toEqual([true, false]);
     expect(c.claude.approvals).toBe(false);
     expect(c.updates.seenVersion).toBe(version);
     expect(c.panel.open).toBe(true);

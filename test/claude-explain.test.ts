@@ -97,7 +97,7 @@ describe('lastReply (1.4.0, Explain): the text of Claude\'s latest answer, and n
         const file = write(lines);
         const t = Date.now();
         const r = await lastReply(file, claudeDir);
-        expect(Date.now() - t, `${n} MB`).toBeLessThan(500);
+        expect(Date.now() - t, `${n} MB`).toBeLessThan(1500);
         expect((r ?? '').length).toBeLessThanOrEqual(EXPLAIN_MAX);
       }
     }

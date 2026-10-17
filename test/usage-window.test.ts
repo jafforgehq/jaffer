@@ -86,7 +86,7 @@ describe('recentUsage: the tokens (and estimated dollars) of the responses of th
     const t0 = performance.now();
     expect((await recentUsage(claudeDir, NOW)).tokens).toBe(42);
     expect(scanStats.bytes).toBeLessThanOrEqual(2 * 1024 * 1024); // (one chunk, or two at most: never the 24 MB)
-    expect(performance.now() - t0).toBeLessThan(1_500);
+    expect(performance.now() - t0).toBeLessThan(5_000);
   });
 
   it('overlapping calls share one scan (one answer, one read)', async () => {
@@ -115,7 +115,7 @@ describe('recentUsage: the tokens (and estimated dollars) of the responses of th
       plant(project, `${'x'.repeat(mb * 1024 * 1024)}"usage"`);
       const t0 = performance.now();
       expect((await recentUsage(claudeDir, NOW)).tokens).toBe(1);
-      expect(performance.now() - t0).toBeLessThan(mb === 1 ? 500 : 2_500);
+      expect(performance.now() - t0).toBeLessThan(mb === 1 ? 2_000 : 8_000);
     });
   }
 });

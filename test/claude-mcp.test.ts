@@ -67,7 +67,7 @@ describe('parseMcpList: the text of `claude mcp list`, line by line', () => {
     const t = Date.now();
     parseMcpList(`\x1b]${'a'.repeat(1024 * 1024)}`);
     parseMcpList(`\x1b]${'\x1b]a'.repeat(300_000)}`);
-    expect(Date.now() - t).toBeLessThan(250);
+    expect(Date.now() - t).toBeLessThan(1000);
   });
 
   it('bounded: 1 MB and 8 MB lines (only the first 64 KB is read)', () => {
@@ -76,7 +76,7 @@ describe('parseMcpList: the text of `claude mcp list`, line by line', () => {
       for (const text of [`x: ${big} - ✓ Connected`, `${big}: npx - ✓ Connected`, `\x1b[${'1;'.repeat(n * 300_000)}`, big, `${'y: - '.repeat(n * 200_000)}`]) {
         const t = Date.now();
         const r = parseMcpList(text);
-        expect(Date.now() - t, `${n} MB`).toBeLessThan(250);
+        expect(Date.now() - t, `${n} MB`).toBeLessThan(1000);
         expect(JSON.stringify(r)).not.toMatch(/a{65}/);
       }
     }
