@@ -13,7 +13,7 @@ import '@xterm/xterm/css/xterm.css';
 import { activePane, activeTheme, assistiveTech, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
-import { safeLinkUrl } from '../../shared/safe-link';
+import { linkRefusal, safeLinkUrl } from '../../shared/safe-link';
 import { screenReaderOn } from '../../shared/screen-reader';
 import { redactText } from '../../shared/redact';
 import { isClaudeCommand } from '../../shared/process-badge';
@@ -38,25 +38,32 @@ export const FIND_OPTS = { decorations: { matchBackground: '#ffcc0055', matchOve
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
-let webOnlyNoted = false;
+let refusalNoted = false;
 /**
- * (1.4.1) OSC 8 links (`ESC ] 8 ; ; uri`): a ⌘-click opens an http(s) link in the browser, like a printed URL; anything else does nothing
- * and the window says so once. xterm's own default would ask with `confirm()` and open an empty window.
+ * (1.4.1) OSC 8 links (`ESC ] 8 ; ; uri`). xterm makes a link only of an http(s) one (`allowNonHttpProtocols: false`: file:, javascript: and the
+ * rest are just text). A ⌘-click opens it in the browser, like a printed URL; a web link that is refused (a login in it, too long) is said once.
+ * The text of an OSC 8 link can hide where it goes, so hovering shows the address as the host's tooltip. xterm's own default would ask with
+ * `confirm()` and open an empty window.
  */
-const linkHandler = {
+const linkHandlerFor = (el: HTMLElement) => ({
   allowNonHttpProtocols: false,
   activate(event: MouseEvent, uri: string) {
     if (!event.metaKey) return;
     const url = safeLinkUrl(uri);
-    if (url) void window.jaffer.openExternal(url);
-    else if (!webOnlyNoted) {
-      webOnlyNoted = true;
-      toast({ kind: 'info', text: 'Only web links open from the terminal.' }, 4000);
+    if (url) return void window.jaffer.openExternal(url);
+    const why = linkRefusal(uri);
+    if (why && !refusalNoted) {
+      refusalNoted = true;
+      toast({ kind: 'info', text: why === 'login' ? "That link has a login in it, so Jaffer didn't open it." : 'That link is too long to open.' });
     }
   },
-  hover() {},
-  leave() {},
-};
+  hover(_event: MouseEvent, uri: string) {
+    el.title = safeLinkUrl(uri) ?? '';
+  },
+  leave() {
+    el.removeAttribute('title');
+  },
+});
 
 /** `base` joined with a relative path, `.` and `..` resolved (no file system: the app checks that the result exists). */
 function joinPath(base: string, rel: string): string {
@@ -113,7 +120,7 @@ export function TerminalView({ pane }: { pane: string }) {
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
       overviewRuler: { width: 10 }, // search matches are marked there
-      linkHandler,
+      linkHandler: linkHandlerFor(el),
       screenReaderMode: screenReaderOn(c.terminal?.screenReader ?? 'auto', assistiveTech.value),
       theme: xtermTheme(theme, windowOpacity(a)),
     });

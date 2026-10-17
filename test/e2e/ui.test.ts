@@ -5878,58 +5878,103 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
-  // 1.4.1 (spec item 4): OSC 8 links open only with ⌘, only http(s), through openExternal
-  it('OSC 8 links: ⌘-click opens an http(s) link, a click alone and every other link do nothing, anything else says so once', async () => {
+  // 1.4.1 (spec item 4): OSC 8 links open only with ⌘, only http(s), through openExternal; the real flow, written by the real shell
+  it('OSC 8 links: ⌘-click opens an http(s) link and shows where it goes on hover; file: and javascript: are no links; a login or a huge link says why, once', async () => {
     const opened = () => page.evaluate(() => (window as any).__opened as string | undefined);
     const reset = () => page.evaluate(() => ((window as any).__opened = undefined));
-    const activate = (meta: boolean, uri: string) =>
-      page.evaluate(([m, u]) => (window as any).__jaffer.terminals.get('main').term.options.linkHandler.activate({ metaKey: m } as MouseEvent, u, { start: { x: 1, y: 1 }, end: { x: 2, y: 1 } }), [meta, uri] as const);
-    const note = () => page.locator('.toast-text', { hasText: 'Only web links open from the terminal.' }).count();
+    const osc = (uri: string, label: string) => `\\e]8;;${uri}\\e\\\\${label}\\e]8;;\\e\\\\\\n`;
+    const note = () => page.locator('.toast-text', { hasText: 'That link ' }).count();
+    const anyToast = () => page.locator('.toast-text').count();
+    const pointer = () => page.locator('.term .xterm-screen.xterm-cursor-pointer, .term .xterm.xterm-cursor-pointer').count();
+    const title = () => page.evaluate(() => document.querySelector('.term[data-pane="main"]')!.getAttribute('title') ?? '');
+    const settle = () => page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
     await page.click('.term');
-    await enter(`printf '\\e]8;;https://example.com/x\\e\\\\LINKTEXT\\e]8;;\\e\\\\\\n'`);
-    const where = await until(
-      () =>
-        page.evaluate(() => {
-          const b = (window as any).__jaffer.terminals.get('main').term.buffer.active;
-          for (let y = b.length - 1; y >= 0; y--) if (b.getLine(y)!.translateToString(true) === 'LINKTEXT') return { row: y - b.viewportY };
-          return null;
-        }),
-      10_000,
-      'the printed link text',
+    await enter(
+      `printf '${osc('https://example.com/x', 'GOODLINK')}${osc('file:///etc/passwd', 'BADFILE')}${osc('javascript:alert(1)', 'BADJS')}${osc('https://user:pass@example.com/', 'CREDLINK')}${osc('https://example.com/%s', 'LONGLINK')}' "$(printf 'a%.0s' $(seq 2100))"`,
     );
+    const rowOf = (label: string) =>
+      until(
+        () =>
+          page.evaluate((l) => {
+            const t = (window as any).__jaffer.terminals.get('main').term;
+            const b = t.buffer.active;
+            for (let y = b.length - 1; y >= 0; y--) if (b.getLine(y)!.translateToString(true) === l) return y - b.viewportY;
+            return null;
+          }, label),
+        10_000,
+        `the printed ${label}`,
+      );
+    await rowOf('LONGLINK');
+    // a cell's place from the screen element and the grid (public pieces only)
+    const grid = () =>
+      page.evaluate(() => {
+        const t = (window as any).__jaffer.terminals.get('main').term;
+        const r = t.element.querySelector('.xterm-screen').getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width / t.cols, h: r.height / t.rows, cols: t.cols as number };
+      });
+    const hover = async (label: string, col = 3) => {
+      const row = await rowOf(label);
+      const g = await grid();
+      await page.mouse.move(g.x + (col + 0.5) * g.w, g.y + (row + 0.5) * g.h);
+    };
+    const away = async () => {
+      await hover('LONGLINK', (await grid()).cols - 1); // (the empty end of a row)
+      await until(async () => (await pointer()) === 0 && (await title()) === '', 3_000, 'the pointer and the tooltip to go');
+    };
     const click = async (meta: boolean) => {
-      const box = (await page.locator('.term .xterm-screen').boundingBox())!;
-      const dims = await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term._core._renderService.dimensions.css.cell);
-      await page.mouse.move(box.x + 3.5 * dims.width, box.y + (where.row + 0.5) * dims.height);
-      await sleep(250); // (the link is found on hover)
       if (meta) await page.keyboard.down('Meta');
       await page.mouse.down();
       await page.mouse.up();
       if (meta) await page.keyboard.up('Meta');
     };
     await reset();
+    // file: and javascript: are not links at all: no pointer, no tooltip, a ⌘-click does nothing and says nothing
+    for (const label of ['BADFILE', 'BADJS']) {
+      await hover(label);
+      await settle();
+      await settle();
+      expect(await pointer(), label).toBe(0);
+      expect(await title(), label).toBe('');
+      await click(true);
+      await settle();
+      expect(await opened(), label).toBeUndefined();
+      expect(await anyToast(), label).toBe(0);
+    }
+    // an http(s) link: the pointer, where it goes, and ⌘ to open
+    await hover('GOODLINK');
+    await until(async () => (await pointer()) > 0, 5_000, 'the pointer over the link');
+    await until(async () => (await title()) === 'https://example.com/x', 3_000, 'the destination as the tooltip');
     await click(false);
-    await sleep(300);
+    await settle();
     expect(await opened()).toBeUndefined();
     await click(true);
-    await until(async () => (await opened()) === 'https://example.com/x', 3_000, 'the OSC 8 link to open on ⌘-click');
-    // the handler itself
+    await until(async () => (await opened()) === 'https://example.com/x', 3_000, 'the link to open on ⌘-click');
+    expect(await anyToast()).toBe(0);
+    await away();
+    // a login in the link: it is a link, nothing opens, one line says why, and the tooltip does not show it
     await reset();
-    await activate(false, 'https://example.com/y');
-    expect(await opened()).toBeUndefined(); // (no ⌘)
-    expect(await note()).toBe(0); // (and nothing said about it)
-    await activate(true, 'http://example.com/z');
-    expect(await opened()).toBe('http://example.com/z');
-    await reset();
-    await activate(true, 'javascript:alert(1)');
-    await activate(true, 'file:///etc/passwd');
-    await activate(true, 'https://user:pass@example.com/');
-    await activate(true, 'https://example.com/' + 'a'.repeat(2100));
-    await activate(true, 'vscode://file/etc/passwd');
+    await hover('CREDLINK');
+    await until(async () => (await pointer()) > 0, 5_000, 'the pointer over the link with a login');
+    expect(await title()).toBe('');
+    await click(false);
+    await settle();
+    expect(await anyToast()).toBe(0);
+    await click(true);
+    await until(async () => (await note()) === 1, 3_000, 'the login line');
+    expect(await page.locator('.toast-text', { hasText: "That link has a login in it, so Jaffer didn't open it." }).count()).toBe(1);
+    // too long: nothing opens, and the window does not say it again this session
+    await away();
+    await hover('LONGLINK');
+    await until(async () => (await pointer()) > 0, 5_000, 'the pointer over the long link');
+    await click(true);
+    await settle();
+    await settle();
+    expect(await note()).toBe(1);
     expect(await opened()).toBeUndefined();
-    expect(await note()).toBe(1); // (once, however many)
+    expect(await page.locator('.toast-text', { hasText: 'too long' }).count()).toBe(0);
+    await away();
     expect(await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.options.linkHandler.allowNonHttpProtocols)).toBe(false);
-  }, 40_000);
+  }, 60_000);
 
   // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
   // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
