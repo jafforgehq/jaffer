@@ -13,6 +13,8 @@ import { parseMd } from '../../src/shared/mini-md';
 import { seasonOf } from '../../src/shared/season';
 import { unseenNotes } from '../../src/shared/whats-new';
 import { paneGrid } from '../../src/shared/pane-grid';
+import { GLOSSARY, glossaryEntry, searchGlossary } from '../../src/shared/glossary';
+import { TOUR_STEPS } from '../../src/shared/tour';
 
 /**
  * Drives the real renderer in headless Chromium against the real daemon (through the dev bridge),
@@ -65,6 +67,9 @@ beforeAll(async () => {
   expect(CHROME, 'a Chromium binary is required (set JAFFER_CHROME)').toBeTruthy();
   execFileSync(process.execPath, [path.join(root, 'scripts/build.mjs')], { stdio: 'ignore' });
   env = makeEnv();
+  // (1.4.0) first-time tips and the tour's offer stay out of the way of the other tests: the Learn tests below switch them on for themselves
+  fs.mkdirSync(env.home, { recursive: true });
+  fs.writeFileSync(env.paths.config, JSON.stringify({ tips: { enabled: false }, tour: { done: true } }));
   fs.writeFileSync(path.join(env.userHome, '.bashrc'), "PS1='\\[\\e[32m\\]\\w\\[\\e[0m\\] ❯ '\n");
   fs.writeFileSync(path.join(env.userHome, '.zshenv'), 'skip_global_compinit=1\n');
   fs.writeFileSync(path.join(env.userHome, '.bash_profile'), '[ -f ~/.bashrc ] && . ~/.bashrc\n'); // login shells read this, as on a real Mac
@@ -3569,7 +3574,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.textContent('.settings')).toContain('Claude Code');
     await shot('08-settings');
     // only the sections that still mean something: the panel's own settings (approvals, where commands run, model) went with its chat
-    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Terminal', 'Claude Code', 'Privacy and permissions', 'Updates', 'Reset']); // (1.4.0: Privacy and permissions)
+    expect(await page.$$eval('.settings-nav button', (b) => b.map((x) => x.textContent?.trim()))).toEqual(['Appearance', 'Terminal', 'Claude Code', 'Privacy and permissions', 'Help', 'Updates', 'Reset']); // (1.4.0: Privacy and permissions, Help)
     // Jaffer runs on a Claude subscription: no API key to enter and no engine to pick, in any section
     for (const section of ['Appearance', 'Claude Code']) {
       await page.click(`.settings-nav button:has-text("${section}")`);
@@ -5389,6 +5394,380 @@ describe('Jaffer UI end to end', () => {
 
   // (last) Every run starts from its own temporary home, daemon, bridge and browser; within a run the tests share one page and one daemon.
   // What the 1.2.0 tests change is put back: no test after them, and no state a later run could be handed, starts from it.
+  // ---- 1.4.0 Learn: the glossary, the ⓘ buttons, the tour and first-time tips
+  const keysInTerminal = () => until(async () => page.evaluate(() => !!document.activeElement?.classList.contains('xterm-helper-textarea')), 3_000, 'the terminal to have the keys again');
+  const onDisk = () => JSON.parse(fs.readFileSync(env.paths.config, 'utf8'));
+  const fresh = async () => {
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+  };
+  const inView = (sel: string) =>
+    page.$eval(sel, (el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth + 0.5 && r.bottom <= window.innerHeight + 0.5;
+    });
+
+  it('the glossary (1.4.0): the palette and the Help menu open it, the search filters, a click shows more, an ⓘ\'s More opens it at that entry; Esc closes it and the terminal has the keys again', async () => {
+    await fresh();
+    await page.click('.term');
+    await page.keyboard.press('Meta+p');
+    await page.waitForSelector('.palette input');
+    await page.keyboard.type('glossary');
+    await until(async () => (await page.locator('.pal-row.sel .pal-title').textContent()) === 'Glossary', 3_000, 'the Glossary action');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.lr-glossary');
+    expect(await page.evaluate(() => document.activeElement?.matches('.lr-glossary input'))).toBe(true);
+    expect(await page.textContent('.modal-head h3')).toBe('Glossary');
+    expect(await page.locator('.lr-entry').count()).toBe(GLOSSARY.length);
+    expect(await page.locator('.lr-more').count()).toBe(0);
+    await sleep(300); // (the dialog's entrance has settled)
+    await shot('40a-glossary');
+    await page.keyboard.type('compact');
+    await until(async () => (await page.locator('.lr-entry').count()) < GLOSSARY.length, 3_000, 'the search');
+    const ids = await page.$$eval('.lr-entry', (els) => els.map((e) => (e as HTMLElement).dataset.id));
+    expect(ids).toEqual(searchGlossary('compact').map((e) => e.id));
+    expect(ids).toContain('compaction');
+    await page.click('.lr-entry[data-id="compaction"] .lr-term');
+    await until(async () => (await page.textContent('.lr-entry[data-id="compaction"] .lr-more')) === glossaryEntry('compaction')!.more, 3_000, 'more of it');
+    expect(await page.getAttribute('.lr-entry[data-id="compaction"] .lr-term', 'aria-expanded')).toBe('true');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.lr-glossary', { state: 'detached' });
+    await keysInTerminal();
+    // the Help menu's Glossary…
+    await menu('glossary');
+    await page.waitForSelector('.lr-glossary');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.lr-glossary', { state: 'detached' });
+    // a deep link: Settings → Companion size's ⓘ → More in the glossary: that entry is open, in view and has the keyboard
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.locator('.settings .field', { hasText: 'Companion size' }).locator('.lr-info').click();
+    await page.waitForSelector('.lr-pop[data-id="companion"]');
+    await page.click('.lr-pop .lr-more-link');
+    await page.waitForSelector('.lr-glossary .lr-entry[data-id="companion"][data-open]');
+    expect(await page.locator('.settings').count()).toBe(0);
+    expect(await page.textContent('.lr-entry[data-id="companion"] .lr-more')).toBe(glossaryEntry('companion')!.more);
+    await until(async () => (await page.evaluate(() => document.activeElement?.closest('.lr-entry')?.getAttribute('data-id'))) === 'companion', 3_000, 'the entry to have the keyboard');
+    const box = await page.evaluate(() => {
+      const r = document.querySelector('.lr-entry[data-id="companion"] .lr-term')!.getBoundingClientRect();
+      const l = document.querySelector('.lr-list')!.getBoundingClientRect();
+      return r.top >= l.top - 1 && r.bottom <= l.bottom + 1;
+    });
+    expect(box).toBe(true);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.lr-glossary', { state: 'detached' });
+    await keysInTerminal();
+  }, 40_000);
+
+  it('the ⓘ buttons (1.4.0): beside the Now card\'s words, the panel\'s sections, the Setup groups and three Settings fields, each opens a popover with its own entry (Enter and Space too); Esc and a click outside close it; none in the title bar', async () => {
+    await fresh();
+    await endClaude();
+    await cfgPatch({ panel: { open: true } });
+    const push = (d: object) => page.evaluate((x) => (window as any).__event('claude.approvals', x), d);
+    try {
+      const T = Date.now();
+      for (const [ago, at] of [[72_000, 1], [30_000, 2]] as const) {
+        await inject([{ id: 'lr-1', state: 'working', turnStartedAtAgo: ago }]);
+        await inject([{ id: 'lr-1', state: 'idle', turnStartedAtAgo: ago, cost: { usd: 0.02, at } }]);
+      }
+      await inject([{ id: 'lr-1', state: 'idle', cost: { usd: 0.02, at: 2 }, context: { tokens: 300_000, window: 1_000_000, at: T } }], { usd: 1, date: 'today', workMs: 600_000 });
+      await push({ items: [{ id: 'lr-ap', sessionId: 'lr-1', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 20_000 }] });
+      await page.waitForSelector('.now-turns');
+      await page.waitForSelector('.now-card .ap-ask');
+      await page.click('.sx-head');
+      await page.waitForSelector('.sx-body[data-loaded]');
+      expect(await page.locator('.titlebar .lr-info').count()).toBe(0); // (no ⓘ in the title bar, not even in its approval chip: the cost card says where to look)
+      const want: [string, string][] = [
+        ['.now-head', 'session'],
+        ['.now-cost', 'cost-estimate'],
+        ['.now-ctx', 'context-window'],
+        ['.now-worked', 'turn'],
+        ['.lr-line', 'turn'],
+        ['.ap-ask', 'permission-prompt'],
+        ['.conv-head', 'transcript'],
+        ['.sx-group[data-group="mcp"]', 'mcp'],
+        ['.sx-group[data-group="skills"]', 'skill'],
+        ['.sx-group[data-group="rules"]', 'rules'],
+        ['.sx-group[data-group="plugins"]', 'plugin'],
+        ['.sx-group[data-group="agents"]', 'subagent'],
+        ['.sx-group[data-group="hooks"]', 'hook'],
+      ];
+      for (const [where, id] of want) {
+        const b = page.locator(`.side-panel ${where} .lr-info`).first();
+        expect(await b.getAttribute('data-id'), where).toBe(id);
+        expect(await b.getAttribute('aria-label'), where).toBe(`What is ${glossaryEntry(id)!.title}?`);
+        expect(await b.getAttribute('aria-expanded'), where).toBe('false');
+        await b.scrollIntoViewIfNeeded();
+        await b.click();
+        await page.waitForSelector(`.lr-pop[data-id="${id}"]`);
+        expect(await page.textContent('.lr-pop p'), where).toBe(glossaryEntry(id)!.short);
+        expect(await page.getAttribute('.lr-pop', 'role')).toBe('dialog');
+        expect(await b.getAttribute('aria-expanded'), where).toBe('true');
+        expect(await inView('.lr-pop'), `${where}: the popover on screen`).toBe(true);
+        expect(await page.locator('.lr-pop').count()).toBe(1);
+        if (id === 'session') await shot('40b-info-popover');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.lr-pop', { state: 'detached' });
+        expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.id), `${where}: the keyboard back on the button`).toBe(id);
+      }
+      // the words beside them are as they were (the ⓘ adds no text)
+      expect(await textOf('.now-worked')).toBe('Claude worked 10m 0s today');
+      expect(await textOf('.now-ctx > span')).toBe('Context 30% of 1M');
+      // the keyboard: Enter and Space open it; a click outside closes it
+      const ctx = page.locator('.now-ctx .lr-info');
+      await ctx.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.lr-pop[data-id="context-window"]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-pop', { state: 'detached' });
+      await page.keyboard.press('Space');
+      await page.waitForSelector('.lr-pop[data-id="context-window"]');
+      await page.mouse.click(200, 400); // (the terminal)
+      await page.waitForSelector('.lr-pop', { state: 'detached' });
+      // and three fields of Settings: Esc closes the popover, not Settings
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.click('.settings-nav button:has-text("Privacy and permissions")');
+      expect(await page.$$eval('.settings .pv-list .lr-info', (els) => els.map((e) => (e as HTMLElement).dataset.id))).toEqual(['transcript', 'permission-prompt']);
+      expect(await page.locator('.settings label.field:has(button)').count()).toBe(0); // (a field with an ⓘ is no label: a click on its words would press it)
+      await page.click('.settings .pv-list .lr-info[data-id="permission-prompt"]');
+      await page.waitForSelector('.lr-pop[data-id="permission-prompt"]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-pop', { state: 'detached' });
+      expect(await page.locator('.settings').count()).toBe(1);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.settings', { state: 'detached' });
+    } finally {
+      await push({ items: [] });
+      await inject([]);
+    }
+  }, 60_000);
+
+  it('the tour (1.4.0): Take the tour runs all eight steps over real elements (Next, Back, → and ←, a spotlight on screen), Try it opens the palette (the tour comes back after Esc) and splits a terminal, Settings shows on Privacy; Done, Skip and Esc end it with tour.done; it types nothing and closes what it opened', async () => {
+    await fresh();
+    await endClaude();
+    await cfgPatch({ panel: { open: false }, tour: { done: false } });
+    await page.waitForSelector('.side-panel', { state: 'detached' });
+    const mainText = await termText();
+    const at = (id: string) => page.waitForSelector(`.lr-tour[data-step="${id}"][data-found]`);
+    /** The spotlight: on screen, not empty, and over its element. */
+    const spot = async (target: string) => {
+      // (settled: the panel slides in and a dialog pops up, and the spotlight follows them)
+      await until(
+        async () => {
+          const h = await page.locator('.lr-hole').boundingBox();
+          const t = await page.locator(`[data-tour="${target}"]`).boundingBox();
+          const vp = page.viewportSize()!;
+          if (!h || !t || h.width <= 10 || h.height <= 10) return false;
+          if (!(h.x >= 0 && h.y >= 0 && h.x + h.width <= vp.width + 0.5 && h.y + h.height <= vp.height + 0.5)) return false; // on screen
+          return Math.abs(h.x - Math.max(0, t.x - 6)) <= 1 && Math.abs(h.y - Math.max(0, t.y - 6)) <= 1; // over its element
+        },
+        5_000,
+        `the spotlight on ${target}`,
+      );
+      expect(await inView('.lr-card'), `${target}: the card on screen`).toBe(true);
+      await until(() => page.evaluate(() => !!document.activeElement?.closest('.lr-card')), 3_000, `${target}: the keyboard in the card`);
+    };
+    try {
+      await page.keyboard.press('Meta+p');
+      await page.waitForSelector('.palette input');
+      await page.keyboard.type('take the tour');
+      await until(async () => (await page.locator('.pal-row.sel .pal-title').textContent()) === 'Take the tour', 3_000, 'the tour action');
+      await page.keyboard.press('Enter');
+      await at('terminal');
+      await spot('panes');
+      expect(await page.textContent('.lr-card h3')).toBe(TOUR_STEPS[0]!.title);
+      expect(await page.getAttribute('.lr-dots', 'aria-label')).toBe('Step 1 of 8');
+      expect(await page.locator('.lr-back').isDisabled()).toBe(true);
+      await shot('41a-tour');
+      await page.keyboard.press('ArrowRight');
+      await at('now');
+      await page.waitForSelector('.side-panel'); // (the panel, opened to show it)
+      await spot('now');
+      await page.click('.lr-back');
+      await at('terminal');
+      await page.keyboard.press('ArrowRight');
+      await at('now');
+      await page.keyboard.press('ArrowLeft');
+      await at('terminal');
+      await page.keyboard.press('ArrowRight');
+      await at('now');
+      await page.click('.lr-next');
+      await at('conversations');
+      await spot('conversations');
+      await page.click('.lr-next');
+      await at('palette');
+      await spot('titlebar');
+      // Try it: the palette, and the tour waits; Esc closes the palette and the tour is back where it was
+      await page.click('.lr-try');
+      await page.waitForSelector('.palette input');
+      expect(await page.locator('.lr-tour').count()).toBe(0);
+      await page.keyboard.press('Escape');
+      await at('palette');
+      await page.click('.lr-next');
+      await at('split');
+      expect(await page.textContent('.lr-try')).toBe('Try it');
+      await page.click('.lr-try');
+      await until(async () => (await page.locator('.panes > .pane').count()) === 2, 10_000, 'a second terminal');
+      await until(async () => page.evaluate(() => !!document.activeElement?.closest('.lr-card')), 3_000, 'the keyboard back in the card');
+      await at('split');
+      await spot('panes');
+      await page.keyboard.press('Enter');
+      await at('setup');
+      await page.waitForSelector('.sx-body'); // (expanded to show it)
+      await spot('setup');
+      await page.click('.lr-next');
+      await at('privacy');
+      await page.waitForSelector('.settings');
+      await spot('settings-privacy');
+      expect(await page.locator('.settings-nav button.on').textContent()).toBe('Privacy and permissions');
+      expect(await page.locator('.lr-lines li').count()).toBe(5);
+      expect(await page.textContent('.lr-try')).toBe('Open Settings');
+      await shot('41b-tour-privacy');
+      await page.click('.lr-next');
+      await at('learn');
+      expect(await page.locator('.settings').count()).toBe(0);
+      await spot('now-info');
+      expect(await page.textContent('.lr-next')).toBe('Done');
+      await page.click('.lr-next');
+      await page.waitForSelector('.lr-tour', { state: 'detached' });
+      await until(async () => onDisk().tour?.done === true, 5_000, 'tour.done on disk');
+      await page.waitForSelector('.side-panel', { state: 'detached' }); // (what it opened is closed again)
+      await keysInTerminal();
+      expect(onDisk().panel.open).toBe(false);
+      // Settings → Help → Start the tour; Esc skips it
+      await cfgPatch({ tour: { done: false } });
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.click('.settings-nav button:has-text("Help")');
+      await page.click('.settings .lr-start');
+      await at('terminal');
+      expect(await page.locator('.settings').count()).toBe(0);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-tour', { state: 'detached' });
+      await until(async () => onDisk().tour?.done === true, 5_000, 'tour.done after Esc');
+      // the Help menu's Take the Tour; Skip tour ends it
+      await cfgPatch({ tour: { done: false } });
+      await menu('start-tour');
+      await at('terminal');
+      await page.click('.lr-skip');
+      await page.waitForSelector('.lr-tour', { state: 'detached' });
+      await until(async () => onDisk().tour?.done === true, 5_000, 'tour.done after Skip');
+      expect(await termText()).toBe(mainText); // nothing was typed
+    } finally {
+      const extra = await page.evaluate(() => window.jaffer.call('pane.list')) as { id: string }[];
+      for (const p of extra) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await until(async () => (await page.locator('.panes > .pane').count()) === 1, 10_000, 'one terminal again');
+      await cfgPatch({ panel: { open: true }, tour: { done: true } });
+    }
+  }, 90_000);
+
+  it('first run ends with one offer of the tour (1.4.0): "Take a 1-minute tour?" with Start; none once the tour is done', async () => {
+    const onboard = async () => {
+      await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+      await page.waitForSelector('.onboard[data-step="choices"]', { timeout: 20_000 });
+      await page.locator('.onboard .choices label', { hasText: 'Start Claude Code in the terminal now' }).locator('.switch').click(); // (nothing typed)
+      await page.click('.onboard .btn.primary');
+      await page.waitForSelector('.onboard[data-step="privacy"]');
+      await page.click('.onboard .btn.primary');
+      await page.waitForSelector('.onboard', { state: 'detached' });
+      await page.waitForSelector('.term .xterm');
+    };
+    const offers = () => page.locator('.toast', { hasText: 'Take a 1-minute tour?' }).count();
+    try {
+      await cfgPatch({ onboarded: false, tour: { done: false } });
+      await onboard();
+      await until(async () => (await offers()) === 1, 5_000, 'the offer');
+      await sleep(500);
+      expect(await offers()).toBe(1); // once
+      await page.locator('.toast', { hasText: 'Take a 1-minute tour?' }).locator('.toast-act', { hasText: 'Start' }).click();
+      await page.waitForSelector('.lr-tour[data-step="terminal"]');
+      expect(await offers()).toBe(0); // (the offer goes with its answer)
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-tour', { state: 'detached' });
+      await until(async () => onDisk().tour?.done === true, 5_000, 'tour.done');
+      // the tour done: first run again makes no offer
+      await cfgPatch({ onboarded: false });
+      await onboard();
+      await sleep(800);
+      expect(await offers()).toBe(0);
+    } finally {
+      await cfgPatch({ onboarded: true, tour: { done: true } });
+    }
+  }, 60_000);
+
+  it('first-time tips (1.4.0): the first compaction raises one "What is compaction?" toast (Explain opens the glossary there), a second none, tips.seen keeps it on disk; another tip within 90 s waits; Turn tips off stops them; Settings → Help switches them and Show tips again clears what was seen', async () => {
+    await fresh();
+    await endClaude();
+    const tips = (q: string) => page.locator('.toast', { hasText: q }).count();
+    try {
+      await cfgPatch({ tips: { enabled: true, seen: [] } });
+      await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).tips.enabled === true, 3_000, 'tips on');
+      await sendHook('SessionStart', { session_id: 'tip-1' });
+      await sleep(300);
+      await sendHook('PreCompact', { session_id: 'tip-1' });
+      await until(async () => (await tips('What is compaction?')) === 1, 5_000, 'the compaction tip');
+      const toastOf = page.locator('.toast', { hasText: 'What is compaction?' });
+      expect(await toastOf.locator('.toast-act').allTextContents()).toEqual(['Explain', 'Turn tips off']);
+      expect(await page.locator('.toast-text', { hasText: 'Claude is compacting its context' }).count()).toBe(1); // (the compaction's own toast, as before)
+      await until(async () => onDisk().tips.seen.includes('compaction'), 5_000, 'tips.seen on disk');
+      await shot('42-tip');
+      await toastOf.locator('.toast-act', { hasText: 'Explain' }).click();
+      await page.waitForSelector('.lr-glossary .lr-entry[data-id="compaction"][data-open]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-glossary', { state: 'detached' });
+      await toastOf.locator('button[aria-label="Dismiss"]').click();
+      // the same again: none
+      await sendHook('UserPromptSubmit', { session_id: 'tip-1' });
+      await sleep(300);
+      await sendHook('PreCompact', { session_id: 'tip-1' });
+      await until(async () => (await page.locator('.toast-text', { hasText: 'Claude is compacting its context' }).count()) >= 1, 5_000, 'the compaction again');
+      await sleep(400);
+      expect(await tips('What is compaction?')).toBe(0);
+      // another tip within 90 s: not now, and not counted as seen
+      await sendHook('SessionEnd', { session_id: 'tip-1' });
+      await sleep(500);
+      await inject([{ id: 'tip-2', state: 'idle' }]);
+      await inject([{ id: 'tip-2', state: 'needs-you', tool: { name: 'Bash' } }]);
+      await sleep(500);
+      expect(await tips('What is a permission prompt?')).toBe(0);
+      expect(onDisk().tips.seen).toEqual(['compaction']);
+      // a new window (the 90 s are the window's): the permission tip; Turn tips off
+      await inject([]);
+      await fresh();
+      await inject([{ id: 'tip-3', state: 'needs-you', tool: { name: 'Bash' } }]);
+      await until(async () => (await tips('What is a permission prompt?')) === 1, 5_000, 'the permission tip');
+      await page.locator('.toast', { hasText: 'What is a permission prompt?' }).locator('.toast-act', { hasText: 'Turn tips off' }).click();
+      await until(async () => onDisk().tips.enabled === false, 5_000, 'tips off on disk');
+      expect(onDisk().tips.seen).toEqual(['compaction', 'permission']);
+      await inject([]);
+      await fresh();
+      await inject([{ id: 'tip-4', state: 'working', subagents: [{ id: 'a1', status: 'running', startAgo: 1000 }] }]);
+      await sleep(600);
+      expect(await tips('What is a subagent?')).toBe(0);
+      // Settings → Help: the switch and Show tips again
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.click('.settings-nav button:has-text("Help")');
+      const sw = page.locator('.settings .field', { hasText: 'Show tips' }).locator('input[type=checkbox]');
+      expect(await sw.isChecked()).toBe(false);
+      await page.locator('.settings .field', { hasText: 'Show tips' }).locator('.switch').click();
+      await until(async () => onDisk().tips.enabled === true, 5_000, 'tips on again');
+      expect(await page.textContent('.settings .field:has(.lr-again) small')).toBe('2 shown so far; each shows once');
+      await page.click('.settings .lr-again');
+      await until(async () => onDisk().tips.seen.length === 0, 5_000, 'tips.seen cleared');
+      await until(async () => page.locator('.settings .lr-again').isDisabled(), 3_000, 'nothing left to clear');
+      expect(await page.locator('.settings .lr-open').count()).toBe(1);
+      await page.click('.settings .lr-open');
+      await page.waitForSelector('.lr-glossary');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.lr-glossary', { state: 'detached' });
+    } finally {
+      await inject([]);
+      await cfgPatch({ tips: { enabled: false, seen: [] } });
+    }
+  }, 60_000);
+
   it('the run leaves nothing of the 1.2.0 tests behind: no approval waits, no stand-in for the window\'s calls, the seen version, the switches and the panel as a first start leaves them', async () => {
     const version: string = await page.evaluate(() => window.jaffer.appInfo().then((a: { version: string }) => a.version));
     expect(await page.evaluate(() => window.jaffer.call('claude.approvals', {}))).toEqual({ items: [] });

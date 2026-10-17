@@ -14,6 +14,7 @@ import { copyToTerminal, loadHistory, resumeConversation } from '../resume';
 import { terminals } from './TerminalView';
 import { IconCopy, IconEyeOff, IconPencil, IconReset, IconSearch, IconStar, IconTag, IconTrash } from './icons';
 import { Menu } from './Blocks';
+import { InfoButton } from './InfoButton';
 
 /** The ⇧⌘O bump the search last took (module wide: a panel that opens again must not take the keyboard for an old bump). */
 let focusedFor = 0;
@@ -370,9 +371,12 @@ export function Conversations(): VNode {
 
   let i = 0;
   return (
-    <section class="sp-convos" data-slot="conversations" aria-label="Past conversations" onKeyDown={onKey}>
+    <section class="sp-convos" data-tour="conversations" data-slot="conversations" aria-label="Past conversations" onKeyDown={onKey}>
       <div class="conv-head">
-        <span>Past conversations</span>
+        <span>
+          Past conversations
+          <InfoButton id="transcript" />
+        </span>
         <span class="conv-head-acts">
           {trashOn && (
             <button

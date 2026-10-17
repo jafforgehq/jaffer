@@ -130,7 +130,7 @@ export function PaneTree(): VNode {
     return () => ro.disconnect();
   }, [list.join()]);
   return (
-    <div ref={box} class="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
+    <div ref={box} class="panes" data-tour="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
       {list.map((id, i) => {
         const c = g.cells[i]!;
         return (

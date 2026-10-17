@@ -1078,3 +1078,41 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .comp-mole { display: flex; flex-direction: row-reverse; align-items: flex-end; transform: scale(0.82); transform-origin: center bottom; padding-bottom: 6px; }
 .comp-name { font-size: 12px; font-weight: 600; margin-top: 3px; }
 .comp-blurb { font-size: 10.5px; line-height: 1.35; color: var(--faint); }
+
+/* 1.4.0 Learn: the ⓘ buttons and their popover, the glossary, the tour, the tips' hint (prefix .lr-). */
+.lr-info { margin-left: 4px; vertical-align: middle; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: default; flex: none; }
+.lr-info:hover, .lr-info[aria-expanded='true'] { color: var(--accent); background: var(--hover); }
+.lr-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lr-pop { position: fixed; z-index: 65; width: max-content; max-width: 260px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--raised-2); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; line-height: 1.45; font-weight: 400; text-align: left; white-space: normal; }
+.lr-pop:focus { outline: none; }
+.lr-pop b { display: block; margin-bottom: 3px; color: var(--text); font-size: 12px; }
+.lr-pop p { margin: 0 0 6px; }
+.lr-more-link { padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; cursor: default; }
+.lr-more-link:hover { text-decoration: underline; }
+.lr-more-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.lr-line { display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+.lr-line .now-turns { min-width: 0; }
+.lr-ap { color: var(--faint); font-size: 11px; display: inline-flex; align-items: center; }
+.lr-hint { margin-top: 6px; color: var(--faint); font-size: 11px; }
+.lr-glossary .lr-list { list-style: none; margin: 0; padding: 4px 8px 10px; overflow: auto; flex: 1; min-height: 0; }
+.lr-glossary { max-height: 70vh; }
+.lr-entry { border-radius: var(--r-sm); }
+.lr-entry[data-open] { background: var(--hover); }
+.lr-term { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 10px; border: 0; background: none; text-align: left; color: var(--muted); font-size: 12.5px; line-height: 1.4; border-radius: var(--r-sm); cursor: default; }
+.lr-term:hover { background: var(--hover); }
+.lr-term:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lr-term b { color: var(--text); font-size: 13px; }
+.lr-more { margin: 0; padding: 0 10px 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.lr-tour { position: fixed; inset: 0; z-index: 70; }
+.lr-tour:not([data-found]) { background: rgba(5, 6, 9, 0.5); }
+.lr-hole { position: fixed; border-radius: var(--r-md); box-shadow: 0 0 0 9999px rgba(5, 6, 9, 0.55), 0 0 0 2px var(--accent); pointer-events: none; }
+.lr-card { position: fixed; max-width: calc(100vw - 24px); padding: 14px 16px 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.lr-card h3 { margin: 0 0 6px; color: var(--text); font-size: 14px; }
+.lr-card p { margin: 0 0 8px; }
+.lr-lines { margin: 0 0 8px; padding-left: 16px; font-size: 12px; }
+.lr-lines li { margin: 2px 0; }
+.lr-dots { display: flex; gap: 5px; list-style: none; margin: 4px 0 10px; padding: 0; }
+.lr-dots li { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+.lr-dots li[aria-current] { background: var(--accent); }
+.lr-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lr-btns .btn { white-space: nowrap; }

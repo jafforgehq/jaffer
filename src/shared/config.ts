@@ -134,6 +134,10 @@ export interface JafferConfig {
     tags: string[];
     hidden: string[];
   };
+  /** (1.4.0) The tour (Help → Take the Tour) was finished or skipped: the offer after first run is not made again. */
+  tour: { done: boolean };
+  /** (1.4.0) First-time tips: a quiet toast the first time a concept comes up (`shared/tips.ts`); `seen` holds the ids of the ones shown. */
+  tips: { enabled: boolean; seen: string[] };
   hotkey: string;
   /**
    * The one-time clean-up of a Mac an older Jaffer ran on (`core/migrate.ts`) has run (1). It runs at the app's start while this is 0, and
@@ -177,6 +181,8 @@ export const DEFAULT_CONFIG: JafferConfig = {
   window: { closeAction: 'menubar', menuBar: true, menuBarOnly: false, menuBarTitle: 'off', hintShown: false, dropdown: false },
   panel: { open: true, width: 300 },
   history: { names: [], pinned: [], tags: [], hidden: [] },
+  tour: { done: false },
+  tips: { enabled: true, seen: [] },
   hotkey: 'Control+`',
   migrated: 0,
 };

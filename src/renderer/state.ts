@@ -17,6 +17,7 @@ import { budgetLevels, parseProjectBudgets } from '../shared/project-budgets';
 import { weekId } from '../shared/usage-week';
 import { formatUsd } from '../shared/claude-cost';
 import { FailTracker } from './fail-tracker';
+import { shouldTip, TIPS, type TipId } from '../shared/tips';
 import { resolveTheme, type JafferTheme } from './themes';
 
 export { fmtDuration };
@@ -38,7 +39,7 @@ export interface SessionInfo {
   git?: GitStatus;
 }
 
-export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent' | 'keys';
+export type Overlay = null | 'settings' | 'palette' | 'onboarding' | 'find' | 'recent' | 'keys' | 'learn' | 'tour';
 
 export const cfg = signal<JafferConfig | null>(null);
 export const daemonUp = signal(true);
@@ -95,6 +96,78 @@ export function openOverlay(next: Exclude<Overlay, 'onboarding' | null>): void {
   if (overlay.value === 'onboarding') return;
   overlay.value = next;
 }
+/** (1.4.0) The section Settings opens on next (Settings → Help, the tour's Open Settings); read once when it opens. */
+export const settingsAt = signal<string | null>(null);
+export function openSettings(section: string): void {
+  settingsAt.value = section;
+  openOverlay('settings');
+}
+
+// ------------------------------------------------------------------ learn (1.4.0): the glossary, the tour, first-time tips
+
+/** The entry the glossary opens on, expanded (a new object on every ask, so an open glossary follows it too). */
+export const glossaryAt = signal<{ id?: string }>({});
+/** The Glossary (Help → Glossary…, the palette, an ⓘ's "More in the glossary", a tip's Explain), at one entry when `id` names one. */
+export function openGlossary(id?: string): void {
+  if (overlay.value === 'onboarding') return;
+  glossaryAt.value = { id };
+  openOverlay('learn');
+}
+
+/** The tour's step while it runs (null: no tour). It pauses while a Try it shows the palette or Settings, and comes back when that closes. */
+export const tourStep = signal<number | null>(null);
+export function startTour(): void {
+  if (overlay.value === 'onboarding') return;
+  tourStep.value = 0;
+  overlay.value = 'tour';
+}
+effect(() => {
+  if (overlay.value === null && tourStep.value !== null) overlay.value = 'tour';
+});
+/** Finished or skipped: `tour.done` (the one setting the tour writes), so the offer after first run is not made again. */
+export function endTour(): void {
+  tourStep.value = null;
+  if (overlay.value === 'tour') overlay.value = null;
+  const c = cfg.value;
+  if (!c || c.tour?.done) return;
+  cfg.value = { ...c, tour: { done: true } };
+  void patchConfig({ tour: { done: true } }).catch(() => undefined);
+}
+
+/** When the last tip showed (memory only): at most one in 90 s. */
+let tipAt = 0;
+/**
+ * Tip `id`'s teaser and buttons when it may show now (`shouldTip`), and then it counts as seen (`tips.seen`, at once); null otherwise.
+ * For a toast of its own (`tip`) or added to one that says the same thing (the budget's).
+ */
+export function takeTip(id: TipId): Pick<Toast, 'text' | 'actions'> | null {
+  const c = cfg.value;
+  const now = Date.now();
+  if (!c || !shouldTip(id, c.tips, { now, lastAt: tipAt, busy: overlay.value === 'onboarding' || tourStep.value !== null })) return null;
+  tipAt = now;
+  const seen = [...c.tips.seen.filter((x) => Object.hasOwn(TIPS, x) && x !== id), id];
+  cfg.value = { ...c, tips: { ...c.tips, seen } };
+  void patchConfig({ tips: { seen } }).catch(() => undefined);
+  const t = TIPS[id];
+  return {
+    text: t.text,
+    actions: [
+      { label: 'Explain', run: () => openGlossary(t.glossary) },
+      { label: 'Turn tips off', run: () => setTips({ enabled: false }) },
+    ],
+  };
+}
+function tip(id: TipId): void {
+  const t = takeTip(id);
+  if (t) toast({ kind: 'info', ...t });
+}
+/** Settings → Help's Show tips switch and Show tips again (`seen: []`), and a tip's Turn tips off. */
+export function setTips(p: Partial<JafferConfig['tips']>): void {
+  const c = cfg.value;
+  if (c) cfg.value = { ...c, tips: { ...c.tips, ...p } };
+  void patchConfig({ tips: p }).catch(() => undefined);
+}
+
 export const windowFocused = signal(true);
 /** When Claude last worked or asked for the person, or a command last started or ended (ms since epoch): the companion dozes after ten quiet minutes. */
 export const lastActivityAt = signal(Date.now());
@@ -321,8 +394,12 @@ function sessionChanged(s: ClaudeSession, p: ClaudeSession | null): void {
   if (p && s.compacting && !p.compacting) {
     toast({ kind: 'info', text: `${whereOf(s)}Claude is compacting its context` });
     contextWarned.delete(s.id); // (a compaction brings the meter down: the next time it fills, it says so again)
+    tip('compaction');
   }
+  if (s.state === 'needs-you' && p?.state !== 'needs-you') tip('permission');
+  if (Array.isArray(s.subagents) && s.subagents.some((a) => a?.status === 'running')) tip('subagent');
   const ctx = s.context;
+  if (cfg.value?.claude?.showCost !== false && ctx && typeof ctx.window === 'number' && ctx.window > 0 && ctx.tokens / ctx.window >= 0.8) tip('context');
   if (cfg.value?.claude?.showCost !== false && ctx && typeof ctx.window === 'number' && ctx.window > 0 && ctx.tokens / ctx.window >= 0.85 && !contextWarned.has(s.id)) {
     contextWarned.add(s.id);
     if (contextWarned.size > 100) contextWarned.delete(contextWarned.values().next().value!);
@@ -347,6 +424,7 @@ function turnFinished(s: ClaudeSession, usd: number | undefined, costKnown: bool
   doneTimer = setTimeout(() => (turnDone.value = false), 1200);
   const durMs = s.since - (s.turnStartedAt as number);
   if (!Number.isFinite(durMs) || durMs < 0) return; // (no times to tell how long it took: nothing to say)
+  if (durMs >= 5 * 60_000) tip('longturn');
   const counts = turnCounts(s.calls, s.turnStartedAt);
   // (a turn without a prompt keeps the last prompt's files: only a turn that wrote lists them)
   const files = counts.write && Array.isArray(s.files) ? s.files : [];
@@ -542,7 +620,8 @@ effect(() => {
     const key = `${b.cwd}\n${weekId(now)}`;
     if (b.level !== 'danger' || budgetWarned.has(key)) continue;
     budgetWarned.add(key);
-    toast({ kind: 'info', text: `${tildePath(b.cwd)} passed its weekly budget: ≈ ${formatUsd(b.usd)} of ${formatUsd(b.budget)} in the last 7 days (an estimate).` });
+    const t = takeTip('budget'); // (the first time: the tip rides on this toast)
+    toast({ kind: 'info', text: `${tildePath(b.cwd)} passed its weekly budget: ≈ ${formatUsd(b.usd)} of ${formatUsd(b.budget)} in the last 7 days (an estimate).${t ? ` ${t.text}` : ''}`, actions: t?.actions });
   }
 });
 

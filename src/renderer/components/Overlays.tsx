@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, appVersion, cfg, claudeLive, commands, fmtAgo, historyItems, homeDir, lastFind, overlay, pasteAsk, patchConfig, pins, safeCommand, toast, updateState, type ClaudeAuthState } from '../state';
+import { activePane, appVersion, cfg, claudeLive, commands, dismissToast, fmtAgo, glossaryAt, historyItems, homeDir, lastFind, openGlossary, overlay, pasteAsk, patchConfig, pins, safeCommand, setTips, settingsAt, startTour, toast, updateState, type ClaudeAuthState } from '../state';
 import { conversationName, paletteConversations } from '../../shared/history-label';
 import { groupByFolder } from '../../shared/recent-commands';
 import { SECTION_ORDER, filterShortcuts, shortcutGroups } from '../../shared/shortcuts';
@@ -16,7 +16,9 @@ import { hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, PET_SIZES, companionOf, petScale } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { explainSupported } from './Explain';
-import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset, IconLock } from './icons';
+import { InfoButton } from './InfoButton';
+import { searchGlossary } from '../../shared/glossary';
+import { IconAgent, IconCommandKey, IconGear, IconInfo, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset, IconLock } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
@@ -24,7 +26,8 @@ function Modal({ title, onClose, children, wide, xwide, center }: { title?: stri
   const dialog = useRef<HTMLDivElement>(null);
   // (a layout effect: an Esc pressed right after the dialog appeared must already find this listener)
   useLayoutEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && (e.stopPropagation(), onClose());
+    // (an ⓘ popover's Esc closes only the popover, and the tour's Esc is the tour's, also over Settings)
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('.lr-pop, .lr-tour') && (e.stopPropagation(), onClose());
     window.addEventListener('keydown', k, true);
     // keyboard focus goes into the dialog (the terminal keeps it otherwise, and Tab and typing would go to the shell behind it)
     const el = dialog.current;
@@ -359,6 +362,52 @@ export function ShortcutsSheet(): VNode {
   );
 }
 
+/**
+ * (1.4.0) The Glossary (Help → Glossary…, the palette, an ⓘ's "More in the glossary", a tip's Explain): the words of Claude Code and Jaffer in
+ * plain language, a search over them, a click on one shows more. Asked for one entry, it opens with that one shown and in view.
+ */
+export function Glossary(): VNode {
+  const [q, setQ] = useState('');
+  const asked = glossaryAt.value;
+  const [open, setOpen] = useState<Set<string>>(() => new Set(asked.id ? [asked.id] : []));
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => {
+    if (asked.id) setOpen((o) => new Set([...o, asked.id!]));
+    const row = asked.id ? list.current?.querySelector<HTMLElement>(`[data-id="${asked.id}"]`) : null;
+    if (row) (row.scrollIntoView({ block: 'nearest' }), row.querySelector<HTMLElement>('.lr-term')?.focus());
+    else input.current?.focus();
+  }, [asked]);
+  const entries = useMemo(() => searchGlossary(q), [q]);
+  const flip = (id: string) => setOpen((o) => (o.has(id) ? new Set([...o].filter((x) => x !== id)) : new Set([...o, id])));
+  return (
+    <Modal onClose={() => (overlay.value = null)} title="Glossary" wide>
+      <div class="palette lr-glossary">
+        <div class="pal-input">
+          <IconSearch size={17} />
+          <input ref={input} placeholder="Search the glossary…" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
+        </div>
+        <ul class="lr-list" ref={list}>
+          {entries.length === 0 && <li class="pal-group">No match</li>}
+          {entries.map((e) => (
+            <li key={e.id} class="lr-entry" data-id={e.id} data-open={open.has(e.id) ? '' : undefined}>
+              <button class="lr-term" aria-expanded={open.has(e.id)} aria-controls={`lr-more-${e.id}`} onClick={() => flip(e.id)}>
+                <b>{highlight(e.title, q)}</b>
+                <span>{e.short}</span>
+              </button>
+              {open.has(e.id) && (
+                <p class="lr-more" id={`lr-more-${e.id}`}>
+                  {e.more}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
 /** Feature 10: "Paste 14 lines?" over the bottom of the terminal; Enter pastes, Esc does not. */
 export function PasteBar(): VNode | null {
   const ask = pasteAsk.value;
@@ -422,21 +471,22 @@ export function Pins(): VNode | null {
 
 // ------------------------------------------------------------------ settings
 
-function Field({ label, hint, children, buttons }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean }): VNode {
+function Field({ label, hint, children, buttons, info }: { label: string; hint?: string; children: preact.ComponentChildren; buttons?: boolean; info?: string }): VNode {
   const body = (
     <>
       <span class="field-label">
         {label}
+        {info && <InfoButton id={info} />}
         {hint && <small>{hint}</small>}
       </span>
       <span class="field-ctl">{children}</span>
     </>
   );
   // A <label> forwards a click on its words to its first button, which would press "Reinstall" or "Reset…" for a stray click.
-  return buttons ? <div class="field">{body}</div> : <label class="field">{body}</label>;
+  return buttons || info ? <div class="field">{body}</div> : <label class="field">{body}</label>;
 }
 
-type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'updates' | 'reset';
+type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'help' | 'updates' | 'reset';
 
 /**
  * Privacy and permissions (1.4.0): what Jaffer may read, send or do, one switch each, in plain words. Shared by Settings and the last
@@ -452,7 +502,7 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
       >
         <Switch checked={p?.explain === true} onChange={(v) => set({ permissions: { explain: v } })} />
       </Field>
-      <Field label="Search the text of past conversations" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">
+      <Field label="Search the text of past conversations" info="transcript" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">
         <Switch checked={p?.deepSearch === true} onChange={(v) => set({ permissions: { deepSearch: v } })} />
       </Field>
       <Field label="Type the resume line for you" hint="Clicking a past conversation types claude --resume into an idle terminal. Off: it only copies the command.">
@@ -461,7 +511,7 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
       <Field label="Move conversations to the Trash" hint="Lets you remove past conversations from the panel. Always asks first; never deletes for good.">
         <Switch checked={p?.trash !== false} onChange={(v) => set({ permissions: { trash: v } })} />
       </Field>
-      <Field label="Answer permission prompts from the notification" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
+      <Field label="Answer permission prompts from the notification" info="permission-prompt" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
         <Switch checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
       </Field>
       <div class="pv-locked" role="note" aria-label="Always locked">
@@ -479,9 +529,14 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
   );
 }
 
-export function Settings(): VNode {
+/** Settings (⌘,); `at`: the section it opens on (the tour shows it on Privacy), else the one asked for with `openSettings`, else Appearance. */
+export function Settings({ at }: { at?: Section } = {}): VNode {
   const c = cfg.value!;
-  const [section, setSection] = useState<Section>('appearance');
+  const [section, setSection] = useState<Section>(() => {
+    const asked = settingsAt.value as Section | null;
+    settingsAt.value = null;
+    return at ?? asked ?? 'appearance';
+  });
   const [claude, setClaude] = useState<{ claudeInstalled: boolean; hooks: boolean } | null>(null);
   const [busy, setBusy] = useState('');
   const refresh = () => {
@@ -534,6 +589,7 @@ export function Settings(): VNode {
     { id: 'terminal', label: 'Terminal', icon: <IconTerminal size={14} /> },
     { id: 'integrations', label: 'Claude Code', icon: <IconPlug size={14} /> },
     { id: 'privacy', label: 'Privacy and permissions', icon: <IconLock size={14} /> },
+    { id: 'help', label: 'Help', icon: <IconInfo size={14} /> },
     { id: 'updates', label: 'Updates', icon: <IconDownload size={14} /> },
     { id: 'reset', label: 'Reset', icon: <IconReset size={14} /> },
   ];
@@ -543,7 +599,7 @@ export function Settings(): VNode {
       <div class="settings">
         <nav class="settings-nav">
           {nav.map((n) => (
-            <button key={n.id} class={section === n.id ? 'on' : ''} onClick={() => setSection(n.id)}>
+            <button key={n.id} class={section === n.id ? 'on' : ''} data-tour={n.id === 'privacy' ? 'settings-privacy' : undefined} onClick={() => setSection(n.id)}>
               {n.icon}
               {n.label}
             </button>
@@ -668,7 +724,7 @@ export function Settings(): VNode {
                   );
                 })}
               </div>
-              <Field label="Companion size" hint="Makes the mole or the scene bigger or smaller in the corner.">
+              <Field label="Companion size" info="companion" hint="Makes the mole or the scene bigger or smaller in the corner.">
                 <select value={PET_SIZES.find((s) => petScale(c.appearance.petSize) === s.scale)?.id ?? 'normal'} onChange={(e) => set({ appearance: { petSize: (e.target as HTMLSelectElement).value } })}>
                   {PET_SIZES.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -824,6 +880,30 @@ export function Settings(): VNode {
             </>
           )}
 
+          {section === 'help' && (
+            <>
+              <h4>Help</h4>
+              <p class="lede">New to Claude Code? A short tour of the window, the words in plain language, and a tip the first time something new comes up.</p>
+              <Field buttons label="The tour" hint="about a minute: the terminal, the side panel, the palette, split terminals and your privacy switches">
+                <button class="btn primary lr-start" onClick={startTour}>
+                  Start the tour
+                </button>
+              </Field>
+              <Field buttons label="The glossary" hint="sessions, tokens, the context window, hooks, MCP servers, skills and more">
+                <button class="btn lr-open" onClick={() => openGlossary()}>
+                  Open the glossary
+                </button>
+              </Field>
+              <Field label="Show tips" hint="the first time something comes up (compaction, a helper Claude, a permission prompt…), a quiet note asks if you want to know what it is">
+                <Switch checked={c.tips?.enabled !== false} onChange={(v) => setTips({ enabled: v })} />
+              </Field>
+              <Field buttons label="Tips you have seen" hint={`${c.tips?.seen?.length ?? 0} shown so far; each shows once`}>
+                <button class="btn lr-again" disabled={!c.tips?.seen?.length} onClick={() => (setTips({ seen: [] }), toast({ kind: 'info', text: 'Tips will show again.' }, 3000))}>
+                  Show tips again
+                </button>
+              </Field>
+            </>
+          )}
           {section === 'reset' && <ResetSection />}
           {section === 'updates' && <UpdatesSection auto={c.updates?.auto !== false} onAuto={(v) => set({ updates: { auto: v } })} />}
         </div>
@@ -1051,6 +1131,12 @@ async function startClaudeWhenReady(): Promise<void> {
   await runClaude();
 }
 
+/** First run is done: one offer of the tour, unless it was taken or skipped before. */
+function offerTour(): void {
+  if (cfg.value?.tour?.done === true) return;
+  const id = toast({ kind: 'info', text: 'Take a 1-minute tour?', actions: [{ label: 'Start', run: () => (dismissToast(id), startTour()) }] });
+}
+
 export function Onboarding(): VNode {
   const [stage, setStage] = useState<'signin' | 'choices' | 'privacy'>('signin');
   const [plain, setPlain] = useState(false); // chose a terminal without Claude: no Claude choices, nothing installed, nothing typed
@@ -1064,12 +1150,14 @@ export function Onboarding(): VNode {
         // Nothing about Claude is on until the person adds it (Settings → Claude Code offers it): not the hooks
         await patchConfig({ onboarded: true, claude: { skipped: true }, updates: { seenVersion: appVersion.value } });
         overlay.value = null;
+        offerTour();
         return;
       }
       await patchConfig({ onboarded: true, updates: { seenVersion: appVersion.value } }); // (a first start has no news)
       if (claude) await call('setup.claude.install', {}).catch((e) => toast({ kind: 'error', text: e.message })); // the hooks, so the mole and the notification can follow Claude
       overlay.value = null;
       if (start) void startClaudeWhenReady(); // after the hooks are in, so this very session is seen
+      offerTour();
     } catch (e) {
       toast({ kind: 'error', text: `Could not save your choices: ${e instanceof Error ? e.message : String(e)}` });
     } finally {

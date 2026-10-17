@@ -1,4 +1,4 @@
-import { activePane, addPin, cfg, focusMode, info, lastFind, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, toast, togglePanel } from './state';
+import { activePane, addPin, cfg, focusMode, info, lastFind, openGlossary, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, startTour, toast, togglePanel } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -79,6 +79,8 @@ export const actions: Action[] = [
   { id: 'recent-commands', title: 'Recent commands', section: 'Terminal', keys: '⌘R', keywords: 'history copy clipboard', run: () => openOverlay('recent') },
   { id: 'shortcuts', title: 'Keyboard shortcuts', section: 'App', keys: '⌘/', keywords: 'keys accelerators cheat sheet help', run: () => openOverlay('keys') },
   { id: 'whats-new', title: "What's new", section: 'App', keywords: 'release notes changelog version update news', run: showWhatsNew },
+  { id: 'glossary', title: 'Glossary', section: 'App', keywords: 'learn help words terms explain what is token context compaction hook mcp skill', run: () => openGlossary() },
+  { id: 'start-tour', title: 'Take the tour', section: 'App', keywords: 'learn help tour introduction guide new', run: startTour },
   { id: 'history', title: 'Past Claude conversations…', section: 'App', keys: '⇧⌘O', keywords: 'resume claude history copy clipboard', run: showConversations },
   { id: 'resume-last', title: 'Resume last conversation', section: 'App', keys: '⇧⌘R', keywords: 'continue past history newest folder', run: resumeLast },
   { id: 'pin-selection', title: 'Pin selection', section: 'Terminal', keys: '⇧⌘L', keywords: 'pin line keep', run: pinSelection },

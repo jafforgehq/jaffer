@@ -9,6 +9,7 @@ import { WhatsNew } from './WhatsNew';
 import { askToExplain, Explain, explainCard, explainLast, explainSupported } from './Explain';
 import { terminals } from './TerminalView';
 import { ApprovalAsk } from './Chrome';
+import { InfoButton } from './InfoButton';
 
 const SLIDE_MS = 180;
 /** The arrow keys on the edge write `panel.width` (and fit the terminal) once they stop for this long. */
@@ -29,11 +30,12 @@ export function NowCard(): VNode {
   const ap = approvals.value[0];
   if (ap) m.hint = undefined;
   return (
-    <section class="now-card" data-state={ap ? 'needs-you' : m.state} aria-label="Now">
+    <section class="now-card" data-tour="now" data-state={ap ? 'needs-you' : m.state} aria-label="Now">
       <div class="now-head">
         <span class="now-dot" />
         <span class="now-label">{m.label}</span>
         {m.elapsed && <span class="now-elapsed">{m.elapsed}</span>}
+        <InfoButton id="session" tour="now-info" />
       </div>
       {m.tool && <div class="now-tool">{m.tool}</div>}
       {ap && <ApprovalAsk key={ap.id} a={ap} place="card" />}
@@ -46,6 +48,7 @@ export function NowCard(): VNode {
       {m.cost && (
         <div class="now-cost" data-live={m.cost.live ? '' : undefined} title={COST_ESTIMATE}>
           {m.cost.text}
+          <InfoButton id="cost-estimate" />
         </div>
       )}
       {m.today && (
@@ -60,7 +63,10 @@ export function NowCard(): VNode {
       )}
       {m.context && (
         <div class="now-ctx" data-level={m.context.level} title="An estimate from the token counts of the latest response: how much of the context window it used">
-          <span>{m.context.text}</span>
+          <span>
+            {m.context.text}
+            <InfoButton id="context-window" />
+          </span>
           {m.context.fraction !== null && (
             <span class="now-ctx-bar" role="meter" aria-label="Context used (estimate)" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(m.context.fraction * 100)}>
               <i style={{ width: pct(m.context.fraction) }} />
@@ -71,6 +77,7 @@ export function NowCard(): VNode {
       {m.worked && (
         <div class="now-worked" data-level={m.workedLevel}>
           {m.worked}
+          <InfoButton id="turn" />
         </div>
       )}
       {m.last5h && (
@@ -79,6 +86,7 @@ export function NowCard(): VNode {
         </div>
       )}
       {m.bars && (
+        <div class="lr-line">
         <svg class="now-turns" viewBox={`0 0 ${m.bars.w} ${m.bars.h}`} width={m.bars.w} height={m.bars.h} role="img" aria-label={m.bars.label}>
           {m.bars.bars.map((b, i) => (
             <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="1.5" data-level={b.level}>
@@ -86,6 +94,8 @@ export function NowCard(): VNode {
             </rect>
           ))}
         </svg>
+        <InfoButton id="turn" />
+        </div>
       )}
       {timeline.length > 0 && (
         <div class="now-tl">

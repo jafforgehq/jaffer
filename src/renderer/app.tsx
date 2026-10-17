@@ -8,7 +8,8 @@ import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { ToolStrip } from './components/ToolStrip';
 import { SidePanel } from './components/SidePanel';
-import { FindBar, Onboarding, Palette, PasteBar, Pins, RecentCommands, Settings, ShortcutsSheet } from './components/Overlays';
+import { FindBar, Glossary, Onboarding, Palette, PasteBar, Pins, RecentCommands, Settings, ShortcutsSheet } from './components/Overlays';
+import { Tour } from './components/Tour';
 import { BlockMenu, StickyHeader } from './components/Blocks';
 import { cssVars, windowOpacity } from './themes';
 
@@ -124,6 +125,8 @@ export function App(): VNode | null {
       {overlay.value === 'keys' && <ShortcutsSheet />}
       {overlay.value === 'settings' && <Settings />}
       {overlay.value === 'onboarding' && <Onboarding />}
+      {overlay.value === 'learn' && <Glossary />}
+      {overlay.value === 'tour' && <Tour />}
     </div>
   );
 }

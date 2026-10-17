@@ -7,6 +7,7 @@ import type { ClaudeSession } from '../../core/claude/watcher';
 import type { ApprovalView } from '../../core/claude/approvals';
 import { baseName, budgetLevel, COST_ESTIMATE, costFigure, fmtDuration, gitText, ordinal, progressFraction, sessionClockText, sparkPath } from '../claude-ui';
 import { IconBranch, IconInfo, IconPencil, IconSidebar, IconX } from './icons';
+import { InfoButton } from './InfoButton';
 
 function shortPath(p: string): string {
   if (!p) return '';
@@ -99,6 +100,7 @@ function CostChip({ s }: { s: ClaudeSession }): VNode | null {
         ))}
         <Spark label={`Last ${hist.length} turns: time`} values={hist.map((h) => h.durMs)} />
         <Spark label="cost" values={hist.map((h) => h.usd ?? 0)} />
+        <div class="lr-hint">What these figures are: ⓘ in the side panel, or Help → Glossary… → Cost estimate</div>
       </div>
     </span>
   );
@@ -179,6 +181,11 @@ export function ApprovalAsk({ a, place }: { a: ApprovalView; place: 'chip' | 'ca
         {a.tool} · Waiting for your answer ({secs} s)
       </span>
       {card && a.detail && <span class="ap-detail">{a.detail}</span>}
+      {card && (
+        <span class="lr-ap">
+          What is this? <InfoButton id="permission-prompt" />
+        </span>
+      )}
       {card && !a.allowable && <span class="ap-why">Not the whole request here: answer it in the terminal to see it, or deny it.</span>}
       <span class="ap-btns">
         <button type="button" class="ap-deny" onMouseDown={keep} onClick={() => answerApproval(a.id, 'deny')}>
@@ -222,7 +229,7 @@ export function TitleBar(): VNode {
     <div class="titlebar">
       <div class="tb-left" />
       <div class="tb-center">
-        <span class="session-pill">
+        <span class="session-pill" data-tour="titlebar">
           <span class={`live ${daemonUp.value ? '' : 'off'}`} />
           <FolderLabel text={shortPath(i.cwd) || 'Jaffer'} title={i.cwd} />
           {i.branch && (

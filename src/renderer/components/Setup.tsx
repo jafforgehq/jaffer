@@ -4,6 +4,7 @@ import { info, setupOpen } from '../state';
 import { formatBytes } from '../../shared/history-label';
 import type { SetupInfo } from '../../core/claude/setup';
 import type { McpCheck, McpStatus } from '../../core/claude/mcp';
+import { InfoButton } from './InfoButton';
 
 /** Only the newest `claude.setup` answer counts (the folder changed while one was read). */
 let asked = 0;
@@ -20,6 +21,8 @@ interface Item {
   danger?: boolean;
 }
 
+/** Each group's glossary entry (its ⓘ). */
+const GROUP_INFO: Record<string, string> = { mcp: 'mcp', skills: 'skill', rules: 'rules', plugins: 'plugin', agents: 'subagent', hooks: 'hook' };
 const MCP_DOT: Record<McpStatus, Dot> = { connected: 'ok', 'needs-auth': 'attention', pending: 'attention', failed: 'attention', disabled: 'off', unknown: 'unknown' };
 const SKILL_NOTE = { 'name-only': 'name only', 'user-invocable-only': 'only by you' } as const;
 const RULE_KIND = { user: 'Your memory (all projects)', project: 'Project memory', local: 'Your local project memory', managed: 'Managed by your organization', rule: 'A rule file' } as const;
@@ -101,7 +104,7 @@ export function Setup(): VNode {
     : [];
 
   return (
-    <section class="sx-setup" aria-label="Setup">
+    <section class="sx-setup" data-tour="setup" aria-label="Setup">
       <button class="sx-head" aria-expanded={open} aria-controls="sx-body" onClick={() => (setupOpen.value = !open)}>
         Setup
       </button>
@@ -113,7 +116,10 @@ export function Setup(): VNode {
             return (
               <div key={g.key} class="sx-group" data-group={g.key}>
                 <div class="sx-ghead">
-                  <span>{g.title}</span>
+                  <span>
+                    {g.title}
+                    <InfoButton id={GROUP_INFO[g.key]!} />
+                  </span>
                   <span class="sx-count">{g.items.length}</span>
                 </div>
                 {g.items.length === 0 && g.key !== 'mcp' && <div class="sx-none">None here</div>}

@@ -495,3 +495,23 @@ describe('1.4.0: the work-time budget, project budgets, the weekly numbers and t
     expect(new ConfigStore(env.paths).get().usage).toEqual({ week, lastWeek: { id: '', usd: 2, workMs: 0 }, digestWeek: '' });
   });
 });
+
+describe('1.4.0: tour.done, tips.enabled and tips.seen', () => {
+  it('have their defaults (the tour not done, tips on, none seen), also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.tour).toEqual({ done: false });
+    expect(DEFAULT_CONFIG.tips).toEqual({ enabled: true, seen: [] });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    const c = new ConfigStore(env.paths).get();
+    expect(c.tour).toEqual({ done: false });
+    expect(c.tips).toEqual({ enabled: true, seen: [] });
+  });
+
+  it('a choice is kept; a value of the wrong kind leaves what was there (a switch stays a boolean, the seen ids a list of text)', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ tour: { done: true }, tips: { enabled: false, seen: ['compaction'] } });
+    store.patch({ tour: { done: 'yes' }, tips: { enabled: 0, seen: 'compaction' } } as never);
+    expect(new ConfigStore(env.paths).get()).toMatchObject({ tour: { done: true }, tips: { enabled: false, seen: ['compaction'] } });
+    fs.writeFileSync(env.paths.config, JSON.stringify({ tips: 'off', tour: [] }));
+    expect(new ConfigStore(env.paths).get()).toMatchObject({ tour: { done: false }, tips: { enabled: true, seen: [] } });
+  });
+});

@@ -35,6 +35,9 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'zoom-reset': { label: 'Actual Size', accelerator: 'Cmd+0' },
   'whats-new': { label: "What's New…" },
   shortcuts: { label: 'Keyboard Shortcuts', accelerator: 'Cmd+/' },
+  // 1.4.0: learn (no accelerators)
+  glossary: { label: 'Glossary…' },
+  'start-tour': { label: 'Take the Tour' },
 };
 
 /** The accelerator of the `togglefullscreen` role (View → Enter Full Screen), which no item of ours may share. */

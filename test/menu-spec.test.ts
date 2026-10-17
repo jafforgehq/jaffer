@@ -94,6 +94,16 @@ describe('the menu and the palette agree', () => {
     expect(main).not.toMatch(/role: 'close'/);
   });
 
+  it('learn (1.4.0): Glossary… and Take the Tour are in the Help menu after Keyboard Shortcuts and in the palette, with no accelerator', () => {
+    expect(MENU_ITEMS['glossary']).toEqual({ label: 'Glossary…' });
+    expect(MENU_ITEMS['start-tour']).toEqual({ label: 'Take the Tour' });
+    expect(actions.find((a) => a.id === 'glossary')).toEqual({ id: 'glossary', keys: undefined });
+    expect(actions.find((a) => a.id === 'start-tour')).toEqual({ id: 'start-tour', keys: undefined });
+    expect(/title: 'Glossary', section: 'App'/.test(source) && /title: 'Take the tour', section: 'App'/.test(source)).toBe(true);
+    const main = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
+    expect(/role: 'help',\s*submenu: \[[^\]]*item\('shortcuts'\),\s*item\('glossary'\),\s*item\('start-tour'\)/.test(main)).toBe(true);
+  });
+
   it('no accelerator is used twice, and none takes ⌃⌘F (Full Screen) or ⌘Q', () => {
     const all = [...Object.values(MENU_ITEMS).map((i) => i.accelerator), 'Cmd+Q', TOGGLE_FULLSCREEN].filter(Boolean);
     expect(all.length).toBeGreaterThan(15);
