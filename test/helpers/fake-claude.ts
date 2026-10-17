@@ -20,7 +20,8 @@ import path from 'node:path';
  * reaches the real claude: it notes its arguments (one per line) in explain.argv, its folder in explain.cwd and what was in it in
  * explain.ls, its stdin in explain.stdin and the variables it got in explain.env, prints a secret on stderr and then the file
  * explain-out (`setExplainOut`) or a fixed answer. Modes: "explain-hang" starts a child (its pid in explain.child) and waits for it,
- * "explain-fail" exits 1, "explain-slow" waits a second first.
+ * "explain-fail" exits 1, "explain-slow" waits a second first, "explain-litter" leaves a folder in its own folder that cannot be removed
+ * (a test must chmod it back); its JAFFER_* variables go to explain.jenv. Mode "help-hang": `--help` never finishes.
  * Any other command goes to `passthrough` (the real claude) when one is given, so a test can keep using the real thing
  * for everything but the login state.
  */
@@ -76,6 +77,7 @@ if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 if [ "$1" = "--help" ]; then
+  [ "$M" = help-hang ] && exec sleep 30
   if [ "$M" = explain-old ]; then printf 'Usage: claude [options]\n  -p, --print  Print response and exit\n'; exit 0; fi
   printf 'Usage: claude [options] [command] [prompt]\n  -p, --print\n  --tools <tools...>\n  --strict-mcp-config\n  --no-session-persistence\n  --output-format <format>\n  --permission-prompts <target>\n  --safe-mode\n'
   exit 0
@@ -85,12 +87,14 @@ if [ "$1" = "-p" ]; then
   pwd > "$D/explain.cwd"
   ls -A > "$D/explain.ls"
   echo "\${JAFFER_SESSION:-}|\${JAFFER_PANE:-}|\${JAFFER_OWNED:-}|\${ANTHROPIC_API_KEY:-}|\${ANTHROPIC_AUTH_TOKEN:-}|\${JAFFER_NO_HOOKS:-}" > "$D/explain.env"
+  env | grep '^JAFFER_' | sort > "$D/explain.jenv"
   cat > "$D/explain.stdin"
   echo "SECRET-STDERR the helper failed loudly" >&2
   case "$M" in
     explain-slow) sleep 1 ;;
     explain-hang) sleep 30 & echo $! > "$D/explain.child"; wait; exit 0 ;;
     explain-fail) exit 1 ;;
+    explain-litter) mkdir locked && touch locked/f && chmod 500 locked; pwd > "$D/explain.litter" ;;
   esac
   if [ -f "$D/explain-out" ]; then cat "$D/explain-out"; else echo "It fixed the bug and suggests running the tests."; fi
   exit 0

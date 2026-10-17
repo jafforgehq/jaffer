@@ -15,6 +15,7 @@ import { THEMES } from '../themes';
 import { hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, PET_SIZES, companionOf, petScale } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
+import { explainSupported } from './Explain';
 import { IconAgent, IconCommandKey, IconGear, IconLayout, IconPalette, IconPlug, IconSearch, IconTerminal, IconX, IconBolt, IconDownload, IconReset, IconLock } from './icons';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -445,7 +446,10 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
   const p = c.permissions;
   return (
     <div class="pv-list">
-      <Field label="Explain the last answer with a helper Claude" hint="Reads Claude's latest reply and sends it to a separate Claude run on your subscription to write a plain explanation. Uses your plan's usage. Off: Jaffer never reads a reply.">
+      <Field
+        label="Explain the last answer with a helper Claude"
+        hint={`Reads Claude's latest reply and sends it to a separate Claude run on your subscription to write a plain explanation. Uses your plan's usage. Off: Jaffer never reads a reply.${explainSupported.value === false ? ' Your Claude Code cannot run a helper without tools and without saving it: update Claude Code to use this.' : ''}`}
+      >
         <Switch checked={p?.explain === true} onChange={(v) => set({ permissions: { explain: v } })} />
       </Field>
       <Field label="Search the text of past conversations" hint="Scans your conversation files when you search with Search text on. Shows only which conversations match. Nothing is stored.">

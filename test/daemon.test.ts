@@ -882,25 +882,38 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(helperCalls()).toBe(before);
     await c.call('config.patch', { permissions: { explain: true } });
     try {
+      // (fix round) the probe the window asks for when the switch goes on: `claude --help` only, kept once it worked
+      const probes = fake.calls().filter((l) => l.startsWith('--help')).length;
+      expect(await c.call('claude.explain.supported', {})).toEqual({ supported: true });
+      expect(await c.call('claude.explain.supported', {})).toEqual({ supported: true });
+      expect(fake.calls().filter((l) => l.startsWith('--help')).length).toBe(probes + 1);
+      expect(helperCalls()).toBe(before + 1);
       expect(await c.call('claude.explain', { session: 'not-a-session' })).toEqual({ ok: false, reason: 'no-reply' });
       expect(await c.call('claude.explain', { session: 5 })).toEqual({ ok: false, reason: 'no-reply' });
-      expect(helperCalls()).toBe(before);
+      expect(helperCalls()).toBe(before + 1);
       expect(await c.call('claude.explain', { session: sid(1) })).toEqual({ ok: true, text: 'It fixed the bug and suggests running the tests.' });
       const stdin = fake.read('explain.stdin');
       expect(stdin).toContain('I changed a.ts so the build passes.');
       expect(stdin).not.toMatch(/SECRET/);
+      expect(fake.read('explain.jenv')).toBe('JAFFER_NO_HOOKS=1'); // (fix round: not even JAFFER_HOME)
       expect(fake.read('explain.env')).toBe('|||||1'); // (the daemon runs with ANTHROPIC_API_KEY set: never passed on)
       // again at once: too soon for that session
       const n = helperCalls();
       expect(await c.call('claude.explain', { session: sid(1) })).toEqual({ ok: false, reason: 'busy' });
       expect(helperCalls()).toBe(n);
-      // one at a time: a second ask while one runs gets the same answer
+      // (fix round) 5 s between two helper runs of any session
       await turn(sid(2), plant(sid(2), 'Second answer.'));
+      await turn(sid(4), plant(sid(4), 'Fourth answer.'));
+      expect(await c.call('claude.explain', { session: sid(2) })).toEqual({ ok: false, reason: 'busy' });
+      expect(helperCalls()).toBe(n);
+      await sleep(5_100);
+      // one at a time: a second ask for that session while one runs gets the same answer; another session's is busy
       fake.setMode('explain-slow');
       const p = fake.calls().filter((l) => l.startsWith('-p')).length;
-      const [a, b] = await Promise.all([c.call('claude.explain', { session: sid(2) }), c.call('claude.explain', { session: sid(2) })]);
+      const [a, b, other] = await Promise.all([c.call('claude.explain', { session: sid(2) }), c.call('claude.explain', { session: sid(2) }), sleep(300).then(() => c.call('claude.explain', { session: sid(4) }))]);
       expect(a).toEqual({ ok: true, text: 'It fixed the bug and suggests running the tests.' });
       expect(b).toEqual(a);
+      expect(other).toEqual({ ok: false, reason: 'busy' });
       expect(fake.calls().filter((l) => l.startsWith('-p')).length).toBe(p + 1);
       // a session that has answered nothing yet
       await c.call('claude.event', { session_id: sid(3), hook_event_name: 'SessionStart', cwd: '/w' });
@@ -908,7 +921,7 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     } finally {
       fake.setMode('ok');
       await c.call('config.patch', { permissions: { explain: false } });
-      for (const n of [1, 2, 3]) await c.call('claude.event', { session_id: sid(n), hook_event_name: 'SessionEnd' });
+      for (const n of [1, 2, 3, 4]) await c.call('claude.event', { session_id: sid(n), hook_event_name: 'SessionEnd' });
     }
   });
 
@@ -929,6 +942,60 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(alive()).toBe(true);
     await c.call('app.shutdown', {});
     await waitUntil(() => !alive(), 5_000);
+    fake.setMode('ok');
+  });
+});
+
+describe('an Explain helper ends with the daemon (1.4.0 fix round; bundled daemon, fake claude)', () => {
+  let env4: TestEnv;
+  let fake: ReturnType<typeof fakeClaude>;
+  let c: RpcClient;
+
+  beforeAll(async () => {
+    env4 = makeEnv();
+    fake = fakeClaude(path.join(env4.root, 'bin'), { loggedIn: true });
+    c = await ensureDaemon(env4.paths, {
+      execPath: process.execPath,
+      daemonScript: path.join(root, 'dist/daemon/jafferd.cjs'),
+      cliScript: path.join(root, 'dist/cli/jaffer.cjs'),
+      env: { HOME: env4.userHome, SHELL: '/bin/bash', PS1: '$ ', PATH: `${fake.dir}:${process.env.PATH}` },
+    });
+  }, 30_000);
+
+  afterAll(async () => {
+    c?.close();
+    const last = await tryConnect(env4.paths);
+    await last?.call('app.shutdown', {}).catch(() => undefined);
+    await sleep(300);
+    env4.cleanup();
+  });
+
+  it('(fix round) the daemon stopping ends an Explain helper under way, with what it started, and removes its folder (a daemon of its own)', async () => {
+    const id = '00000009-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const file = path.join(env4.userHome, '.claude', 'projects', '-w', `${id}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, [JSON.stringify({ type: 'user', message: { role: 'user', content: 'go' } }), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } })].join('\n') + '\n');
+    await c.call('claude.event', { session_id: id, hook_event_name: 'UserPromptSubmit', transcript_path: file, cwd: '/w' });
+    await c.call('claude.event', { session_id: id, hook_event_name: 'Stop', transcript_path: file, cwd: '/w' });
+    await c.call('config.patch', { permissions: { explain: true } });
+    fs.rmSync(path.join(fake.dir, 'explain.child'), { force: true });
+    fake.setMode('explain-hang');
+    const asked = c.call('claude.explain', { session: id }).catch(() => undefined);
+    await waitUntil(() => !!fake.read('explain.child'), 10_000);
+    const child = Number(fake.read('explain.child'));
+    const folder = fake.read('explain.cwd');
+    expect(fs.existsSync(folder)).toBe(true);
+    await c.call('app.shutdown', {}).catch(() => undefined);
+    await asked;
+    const alive = () => {
+      try {
+        process.kill(child, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await waitUntil(() => !alive() && !fs.existsSync(folder), 5_000);
     fake.setMode('ok');
   });
 });

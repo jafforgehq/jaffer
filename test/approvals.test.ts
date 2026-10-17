@@ -147,4 +147,16 @@ describe('approvals: what Claude Code reads back, and what the notification says
       }
     }
   });
+
+  it('(Explain fix round) a folder of 64 KB of slashes is read in linear time: the trailing slashes are trimmed by a loop', () => {
+    const t = Date.now();
+    for (let i = 0; i < 20; i++) {
+      for (const dir of ['/'.repeat(65536) + 'a', 'a' + '/'.repeat(65536), '/'.repeat(65536)]) {
+        approvalDetail('Read', { file_path: '/etc/hosts' }, { cwd: dir, home: dir });
+      }
+    }
+    expect(Date.now() - t).toBeLessThan(150);
+    expect(approvalDetail('Read', { file_path: '/work/app/a.ts' }, { cwd: '/work/app///', home: '/Users/me//' })).toEqual({ text: 'a.ts', complete: true });
+    expect(approvalDetail('Read', { file_path: '/Users/me/b.ts' }, { cwd: '/x', home: '/Users/me//' })).toEqual({ text: '~/b.ts', complete: true });
+  });
 });

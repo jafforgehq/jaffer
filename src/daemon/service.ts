@@ -23,7 +23,7 @@ import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
 import { readSetup } from '../core/claude/setup';
 import { runMcpList, stopMcpChecks, type McpCheck } from '../core/claude/mcp';
-import { buildExplainPrompt, explainSupported, lastReply, runExplain, type ExplainResult } from '../core/claude/explain';
+import { buildExplainPrompt, explainSupport, lastReply, runExplain, stopExplains, type ExplainResult } from '../core/claude/explain';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
 import { nextTypicalTurnMs } from '../shared/turn-median';
@@ -92,10 +92,9 @@ export class JafferService {
   private claudePushTimer: NodeJS.Timeout | null = null;
   /** (1.4.0) The `claude mcp list` under way per folder (by its real path): a second ask for that folder while it runs gets the same answer. */
   private mcpChecks = new Map<string, Promise<McpCheck>>();
-  /** (1.4.0) The one Explain under way, when each session's last one ended (5 s between two), and whether this `claude` can run the helper. */
-  private explaining: Promise<ExplainResult> | null = null;
-  private explainedAt = new Map<string, number>();
-  private explainOk: { bin: string | null; ok: boolean } | null = null;
+  /** (1.4.0) The one Explain under way (for its session), and when the last helper run ended (5 s between two, of any session). */
+  private explaining: { session: string; p: Promise<ExplainResult> } | null = null;
+  private explainedAt = 0;
   private claudePushPending = false;
   private stopping = false;
   /** Keeps the Mac from idle sleep while Claude or a long command works (see `refreshStayAwake`). */
@@ -183,6 +182,7 @@ export class JafferService {
     for (const g of this.git.values()) if (g.timer) clearTimeout(g.timer);
     this.login?.cancel(); // a `claude auth login` left running would outlive the daemon
     stopMcpChecks(); // (and a `claude mcp list` with the servers it started)
+    stopExplains(); // (and an Explain helper, with its folder)
     this.host?.dispose();
     await this.rpc.close();
     try {
@@ -733,10 +733,25 @@ export class JafferService {
 
     // (1.4.0) Explain, only while this daemon's own permissions.explain is on (never the page's word): the latest answer of a session it
     // tracks (the one named, else the newest that has not ended) goes to one helper `claude -p` without tools; its answer goes back to the
-    // caller only. Nothing of either is logged or kept. One at a time: a second ask while one runs gets the same answer.
+    // caller only. Nothing of either is logged or kept. One at a time: a second ask for that session while one runs gets the same answer,
+    // another session's is busy, and so is any ask within 5 s of the last run's end.
     r.handle('claude.explain', (p: { session?: unknown } | null): Promise<ExplainResult> | ExplainResult => {
       if (this.config.get().permissions.explain !== true) return { ok: false, reason: 'off' };
-      return (this.explaining ??= this.explain(p?.session).finally(() => (this.explaining = null)));
+      const id = p?.session;
+      const live = this.claudeWatcher.sessions();
+      const s = id === undefined || id === null ? live.find((x) => x.state !== 'ended') : live.find((x) => x.id === id);
+      if (!s?.transcriptPath) return { ok: false, reason: 'no-reply' };
+      if (this.explaining) return this.explaining.session === s.id ? this.explaining.p : { ok: false, reason: 'busy' };
+      if (Date.now() - this.explainedAt < EXPLAIN_GAP_MS) return { ok: false, reason: 'busy' };
+      const run = this.explain(s.transcriptPath).finally(() => (this.explaining = null));
+      this.explaining = { session: s.id, p: run };
+      return run;
+    });
+    // (1.4.0) Can this `claude` run the helper (no tools, no saved session)? `claude --help` only; true/false kept once a probe worked, null
+    // (unknown) when it failed. The window asks when the switch goes on, to hide the button and say why.
+    r.handle('claude.explain.supported', async () => {
+      await this.probeClaude();
+      return { supported: await explainSupport(this.claudeBin, this.claudeEnv()) };
     });
 
     // ---- config
@@ -800,24 +815,18 @@ export class JafferService {
     });
   }
 
-  private async explain(id: unknown): Promise<ExplainResult> {
-    const live = this.claudeWatcher.sessions();
-    const s = id === undefined || id === null ? live.find((x) => x.state !== 'ended') : live.find((x) => x.id === id);
-    if (!s?.transcriptPath) return { ok: false, reason: 'no-reply' };
-    const now = Date.now();
-    for (const [k, t] of this.explainedAt) if (now - t >= EXPLAIN_COOLDOWN_MS) this.explainedAt.delete(k);
-    if (this.explainedAt.has(s.id)) return { ok: false, reason: 'busy' };
+  private async explain(transcript: string): Promise<ExplainResult> {
     await this.probeClaude();
     const env = this.claudeEnv();
-    if (this.explainOk?.bin !== this.claudeBin) this.explainOk = { bin: this.claudeBin, ok: await explainSupported(this.claudeBin, env) };
-    if (!this.explainOk.ok) return { ok: false, reason: 'unavailable' };
-    if (this.config.get().permissions.explain !== true) return { ok: false, reason: 'off' }; // (switched off meanwhile: read nothing)
-    const text = await lastReply(s.transcriptPath, process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'));
+    const supported = await explainSupport(this.claudeBin, env);
+    if (supported !== true) return { ok: false, reason: supported === false ? 'unavailable' : 'error' };
+    if (this.config.get().permissions.explain !== true || this.stopping) return { ok: false, reason: 'off' }; // (switched off meanwhile: read nothing)
+    const text = await lastReply(transcript, process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'));
     if (!text) return { ok: false, reason: 'no-reply' };
     try {
       return await runExplain({ claudeBin: this.claudeBin, prompt: buildExplainPrompt(text), env });
     } finally {
-      this.explainedAt.set(s.id, Date.now());
+      this.explainedAt = Date.now();
     }
   }
 
@@ -857,8 +866,8 @@ export class JafferService {
   }
 }
 
-/** The least time between two Explains of one session (a double click is not two helper runs). */
-const EXPLAIN_COOLDOWN_MS = 5000;
+/** The least time between two Explain helper runs, of any session (a double click is not two runs). */
+const EXPLAIN_GAP_MS = 5000;
 
 /** A command that was stopped, not ended (Ctrl+Z: the shell reports 128 + a stop signal, 145 to 150 on macOS and Linux). */
 function stoppedExit(exit: number | null): boolean {

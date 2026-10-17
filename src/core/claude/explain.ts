@@ -110,30 +110,66 @@ function parse(line: string): Record<string, unknown> | undefined {
 
 /** The fixed instruction, then the answer between `<message>` and `</message>` (a mark inside it is defused, so it cannot end the data early). */
 export function buildExplainPrompt(text: string): string {
-  return `${INSTRUCTION}\n<message>\n${text.replace(/<(\/?message)>/gi, '‹$1›')}\n</message>`;
+  // (any spelling: `</ message >`, `<MESSAGE foo>`, `< /message`; the text is at most a few KB, and each run is bounded)
+  return `${INSTRUCTION}\n<message>\n${text.replace(/<(?=\s{0,16}\/?\s{0,16}message)/gi, '‹')}\n</message>`;
 }
 
-/** The helper's environment: the person's own, without Jaffer's session variables and without an API key (a subscription only). */
+/** The helper's environment: the person's own, without any of Jaffer's variables and without an API key (a subscription only). */
 function helperEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const e = { ...env };
-  for (const k of ['JAFFER_SESSION', 'JAFFER_PANE', 'JAFFER_OWNED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) delete e[k];
+  for (const k of Object.keys(e)) if (k.startsWith('JAFFER_')) delete e[k];
+  delete e.ANTHROPIC_API_KEY;
+  delete e.ANTHROPIC_AUTH_TOKEN;
   e.JAFFER_NO_HOOKS = '1'; // (not the terminal's Claude: Jaffer's hooks report nothing for it)
   return e;
 }
 
-/** Does this `claude` document every flag the helper needs? Asked with `claude --help` only. */
-export function explainSupported(claude: string | null, env: NodeJS.ProcessEnv, timeoutMs = 10_000): Promise<boolean> {
+/** Does this `claude` document every flag the helper needs? Asked with `claude --help` only; null when it could not be asked (a failure, a timeout). */
+export function explainSupported(claude: string | null, env: NodeJS.ProcessEnv, timeoutMs = 10_000): Promise<boolean | null> {
   if (!claude) return Promise.resolve(false);
   return new Promise((resolve) => {
     execFile(claude, ['--help'], { env: helperEnv(env), timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
-      resolve(!err && HELP_WORDS.every((w) => String(stdout).includes(w)));
+      resolve(err ? null : HELP_WORDS.every((w) => String(stdout).includes(w)));
     });
   });
 }
 
+/** The answers of probes that worked, per `claude` path, for the daemon's run (a failed probe is asked again next time). */
+const probed = new Map<string, boolean>();
+export async function explainSupport(claude: string | null, env: NodeJS.ProcessEnv, timeoutMs?: number): Promise<boolean | null> {
+  if (!claude) return false;
+  const known = probed.get(claude);
+  if (known !== undefined) return known;
+  const r = await explainSupported(claude, env, timeoutMs);
+  if (r !== null) probed.set(claude, r);
+  return r;
+}
+
+/** The helpers under way: their process groups (leaders' pids) and folders, so the daemon can end them when it stops. */
+const live = new Map<number, string>();
+
+function cleanUp(pid: number | undefined, dir: string): void {
+  try {
+    if (pid) process.kill(-pid, 'SIGKILL');
+  } catch {
+    /* gone already */
+  }
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* (a folder it left that cannot be removed: in the temporary folder, where the system clears it) */
+  }
+}
+
+/** Ends every helper under way, with whatever it started, and removes its folder (the daemon stopping). */
+export function stopExplains(): void {
+  for (const [pid, dir] of live) cleanUp(pid, dir);
+  live.clear();
+}
+
 /**
  * One helper run: `claude` with `EXPLAIN_FLAGS` (no shell), the prompt on stdin, in a fresh empty temporary folder (removed after), in its
- * own process group (stopped whole with SIGKILL after `timeoutMs`). What it prints on stderr is never read; its answer loses colours and
+ * own process group (ended whole with SIGKILL when it is done, after `timeoutMs` or by `stopExplains`). What it prints on stderr is never read; its answer loses colours and
  * control characters, is redacted and cut to 8000 characters. A failure is one of the fixed reasons, never its text.
  */
 export function runExplain(o: { claudeBin: string | null; prompt: string; env: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<ExplainResult> {
@@ -152,24 +188,18 @@ export function runExplain(o: { claudeBin: string | null; prompt: string; env: N
       if (done) return;
       done = true;
       clearTimeout(timer);
-      fs.rmSync(dir, { recursive: true, force: true });
+      if (child?.pid) live.delete(child.pid);
+      cleanUp(child?.pid, dir); // (its whole group: nothing it started outlives it)
       resolve(r);
     };
-    let child: ReturnType<typeof spawn>;
+    let child: ReturnType<typeof spawn> | undefined;
+    const timer = setTimeout(() => finish({ ok: false, reason: 'timeout' }), o.timeoutMs ?? EXPLAIN_TIMEOUT_MS); // (finish kills the group)
     try {
       child = spawn(claude, EXPLAIN_FLAGS, { cwd: dir, env: helperEnv(o.env), detached: true, stdio: ['pipe', 'pipe', 'ignore'] });
     } catch {
-      fs.rmSync(dir, { recursive: true, force: true });
-      return resolve({ ok: false, reason: 'unavailable' });
+      return finish({ ok: false, reason: 'unavailable' });
     }
-    const timer = setTimeout(() => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* gone already */
-      }
-      finish({ ok: false, reason: 'timeout' });
-    }, o.timeoutMs ?? EXPLAIN_TIMEOUT_MS);
+    if (child.pid) live.set(child.pid, dir);
     child.stdin!.on('error', () => undefined); // (a helper that ends before reading it all)
     child.stdin!.end(o.prompt);
     child.stdout!.setEncoding('utf8');

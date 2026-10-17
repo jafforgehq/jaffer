@@ -4623,7 +4623,7 @@ describe('Jaffer UI end to end', () => {
       const w = window as any;
       w.__exCalls = [];
       w.__exReal = w.jaffer.call;
-      w.jaffer.call = (m: string, p: any) => (w.__exCalls.push(m), w.__exReal(m, p));
+      w.jaffer.call = (m: string, p: any) => (w.__exCalls.push(m), m === 'claude.explain.supported' && w.__exUnsupported ? Promise.resolve({ supported: false }) : w.__exReal(m, p));
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => '', writeText: async (t: string) => void (w.__exClip = t) } });
     });
     const calls = () => page.evaluate(() => (window as any).__exCalls as string[]);
@@ -4691,7 +4691,23 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await page.locator('.now-explain').count()) === 0, 3_000, 'the button to go');
       const asked = await calls();
       expect(asked.filter((m) => m === 'claude.explain')).toHaveLength(3);
+      expect(asked).toContain('claude.explain.supported'); // (fix round: asked when the switch went on)
       expect(asked).not.toContain('pty.write');
+
+      // (fix round) a Claude Code that cannot run the helper: no Explain button (Ask Claude to explain stays), and the Privacy hint says why
+      await page.evaluate(() => void ((window as any).__exUnsupported = true));
+      await cfgPatch({ permissions: { explain: true } });
+      await until(async () => (await calls()).filter((m) => m === 'claude.explain.supported').length >= 2, 5_000, 'the probe');
+      await sleep(300);
+      expect(await page.locator('.now-explain').count()).toBe(0);
+      expect(await page.locator('.now-ask').count()).toBe(1);
+      await page.keyboard.press('Meta+,');
+      await page.waitForSelector('.settings');
+      await page.click('.settings-nav button:has-text("Privacy and permissions")');
+      expect(await page.locator('.settings .pv-list .field small').first().textContent()).toContain('Your Claude Code cannot run a helper without tools and without saving it: update Claude Code to use this.');
+      await page.keyboard.press('Escape');
+      await until(async () => (await page.locator('.settings').count()) === 0, 3_000, 'Settings to close');
+      await cfgPatch({ permissions: { explain: false } });
     } finally {
       fake.setMode('ok');
       fs.rmSync(path.join(fake.dir, 'explain-out'), { force: true });
@@ -4699,6 +4715,7 @@ describe('Jaffer UI end to end', () => {
         const w = window as any;
         if (w.__exReal) w.jaffer.call = w.__exReal;
         delete w.__exReal;
+        delete w.__exUnsupported;
       });
       await cfgPatch({ panel: panelWas, permissions: { explain: false } });
       await sendHook('SessionEnd', { session_id: sid });

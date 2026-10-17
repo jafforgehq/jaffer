@@ -76,6 +76,13 @@ function redactedHead(s: string, max: number): ApprovalDetail {
   return shown(red, s.length - head.length, red === head);
 }
 
+/** Without its trailing slashes, by a loop (a `/\/+$/` would retry the run of slashes from every one of them). */
+function noTrailingSlash(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end--;
+  return s.slice(0, end);
+}
+
 /**
  * A file's path, relative to the folder Claude works in or with ~ for the home folder; a sensitive one is never shown (`isSensitivePath`
  * fails closed past 4096 characters).
@@ -84,8 +91,8 @@ function filePath(p: string, where: { cwd?: string; home?: string }): ApprovalDe
   if (!p) return NONE;
   const q = p.slice(0, 4097);
   if (isSensitivePath(q)) return { text: 'a key or credential file', complete: false };
-  const cwd = (where.cwd ?? '').slice(0, 4096).replace(/\/+$/, '');
-  const home = (where.home ?? '').slice(0, 4096).replace(/\/+$/, '');
+  const cwd = noTrailingSlash((where.cwd ?? '').slice(0, 4096));
+  const home = noTrailingSlash((where.home ?? '').slice(0, 4096));
   // (relative only inside a real folder: at the root, `etc/hosts` would read as a path in some other folder)
   const rel = cwd && q.startsWith(`${cwd}/`) ? q.slice(cwd.length + 1) : home && q.startsWith(`${home}/`) ? `~/${q.slice(home.length + 1)}` : q;
   return redactedHead(rel, 4097);

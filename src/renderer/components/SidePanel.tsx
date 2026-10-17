@@ -6,7 +6,7 @@ import { nowCardModel, panelWidth, todayTimeline } from '../panel';
 import { Conversations } from './Conversations';
 import { Setup } from './Setup';
 import { WhatsNew } from './WhatsNew';
-import { askToExplain, Explain, explainCard, explainLast } from './Explain';
+import { askToExplain, Explain, explainCard, explainLast, explainSupported } from './Explain';
 import { terminals } from './TerminalView';
 import { ApprovalAsk } from './Chrome';
 
@@ -124,7 +124,7 @@ export function NowCard(): VNode {
       )}
       {s?.state === 'idle' && s.turns > 0 && (
         <div class="now-ex">
-          {cfg.value?.permissions?.explain === true && (
+          {cfg.value?.permissions?.explain === true && explainSupported.value !== false && (
             <button class="btn small now-explain" disabled={!!explainCard.value && 'busy' in explainCard.value} onClick={() => void explainLast(s.id)}>
               Explain the last answer
             </button>

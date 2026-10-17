@@ -49,8 +49,29 @@ export function dismissExplain(): void {
 
 export const askToExplain = () => copyToTerminal(ASK_PROMPT, 'Copied. Paste it in the terminal.');
 
-// the switch off: the card goes, and an answer still on its way is dropped
-effect(() => void (cfg.value?.permissions?.explain !== true && explainCard.peek() && dismissExplain()));
+/**
+ * Can the installed Claude Code run the helper (no tools, no saved session)? Asked (`claude.explain.supported`, the daemon's `claude --help`
+ * check) each time the switch goes on, and at the window's start with it on. false: no Explain button, and the Privacy hint says why;
+ * null: not known (the probe failed): the button shows and a click tells the truth.
+ */
+export const explainSupported = signal<boolean | null | undefined>(undefined);
+async function probe(): Promise<void> {
+  try {
+    const r = await window.jaffer.call<{ supported?: unknown }>('claude.explain.supported', {});
+    explainSupported.value = typeof r?.supported === 'boolean' ? r.supported : null;
+  } catch {
+    explainSupported.value = null;
+  }
+}
+
+// the switch on: ask whether the helper can run; off: the card goes, and an answer still on its way is dropped
+let wasOn = false;
+effect(() => {
+  const on = cfg.value?.permissions?.explain === true;
+  if (on && !wasOn) void probe();
+  wasOn = on;
+  if (!on && explainCard.peek()) dismissExplain();
+});
 
 export function Explain(): VNode | null {
   const c = explainCard.value;

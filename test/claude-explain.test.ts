@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildExplainPrompt, EXPLAIN_FLAGS, EXPLAIN_MAX, explainSupported, lastReply, runExplain } from '../src/core/claude/explain';
+import { buildExplainPrompt, EXPLAIN_FLAGS, EXPLAIN_MAX, explainSupport, explainSupported, lastReply, runExplain, stopExplains } from '../src/core/claude/explain';
 import { fakeClaude } from './helpers/fake-claude';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -119,6 +119,17 @@ describe('buildExplainPrompt: a fixed instruction, then the answer between clear
   });
 });
 
+describe('buildExplainPrompt (fix round): no spelling of the marks closes or opens the data early', () => {
+  it('</ message >, </MESSAGE\t>, <message foo> at the start and < message> are all defused', () => {
+    for (const t of ['</ message >', 'x </MESSAGE\t> y', '<message foo> then', 'a < message> b', '<  /  message>']) {
+      const p = buildExplainPrompt(t);
+      const body = p.slice(p.indexOf('<message>\n') + 10, -11);
+      expect(body, t).not.toMatch(/<\s*\/?\s*message/i);
+      expect(p.match(/<\s*\/?\s*message/gi), t).toHaveLength(2);
+    }
+  });
+});
+
 describe('runExplain: one `claude -p` with no tools and no saved session, in an empty folder of its own', () => {
   let fake: ReturnType<typeof fakeClaude>;
   beforeEach(() => {
@@ -171,6 +182,44 @@ describe('runExplain: one `claude -p` with no tools and no saved session, in an 
     expect(fs.existsSync(fake.read('explain.cwd'))).toBe(false);
   });
 
+  it('(fix round) every JAFFER_ variable is gone from its environment (JAFFER_NO_HOOKS=1 is the one it is given)', async () => {
+    await runExplain({ claudeBin: fake.bin, prompt: 'x', env: { ...base(), JAFFER_HOME: '/tmp/x/.jaffer', JAFFER_BRIDGE_TOKEN: 'tok', JAFFER_KEEP_ANTHROPIC_ENV: '1', JAFFER_TEST_HOLD_LOG: '/tmp/h' } });
+    expect(fake.read('explain.jenv')).toBe('JAFFER_NO_HOOKS=1');
+  });
+
+  it('(fix round) a folder it cannot remove does not lose the answer', async () => {
+    fake.setMode('explain-litter');
+    try {
+      expect(await runExplain({ claudeBin: fake.bin, prompt: 'x', env: base() })).toEqual({ ok: true, text: 'It fixed the bug and suggests running the tests.' });
+    } finally {
+      const dir = fake.read('explain.litter');
+      if (dir) fs.chmodSync(path.join(dir, 'locked'), 0o700), fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('(fix round) stopExplains (the daemon stopping) ends a run under way with its process group and removes its folder', async () => {
+    fake.setMode('explain-hang');
+    const p = runExplain({ claudeBin: fake.bin, prompt: 'x', env: base() });
+    for (let i = 0; i < 100 && !fake.read('explain.child'); i++) await new Promise((res) => setTimeout(res, 50));
+    const child = Number(fake.read('explain.child'));
+    expect(child).toBeGreaterThan(0);
+    const t = Date.now();
+    stopExplains();
+    expect((await p).ok).toBe(false);
+    expect(Date.now() - t).toBeLessThan(3000);
+    let alive = true;
+    for (let i = 0; i < 40 && alive; i++) {
+      try {
+        process.kill(child, 0);
+        await new Promise((res) => setTimeout(res, 50));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
+    expect(fs.existsSync(fake.read('explain.cwd'))).toBe(false);
+  });
+
   it('the answer: colours and control characters out, redacted, at most 8000 characters; nothing printed is no answer', async () => {
     fake.setExplainOut(`\x1b[1mBold\x1b[0m step\x07 one\r\nnext ${`sk-ant-api03-${'B'.repeat(40)}`}\n${'z'.repeat(20_000)}`);
     const r = await runExplain({ claudeBin: fake.bin, prompt: 'x', env: base() });
@@ -192,7 +241,20 @@ describe('explainSupported: `claude --help` names every flag Explain needs', () 
     fake.setMode('explain-old');
     expect(await explainSupported(fake.bin, process.env)).toBe(false);
     expect(await explainSupported(null, process.env)).toBe(false);
-    expect(await explainSupported(path.join(env.root, 'nope'), process.env)).toBe(false);
+    expect(await explainSupported(path.join(env.root, 'nope'), process.env)).toBeNull(); // (fix round: a failed probe is unknown)
     expect(fake.calls().every((l) => l.startsWith('--help'))).toBe(true); // (it asks for the help only)
+  });
+});
+
+describe('explainSupport (fix round): the answer of a probe that worked is kept; one that failed is not', () => {
+  it('a hanging --help is unknown (null) and asked again next time; a parsed answer is kept for that claude', async () => {
+    const fake = fakeClaude(path.join(env.root, 'bin'), { loggedIn: true, mode: 'help-hang' });
+    expect(await explainSupported(fake.bin, process.env, 500)).toBeNull();
+    expect(await explainSupport(fake.bin, process.env, 500)).toBeNull();
+    fake.setMode('explain-old');
+    expect(await explainSupport(fake.bin, process.env, 500)).toBe(false);
+    fake.setMode('ok');
+    expect(await explainSupport(fake.bin, process.env, 500)).toBe(false); // (kept)
+    expect(await explainSupport(null, process.env)).toBe(false);
   });
 });
