@@ -34,6 +34,7 @@ let bridge: ChildProcess;
 let browser: Browser;
 let page: Page;
 let url = '';
+let signedIn: ReturnType<typeof fakeClaude>;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -262,10 +263,13 @@ describe.skipIf(!OUT)('README screenshots', () => {
     );
     writeDemoProject();
     plantConversations();
+    // (1.4.0) first-time tips and the tour's offer would put toasts and a coach mark into the pictures; first run itself is untouched (`onboarded` stays false)
+    fs.mkdirSync(path.join(userHome, '.jaffer'), { recursive: true });
+    fs.writeFileSync(path.join(userHome, '.jaffer', 'config.json'), JSON.stringify({ tips: { enabled: false }, tour: { done: true } }));
     mock = new MockAnthropic();
     const mockUrl = await mock.listen();
     // the demo person is signed in to Claude: first run passes the sign-in step by itself (everything but `claude auth` is the real claude)
-    const signedIn = fakeClaude(path.join(tmp, 'bin'), { loggedIn: true, passthrough: CLAUDE });
+    signedIn = fakeClaude(path.join(tmp, 'bin'), { loggedIn: true, passthrough: CLAUDE });
     bridge = spawn(process.execPath, [path.join(root, 'dist/dev/bridge.cjs')], {
       env: { ...cleanEnv(), PATH: `${signedIn.dir}:${process.env.PATH}`, JAFFER_HOME: path.join(userHome, '.jaffer'), HOME: userHome, SHELL: fs.existsSync('/usr/bin/zsh') ? '/usr/bin/zsh' : '/bin/zsh', ANTHROPIC_API_KEY: 'sk-ant-demo-0000000000000000', ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_BASE_URL: mockUrl, JAFFER_BRIDGE_TOKEN: 'tok', CLAUDE_CONFIG_DIR: path.join(userHome, '.claude'), JAFFER_KEEP_ANTHROPIC_ENV: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       stdio: ['ignore', 'pipe', 'inherit'],
@@ -486,6 +490,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
               ],
               live: { input: 184_000, output: 5_200, usd: 0.06, at: now },
               cost: { last: { input: 3000, output: 4200, cacheRead: 180_000, cacheWrite: 0, usd: 0.13 }, totalUsd: 1.2, answers: 8, partial: false, at: now - 120_000 },
+              context: { tokens: 620_000, window: 1_000_000, at: now - 120_000 }, // (1.4.0) the context meter
             },
           ],
           today: { usd: 4.82, date: new Date().toISOString().slice(0, 10), workMs: 4_320_000 },
@@ -673,4 +678,105 @@ describe.skipIf(!OUT)('README screenshots', () => {
     await sleep(1800);
     await page.keyboard.press('Control+c');
   }, 60_000);
+
+  // (1.4.0) split terminals, Privacy and permissions, the Setup list and a coach mark of the tour
+  it('1.4.0: four terminals, the privacy switches, the Setup list and the tour', async () => {
+    await clearToasts();
+    const menu = (id: string) => page.evaluate((i) => (window as any).__menu(i), id);
+    const paneText = (id: string) => page.evaluate((p) => {
+      const t = (window as any).__jaffer.terminals.get(p)?.term;
+      if (!t) return '';
+      const b = t.buffer.active;
+      const out: string[] = [];
+      for (let i = 0; i < b.length; i++) out.push(b.getLine(i)!.translateToString(true));
+      return out.join('\n');
+    }, id);
+    const ranIn = async (id: string, cmd: string, done: RegExp) => {
+      await until(async () => /❯/.test(await paneText(id)), 20_000, `a prompt in ${id}`);
+      await page.keyboard.type(cmd, { delay: 14 });
+      await page.keyboard.press('Enter');
+      await until(async () => done.test(await paneText(id)), 20_000, `${cmd} in ${id}`);
+      await sleep(250);
+    };
+    const panes = () => page.locator('.panes > .pane').count();
+    // main: a quiet screen with the git status
+    await page.click('.term');
+    await page.keyboard.type('clear', { delay: 14 });
+    await page.keyboard.press('Enter');
+    await sleep(500);
+    await ranIn('main', 'git status -sb', /acme-api|main/);
+    // three splits: each new terminal starts in the folder of the one that was focused, and takes the keyboard
+    await menu('split-terminal');
+    await until(async () => (await panes()) === 2, 10_000, 'two terminals');
+    await ranIn('p2', 'git log --oneline -4', /Add session expiry/);
+    await menu('split-terminal');
+    await until(async () => (await panes()) === 3, 10_000, 'three terminals');
+    await ranIn('p3', './bin/test', /16 passed/);
+    await menu('split-terminal');
+    await until(async () => (await panes()) === 4, 10_000, 'four terminals');
+    await ranIn('p4', 'cd src/auth && ls', /session\.ts/);
+    // a Claude in the last terminal: its chip gets the working dot (the hook says which terminal it runs in)
+    await page.evaluate((cwd) => window.jaffer.call('claude.event', { session_id: 'demo-split', hook_event_name: 'UserPromptSubmit', cwd, jaffer_pane: 'p4', prompt: 'x' }), repo);
+    await page.evaluate((cwd) => window.jaffer.call('claude.event', { session_id: 'demo-split', hook_event_name: 'PreToolUse', cwd, jaffer_pane: 'p4', tool_name: 'Read', tool_input: { file_path: `${cwd}/README.md` }, tool_use_id: 's1' }), repo);
+    await page.waitForSelector('.pane[data-pane="p4"] .pn-dot');
+    await menu('focus-terminal-1');
+    await clearToasts();
+    await page.mouse.move(700, 4);
+    await shot('22-split-terminals');
+    await page.evaluate((cwd) => window.jaffer.call('claude.event', { session_id: 'demo-split', hook_event_name: 'SessionEnd', cwd, jaffer_pane: 'p4' }), repo);
+    for (const id of ['p4', 'p3', 'p2']) await page.evaluate((p) => window.jaffer.call('pane.close', { pane: p }), id);
+    await until(async () => (await panes()) === 1, 10_000, 'back to one terminal');
+    await page.waitForSelector('.pn-confirm', { state: 'detached' });
+
+    // Settings → Privacy and permissions
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.click('.settings-nav button:text-is("Privacy and permissions")');
+    await page.waitForSelector('.pv-list');
+    const taller = await page.addStyleTag({ content: '.modal { max-height: none !important } .settings { height: 780px !important }' }); // room for the locked rules under the switches
+    await sleep(500);
+    await shot('23-privacy');
+    await taller.evaluate((el) => (el as Element).remove());
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
+
+    // the Setup list: planted in the demo person's project and Claude folder (the temporary home), then a click on Check MCP servers
+    const w = (file: string, body: string) => (fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, body));
+    const claudeDir = path.join(userHome, '.claude');
+    w(path.join(repo, '.mcp.json'), JSON.stringify({ mcpServers: { github: { command: 'npx' }, postgres: { command: 'npx' } } }));
+    w(path.join(repo, 'CLAUDE.md'), '# acme-api\n\nRun ./bin/test before you commit. Keep sessions short-lived.\n');
+    w(path.join(repo, '.claude/rules/testing.md'), '---\npaths:\n  - "src/**/*.test.ts"\n---\nTests live next to the code they cover.\n');
+    w(path.join(repo, '.claude/skills/release-notes/SKILL.md'), '---\nname: release-notes\ndescription: Draft the release notes from the merged pull requests\n---\nSteps.\n');
+    w(path.join(repo, '.claude/agents/reviewer.md'), '---\nname: reviewer\ndescription: Reviews a diff for bugs\n---\nReview.\n');
+    w(path.join(claudeDir, 'skills/review/SKILL.md'), '---\nname: review\ndescription: Review the current branch before a pull request\n---\nSteps.\n');
+    w(path.join(claudeDir, 'plugins/installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'tidy@acme-tools': [{ scope: 'user', version: '1.2.0' }] } }));
+    const settingsFile = path.join(claudeDir, 'settings.json');
+    const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
+    fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, enabledPlugins: { 'tidy@acme-tools': true } }));
+    signedIn.setMcpList('Checking MCP server health…\n\ngithub: npx -y @acme/github-mcp - ✓ Connected\npostgres: npx -y @acme/postgres-mcp - ✗ Failed to connect\n');
+    // fewer rows of other things, so the Setup section has room beside the conversations
+    await page.evaluate(() => (window as any).__menu('history'));
+    await page.waitForSelector('.sp-convos');
+    await page.evaluate(() => window.jaffer.call('hello', { client: 'app', protocol: 1 })); // only the app's own connection may run the check: the bridge's stands in for it
+    await page.setViewportSize({ width: 1360, height: 1260 }); // room for the whole list
+    await page.click('.sx-setup .sx-head');
+    await page.waitForSelector('.sx-setup .sx-item');
+    await page.click('.sx-setup button:has-text("Check MCP servers")');
+    await page.waitForSelector('.sx-setup .sx-dot[data-state="attention"]', { timeout: 30_000 }); // the failed server, after the check
+    await clearToasts();
+    await page.mouse.move(700, 4);
+    await shot('24-setup-list');
+    await page.setViewportSize({ width: 1360, height: 860 });
+    await page.click('.sx-setup .sx-head'); // collapsed again
+
+    // the tour: one coach mark, over the Now card
+    await menu('start-tour');
+    await page.waitForSelector('.lr-tour[data-step="terminal"][data-found]');
+    await page.click('.lr-next');
+    await page.waitForSelector('.lr-tour[data-step="now"][data-found]');
+    await sleep(400);
+    await shot('25-tour');
+    await page.click('.lr-skip');
+    await page.waitForSelector('.lr-tour', { state: 'detached' });
+  }, 150_000);
 });
