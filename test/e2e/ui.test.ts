@@ -6043,6 +6043,8 @@ describe('Jaffer UI end to end', () => {
     // file: and javascript: are not links at all: no pointer, no tooltip, a ⌘-click does nothing and says nothing
     for (const label of ['BADFILE', 'BADJS']) {
       await hover(label);
+      // the pointer state follows the mouse a frame or two late (and later under load): wait until it is quiet, then check it stays so
+      await until(async () => (await pointer()) === 0 && (await title()) === '', 5_000, `no pointer and no tooltip over ${label}`);
       await settle();
       await settle();
       expect(await pointer(), label).toBe(0);
