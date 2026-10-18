@@ -126,8 +126,14 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
   it('(1.4.2) reports the PATH its startup files made (633;P;Path, with the nonce), again only when it changes; a PATH with control characters or past 8192 characters is ignored', async () => {
     fs.writeFileSync(path.join(env.userHome, shell.endsWith('zsh') ? '.zshrc' : '.bashrc'), 'export PATH="/rc/added/bin:$PATH"\n');
     sh = startShell(env, { shell, path: '/usr/bin:/bin' });
+    // the PATH marks, counted as the terminal parses them (in step with shellPath and the prompt events; the `data` events come in 4 ms
+    // batches, which a fast machine's next command can beat: that read 1 for 2 on Linux CI). Returning false passes the mark on.
     const marks: string[] = [];
-    sh.events.on((e) => e.type === 'data' && marks.push(...(e.data.match(/\x1b\]633;P;Path=/g) ?? [])));
+    sh.term.parser.registerOscHandler(633, (d) => (d.startsWith('P;Path=') && marks.push(d), false));
+    const marksAt = async (want: number) => {
+      for (let i = 0; i < 100 && marks.length < want; i++) await new Promise((r) => setTimeout(r, 50));
+      return marks.length;
+    };
     await untilReady(sh);
     const shown = (await runInShell(sh, 'printf "%s\\n" "$PATH"')).output.replace(/\n/g, '');
     expect(shown).toContain('/rc/added/bin:/usr/bin:/bin');
@@ -139,8 +145,9 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(marks.length).toBe(n); // (unchanged: not reported again)
     await runInShell(sh, 'export PATH="/later/bin:$PATH"');
     expect(await pathIs(sh, `/later/bin:${shown}`)).toBe(`/later/bin:${shown}`);
+    expect(await marksAt(n + 1)).toBe(n + 1);
     await runInShell(sh, 'true');
-    expect(marks.length).toBe(n + 1);
+    expect(marks.length).toBe(n + 1); // (and only one)
     // the nonce never reaches the shell's environment (a program it runs cannot forge the mark with it)
     expect((await runInShell(sh, 'echo "[${JAFFER_NONCE-unset}]"')).output).toBe('[unset]');
     // hostile values are ignored: the last good one stays
