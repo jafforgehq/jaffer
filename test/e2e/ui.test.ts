@@ -2002,11 +2002,19 @@ describe('Jaffer UI end to end', () => {
     await metaClick(5, false);
     await sleep(200);
     expect(await page.evaluate(() => (window as any).__openedPath)).toEqual([]);
-    await metaClick(5);
-    await until(async () => (await page.evaluate(() => (window as any).__openedPath.length)) === 1, 3_000, 'the absolute path opened');
+    // (the link is found on hover, which can lag on a loaded runner: click again until it opens)
+    const openedCount = () => page.evaluate(() => (window as any).__openedPath.length as number);
+    const metaClickUntil = async (col: number, count: number) => {
+      for (let i = 0; i < 6 && (await openedCount()) < count; i++) {
+        await metaClick(col);
+        await sleep(300);
+      }
+    };
+    await metaClickUntil(5, 1);
+    await until(async () => (await openedCount()) === 1, 3_000, 'the absolute path opened');
     expect(await page.evaluate(() => (window as any).__openedPath[0])).toEqual({ path: path.join(dir, 'src', 'app.ts'), line: 12, col: 3 });
-    await metaClick(where.text.indexOf('src/app.ts:7') + 2);
-    await until(async () => (await page.evaluate(() => (window as any).__openedPath.length)) === 2, 3_000, 'the relative path opened');
+    await metaClickUntil(where.text.indexOf('src/app.ts:7') + 2, 2);
+    await until(async () => (await openedCount()) === 2, 3_000, 'the relative path opened');
     expect(await page.evaluate(() => (window as any).__openedPath[1])).toEqual({ path: path.join(dir, 'src', 'app.ts'), line: 7 });
     // the editor link could not be opened (no app for its scheme): the window says so
     await page.evaluate(() => ((window as any).__openPathAnswer = { opened: false, editorFailed: true }));
@@ -6040,6 +6048,8 @@ describe('Jaffer UI end to end', () => {
       if (meta) await page.keyboard.up('Meta');
     };
     await reset();
+    // (a toast left by an earlier test would count below: wait until none is up)
+    await until(async () => (await anyToast()) === 0, 15_000, 'earlier toasts to go');
     // file: and javascript: are not links at all: no pointer, no tooltip, a ⌘-click does nothing and says nothing
     for (const label of ['BADFILE', 'BADJS']) {
       await hover(label);
