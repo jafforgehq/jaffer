@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JafferPaths } from '../../shared/paths';
@@ -9,6 +10,7 @@ import { SHELL_SCRIPTS } from '../../generated/shell-scripts';
  * dotfiles) that emit standard terminal marks —
  *   OSC 133;A  prompt start      OSC 133;C  command output start      OSC 133;D;<exit>  command finished
  *   OSC 633;E;<cmd>  the command line      OSC 633;P;Cwd=<dir>  working directory
+ *   OSC 633;P;Path=<PATH>;<nonce>  (1.4.2) the shell's PATH, when it changed (for the MCP check)
  * The session host turns them into command events (for the "something is running" cues, notifications and staying awake).
  */
 
@@ -75,6 +77,8 @@ export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
   env.JAFFER_SOCK = o.paths.socket;
   env.JAFFER_BIN = o.paths.binDir;
   env.JAFFER_SHELL_DIR = o.paths.shellDir;
+  // (1.4.2) Signs the PATH mark (633;P;Path): the scripts keep it in a shell variable and take it out of the environment
+  env.JAFFER_NONCE = crypto.randomBytes(16).toString('hex');
   const login = o.login !== false;
   const extra = o.extraArgs ?? [];
 

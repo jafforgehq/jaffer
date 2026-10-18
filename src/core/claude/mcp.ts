@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { isShellPath } from '../../shared/osc';
 import { cleanLine } from './setup';
 
 /**
@@ -43,11 +45,21 @@ function statusOf(text: string): McpStatus {
   return /\bconnected\b/.test(t) ? 'connected' : 'unknown';
 }
 
-/** The servers of `claude mcp list`'s text, tolerantly: a line is "<name>: …" with a state word or a " - " before the state; others are skipped. */
+/** What may follow "<name>: ": a URL (any scheme), a path (`/`, `~`, `./`, `../`) or, for a name without a space, a command word. */
+const URL_OR_PATH = /^(?:[a-z][a-z0-9+.-]{0,30}:\/\/|~|\.{0,2}\/)/i;
+const COMMAND_WORD = /^[\w@%+=,.-]{1,256}(?: |$)/;
+/** Where a name may end: the first 8 ": " within the first 512 characters of a line. */
+const NAME_END_MAX = 512;
+
+/**
+ * The servers of `claude mcp list`'s text, tolerantly: a line is "<name>: <target> - <state>" (or "<name>: <target>" with a state word);
+ * others are skipped. (1.4.2) The name ends at the first ": " that a target follows, so names with spaces (`claude.ai Claude Docs`, the
+ * claude.ai connectors) and with colons (`plugin:context7:context7`) stay whole; a name with a space needs a URL or a path after it, so a
+ * line of prose with a colon is not a server.
+ */
 export function parseMcpList(text: string): McpServer[] {
   const out: McpServer[] = [];
-  // (links and titles (OSC, with what they carry) and colours (CSI) out first; a name ends at the first ": ", so a plugin's "plugin:x:y"
-  // stays whole)
+  // (links and titles (OSC, with what they carry) and colours (CSI) out first)
   const plain = text
     .slice(0, OUT_MAX)
     .replace(/\x1b\][^\x07\x1b]{0,4096}(?:\x07|\x1b\\)/g, '')
@@ -56,18 +68,41 @@ export function parseMcpList(text: string): McpServer[] {
     if (out.length >= MAX_SERVERS) break;
     const line = raw.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
     if (line.startsWith('Error')) continue; // (what went wrong, not a server)
-    let i = line.indexOf(': ');
-    if (i < 0) i = line.indexOf(':');
-    const head = line.slice(0, i).trim();
-    if (i <= 0 || /\s/.test(head)) continue;
+    let i = -1;
+    for (let from = 0, k = 0; k < 8; k++) {
+      const j = line.indexOf(': ', from);
+      if (j < 0 || j > NAME_END_MAX) break;
+      const target = line.slice(j + 2, j + 2 + NAME_END_MAX);
+      if (j > 0 && (URL_OR_PATH.test(target) || (!/\s/.test(line.slice(0, j)) && COMMAND_WORD.test(target)))) {
+        i = j;
+        break;
+      }
+      from = j + 2;
+    }
+    if (i < 0) continue;
     const rest = line.slice(i + 1);
     const dash = rest.lastIndexOf(' - ');
     const status = statusOf(dash >= 0 ? rest.slice(dash + 3) : rest);
     if (status === 'unknown' && dash < 0) continue;
-    const name = cleanLine(head, 64);
+    const name = cleanLine(line.slice(0, i), 64);
     if (name) out.push({ name, status, label: MCP_LABEL[status] });
   }
   return out;
+}
+
+/** (1.4.2) The tool folders a Mac app started from the Dock lacks, added (once each, when they exist) when the shell's PATH is not known. */
+export const MCP_PATH_EXTRA = (home: string) => [path.join(home, '.local', 'bin'), '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
+
+/**
+ * (1.4.2) The PATH `claude mcp list` runs with: the focused shell's own (`shellPath`, what its startup files made) when it reported a usable
+ * one, else the app's PATH with `MCP_PATH_EXTRA` appended. A Mac app started from the Dock has only `/usr/bin:/bin:/usr/sbin:/sbin`, and
+ * the servers started with `npx`, `node` or `uvx` then fail with ENOENT although they work.
+ */
+export function mcpPath(shellPath: string | undefined, appPath: string | undefined, home: string, exists: (dir: string) => boolean): string {
+  if (isShellPath(shellPath)) return shellPath;
+  const parts = (appPath ?? '').split(':').filter(Boolean);
+  for (const d of MCP_PATH_EXTRA(home)) if (!parts.includes(d) && exists(d)) parts.push(d);
+  return parts.join(':');
 }
 
 /** The process groups of the checks under way (their leaders' pids), so the daemon can end them when it stops. */

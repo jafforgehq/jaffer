@@ -7,8 +7,9 @@ import { redactText } from '../../shared/redact';
 
 /**
  * (1.4.0) What Claude Code is set up with in a folder, for the side panel's Setup list: from its files only (no process runs). Skills
- * (`<claudeDir>/skills/<n>/SKILL.md`, `<cwd>/.claude/skills/<n>/SKILL.md`: the frontmatter's name and description, the state from
- * `skillOverrides`), plugins (`<claudeDir>/plugins/installed_plugins.json` and `enabledPlugins`), the CLAUDE.md files and rules Claude reads
+ * (`<claudeDir>/skills/<n>/SKILL.md`, since 1.4.2 also nested to 3 folders deep there, `<cwd>/.claude/skills/<n>/SKILL.md`: the
+ * frontmatter's name and description, the state from `skillOverrides`; since 1.4.2 also `<installPath>/skills/<n>/SKILL.md` of each
+ * installed plugin whose install is inside `<claudeDir>/plugins`, on or off with the plugin; 300 in all), plugins (`<claudeDir>/plugins/installed_plugins.json` and `enabledPlugins`), the CLAUDE.md files and rules Claude reads
  * there (path, size, scoped by `paths:`), subagents (their names), hooks (event names and counts: never a command) and the server names of
  * `<cwd>/.mcp.json` (never a command, an argument or a URL). Read only and bounded: the head of a file (256 KB, 1 MB for JSON), at most 500
  * entries a folder; a link counts only while it stays inside the folder it was found in; `.claude.json` (Claude's login) is never opened,
@@ -16,7 +17,8 @@ import { redactText } from '../../shared/redact';
  */
 export type SkillState = 'on' | 'name-only' | 'user-invocable-only' | 'off';
 export interface SetupInfo {
-  skills: { name: string; description?: string; scope: 'user' | 'project'; state: SkillState }[];
+  /** (1.4.2) `plugin:<id>`: a skill of an installed plugin. */
+  skills: { name: string; description?: string; scope: 'user' | 'project' | `plugin:${string}`; state: SkillState }[];
   plugins: { id: string; version?: string; enabled: boolean }[];
   rules: { path: string; kind: 'user' | 'project' | 'local' | 'managed' | 'rule'; bytes: number; scoped: boolean }[];
   agents: { name: string; scope: 'user' | 'project' }[];
@@ -29,6 +31,9 @@ const JSON_MAX = 1024 * 1024;
 const MAX_ENTRIES = 500;
 const MAX_ITEMS = 200;
 const MAX_RULES = 50;
+/** (1.4.2) The most skills listed, from all their places; and how deep ~/.claude/skills is looked into (a skill folder counts as 1). */
+const MAX_SKILLS = 300;
+const SKILL_DEPTH = 3;
 /** The most names the `rules` folders' walk looks at, in all. */
 const MAX_WALK = 2000;
 const MAX_UP = 12;
@@ -63,30 +68,57 @@ export async function readSetup(o: { home: string; claudeDir: string; cwd: strin
   // the user's folder, then the project's (none when they are the same)
   const scopes = (sub: string): ['user' | 'project', string, string][] => [['user', claudeDir, path.join(claudeDir, sub)], ...(same ? [] : [['project', cwd, path.join(dot, sub)] as ['project', string, string]])];
   const overrides = merged('skillOverrides');
-  const skills: SetupInfo['skills'] = [];
-  for (const [scope, base, dir] of scopes('skills')) {
-    for (const n of await list(base, dir)) {
-      if (skills.length >= MAX_ITEMS) break;
-      if (!(await isDir(base, path.join(dir, n)))) continue;
-      const f = await readHead(base, path.join(dir, n, 'SKILL.md'), HEAD);
-      if (!f) continue;
-      const fm = frontmatter(f.text);
-      const name = cleanLine(fm.name, 64) ?? cleanLine(n, 64);
-      if (!name) continue;
-      const description = cleanLine(fm.description, 160);
-      const st = overrides[fm.name ?? n] ?? overrides[n];
-      skills.push({ name, ...(description ? { description } : {}), scope, state: (typeof st === 'string' && STATES.includes(st) ? st : 'on') as SkillState });
-    }
-  }
-
   const enabled = merged('enabledPlugins');
   const installed = await readJson(claudeDir, path.join(claudeDir, 'plugins', 'installed_plugins.json'));
   const pl = isObj(installed?.plugins) ? (installed.plugins as Record<string, unknown>) : {};
+  const entryOf = (id: string) => (Array.isArray(pl[id]) ? (pl[id] as unknown[])[0] : pl[id]);
+
+  const skills: SetupInfo['skills'] = [];
+  const skillSeen = new Set<string>();
+  const skillDirs = new Set<string>();
+  let skillWalk = 0;
+  // one folder of skill folders: a folder with a SKILL.md is a skill; (1.4.2) one without is looked into, to `depth` levels in all (the
+  // skills the Claude app syncs sit at ~/.claude/skills/synced/<id>/<name>); each real folder once, 2000 names in all
+  const walkSkills = async (scope: SetupInfo['skills'][number]['scope'], base: string, dir: string, depth: number, fixed?: SkillState): Promise<void> => {
+    const r = await real(dir);
+    if (!r || skillDirs.has(r)) return;
+    skillDirs.add(r);
+    for (const n of await list(base, dir)) {
+      if (skills.length >= MAX_SKILLS || ++skillWalk > MAX_WALK) return;
+      const p = path.join(dir, n);
+      if (!(await isDir(base, p))) continue;
+      const f = await readHead(base, path.join(p, 'SKILL.md'), HEAD);
+      if (!f) {
+        if (depth > 1 && !n.startsWith('.')) await walkSkills(scope, base, p, depth - 1, fixed);
+        continue;
+      }
+      const fm = frontmatter(f.text);
+      const name = cleanLine(fm.name, 64) ?? cleanLine(n, 64);
+      if (!name || skillSeen.has(`${scope}\0${name}`)) continue;
+      skillSeen.add(`${scope}\0${name}`);
+      const description = cleanLine(fm.description, 160);
+      const st = fixed ?? overrides[fm.name ?? n] ?? overrides[n];
+      skills.push({ name, ...(description ? { description } : {}), scope, state: (typeof st === 'string' && STATES.includes(st) ? st : 'on') as SkillState });
+    }
+  };
+  for (const [scope, base, dir] of scopes('skills')) await walkSkills(scope, base, dir, scope === 'user' ? SKILL_DEPTH : 1);
+  // (1.4.2) the skills of installed plugins: <installPath>/skills/<name>/SKILL.md, the install inside <claudeDir>/plugins (links resolved);
+  // on while the plugin is enabled, else off (skillOverrides is for your own skills)
+  const pluginsDir = path.join(claudeDir, 'plugins');
+  for (const id of Object.keys(pl).sort().slice(0, MAX_ITEMS)) {
+    if (skills.length >= MAX_SKILLS) break;
+    const e = entryOf(id);
+    const at = isObj(e) ? e.installPath : undefined;
+    const label = cleanLine(id, 100);
+    if (!label || typeof at !== 'string' || !path.isAbsolute(at) || at.length > 4096 || /\p{Cc}/u.test(at) || !(await within(pluginsDir, at))) continue;
+    await walkSkills(`plugin:${label}`, pluginsDir, path.join(at, 'skills'), 1, enabled[id] === true ? 'on' : 'off');
+  }
+
   const plugins: SetupInfo['plugins'] = [];
   for (const id of [...new Set([...Object.keys(pl), ...Object.keys(enabled)])].sort().slice(0, MAX_ITEMS)) {
     const name = cleanLine(id, 100);
     if (!name) continue;
-    const e = Array.isArray(pl[id]) ? (pl[id] as unknown[])[0] : pl[id];
+    const e = entryOf(id);
     const version = isObj(e) && typeof e.version === 'string' ? cleanLine(e.version, 32) : undefined;
     plugins.push({ id: name, ...(version ? { version } : {}), enabled: enabled[id] === true });
   }

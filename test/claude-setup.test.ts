@@ -269,6 +269,74 @@ describe('readSetup: what Claude Code is set up with, from its files only', () =
     expect(s.rules.map((r) => r.path)).toEqual([path.join(out, 'CLAUDE.md'), path.join(out, 'CLAUDE.local.md')]);
   });
 
+  it('(1.4.2) skills nested to depth 3 under ~/.claude/skills (the ones synced from the Claude app), and the skills of installed plugins (on for an enabled plugin, off for a disabled one), each once', async () => {
+    const synced = path.join(claudeDir, 'skills/synced/ed0b0748-a15e-4611-9850-9dac22ed826e_c85305a1');
+    w(path.join(synced, 'morning/SKILL.md'), '---\nname: morning\ndescription: A synced skill\n---\n');
+    w(path.join(synced, 'pdf/SKILL.md'), '---\nname: pdf\n---\n');
+    w(path.join(claudeDir, 'skills/a/b/c/d/SKILL.md'), '---\nname: too-deep\n---\n'); // (depth 4: not looked at)
+    w(path.join(claudeDir, 'skills/top/SKILL.md'), '---\nname: top\n---\n');
+    w(path.join(claudeDir, 'skills/top/inner/SKILL.md'), '---\nname: inside-a-skill\n---\n'); // (a skill's own folder is not walked)
+    w(path.join(claudeDir, 'skills/dup1/SKILL.md'), '---\nname: twice\n---\n');
+    w(path.join(claudeDir, 'skills/x/dup2/SKILL.md'), '---\nname: twice\n---\n');
+    w(path.join(proj, '.claude/skills/group/nested/SKILL.md'), '---\nname: project-nested\n---\n'); // (a project's skills: one level, as before)
+    const cache = path.join(claudeDir, 'plugins/cache/market');
+    w(path.join(cache, 'on-plug/1.0.0/skills/brainstorm/SKILL.md'), '---\nname: brainstorm\ndescription: Plugin skill\n---\n');
+    w(path.join(cache, 'on-plug/1.0.0/skills/review/SKILL.md'), '---\nname: review\n---\n');
+    w(path.join(cache, 'off-plug/2.0.0/skills/quiet/SKILL.md'), '---\nname: quiet\n---\n');
+    w(path.join(env.root, 'outside-plugin/skills/escaped/SKILL.md'), '---\nname: escaped\n---\n');
+    fs.mkdirSync(path.join(cache, 'linked'), { recursive: true });
+    fs.symlinkSync(path.join(env.root, 'outside-plugin'), path.join(cache, 'linked/1.0'));
+    json(path.join(claudeDir, 'plugins/installed_plugins.json'), {
+      version: 2,
+      plugins: {
+        'on-plug@market': [{ scope: 'user', installPath: path.join(cache, 'on-plug/1.0.0'), version: '1.0.0' }],
+        'off-plug@market': [{ scope: 'user', installPath: path.join(cache, 'off-plug/1.0.0/../2.0.0'), version: '2.0.0' }],
+        'out@market': [{ installPath: path.join(env.root, 'outside-plugin') }],
+        'up@market': [{ installPath: path.join(claudeDir, 'plugins/../../outside-plugin') }],
+        'link@market': [{ installPath: path.join(cache, 'linked/1.0') }],
+        'rel@market': [{ installPath: 'cache/market/on-plug/1.0.0' }],
+        'odd@market': [{ installPath: 7 }, null],
+      },
+    });
+    json(path.join(claudeDir, 'settings.json'), { enabledPlugins: { 'on-plug@market': true, 'off-plug@market': false, 'out@market': true, 'link@market': true }, skillOverrides: { morning: 'name-only', brainstorm: 'off' } });
+    const s = await read();
+    expect(s.skills).toEqual([
+      { name: 'twice', scope: 'user', state: 'on' },
+      { name: 'morning', description: 'A synced skill', scope: 'user', state: 'name-only' },
+      { name: 'pdf', scope: 'user', state: 'on' },
+      { name: 'top', scope: 'user', state: 'on' },
+      { name: 'quiet', scope: 'plugin:off-plug@market', state: 'off' },
+      { name: 'brainstorm', description: 'Plugin skill', scope: 'plugin:on-plug@market', state: 'on' }, // (skillOverrides is for your own skills)
+      { name: 'review', scope: 'plugin:on-plug@market', state: 'on' },
+    ]);
+    expect(JSON.stringify(s)).not.toMatch(/escaped|too-deep|inside-a-skill|project-nested|installPath|cache/);
+  });
+
+  it('(1.4.2) at most 300 skills in all, and a plugin with a hostile skills folder (a FIFO, 2000 entries, a 5 MB SKILL.md) stays bounded; ~/.claude.json is never opened', async () => {
+    for (let i = 0; i < 250; i++) w(path.join(claudeDir, `skills/s${String(i).padStart(3, '0')}/SKILL.md`), `---\nname: s${i}\n---\n`);
+    const plug = path.join(claudeDir, 'plugins/cache/m/big/1');
+    for (let i = 0; i < 2000; i++) w(path.join(plug, 'skills', `k${String(i).padStart(4, '0')}`, 'SKILL.md'), `---\nname: k${i}\n---\n`);
+    w(path.join(plug, 'skills/k0001/SKILL.md'), '---\nname: ' + 'n'.repeat(5 * 1024 * 1024));
+    fs.rmSync(path.join(plug, 'skills/k0002/SKILL.md'));
+    execFileSync('mkfifo', [path.join(plug, 'skills/k0002/SKILL.md')]);
+    json(path.join(claudeDir, 'plugins/installed_plugins.json'), { version: 2, plugins: { 'big@m': [{ installPath: plug }] } });
+    json(path.join(claudeDir, 'settings.json'), { enabledPlugins: { 'big@m': true } });
+    w(path.join(home, '.claude.json'), '{"oauthAccount":"SECRET-OAUTH"}');
+    const opened: string[] = [];
+    const orig = fs.promises.open;
+    vi.spyOn(fs.promises, 'open').mockImplementation(((p: unknown, ...rest: unknown[]) => (opened.push(String(p)), (orig as (...a: unknown[]) => unknown).call(fs.promises, p, ...rest))) as never);
+    const t = Date.now();
+    const s = await Promise.race([read(), new Promise<'hung'>((res) => setTimeout(() => res('hung'), 8_000))]);
+    vi.restoreAllMocks();
+    expect(s).not.toBe('hung');
+    expect(Date.now() - t).toBeLessThan(8_000);
+    const skills = (s as Awaited<ReturnType<typeof read>>).skills;
+    expect(skills).toHaveLength(300);
+    expect(skills.filter((k) => k.scope === 'user')).toHaveLength(250);
+    expect(skills.filter((k) => k.scope === 'plugin:big@m').length).toBe(50);
+    expect(opened.filter((p) => path.basename(p).startsWith('.claude.json'))).toEqual([]);
+  }, 30_000);
+
   it('frontmatter reads the head only: 1 MB and 8 MB lines are quick', () => {
     for (const n of [1, 8]) {
       const big = 'k'.repeat(n * 1024 * 1024);

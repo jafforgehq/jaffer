@@ -916,6 +916,43 @@ describe('first-run Claude sign-in (bundled daemon, fake claude)', () => {
     expect(r.gated).toBeUndefined();
   });
 
+  it('claude.mcp (1.4.2): runs with the PATH of the terminal named, as its shell reported it; without a terminal, or one that is not there: the app\'s PATH and the usual tool folders; the claude.ai connectors are listed', async () => {
+    fake.setMode('ok');
+    const connectors = ['claude.ai Claude Docs', 'claude.ai Gmail', 'claude.ai Google Drive', 'claude.ai Slack'];
+    fake.setMcpList(
+      [
+        'Checking MCP server health…',
+        '',
+        `${connectors[0]}: https://example.invalid/docs - ✔ Connected`,
+        `${connectors[1]}: https://example.invalid/gmail - ! Needs authentication`,
+        `${connectors[2]}: https://example.invalid/drive - ✔ Connected`,
+        `${connectors[3]}: https://example.invalid/slack - ✘ Failed to connect`,
+        'plugin:context7:context7: https://example.invalid/mcp - ! Needs authentication',
+        'godot: npx -y example-mcp - ✔ Connected',
+      ].join('\n') + '\n',
+    );
+    await c.call('hello', { client: 'app', protocol: 1 });
+    await c.call('pty.write', { pane: 'main', data: 'export PATH="/jaffer-pane-path/bin:$PATH"\r' });
+    let r: { servers: { name: string }[] } | undefined;
+    await waitUntil(async () => {
+      r = await c.call('claude.mcp', { pane: 'main' });
+      return fake.read('mcp.path').startsWith('/jaffer-pane-path/bin:');
+    }, 15_000);
+    expect(r!.servers.map((s) => s.name)).toEqual([...connectors, 'plugin:context7:context7', 'godot']);
+    expect(JSON.stringify(r)).not.toMatch(/example|https|npx/);
+    // no terminal named, or one that is not there: the daemon's own PATH (the fake claude's folder first), the tool folders after it
+    const extra = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', path.join(env2.userHome, '.local', 'bin')].filter((d) => fs.existsSync(d));
+    for (const ask of [{}, { pane: 'p4' }, { pane: 7 }]) {
+      fs.writeFileSync(path.join(fake.dir, 'mcp.path'), '');
+      await c.call('claude.mcp', ask);
+      const used = fake.read('mcp.path');
+      expect(used.startsWith(`${fake.dir}:`), JSON.stringify(ask)).toBe(true);
+      expect(used).not.toContain('/jaffer-pane-path');
+      for (const d of extra) expect(used.split(':')).toContain(d);
+    }
+    await c.call('pty.write', { pane: 'main', data: 'export PATH="${PATH#/jaffer-pane-path/bin:}"\r' });
+  });
+
   it('claude.explain (1.4.0): off (the daemon\'s own permissions.explain) refuses without reading or starting anything; on, the latest answer of a known session goes to one `claude -p` and its answer comes back; an unknown session has no reply; 5 s between two of one session; one at a time', async () => {
     fake.setMode('ok');
     const helperCalls = () => fake.calls().filter((l) => l.startsWith('-p') || l.startsWith('--help')).length;

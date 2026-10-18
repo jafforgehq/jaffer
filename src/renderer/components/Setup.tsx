@@ -1,6 +1,6 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { info, setupOpen } from '../state';
+import { activePane, info, setupOpen } from '../state';
 import { formatBytes } from '../../shared/history-label';
 import { MCP_GATED_NOTE } from '../../shared/mcp-gate';
 import type { SetupInfo } from '../../core/claude/setup';
@@ -68,7 +68,8 @@ export function Setup(): VNode {
     if (mcp?.busy) return;
     const at = cwd;
     setMcp({ cwd: at, busy: true });
-    void window.jaffer.call<McpCheck>('claude.mcp', { cwd: at }).then(
+    // (1.4.2) the focused terminal: the check runs with its shell's PATH
+    void window.jaffer.call<McpCheck>('claude.mcp', { cwd: at, pane: activePane.value }).then(
       // (an answer for another folder than the one asked about counts as a failed check)
       (result) => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: result.cwd === at || at === '' || result.gated ? result : { servers: [], ok: false, reason: 'error' } }),
       () => cwdNow.current === at && setMcp({ cwd: at, busy: false, result: { servers: [], ok: false, reason: 'error' } }),
@@ -94,7 +95,7 @@ export function Setup(): VNode {
             name: k.name,
             state: k.state === 'on' ? 'ok' : k.state === 'off' ? 'off' : 'unknown',
             note: k.state === 'off' ? 'off' : k.state === 'on' ? undefined : SKILL_NOTE[k.state],
-            title: [k.description, k.scope === 'project' ? 'A skill of this project' : 'Your skill'].filter(Boolean).join(' · '),
+            title: [k.description, k.scope === 'project' ? 'A skill of this project' : k.scope === 'user' ? 'Your skill' : `From the plugin ${k.scope.slice(7)}`].filter(Boolean).join(' · '),
           })),
         },
         { key: 'rules', title: 'Rules and memory', items: data.rules.map((r) => ({ name: r.path, state: 'ok', note: formatBytes(r.bytes), tag: r.scoped ? 'scoped' : undefined, title: `${r.path} · ${RULE_KIND[r.kind]}${r.scoped ? ' · only for the paths it names' : ''}` })) },

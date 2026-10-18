@@ -7,8 +7,13 @@ if set -q JAFFER_BIN; and test -d "$JAFFER_BIN"
     fish_add_path -g "$JAFFER_BIN"
 end
 
+# (1.4.2) The PATH (joined with colons), reported before a prompt only when it changed; the nonce stays a shell variable.
+set -g __jaffer_path ''
+set -g __jaffer_nonce "$JAFFER_NONCE"
+set -e -g JAFFER_NONCE
+
 function __jaffer_esc
-    string replace -a '\\' '\\x5c' -- $argv[1] | string replace -a ';' '\\x3b' | string replace -a \n '\\x0a'
+    string replace -a '\\' '\\x5c' -- $argv[1] | string replace -a ';' '\\x3b' | string replace -a \n '\\x0a' | string replace -a \e '\\x1b' | string replace -a \a '\\x07'
 end
 
 function __jaffer_preexec --on-event fish_preexec
@@ -20,6 +25,10 @@ function __jaffer_postexec --on-event fish_postexec
 end
 
 function __jaffer_prompt --on-event fish_prompt
+    if test "$PATH" != "$__jaffer_path"
+        set -g __jaffer_path "$PATH"
+        printf '\e]633;P;Path=%s;%s\a' (__jaffer_esc "$PATH") "$__jaffer_nonce"
+    end
     printf '\e]633;P;Cwd=%s\a' (__jaffer_esc "$PWD")
     printf '\e]133;A\a'
 end

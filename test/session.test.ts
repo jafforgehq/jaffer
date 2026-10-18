@@ -117,6 +117,38 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     expect(e.type === 'notify' && e.body).toBe('Claude needs your attention');
   });
 
+  it('(1.4.2) reports the PATH its startup files made (633;P;Path, with the nonce), again only when it changes; a PATH with control characters or past 8192 characters is ignored', async () => {
+    fs.writeFileSync(path.join(env.userHome, shell.endsWith('zsh') ? '.zshrc' : '.bashrc'), 'export PATH="/rc/added/bin:$PATH"\n');
+    sh = startShell(env, { shell, path: '/usr/bin:/bin' });
+    const marks: string[] = [];
+    sh.events.on((e) => e.type === 'data' && marks.push(...(e.data.match(/\x1b\]633;P;Path=/g) ?? [])));
+    await untilReady(sh);
+    const shown = (await runInShell(sh, 'printf "%s\\n" "$PATH"')).output.replace(/\n/g, '');
+    expect(shown).toContain('/rc/added/bin:/usr/bin:/bin');
+    expect(sh.shellPath).toBe(shown);
+    const n = marks.length;
+    expect(n).toBeGreaterThanOrEqual(1);
+    await runInShell(sh, 'true');
+    await untilReady(sh);
+    expect(marks.length).toBe(n); // (unchanged: not reported again)
+    await runInShell(sh, 'export PATH="/later/bin:$PATH"');
+    await untilReady(sh);
+    expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+    expect(marks.length).toBe(n + 1);
+    // the nonce never reaches the shell's environment (a program it runs cannot forge the mark with it)
+    expect((await runInShell(sh, 'echo "[${JAFFER_NONCE-unset}]"')).output).toBe('[unset]');
+    // hostile values are ignored: the last good one stays
+    await runInShell(sh, `export PATH="$PATH:/bad$(printf '\\033')x"`);
+    await untilReady(sh);
+    expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+    await runInShell(sh, `export PATH="/usr/bin:/bin:/$(head -c 9000 /dev/zero | tr '\\0' a)"`);
+    await untilReady(sh);
+    expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+    // a mark a program prints (no nonce, or a wrong one) is not the shell's
+    await runInShell(sh, "printf '\\033]633;P;Path=/forged/bin\\007\\033]633;P;Path=/forged/bin;0000\\007'");
+    expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+  });
+
   it('does not leak daemon-only environment into the shell', async () => {
     sh = startShell(env, { shell });
     await untilReady(sh);
@@ -135,6 +167,40 @@ describe('shell marks are forgeable at any length', () => {
     const cmd = await waitFor(sh, isCmd, 20_000);
     expect(cmd.cmd).toHaveLength(4 * COMMAND_HEAD);
     expect((await cwd).cwd.length).toBeLessThanOrEqual(4 * COMMAND_HEAD);
+  }, 40_000);
+});
+
+describe('(1.4.2) the PATH mark (633;P;Path=<value>;<nonce>) is checked', () => {
+  it('only with the nonce of the shell Jaffer started, printable (no C0, C1 or DEL), at most 8192 characters; anything else is ignored', async () => {
+    const { PtySession: Session } = await import('../src/core/session/terminal');
+    const N = 'abc123nonce';
+    const marks = [
+      ['/no/nonce', ''],
+      ['/wrong/nonce', ';nope'],
+      ['/ok/one:/usr/bin', `;${N}`],
+      ['/nl\\\\x0abin', `;${N}`],
+      ['/esc\\\\x1bbin', `;${N}`],
+      ['/c1\\\\x85bin', `;${N}`],
+      ['/del\\\\x7fbin', `;${N}`],
+      [`/${'a'.repeat(8192)}`, `;${N}`],
+      ['', `;${N}`],
+      ['/semi\\\\x3bok:/x', `;${N}`],
+    ];
+    const out = marks.map(([v, n]) => `\\x1b]633;P;Path=${v}${n}\\x07\\x1b]133;A\\x07`).join('');
+    const script = `process.stdout.write('${out}'); setTimeout(() => {}, 30000);`;
+    sh = new Session({ file: process.execPath, args: ['-e', script], cwd: env.root, env: { PATH: process.env.PATH ?? '', JAFFER_NONCE: N }, cols: 80, rows: 24 });
+    const seen: (string | undefined)[] = [];
+    const s = sh;
+    await waitFor(sh, (e) => e.type === 'prompt' && seen.push(s.shellPath) >= marks.length, 20_000);
+    expect(seen).toEqual([undefined, undefined, '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/ok/one:/usr/bin', '/semi;ok:/x']);
+  }, 40_000);
+
+  it('a terminal started without a nonce takes no PATH mark at all', async () => {
+    const { PtySession: Session } = await import('../src/core/session/terminal');
+    const script = "process.stdout.write('\\x1b]633;P;Path=/a/bin;\\x07\\x1b]633;P;Path=/a/bin\\x07\\x1b]133;A\\x07'); setTimeout(() => {}, 30000);";
+    sh = new Session({ file: process.execPath, args: ['-e', script], cwd: env.root, env: { PATH: process.env.PATH ?? '' }, cols: 80, rows: 24 });
+    await waitFor(sh, (e) => e.type === 'prompt', 20_000);
+    expect(sh.shellPath).toBeUndefined();
   }, 40_000);
 });
 

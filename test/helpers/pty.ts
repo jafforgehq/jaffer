@@ -4,7 +4,7 @@ import { buildShellSpawn, installShellIntegration } from '../../src/core/session
 import { PtySession, type PtyEvent } from '../../src/core/session/terminal';
 import type { TestEnv } from './env';
 
-export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; rows?: number; cwd?: string } = {}): PtySession {
+export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; rows?: number; cwd?: string; path?: string } = {}): PtySession {
   installShellIntegration(env.paths);
   // Debian/Ubuntu's global zshrc runs compinit, which prompts on CI runners; opt out via the user's own .zshenv
   // (this doubles as a check that the integration sources the user's real dotfiles).
@@ -15,7 +15,7 @@ export function startShell(env: TestEnv, opts: { shell?: string; cols?: number; 
     shell,
     paths: env.paths,
     version: 'test',
-    baseEnv: { PATH: process.env.PATH, HOME: env.userHome, LANG: 'en_US.UTF-8', PS1: '$ ', ELECTRON_RUN_AS_NODE: '1' },
+    baseEnv: { PATH: opts.path ?? process.env.PATH, HOME: env.userHome, LANG: 'en_US.UTF-8', PS1: '$ ', ELECTRON_RUN_AS_NODE: '1' },
     login: false,
     pane: 'main',
   });

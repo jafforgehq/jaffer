@@ -13,8 +13,8 @@ import path from 'node:path';
  *
  * `interactive: 'stub'`: `claude` with no arguments (what typing `claude` in the terminal does) prints a line and exits 0 instead of
  * starting the real TUI, so a test can see that something started Claude Code without a TUI taking over the shell.
- * `claude mcp list` (1.4.0) prints the file mcp-list (`setMcpList`) and notes its folder in mcp.cwd and the Jaffer variables it got in
- * mcp.env; it never reaches the real claude. Modes: "mcp-slow" waits a second first, "mcp-hang" starts a child (its pid in mcp.child) and
+ * `claude mcp list` (1.4.0) prints the file mcp-list (`setMcpList`) and notes its folder in mcp.cwd, the Jaffer variables it got in
+ * mcp.env and (1.4.2) its PATH in mcp.path; it never reaches the real claude. Modes: "mcp-slow" waits a second first, "mcp-hang" starts a child (its pid in mcp.child) and
  * waits for it, "mcp-orphan" leaves such a child behind (not on its output) and ends, "mcp-fail" exits 1 after printing.
  * `claude --help` (1.4.0, Explain) prints the options Explain needs (mode "explain-old": a help without them). `claude -p …` never
  * reaches the real claude: it notes its arguments (one per line) in explain.argv, its folder in explain.cwd and what was in it in
@@ -67,6 +67,7 @@ fi
 if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
   pwd > "$D/mcp.cwd"
   echo "\${JAFFER_SESSION:-}|\${JAFFER_PANE:-}|\${JAFFER_OWNED:-}" > "$D/mcp.env"
+  printf '%s\n' "$PATH" > "$D/mcp.path"
   case "$M" in
     mcp-slow) sleep 1 ;;
     mcp-hang) sleep 30 & echo $! > "$D/mcp.child"; wait; exit 0 ;;

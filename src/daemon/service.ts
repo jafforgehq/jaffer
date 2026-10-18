@@ -22,7 +22,7 @@ import { conversationStorage, listConversations, OLD_DAYS, oldConversations } fr
 import { searchConversations, searchQuery } from '../core/claude/search';
 import { recentUsage } from '../core/claude/usage-window';
 import { mcpGateFor, readSetup } from '../core/claude/setup';
-import { runMcpList, stopMcpChecks, type McpCheck } from '../core/claude/mcp';
+import { mcpPath, runMcpList, stopMcpChecks, type McpCheck } from '../core/claude/mcp';
 import { buildExplainPrompt, explainSupport, lastReply, runExplain, stopExplains, type ExplainResult } from '../core/claude/explain';
 import { contextWindow, dayTotal, type DayTotal } from '../shared/claude-cost';
 import { rollWeek } from '../shared/usage-week';
@@ -762,8 +762,9 @@ export class JafferService {
     r.handle('claude.setup', (p: { cwd?: unknown } | null) => readSetup({ home: this.userHome, claudeDir: process.env.CLAUDE_CONFIG_DIR || path.join(this.userHome, '.claude'), cwd: this.setupFolder(p?.cwd) }));
     // (1.4.0) Only on the person's click (*Check MCP servers*): `claude mcp list` starts their servers to ask them; names and states come back
     // (only the app's own connection: a click there is the only way in; no folder means the home folder, a folder that is not there is an
-    // error, never the home folder instead; the answer names the folder it ran in)
-    r.handle('claude.mcp', async (p: { cwd?: unknown } | null, conn) => {
+    // error, never the home folder instead; the answer names the folder it ran in). (1.4.2) With the PATH of the terminal named (`pane`,
+    // the focused one), as its shell reported it; else the app's PATH and the usual tool folders (mcpPath)
+    r.handle('claude.mcp', async (p: { cwd?: unknown; pane?: unknown } | null, conn) => {
       if (!this.isApp(conn)) throw new RpcError('Only the app checks MCP servers.', 'EPERM');
       const asked = p?.cwd;
       const folder = asked === undefined || asked === null || asked === '' ? this.userHome : this.setupFolder(asked, null);
@@ -778,11 +779,12 @@ export class JafferService {
       };
       const gated = real(folder) !== real(this.userHome) && (await mcpGateFor(folder, [this.claudeDir(), path.join(this.userHome, '.claude')]));
       const cwd = gated ? this.userHome : folder;
+      const shellPath = typeof p?.pane === 'string' ? this.host.get(p.pane)?.shellPath : undefined;
       const key = real(cwd);
       let run = this.mcpChecks.get(key);
       if (!run) {
         run = this.probeClaude()
-          .then(() => runMcpList(this.claudeBin, cwd, this.claudeEnv()))
+          .then(() => runMcpList(this.claudeBin, cwd, { ...this.claudeEnv(), PATH: mcpPath(shellPath, process.env.PATH, this.userHome, isDir) }))
           .then((r) => ({ ...r, cwd }))
           .finally(() => this.mcpChecks.delete(key));
         this.mcpChecks.set(key, run);

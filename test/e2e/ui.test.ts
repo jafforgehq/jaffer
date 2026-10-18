@@ -4664,6 +4664,82 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('the Setup list (1.4.2): the check runs with the focused terminal\'s PATH (its pane is named), the claude.ai connectors are listed with the other servers, and synced and plugin skills are in Skills', async () => {
+    const claudeDir = path.join(env.userHome, '.claude');
+    const proj = path.join(env.userHome, 'setup-142');
+    const synced = path.join(claudeDir, 'skills/synced/0000-sync');
+    const plug = path.join(claudeDir, 'plugins/cache/m/plug/1.0.0');
+    const put = (p: string, t: string) => (fs.mkdirSync(path.dirname(p), { recursive: true }), fs.writeFileSync(p, t));
+    put(path.join(synced, 'syn-skill/SKILL.md'), '---\nname: syn-skill\n---\n');
+    put(path.join(plug, 'skills/plug-skill/SKILL.md'), '---\nname: plug-skill\ndescription: From a plugin\n---\n');
+    put(path.join(claudeDir, 'plugins/installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'plug@m': [{ scope: 'user', installPath: plug, version: '1.0.0' }] } }));
+    put(path.join(proj, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'plug@m': true } }));
+    const connectors = ['claude.ai Claude Docs', 'claude.ai Gmail', 'claude.ai Google Drive', 'claude.ai Slack'];
+    fake.setMcpList(
+      [
+        'Checking MCP server health…',
+        '',
+        `${connectors[0]}: https://example.invalid/docs - ✔ Connected`,
+        `${connectors[1]}: https://example.invalid/gmail - ! Needs authentication`,
+        `${connectors[2]}: https://example.invalid/drive - ✔ Connected`,
+        `${connectors[3]}: https://example.invalid/slack - ✘ Failed to connect`,
+        'godot: npx -y example-mcp - ✔ Connected',
+      ].join('\n') + '\n',
+    );
+    fake.setMode('ok');
+    fs.writeFileSync(path.join(fake.dir, 'mcp.path'), '');
+    await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
+    await page.waitForSelector('.term .xterm');
+    await page.evaluate(() => (window as any).jaffer.call('hello', { client: 'app', protocol: 1 }));
+    const type = (data: string) => page.evaluate((d) => window.jaffer.call('pty.write', { pane: 'main', data: d }), data);
+    const group = (g: string) => page.locator(`.sx-group[data-group="${g}"]`);
+    const items = (g: string) => group(g).locator('.sx-item').evaluateAll((els) => els.map((e) => ({ name: e.querySelector('.sx-name')!.textContent, state: (e.querySelector('.sx-dot') as HTMLElement).dataset.state, note: e.querySelector('.sx-note')?.textContent ?? null, title: e.getAttribute('title') })));
+    const mainWas = (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd as string;
+    const panelWas = (await page.evaluate(() => window.jaffer.call('config.get'))).panel;
+    await cfgPatch({ panel: { open: true, width: 320 } });
+    try {
+      await type(`\x15export PATH="/jaffer-e2e-path/bin:$PATH"; cd '${proj}'\r`);
+      await until(async () => (await page.locator('.pane[data-pane="main"] .pn-chip .pn-name').textContent()) === 'setup-142', 8_000, 'main in setup-142');
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__mcpAsk = [];
+        w.__mcpReal = w.jaffer.call;
+        w.jaffer.call = (m: string, p: any) => (m === 'claude.mcp' && w.__mcpAsk.push(p), w.__mcpReal(m, p));
+      });
+      await page.waitForSelector('.side-panel .sx-setup');
+      if ((await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')) !== 'true') await page.click('.sx-setup .sx-head');
+      await page.waitForSelector('#sx-body[data-loaded] .sx-group[data-group="mcp"]');
+      await page.click('.sx-check');
+      await until(async () => (await items('mcp')).length === 5, 10_000, 'the checked servers');
+      expect(await items('mcp')).toEqual([
+        { name: connectors[0], state: 'ok', note: 'Connected', title: connectors[0] },
+        { name: connectors[1], state: 'attention', note: 'Needs sign-in', title: connectors[1] },
+        { name: connectors[2], state: 'ok', note: 'Connected', title: connectors[2] },
+        { name: connectors[3], state: 'attention', note: 'Failed to connect', title: connectors[3] },
+        { name: 'godot', state: 'ok', note: 'Connected', title: 'godot' },
+      ]);
+      expect(await group('mcp').locator('.sx-count').textContent()).toBe('5');
+      expect(await page.evaluate(() => (window as any).__mcpAsk)).toEqual([{ cwd: proj, pane: 'main' }]);
+      expect(fake.read('mcp.path').startsWith('/jaffer-e2e-path/bin:')).toBe(true);
+      if (await group('skills').locator('.sx-more', { hasText: 'Show all' }).count()) await group('skills').locator('.sx-more').click();
+      const skills = await items('skills');
+      expect(skills).toContainEqual({ name: 'syn-skill', state: 'ok', note: null, title: 'Your skill' });
+      expect(skills).toContainEqual({ name: 'plug-skill', state: 'ok', note: null, title: 'From a plugin · From the plugin plug@m' });
+      expect(await page.textContent('.sx-setup')).not.toMatch(/example|https|npx|cache/);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        if (w.__mcpReal) w.jaffer.call = w.__mcpReal;
+        delete w.__mcpReal;
+      });
+      if ((await page.getAttribute('.sx-setup .sx-head', 'aria-expanded').catch(() => null)) === 'true') await page.click('.sx-setup .sx-head');
+      await type(`\x15export PATH="\${PATH#/jaffer-e2e-path/bin:}"; cd '${mainWas}'\r`);
+      await until(async () => (await page.evaluate(() => window.jaffer.call('pane.list')))[0].cwd === mainWas, 8_000, 'main back in its folder');
+      await cfgPatch({ panel: panelWas });
+      for (const p of [proj, path.join(claudeDir, 'skills/synced'), path.join(claudeDir, 'plugins')]) fs.rmSync(p, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('Explain (1.4.0): with permissions.explain off there is no Explain button and claude.explain is never asked, and Ask Claude to explain only copies its prompt; on, after a finished turn the button asks the helper, the card shows its answer above Now and Dismiss takes it away; a failure is one calm line; nothing is typed', async () => {
     await page.goto(`${url}?debug=1&renderer=${process.env.JAFFER_RENDERER ?? 'dom'}`);
     await page.waitForSelector('.term .xterm');

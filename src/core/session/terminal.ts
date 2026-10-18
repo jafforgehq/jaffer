@@ -3,7 +3,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import * as nodePty from '@lydell/node-pty';
 import type { IPty } from '@lydell/node-pty';
 import { Emitter } from '../../shared/util';
-import { unescapeOsc } from '../../shared/osc';
+import { isShellPath, SHELL_PATH_MAX, unescapeOsc } from '../../shared/osc';
 import { COMMAND_HEAD } from '../../shared/process-badge';
 
 export type PtyEvent =
@@ -43,6 +43,13 @@ export class PtySession {
   /** True once the shell has emitted integration marks, i.e. we can trust the state below. */
   integrated = false;
   promptReady = false;
+  /**
+   * (1.4.2) The shell's PATH as its startup files left it (633;P;Path), for the MCP check: memory only, never sent to the window or logged.
+   * Taken only with the nonce the shell was started with (`JAFFER_NONCE`, which the scripts move out of the environment), so text a
+   * program prints cannot set it.
+   */
+  shellPath: string | undefined;
+  private readonly nonce: string | undefined;
   private pendingCmd = '';
   private running: { cmd: string; startedAt: number } | null = null;
   private batch: string[] = [];
@@ -53,6 +60,7 @@ export class PtySession {
 
   constructor(opts: PtyOptions) {
     this.cwd = opts.cwd;
+    this.nonce = opts.env.JAFFER_NONCE || undefined;
     this.term = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: opts.scrollback ?? 10_000, allowProposedApi: true, convertEol: false });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
@@ -232,7 +240,7 @@ export class PtySession {
           this.cwd = cwd;
           this.events.emit({ type: 'cwd', cwd });
         }
-      }
+      } else if (kind === 'P' && rest.startsWith('Path=')) this.takePath(rest.slice(5));
       return true;
     });
     // OSC 7 (file://host/path) — honoured too, for shells that already emit it.
@@ -267,6 +275,14 @@ export class PtySession {
       this.events.emit({ type: 'title', title: t });
     });
     this.term.onBell(() => this.events.emit({ type: 'bell' }));
+  }
+
+  /** `<value>;<nonce>`: the value is escaped (`;` is `\x3b`), so the last `;` starts the nonce. */
+  private takePath(mark: string): void {
+    const semi = mark.lastIndexOf(';');
+    if (!this.nonce || semi < 0 || mark.slice(semi + 1) !== this.nonce || semi > 4 * SHELL_PATH_MAX) return;
+    const value = unescapeOsc(mark.slice(0, semi));
+    if (isShellPath(value)) this.shellPath = value;
   }
 
   private finishCommand(exit: number | null): void {

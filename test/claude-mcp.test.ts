@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MCP_LABEL, parseMcpList, runMcpList, stopMcpChecks } from '../src/core/claude/mcp';
+import { MCP_LABEL, mcpPath, parseMcpList, runMcpList, stopMcpChecks } from '../src/core/claude/mcp';
 import { fakeClaude } from './helpers/fake-claude';
 import { makeEnv, type TestEnv } from './helpers/env';
 
@@ -80,6 +80,76 @@ describe('parseMcpList: the text of `claude mcp list`, line by line', () => {
         expect(JSON.stringify(r)).not.toMatch(/a{65}/);
       }
     }
+  });
+});
+
+describe('(1.4.2) parseMcpList: the real lines of `claude mcp list` (targets redacted), names with spaces and plugin names', () => {
+  const REAL = [
+    'Checking MCP server health…',
+    '',
+    'claude.ai Claude Docs: https://example.invalid/mcp - ✔ Connected',
+    'plugin:context7:context7: https://example.invalid/mcp - ! Needs authentication',
+    'godot: npx -y example-mcp - ✘ Failed to connect — ENOENT: Executable not found in $PATH: "npx"',
+    'godot-ai: http://localhost:1234/mcp - ✘ Failed to connect — ECONNREFUSED: ECONNREFUSED: Unable to connect. Is the computer able to access the url?',
+    "isoforge: /Users/x/.venv/bin/python server.py - ✘ Failed to connect — ENOENT: ENOENT: no such file or directory, posix_spawn '/Users/x/.venv/bin/python'",
+    'orbion: npx -y orbion-mcp - ✔ Connected',
+    'claude.ai Google Drive: https://example.invalid/gdrive - ✔ Connected',
+    'claude.ai Gmail: https://example.invalid/gmail - ! Needs authentication',
+    'claude.ai Slack Tools: https://example.invalid/slack - ✘ Failed to connect',
+    'Error: Some MCP server says: oops - ✔ Connected',
+  ].join('\n');
+
+  it('keeps the whole name before the target (a URL, a path or a command), with the states as before; never a target, a URL or an error text', () => {
+    const r = parseMcpList(REAL);
+    expect(r.map((s) => [s.name, s.status])).toEqual([
+      ['claude.ai Claude Docs', 'connected'],
+      ['plugin:context7:context7', 'needs-auth'],
+      ['godot', 'failed'],
+      ['godot-ai', 'failed'],
+      ['isoforge', 'failed'],
+      ['orbion', 'connected'],
+      ['claude.ai Google Drive', 'connected'],
+      ['claude.ai Gmail', 'needs-auth'],
+      ['claude.ai Slack Tools', 'failed'],
+    ]);
+    for (const s of r) expect(s.label).toBe(MCP_LABEL[s.status]);
+    const all = JSON.stringify(r);
+    for (const never of ['example', 'http', 'npx', 'python', '/Users', 'ENOENT', 'ECONNREFUSED', 'PATH', 'Checking', 'oops']) expect(all, never).not.toContain(never);
+  });
+
+  it('a name with a space needs a URL or a path after it (prose with a colon is not a server); ANSI colours are dropped; a hostile 1 MB line is quick', () => {
+    expect(parseMcpList('Note on servers: run them again - ✔ Connected')).toEqual([]);
+    expect(parseMcpList('\x1b[1mclaude.ai Claude Docs\x1b[0m: https://example.invalid/mcp - \x1b[32m✔ Connected\x1b[0m')).toEqual([{ name: 'claude.ai Claude Docs', status: 'connected', label: 'Connected' }]);
+    expect(parseMcpList('My Server: ~/bin/srv - ✔ Connected\nLocal Thing: ./srv.sh - ✘ Failed to connect')).toEqual([
+      { name: 'My Server', status: 'connected', label: 'Connected' },
+      { name: 'Local Thing', status: 'failed', label: 'Failed to connect' },
+    ]);
+    // the first ": " that a target follows ends the name
+    expect(parseMcpList('claude.ai Tasks: Work: https://example.invalid/t - ✔ Connected').map((s) => s.name)).toEqual(['claude.ai Tasks: Work']);
+    for (const text of [`${'a: '.repeat(350_000)}`, `claude.ai ${'x '.repeat(500_000)}: https://e - ✔ Connected`, `${'a b: '.repeat(200_000)}https://e - ✔ Connected`]) {
+      const t = Date.now();
+      const r = parseMcpList(text);
+      expect(Date.now() - t).toBeLessThan(1000);
+      expect(r.every((s) => s.name.length <= 64)).toBe(true);
+    }
+  });
+});
+
+describe('(1.4.2) mcpPath: the PATH `claude mcp list` runs with', () => {
+  const home = '/Users/someone';
+  const all = () => true;
+  it('the focused shell\'s PATH when it reported one', () => {
+    expect(mcpPath('/Users/someone/.nvm/bin:/usr/bin:/bin', '/usr/bin:/bin', home, all)).toBe('/Users/someone/.nvm/bin:/usr/bin:/bin');
+  });
+  it('otherwise the app\'s PATH with the usual tool folders added once each, in order, only when they exist', () => {
+    expect(mcpPath(undefined, '/usr/bin:/bin:/usr/sbin:/sbin', home, all)).toBe('/usr/bin:/bin:/usr/sbin:/sbin:/Users/someone/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin');
+    expect(mcpPath(undefined, '/opt/homebrew/bin:/usr/bin', home, all)).toBe('/opt/homebrew/bin:/usr/bin:/Users/someone/.local/bin:/opt/homebrew/sbin:/usr/local/bin');
+    expect(mcpPath(undefined, '/usr/bin:/bin', home, (d) => d === '/usr/local/bin')).toBe('/usr/bin:/bin:/usr/local/bin');
+    expect(mcpPath(undefined, undefined, home, () => false)).toBe('');
+    expect(mcpPath(undefined, '', home, (d) => d === '/opt/homebrew/bin')).toBe('/opt/homebrew/bin');
+  });
+  it('a shell PATH that is not usable (empty, control characters, past 8192 characters) falls back', () => {
+    for (const bad of ['', '/a\nb', '/a\x1bb', '/a\x85b', '/a\x7fb', `/${'a'.repeat(8192)}`]) expect(mcpPath(bad, '/usr/bin', home, () => false), JSON.stringify(bad.slice(0, 9))).toBe('/usr/bin');
   });
 });
 

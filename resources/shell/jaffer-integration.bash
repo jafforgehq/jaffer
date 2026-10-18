@@ -18,6 +18,11 @@ __jaffer_esc() {
 # commands the user actually typed are reported.
 __jaffer_in_prompt=1
 __jaffer_ran=0
+# (1.4.2) The PATH the person's startup files made, for the MCP check; reported before a prompt only when it changed. The nonce (kept in a
+# shell variable, out of the environment) tells the terminal the mark is ours, not text a program printed.
+__jaffer_path=
+__jaffer_nonce="${JAFFER_NONCE-}"
+unset JAFFER_NONCE
 
 __jaffer_precmd() {
   local ec=$?
@@ -27,6 +32,10 @@ __jaffer_precmd() {
     __jaffer_ran=0
   else
     printf '\e]133;D\a'
+  fi
+  if [ "$PATH" != "$__jaffer_path" ]; then
+    __jaffer_path="$PATH"
+    printf '\e]633;P;Path=%s;%s\a' "$(__jaffer_esc "$PATH")" "$__jaffer_nonce"
   fi
   printf '\e]633;P;Cwd=%s\a' "$(__jaffer_esc "$PWD")"
   printf '\e]133;A\a'
