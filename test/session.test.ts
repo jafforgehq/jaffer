@@ -19,6 +19,12 @@ afterEach(async () => {
   env.cleanup();
 });
 
+/** The terminal's `shellPath` once it is `want` (the mark comes with the prompt; bash's after its PROMPT_COMMAND hooks), or what it is after 5 s. */
+async function pathIs(session: PtySession, want: string): Promise<string | undefined> {
+  for (let i = 0; i < 100 && session.shellPath !== want; i++) await new Promise((r) => setTimeout(r, 50));
+  return session.shellPath;
+}
+
 type CommandEvent = Extract<PtyEvent, { type: 'command' }>;
 const isCmd = (e: PtyEvent): CommandEvent | false => (e.type === 'command' ? e : false);
 
@@ -125,28 +131,40 @@ describe.each(SHELLS)('PtySession with shell integration (%s)', (shell) => {
     await untilReady(sh);
     const shown = (await runInShell(sh, 'printf "%s\\n" "$PATH"')).output.replace(/\n/g, '');
     expect(shown).toContain('/rc/added/bin:/usr/bin:/bin');
-    expect(sh.shellPath).toBe(shown);
+    expect(await pathIs(sh, shown)).toBe(shown);
+    await runInShell(sh, 'true'); // (a prompt's mark is in before the next command starts)
     const n = marks.length;
     expect(n).toBeGreaterThanOrEqual(1);
     await runInShell(sh, 'true');
-    await untilReady(sh);
     expect(marks.length).toBe(n); // (unchanged: not reported again)
     await runInShell(sh, 'export PATH="/later/bin:$PATH"');
-    await untilReady(sh);
-    expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+    expect(await pathIs(sh, `/later/bin:${shown}`)).toBe(`/later/bin:${shown}`);
+    await runInShell(sh, 'true');
     expect(marks.length).toBe(n + 1);
     // the nonce never reaches the shell's environment (a program it runs cannot forge the mark with it)
     expect((await runInShell(sh, 'echo "[${JAFFER_NONCE-unset}]"')).output).toBe('[unset]');
     // hostile values are ignored: the last good one stays
     await runInShell(sh, `export PATH="$PATH:/bad$(printf '\\033')x"`);
-    await untilReady(sh);
+    await runInShell(sh, 'true');
     expect(sh.shellPath).toBe(`/later/bin:${shown}`);
     await runInShell(sh, `export PATH="/usr/bin:/bin:/$(head -c 9000 /dev/zero | tr '\\0' a)"`);
-    await untilReady(sh);
+    await runInShell(sh, 'true');
     expect(sh.shellPath).toBe(`/later/bin:${shown}`);
     // a mark a program prints (no nonce, or a wrong one) is not the shell's
     await runInShell(sh, "printf '\\033]633;P;Path=/forged/bin\\007\\033]633;P;Path=/forged/bin;0000\\007'");
     expect(sh.shellPath).toBe(`/later/bin:${shown}`);
+  });
+
+  it('(1.4.2 review) the nonce leaves the environment before the startup files run, and the shell\'s copy of it is never exported, also with allexport', async () => {
+    const zsh = shell.endsWith('zsh');
+    fs.writeFileSync(path.join(env.userHome, zsh ? '.zshrc' : '.bashrc'), `${zsh ? 'setopt allexport' : 'set -a'}\nenv > "$HOME/rc-env.txt"\n`);
+    sh = startShell(env, { shell });
+    await untilReady(sh);
+    const nonce = (sh as unknown as { nonce: string }).nonce;
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(fs.readFileSync(path.join(env.userHome, 'rc-env.txt'), 'utf8')).not.toContain(nonce); // (what the rc file starts does not get it)
+    expect((await runInShell(sh, `env | grep -ci -e jaffer_nonce -e ${nonce}`)).output).toBe('0'); // (with set -a, not even a function that names it)
+    expect(await pathIs(sh, (await runInShell(sh, 'printf "%s\\n" "$PATH"')).output.replace(/\n/g, ''))).toBeTruthy(); // (and the mark still works)
   });
 
   it('does not leak daemon-only environment into the shell', async () => {
@@ -171,6 +189,14 @@ describe('shell marks are forgeable at any length', () => {
 });
 
 describe('(1.4.2) the PATH mark (633;P;Path=<value>;<nonce>) is checked', () => {
+  it('(review) only a zsh, bash or fish start gets a nonce: another shell has no integration, so no PATH mark', async () => {
+    const { buildShellSpawn } = await import('../src/core/session/shell-integration');
+    const spawn = (shell: string) => buildShellSpawn({ shell, paths: env.paths, version: 't', baseEnv: { JAFFER_NONCE: 'from-outside' }, pane: 'main' }).env.JAFFER_NONCE;
+    for (const shell of ['/bin/zsh', '/bin/bash', '/opt/homebrew/bin/fish']) expect(spawn(shell), shell).toMatch(/^[0-9a-f]{32}$/);
+    expect(spawn('/bin/sh')).toBeUndefined();
+    expect(spawn('/usr/bin/tcsh')).toBeUndefined();
+  });
+
   it('only with the nonce of the shell Jaffer started, printable (no C0, C1 or DEL), at most 8192 characters; anything else is ignored', async () => {
     const { PtySession: Session } = await import('../src/core/session/terminal');
     const N = 'abc123nonce';
@@ -218,6 +244,15 @@ describe('shell integration regressions (found by macOS CI)', () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(seen).toEqual(['echo typed-by-user']); // neither startup lines nor the hook itself show up as commands
     expect((await runInShell(sh, 'echo $__user_hook')).output).toBe('ran'); // and the user's own hook still ran
+  });
+
+  it('bash (1.4.2 review): a PROMPT_COMMAND hook of the rc file that changes PATH (as direnv does) is reported at the same prompt', async () => {
+    fs.writeFileSync(path.join(env.userHome, '.bashrc'), `PROMPT_COMMAND='case ":$PATH:" in *:/hook/bin:*) ;; *) PATH="/hook/bin:$PATH";; esac'\n`);
+    sh = startShell(env, { shell: '/bin/bash', path: '/usr/bin:/bin' });
+    await untilReady(sh);
+    const s = sh;
+    for (let i = 0; i < 60 && !s.shellPath?.startsWith('/hook/bin:'); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(sh.shellPath?.startsWith('/hook/bin:')).toBe(true);
   });
 
   it('zsh: history stays in the user\'s home, never in the integration shim directory', async () => {

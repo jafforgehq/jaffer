@@ -7,10 +7,11 @@ if set -q JAFFER_BIN; and test -d "$JAFFER_BIN"
     fish_add_path -g "$JAFFER_BIN"
 end
 
-# (1.4.2) The PATH (joined with colons), reported before a prompt only when it changed; the nonce stays a shell variable.
+# (1.4.2) The PATH (joined with colons), reported before a prompt only when it changed. The nonce moves into an unexported variable
+# (fish runs this after config.fish, so what config.fish starts still inherits it).
 set -g __jaffer_path ''
-set -g __jaffer_nonce "$JAFFER_NONCE"
-set -e -g JAFFER_NONCE
+set -g -u __jaffer_nonce "$JAFFER_NONCE"
+set -e JAFFER_NONCE
 
 function __jaffer_esc
     string replace -a '\\' '\\x5c' -- $argv[1] | string replace -a ';' '\\x3b' | string replace -a \n '\\x0a' | string replace -a \e '\\x1b' | string replace -a \a '\\x07'

@@ -45,17 +45,16 @@ function statusOf(text: string): McpStatus {
   return /\bconnected\b/.test(t) ? 'connected' : 'unknown';
 }
 
-/** What may follow "<name>: ": a URL (any scheme), a path (`/`, `~`, `./`, `../`) or, for a name without a space, a command word. */
-const URL_OR_PATH = /^(?:[a-z][a-z0-9+.-]{0,30}:\/\/|~|\.{0,2}\/)/i;
-const COMMAND_WORD = /^[\w@%+=,.-]{1,256}(?: |$)/;
-/** Where a name may end: the first 8 ": " within the first 512 characters of a line. */
+/** What a claude.ai connector's name is followed by: a URL (any scheme). */
+const URL_TARGET = /^[a-z][a-z0-9+.-]{0,30}:\/\//i;
+/** Where a claude.ai name may end: the first 8 ": " within the first 512 characters of a line. */
 const NAME_END_MAX = 512;
 
 /**
  * The servers of `claude mcp list`'s text, tolerantly: a line is "<name>: <target> - <state>" (or "<name>: <target>" with a state word);
- * others are skipped. (1.4.2) The name ends at the first ": " that a target follows, so names with spaces (`claude.ai Claude Docs`, the
- * claude.ai connectors) and with colons (`plugin:context7:context7`) stay whole; a name with a space needs a URL or a path after it, so a
- * line of prose with a colon is not a server.
+ * others are skipped. A name ends at the first ": ", so `plugin:context7:context7` stays whole. (1.4.2) Only a line that starts with
+ * `claude.ai ` (Claude Code's connectors, the only names with spaces or ": " in them) may end its name at a later ": ", the first one a
+ * URL follows; a command's own ": " (`--token: x`) can then never become part of a name.
  */
 export function parseMcpList(text: string): McpServer[] {
   const out: McpServer[] = [];
@@ -68,18 +67,17 @@ export function parseMcpList(text: string): McpServer[] {
     if (out.length >= MAX_SERVERS) break;
     const line = raw.replace(/[\p{Cc}\p{Cf}]/gu, '').trim();
     if (line.startsWith('Error')) continue; // (what went wrong, not a server)
-    let i = -1;
-    for (let from = 0, k = 0; k < 8; k++) {
-      const j = line.indexOf(': ', from);
-      if (j < 0 || j > NAME_END_MAX) break;
-      const target = line.slice(j + 2, j + 2 + NAME_END_MAX);
-      if (j > 0 && (URL_OR_PATH.test(target) || (!/\s/.test(line.slice(0, j)) && COMMAND_WORD.test(target)))) {
-        i = j;
-        break;
+    let i = line.indexOf(': ');
+    if (i > NAME_END_MAX) i = -1;
+    if (i > 0 && line.startsWith('claude.ai ')) {
+      for (let j = i, k = 0; j > 0 && j <= NAME_END_MAX && k < 8; j = line.indexOf(': ', j + 2), k++) {
+        if (URL_TARGET.test(line.slice(j + 2, j + 2 + 40))) {
+          i = j;
+          break;
+        }
       }
-      from = j + 2;
     }
-    if (i < 0) continue;
+    if (i <= 0) continue;
     const rest = line.slice(i + 1);
     const dash = rest.lastIndexOf(' - ');
     const status = statusOf(dash >= 0 ? rest.slice(dash + 3) : rest);
@@ -99,10 +97,15 @@ export const MCP_PATH_EXTRA = (home: string) => [path.join(home, '.local', 'bin'
  * the servers started with `npx`, `node` or `uvx` then fail with ENOENT although they work.
  */
 export function mcpPath(shellPath: string | undefined, appPath: string | undefined, home: string, exists: (dir: string) => boolean): string {
-  if (isShellPath(shellPath)) return shellPath;
-  const parts = (appPath ?? '').split(':').filter(Boolean);
+  // (review) only absolute folders: ".", an empty entry or a relative one would make the spawn find a program of the checked folder (a
+  // cloned repository's own ./npx)
+  const absolute = (p: string | undefined) => (p ?? '').split(':').filter((d) => path.isAbsolute(d));
+  const shell = isShellPath(shellPath) ? absolute(shellPath) : [];
+  if (shell.length) return shell.join(':');
+  const parts = absolute(appPath);
   for (const d of MCP_PATH_EXTRA(home)) if (!parts.includes(d) && exists(d)) parts.push(d);
-  return parts.join(':');
+  // (never an empty PATH, which can mean "this folder": the PATH of an app started from the Dock)
+  return parts.length ? parts.join(':') : '/usr/bin:/bin:/usr/sbin:/sbin';
 }
 
 /** The process groups of the checks under way (their leaders' pids), so the daemon can end them when it stops. */

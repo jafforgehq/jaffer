@@ -262,6 +262,7 @@ None of this counts as verified until the owner of the Mac has checked it there.
 ## Limitations
 
 - macOS only. Fish integration is experimental (zsh and bash are tested).
+- After `exec zsh` or `exec bash` in a Jaffer terminal the new shell has no shell integration (no command marks, no `PATH` report) until that terminal starts a fresh shell.
 - *Check MCP servers* takes only `PATH` from your shell (1.4.2): a server that needs something else your shell's startup files set (a variable only your rc file exports, say) can still fail in the check although it works in Claude Code.
 - Jaffer keeps no session of its own: when it quits, updates or crashes, every shell and Claude Code end, and the next start is one fresh terminal. Claude Code's own `claude --resume` and `claude -c` still work, typed by you; since 1.1.1 a click on a past conversation in the side panel types the resume line for you when the terminal is idle (and, since 1.2.0, so do Enter on one in the palette and `⇧⌘R`). (A `tmux` you start in it is yours, and works as anywhere.) The terminals you split are not saved either: the next start is one.
 - Only *Quit Jaffer* (`⌘Q`, or the menu bar icon's menu, or a close set to quit) asks before it ends a running Claude Code or command. A logout, restart, shutdown, an AppleScript quit and the Dock's *Quit* end the session without asking.

@@ -45,7 +45,7 @@ export function installShellIntegration(paths: JafferPaths): void {
 }
 
 /** Environment variables that must never leak from the daemon into the user's shell. */
-const STRIP_ENV = [/^ELECTRON_/, /^NODE_OPTIONS$/, /^CLAUDECODE$/, /^CLAUDE_CODE_/, /^npm_lifecycle_/, /^npm_package_/, /^npm_command$/, /^npm_execpath$/, /^npm_node_execpath$/, /^INIT_CWD$/, /^JAFFER_USER_ZDOTDIR$/, /^_JAFFER_LOADED$/, /^JAFFER_OWNED$/];
+const STRIP_ENV = [/^ELECTRON_/, /^NODE_OPTIONS$/, /^CLAUDECODE$/, /^CLAUDE_CODE_/, /^npm_lifecycle_/, /^npm_package_/, /^npm_command$/, /^npm_execpath$/, /^npm_node_execpath$/, /^INIT_CWD$/, /^JAFFER_USER_ZDOTDIR$/, /^_JAFFER_LOADED$/, /^JAFFER_OWNED$/, /^JAFFER_NONCE$/];
 
 export interface SpawnOptions {
   shell: string;
@@ -77,10 +77,11 @@ export function buildShellSpawn(o: SpawnOptions): ShellSpawn {
   env.JAFFER_SOCK = o.paths.socket;
   env.JAFFER_BIN = o.paths.binDir;
   env.JAFFER_SHELL_DIR = o.paths.shellDir;
-  // (1.4.2) Signs the PATH mark (633;P;Path): the scripts keep it in a shell variable and take it out of the environment
-  env.JAFFER_NONCE = crypto.randomBytes(16).toString('hex');
   const login = o.login !== false;
   const extra = o.extraArgs ?? [];
+  // (1.4.2) Signs the PATH mark (633;P;Path), only for the shells with an integration: their scripts move it out of the environment
+  // into an unexported shell variable (zsh and bash before the person's startup files, fish after config.fish)
+  if (kind !== 'other') env.JAFFER_NONCE = crypto.randomBytes(16).toString('hex');
 
   if (kind === 'zsh') {
     if (env.ZDOTDIR) env.JAFFER_USER_ZDOTDIR = env.ZDOTDIR;

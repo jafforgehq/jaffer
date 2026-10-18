@@ -117,8 +117,11 @@ describe('(1.4.2) parseMcpList: the real lines of `claude mcp list` (targets red
     for (const never of ['example', 'http', 'npx', 'python', '/Users', 'ENOENT', 'ECONNREFUSED', 'PATH', 'Checking', 'oops']) expect(all, never).not.toContain(never);
   });
 
-  it('a name with a space needs a URL or a path after it (prose with a colon is not a server); ANSI colours are dropped; a hostile 1 MB line is quick', () => {
-    expect(parseMcpList('Note on servers: run them again - ✔ Connected')).toEqual([]);
+  it('only a claude.ai line looks past the first ": " (for a URL); ANSI colours are dropped; a hostile 1 MB line is quick', () => {
+    // (review) only a claude.ai line may have ": " or a space inside its name: any other name ends at the first ": "
+    expect(parseMcpList('My Server: python -m srv --token: /etc/x - ✔ Connected')).toEqual([{ name: 'My Server', status: 'connected', label: 'Connected' }]);
+    expect(parseMcpList('srv: $HOME/bin/x --config: /Users/me/s.json - ✔ Connected')).toEqual([{ name: 'srv', status: 'connected', label: 'Connected' }]);
+    expect(parseMcpList('Some Tool: Work: https://example.invalid/t - ✔ Connected').map((s) => s.name)).toEqual(['Some Tool']);
     expect(parseMcpList('\x1b[1mclaude.ai Claude Docs\x1b[0m: https://example.invalid/mcp - \x1b[32m✔ Connected\x1b[0m')).toEqual([{ name: 'claude.ai Claude Docs', status: 'connected', label: 'Connected' }]);
     expect(parseMcpList('My Server: ~/bin/srv - ✔ Connected\nLocal Thing: ./srv.sh - ✘ Failed to connect')).toEqual([
       { name: 'My Server', status: 'connected', label: 'Connected' },
@@ -145,9 +148,19 @@ describe('(1.4.2) mcpPath: the PATH `claude mcp list` runs with', () => {
     expect(mcpPath(undefined, '/usr/bin:/bin:/usr/sbin:/sbin', home, all)).toBe('/usr/bin:/bin:/usr/sbin:/sbin:/Users/someone/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin');
     expect(mcpPath(undefined, '/opt/homebrew/bin:/usr/bin', home, all)).toBe('/opt/homebrew/bin:/usr/bin:/Users/someone/.local/bin:/opt/homebrew/sbin:/usr/local/bin');
     expect(mcpPath(undefined, '/usr/bin:/bin', home, (d) => d === '/usr/local/bin')).toBe('/usr/bin:/bin:/usr/local/bin');
-    expect(mcpPath(undefined, undefined, home, () => false)).toBe('');
     expect(mcpPath(undefined, '', home, (d) => d === '/opt/homebrew/bin')).toBe('/opt/homebrew/bin');
   });
+  it('(review) only absolute entries are kept, from the shell and in the fallback: never ".", an empty entry or a relative folder; none left: the fallback', () => {
+    expect(mcpPath('.:/usr/bin', '/bin', home, () => false)).toBe('/usr/bin');
+    expect(mcpPath('/a/bin::/usr/bin:', '/bin', home, () => false)).toBe('/a/bin:/usr/bin');
+    expect(mcpPath('node_modules/.bin:/usr/bin:bin', '/bin', home, () => false)).toBe('/usr/bin');
+    expect(mcpPath('.:node_modules/.bin::', '/bin:.', home, () => false)).toBe('/bin');
+    expect(mcpPath(undefined, '.::node_modules/.bin:/usr/bin:', home, (d) => d === '/opt/homebrew/bin')).toBe('/usr/bin:/opt/homebrew/bin');
+    // nothing absolute anywhere: the PATH of an app started from the Dock, never an empty one (an empty PATH can mean "this folder")
+    expect(mcpPath('.', '', home, () => false)).toBe('/usr/bin:/bin:/usr/sbin:/sbin');
+    expect(mcpPath(undefined, undefined, home, () => false)).toBe('/usr/bin:/bin:/usr/sbin:/sbin');
+  });
+
   it('a shell PATH that is not usable (empty, control characters, past 8192 characters) falls back', () => {
     for (const bad of ['', '/a\nb', '/a\x1bb', '/a\x85b', '/a\x7fb', `/${'a'.repeat(8192)}`]) expect(mcpPath(bad, '/usr/bin', home, () => false), JSON.stringify(bad.slice(0, 9))).toBe('/usr/bin');
   });
@@ -174,6 +187,23 @@ describe('runMcpList: `claude mcp list` once, in a folder, bounded', () => {
     expect(fake.read('mcp.cwd')).toBe(dir);
     expect(fake.read('mcp.env')).toBe('||');
     expect(JSON.stringify(r)).not.toContain('SECRET');
+  });
+
+  it('(review) a PATH with "." from the shell: the check never runs a program of the checked folder (a cloned repository\'s own ./npx)', async () => {
+    const repo = path.join(env.userHome, 'cloned-repo');
+    fs.mkdirSync(repo);
+    const marker = path.join(env.root, 'npx-ran');
+    fs.writeFileSync(path.join(repo, 'npx'), `#!/bin/sh\n: > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    // a claude whose MCP server is started with `npx`, looked up on its PATH
+    const stub = path.join(env.root, 'claude-stub');
+    fs.writeFileSync(stub, '#!/bin/sh\nnpx -y some-server >/dev/null 2>&1\necho "srv: npx -y some-server - ✓ Connected"\n', { mode: 0o755 });
+    // (the stand-in itself works: with the raw PATH it does run ./npx)
+    await runMcpList(stub, repo, { HOME: env.userHome, PATH: '.:/usr/bin:/bin' });
+    expect(fs.existsSync(marker)).toBe(true);
+    fs.rmSync(marker);
+    const r = await runMcpList(stub, repo, { HOME: env.userHome, PATH: mcpPath('.:/usr/bin:/bin', '/usr/bin:/bin', env.userHome, () => false) });
+    expect(r.servers.map((s) => s.name)).toEqual(['srv']);
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('no claude, or a claude that is not there: no-claude; a failing one: error, with what it printed', async () => {

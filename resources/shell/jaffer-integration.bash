@@ -18,11 +18,10 @@ __jaffer_esc() {
 # commands the user actually typed are reported.
 __jaffer_in_prompt=1
 __jaffer_ran=0
-# (1.4.2) The PATH the person's startup files made, for the MCP check; reported before a prompt only when it changed. The nonce (kept in a
-# shell variable, out of the environment) tells the terminal the mark is ours, not text a program printed.
+# (1.4.2) The PATH the person's startup files and PROMPT_COMMAND hooks made, for the MCP check; reported at the end of the prompt phase
+# only when it changed. The nonce (taken out of the environment by jaffer-bash-init.sh, before the startup files, into an unexported
+# variable) tells the terminal the mark is ours, not text a program printed.
 __jaffer_path=
-__jaffer_nonce="${JAFFER_NONCE-}"
-unset JAFFER_NONCE
 
 __jaffer_precmd() {
   local ec=$?
@@ -32,10 +31,6 @@ __jaffer_precmd() {
     __jaffer_ran=0
   else
     printf '\e]133;D\a'
-  fi
-  if [ "$PATH" != "$__jaffer_path" ]; then
-    __jaffer_path="$PATH"
-    printf '\e]633;P;Path=%s;%s\a' "$(__jaffer_esc "$PATH")" "$__jaffer_nonce"
   fi
   printf '\e]633;P;Cwd=%s\a' "$(__jaffer_esc "$PWD")"
   printf '\e]133;A\a'
@@ -48,6 +43,11 @@ __jaffer_precmd() {
 
 __jaffer_prompt_end() {
   local ec=$?
+  # (after the other PROMPT_COMMAND hooks, such as direnv's, so a PATH they change is reported at this prompt)
+  if [ "$PATH" != "$__jaffer_path" ]; then
+    __jaffer_path="$PATH"
+    printf '\e]633;P;Path=%s;%s\a' "$(__jaffer_esc "$PATH")" "${__jaffer_nonce-}"
+  fi
   __jaffer_in_prompt=0
   return $ec
 }
@@ -69,3 +69,5 @@ if [ -n "$PROMPT_COMMAND" ]; then
 else
   PROMPT_COMMAND="__jaffer_precmd;__jaffer_prompt_end"
 fi
+# (an rc file's `set -a` would export these functions, and with them the name of the nonce's variable, to every program)
+export -fn __jaffer_esc __jaffer_precmd __jaffer_prompt_end __jaffer_preexec 2>/dev/null
