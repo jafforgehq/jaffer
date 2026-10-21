@@ -116,7 +116,7 @@ export const GLOSSARY: GlossaryEntry[] = [
   {
     id: 'companion',
     title: 'Companion',
-    short: 'The companion is the little mole (or scene) in the corner of the terminal. It digs while something runs and pops up when Claude needs you.',
+    short: 'The companion is the little mole (or scene) that lives in each terminal. It digs while something runs and pops up when Claude needs you.',
     more: 'Each helper Claude gets its own small mole. Choose another companion, its size, or switch it off in Settings → Appearance. It only shows what Claude Code reports; it never does anything itself.',
   },
   {

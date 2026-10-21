@@ -29,7 +29,12 @@ Setup: install the signed build from the Releases page (or let 1.4.0 offer the u
 - [ ] Make the window as small as it goes with four terminals. *Expect:* usable, if cramped (note how it looks).
 - [ ] Run `sleep 300` in a terminal that is *not* focused, then **⌘Q**. *Expect:* the quit question appears.
 - [ ] Click a terminal's ✕ while a command runs: an inline question names it. *End terminal* closes it. The last terminal's ✕ restarts it fresh.
-- [ ] Start `claude` in two terminals. When one finishes while you're in another: note whether the notification or the title bar says which terminal (known gap).
+- [ ] Open the side panel: a **Terminals** section sits between Now and Past conversations, one row per terminal. *New terminal* adds one; a row's *Split here* opens a new terminal in that row's folder; the ✕ closes it (an inline question when something runs).
+- [ ] Double-click a name (or **F2**), type a name, Enter: the row and the terminal's chip show it. Empty removes it. Drag a row onto another (or **⌥↑ / ⌥↓**): the order, the grid and **⌘1**-**⌘4** follow.
+- [ ] **⇧⌘Return** (and *Shell → Zoom Terminal*): the focused terminal fills the window and the others vanish; focus another from the panel and the zoom moves; **⇧⌘Return** again restores the grid (the real keypress, not a shim).
+- [ ] *Close idle…* (with `sleep 300` running in one terminal): the question counts only the idle ones, never the focused one or the one running; *Cancel* is the default.
+- [ ] Each terminal has its own companion; one working shows work only in its own terminal. With two terminals, a terminal where Claude works (and one that needs you) has a coloured outline; idle ones do not. Check Animations off and Reduce motion: no pulse.
+- [ ] Start `claude` in two terminals (different folders). When one needs you or finishes while Jaffer is in the background: the notification starts with that terminal's folder. Click it (and, separately, its *Show* button): that terminal is focused, not the other one. With a permission prompt (experimental setting on), *Answer in terminal* in the panel also switches to the asking terminal. (The title-bar chip and the approval card still do not name the terminal.)
 
 ## 5. Notifications and the hotkey (3 min)
 - [ ] The global hotkey (default Control-`) shows and hides Jaffer from another app.
