@@ -17,7 +17,7 @@ export interface FinishedDeps {
   now(): number;
   /** (1.5.0) The terminal's name when several are open, else ''. */
   where?(s: ClaudeSession): string;
-  notify(n: { title: string; body: string; pane?: string }): void;
+  notify(n: { title: string; body: string; pane?: string; session?: string }): void;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(t: unknown): void;
 }
@@ -74,6 +74,6 @@ export class FinishedNotifier {
     const cost = session?.cost;
     const where = session ? this.d.where?.(session) : '';
     const usd = this.d.showCost() && cost && cost.answers > p.answersBefore ? cost.last.usd : undefined;
-    this.d.notify({ title: 'Claude finished', ...(session?.pane ? { pane: session.pane } : {}), body: `${where ? `${where} · ` : ''}${took(p.durMs)}${usd !== undefined ? ` · ≈ ${formatUsd(usd)}` : ''}` });
+    this.d.notify({ title: 'Claude finished', ...(session?.pane ? { pane: session.pane, session: session.id } : {}), body: `${where ? `${where} · ` : ''}${took(p.durMs)}${usd !== undefined ? ` · ≈ ${formatUsd(usd)}` : ''}` });
   }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, paneName, panes, removePane, safeCommand, tildePath, toast, zoomPane } from '../state';
+import { activePane, addPane, focusPane, claudeFor, closeAsk, daemonUp, overlay, paneLayout, paneInfo, paneKey, paneName, panes, removePane, safeCommand, tildePath, toast, windowFocused, zoomPane } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { TerminalView, terminals } from './TerminalView';
@@ -43,7 +43,7 @@ export function cycleTerminal(dir: 1 | -1): void {
 /** What closing this terminal would stop, as the question says it (the command through `safeCommand`); null when nothing runs. */
 export function whatRuns(id: string): string | null {
   const busy = paneInfo.value[id]?.busy;
-  if (claudeIn(id) || (busy && isClaudeCommand(busy))) return 'Claude is running here';
+  if (claudeFor(id) || (busy && isClaudeCommand(busy))) return 'Claude is running here';
   if (!busy) return null;
   const shown = safeCommand(busy).replace(/\s+/g, ' ').trim().slice(0, 60);
   return busy === 'command' || shown === '(hidden)' ? 'A command is running.' : `A command is running: ${shown}`;
@@ -80,7 +80,7 @@ export async function endTerminal(id: string): Promise<void> {
 }
 
 function Chip({ id, alone, zoomed }: { id: string; alone: boolean; zoomed: boolean }): VNode {
-  const c = claudeIn(id);
+  const c = claudeFor(id);
   const cwd = paneInfo.value[id]?.cwd ?? '';
   const label = alone ? 'Restart terminal' : 'Close terminal';
   return (
@@ -130,6 +130,12 @@ export function PaneTree(): VNode {
     for (const el of box.current?.children ?? []) ro.observe(el);
     return () => ro.disconnect();
   }, [list.join()]);
+  // The keyboard follows the focus once the render has shown the terminal: the terminal's own focus effect runs before a hidden pane
+  // (display: none) is shown again, and a focus call into a hidden element does nothing, so a zoom that moves or ends would lose it.
+  const active = activePane.value;
+  useLayoutEffect(() => {
+    if (!overlay.value && windowFocused.value && daemonUp.value) terminals.get(active)?.focus();
+  }, [zoom, active]);
   return (
     <div ref={box} class="panes" data-tour="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
       {list.map((id, i) => {

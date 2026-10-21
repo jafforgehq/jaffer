@@ -69,10 +69,13 @@ export function Terminals(): VNode {
     if (id) box.current?.querySelector<HTMLElement>(`.tm-row[data-pane="${CSS.escape(id)}"] .tm-name`)?.focus();
   }, [editing, list.join()]);
 
-  const startEdit = (id: string) => (setDraft(paneLabels.value[id] ?? ''), setEditing(id));
-  const finish = (id: string, save: boolean) => {
+  const ended = useRef(false); // (Enter or Esc ends the edit once: the blur that follows, as the input goes, must not save a cancelled name)
+  const startEdit = (id: string) => (setDraft(paneLabels.value[id] ?? ''), (ended.current = false), setEditing(id));
+  const finish = (id: string, save: boolean, restoreFocus = true) => {
+    if (ended.current) return;
+    ended.current = true;
     if (save) setPaneLabel(id, draft);
-    keep.current = id;
+    if (restoreFocus) keep.current = id;
     setEditing(null);
   };
   const shift = (id: string, dir: -1 | 1) => {
@@ -159,7 +162,7 @@ export function Terminals(): VNode {
                     e.stopPropagation();
                     finish(id, e.key === 'Enter');
                   }}
-                  onBlur={() => editing === id && setEditing(null)}
+                  onBlur={() => editing === id && finish(id, true, false)} // (a click elsewhere or a window refocus keeps what was typed; Enter and Esc have already ended the edit)
                 />
               ) : (
                 <button

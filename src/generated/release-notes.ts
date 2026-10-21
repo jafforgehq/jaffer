@@ -2,7 +2,7 @@
 export const RELEASE_NOTES: { version: string; md: string }[] = [
   {
     "version": "1.5.0",
-    "md": "**Several terminals are easier to live with: a Terminals list, a companion in each, zoom, and notifications that say which terminal.**\n- **A Terminals section in the side panel.** Click a name to focus it, double-click to name it, drag to reorder, split from a row, zoom, close, or close all the idle ones at once.\n- **A companion in every terminal**, and with two or more a coloured outline on the terminal where Claude works or needs you.\n- **Zoom one terminal** with `⇧⌘Return`; the same key brings the grid back.\n- **Notifications start with the terminal's folder**, and a click takes you to that terminal."
+    "md": "**Several terminals are easier to live with: a Terminals list, a companion in each, zoom, and notifications that say which terminal.**\n- **A Terminals section in the side panel.** Click a name to focus it, double-click to name it, drag to reorder, split from a row, zoom, close, or close all the idle ones at once.\n- **A companion in every terminal**, and with two or more a coloured outline on the terminal where Claude works or needs you.\n- **Zoom one terminal** with `⇧⌘↩`; the same key brings the grid back.\n- **Notifications start with the terminal's folder**, and a click takes you to that terminal."
   },
   {
     "version": "1.4.2",

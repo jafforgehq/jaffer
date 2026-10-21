@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '../src/renderer/actions.ts'
 const actions = [...source.matchAll(/\{ id: '([^']+)'[^\n]*/g)].map((m) => ({ id: m[1]!, keys: /keys: '([^']+)'/.exec(m[0])?.[1] }));
 const keyed = actions.filter((a): a is { id: string; keys: string } => !!a.keys);
 
-const ACCEL: Record<string, string> = { '⌃': 'Ctrl', '⌥': 'Alt', '⇧': 'Shift', '⌘': 'Cmd', '↑': 'Up', '↓': 'Down' };
+const ACCEL: Record<string, string> = { '⌃': 'Ctrl', '⌥': 'Alt', '⇧': 'Shift', '⌘': 'Cmd', '↑': 'Up', '↓': 'Down', '↩': 'Return' };
 /** `⇧⌘G` as Electron spells it: `Shift+Cmd+G`. */
 const accel = (keys: string): string => {
   const mods = [...keys].filter((c) => '⌃⌥⇧⌘'.includes(c)).map((c) => ACCEL[c]!);
@@ -71,11 +71,11 @@ describe('the menu and the palette agree', () => {
     expect(/role: 'help',\s*submenu: \[[^\]]*item\('whats-new'\),\s*item\('shortcuts'\)/.test(main)).toBe(true);
   });
 
-  it('split terminals (1.4.0, Zoom Terminal ⇧⌘Return 1.5.0): Split Terminal ⌘D, Close Terminal ⇧⌘W, ⌘1..⌘4 and ⌘] / ⌘[ in the palette and the menus, and no role of the Window menu owns ⇧⌘W', () => {
+  it('split terminals (1.4.0, Zoom Terminal ⇧⌘↩ 1.5.0): Split Terminal ⌘D, Close Terminal ⇧⌘W, ⌘1..⌘4 and ⌘] / ⌘[ in the palette and the menus, and no role of the Window menu owns ⇧⌘W', () => {
     const want: Record<string, [string, string, string]> = {
       'split-terminal': ['Split Terminal', 'Cmd+D', '⌘D'],
       'close-terminal': ['Close Terminal', 'Shift+Cmd+W', '⇧⌘W'],
-      'zoom-terminal': ['Zoom Terminal', 'Shift+Cmd+Return', '⇧⌘Return'],
+      'zoom-terminal': ['Zoom Terminal', 'Shift+Cmd+Return', '⇧⌘↩'],
       'next-terminal': ['Next Terminal', 'Cmd+]', '⌘]'],
       'prev-terminal': ['Previous Terminal', 'Cmd+[', '⌘['],
       'focus-terminal-1': ['Terminal 1', 'Cmd+1', '⌘1'],

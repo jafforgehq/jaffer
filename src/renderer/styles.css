@@ -274,8 +274,8 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .tm-row[data-drop='before'] { box-shadow: 0 -2px 0 var(--accent); }
 .tm-row[data-drop='after'] { box-shadow: 0 2px 0 var(--accent); }
 .tm-dot { grid-row: 1 / span 2; width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1px solid var(--faint); box-sizing: border-box; }
-.tm-row:not([data-state='none']) .tm-dot { border-color: transparent; background: var(--faint); }
-.tm-row[data-state='working'] .tm-dot { background: var(--ok); }
+.tm-row:not([data-state='none']) .tm-dot { border-color: transparent; background: var(--ok); } /* (the chip's dot colours: waiting is green, working the accent) */
+.tm-row[data-state='working'] .tm-dot { background: var(--accent); }
 .tm-row[data-state='needs-you'] .tm-dot { background: var(--warn); }
 .tm-name { min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .tm-meta { min-width: 0; grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }

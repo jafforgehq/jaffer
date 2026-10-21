@@ -20,6 +20,7 @@ describe('the shortcuts sheet (⌘/, 1.2.0)', () => {
     expect(keysOf('Cmd+Up')).toBe('⌘↑');
     expect(keysOf('Cmd+/')).toBe('⌘/');
     expect(keysOf('Cmd+P')).toBe('⌘P');
+    expect(keysOf('Shift+Cmd+Return')).toBe('⇧⌘↩');
   });
 
   it('lists every key-bound action, the menu’s keys that are no action (the palette) and the terminal’s own keys, each once, by section', () => {

@@ -20,7 +20,7 @@ import { FailTracker } from './fail-tracker';
 import { shouldTip, TIPS, type TipId } from '../shared/tips';
 import { resolveTheme, type JafferTheme } from './themes';
 import { isPaneId } from '../shared/session-id';
-import { cleanPaneLabel, movePane, reorderPanes } from '../shared/pane-tools';
+import { cleanPaneLabel, firstPaneId, movePane, reorderPanes } from '../shared/pane-tools';
 
 export { fmtDuration };
 
@@ -346,9 +346,9 @@ export const currentClaude = (): ClaudeSession | null => {
 };
 /** The Claude of one terminal, when its hooks named that terminal and it has not ended. */
 export const claudeIn = (pane: string): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended' && s.pane === pane) ?? null;
-/** `claudeIn`, and for the first terminal also a session that names no terminal of ours (a hook without `JAFFER_PANE`: the daemon treats it as the first pane's). */
+/** `claudeIn`, and for the first terminal also a session that names no terminal of ours (a hook without `JAFFER_PANE`: the daemon treats it as its first pane's, not the window's first row). */
 export const claudeFor = (pane: string): ClaudeSession | null =>
-  claudeIn(pane) ?? (pane === panes.value[0] ? claudeLive.value.find((s) => s.state !== 'ended' && !(s.pane && panes.value.includes(s.pane))) ?? null : null);
+  claudeIn(pane) ?? (pane === firstPaneId(panes.value) ? claudeLive.value.find((s) => s.state !== 'ended' && !(s.pane && panes.value.includes(s.pane))) ?? null : null);
 async function loadClaudeState(): Promise<void> {
   try {
     setClaude(await jaffer().call('claude.state', {}));
@@ -440,7 +440,7 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
     claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
     const busy = claudeLive.value.filter((c) => c?.state === 'working' || c?.state === 'needs-you');
     if (busy.length) lastActivityAt.value = Date.now();
-    for (const c of busy) stamp(paneActivityAt, c.pane && panes.value.includes(c.pane) ? c.pane : panes.value[0] ?? 'main', Date.now());
+    for (const c of busy) stamp(paneActivityAt, c.pane && panes.value.includes(c.pane) ? c.pane : firstPaneId(panes.value), Date.now());
   });
   const before = seen;
   seen = new Map();

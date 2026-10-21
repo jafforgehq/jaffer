@@ -14,13 +14,13 @@ export function needsYouNotification(
   prev: ClaudeSession[],
   next: ClaudeSession[],
   ctx: { windowFocused: boolean; lastTerminalNotifyAt: number; now: number; where?: (s: ClaudeSession) => string },
-): { title: string; body: string; pane?: string } | null {
+): { title: string; body: string; pane?: string; session?: string } | null {
   if (ctx.windowFocused || ctx.now - ctx.lastTerminalNotifyAt < TERMINAL_NOTIFY_WINDOW_MS) return null;
   const was = new Map(prev.map((s) => [s.id, s.state]));
   const hit = next.find((s) => s.state === 'needs-you' && was.get(s.id) !== 'needs-you');
   if (!hit) return null;
   const where = ctx.where?.(hit);
-  return { title: 'Claude needs you', body: `${where ? `${where}: ` : ''}${hit.notice || 'Claude is waiting for your permission.'}`, ...(hit.pane ? { pane: hit.pane } : {}) };
+  return { title: 'Claude needs you', body: `${where ? `${where}: ` : ''}${hit.notice || 'Claude is waiting for your permission.'}`, ...(hit.pane ? { pane: hit.pane, session: hit.id } : {}) };
 }
 
 /**
@@ -32,7 +32,7 @@ export function terminalWhere(pane: string | undefined, folders: ReadonlyMap<str
   if (paneCount < 2 || !isPaneId(pane)) return '';
   const tail = (folders.get(pane) ?? '').slice(-4 * COMMAND_HEAD);
   const base = tail.split('/').filter(Boolean).pop() ?? '';
-  const clean = redactText(base.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')).trim().slice(0, 40);
+  const clean = [...redactText(base.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')).trim()].slice(0, 40).join(''); // (by characters: a pair is never cut in half)
   return clean || 'another terminal';
 }
 

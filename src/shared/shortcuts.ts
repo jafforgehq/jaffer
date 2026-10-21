@@ -21,7 +21,7 @@ export const TERMINAL_KEYS: Shortcut[] = [
   { title: 'New line (Claude Code, editors)', keys: '⇧↵' },
 ];
 
-const SYMBOL: Record<string, string> = { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Cmd: '⌘', Up: '↑', Down: '↓' };
+const SYMBOL: Record<string, string> = { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Cmd: '⌘', Up: '↑', Down: '↓', Return: '↩' };
 /** `Shift+Cmd+G` as the palette spells it: `⇧⌘G`. */
 export const keysOf = (accelerator: string): string =>
   accelerator

@@ -123,20 +123,27 @@ const runningCommands = new Map<string, string>();
 const paneFolders = new Map<string, string>();
 /** The name of the terminal a session lives in, for a notification: nothing with one terminal. */
 const whereOf = (s: ClaudeSession): string => terminalWhere(s.pane, paneFolders, paneFolders.size);
-/** Brings the window back and, for a session in a known terminal, asks the page to focus it (the page checks the id again). */
-function showAndFocus(pane?: string): void {
+/**
+ * Brings the window back and asks the page to focus the terminal of `session`, but only if that session is still known and still in that
+ * terminal when the click comes (a closed terminal's id can be used again by an unrelated one); otherwise it only shows the window.
+ */
+function showAndFocus(pane?: string, session?: string): void {
   showWindow();
-  if (isPaneId(pane)) sendToRenderer('jaffer:event', 'app.focus-pane', { pane });
+  if (isPaneId(pane) && prevClaude.some((s) => s.id === session && s.pane === pane)) sendToRenderer('jaffer:event', 'app.focus-pane', { pane });
 }
-function loadPaneFolders(c: RpcClient): void {
+/** Reads `pane.list`. At connect (`first`) it also seeds the running commands; a re-read after `spawned` only sets the folders of the listed terminals and forgets the unlisted ones (an event that raced with the answer is not undone). */
+function loadPaneFolders(c: RpcClient, first = false): void {
   void c
     .call('pane.list', {})
     .then((list: { id: string; cwd?: unknown; busy?: string | null }[]) => {
-      paneFolders.clear();
+      const ids = new Set<string>();
       for (const p of list) {
-        if (p.busy) runningCommands.set(p.id, p.busy);
-        if (typeof p.id === 'string') paneFolders.set(p.id, typeof p.cwd === 'string' ? p.cwd : '');
+        if (typeof p.id !== 'string') continue;
+        ids.add(p.id);
+        if (first && p.busy) runningCommands.set(p.id, p.busy);
+        paneFolders.set(p.id, typeof p.cwd === 'string' ? p.cwd : '');
       }
+      for (const id of [...paneFolders.keys()]) if (!ids.has(id)) paneFolders.delete(id);
     })
     .catch(() => undefined);
 }
@@ -172,7 +179,7 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     .call('config.get', {})
     .then((x) => applyConfig(x as typeof appCfg))
     .catch(() => undefined);
-  loadPaneFolders(c);
+  loadPaneFolders(c, true);
   c.onClose.on(() => {
     onApprovals([]); // (no answer can reach the terminal any more)
     void onConnectionLost(o);
@@ -366,7 +373,7 @@ const finished = new FinishedNotifier({
   lastTerminalNotifyAt: () => lastTerminalNotifyAt,
   now: Date.now,
   where: whereOf,
-  notify: (n) => notify(n.title, n.body, 'finished', n.pane),
+  notify: (n) => notify(n.title, n.body, 'finished', n.pane, n.session),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
 });
@@ -401,7 +408,7 @@ function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
   syncTrayState();
   if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
-  notify(n.title, n.body, 'needs-you', n.pane); // (not held again: focus mode returned above)
+  notify(n.title, n.body, 'needs-you', n.pane, n.session); // (not held again: focus mode returned above)
 }
 
 /**
@@ -441,13 +448,13 @@ function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number
  * "Claude needs you" and "Claude finished" also get a Show button; it and a click on the notification bring the window back, also from
  * the menu bar.
  */
-function notify(title: string, body: string, kind?: HoldKind, pane?: string): void {
+function notify(title: string, body: string, kind?: HoldKind, pane?: string, session?: string): void {
   if (kind && focus.hold(kind)) return;
   if (!Notification.isSupported()) return;
   const withShow = kind === 'needs-you' || kind === 'finished';
   const note = new Notification({ title, body: body.slice(0, 240), ...(withShow ? { actions: [{ type: 'button' as const, text: 'Show' }] } : {}) });
-  note.on('click', () => showAndFocus(pane));
-  if (withShow) note.on('action', () => showAndFocus(pane));
+  note.on('click', () => showAndFocus(pane, session));
+  if (withShow) note.on('action', () => showAndFocus(pane, session));
   note.show();
 }
 
@@ -481,13 +488,13 @@ function onApprovals(items: unknown): void {
       ],
     });
     const answer = (decision: 'deny' | 'ask') => void client?.call('claude.approval.answer', { id: a.id, decision }).catch(() => undefined);
-    note.on('click', () => showAndFocus(asking?.pane));
+    note.on('click', () => showAndFocus(asking?.pane, asking?.id));
     note.on('action', (e, index) => {
       const i = typeof (e as { actionIndex?: unknown })?.actionIndex === 'number' ? (e as { actionIndex: number }).actionIndex : index;
       if (i === 1) answer('deny');
       else {
         answer('ask');
-        showAndFocus(asking?.pane);
+        showAndFocus(asking?.pane, asking?.id);
       }
     });
     approvalNotes.set(a.id, note);

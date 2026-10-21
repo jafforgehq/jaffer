@@ -5234,6 +5234,12 @@ describe('Jaffer UI end to end', () => {
     const ptySizes = async () => Object.fromEntries(((await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string; cols: number; rows: number }[]).map((p) => [p.id, `${p.cols}x${p.rows}`]));
     const shown = () => page.$$eval('.panes > .pane', (els) => els.filter((e) => getComputedStyle(e).display !== 'none').map((e) => (e as HTMLElement).dataset.pane ?? ''));
     const zoomedIn = (id: string) => until(async () => (await shown()).join() === id, 5_000, `only ${id} to show`);
+    const typingIn = (id: string) =>
+      until(
+        () => page.evaluate((p) => (document.activeElement as HTMLElement | null)?.classList.contains('xterm-helper-textarea') === true && !!document.activeElement!.closest(`.pane[data-pane="${p}"]`), id),
+        5_000,
+        `the keyboard to be in ${id}`,
+      );
     const fills = async (id: string) => {
       const box = (await page.locator('.panes').boundingBox())!;
       const b = (await page.locator(`.pane[data-pane="${id}"]`).boundingBox())!;
@@ -5267,6 +5273,7 @@ describe('Jaffer UI end to end', () => {
       await menu('focus-terminal-2');
       await zoomedIn('p2');
       await fills('p2');
+      await typingIn('p2'); // (the keyboard follows the zoom to a terminal that was hidden a moment ago)
       await until(async () => (await ptySizes()).p2 === (await termSizes()).p2 && (await termSizes()).p2 !== before.p2, 5_000, 'p2 to refit');
       // leaving the zoom puts every terminal back at its old size
       await menu('zoom-terminal');
@@ -5285,6 +5292,7 @@ describe('Jaffer UI end to end', () => {
       await zoomedIn(z);
       await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), z);
       await until(async () => (await panesNow()).length === 3 && (await shown()).length === 3, 10_000, 'three terminals, none zoomed');
+      await typingIn(await page.evaluate(() => (window as any).__jaffer.activePane() as string)); // (closing the zoomed terminal leaves the keyboard in the next one)
       // one terminal: nothing to zoom
       for (const id of (await panesNow()).slice(1)) await page.evaluate((p) => window.jaffer.call('pane.close', { pane: p }), id);
       await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal');
@@ -5360,6 +5368,12 @@ describe('Jaffer UI end to end', () => {
       await page.keyboard.press('Escape');
       await page.waitForSelector('.tm-rename', { state: 'detached' });
       expect(await nameOf('p2')).toBe('build');
+      // a blur (a click elsewhere, a window refocus) saves what was typed
+      await row('p2', '.tm-name').dblclick();
+      await page.fill('.tm-rename', 'blurred');
+      await page.locator('.tm-card .tm-title').click();
+      await page.waitForSelector('.tm-rename', { state: 'detached' });
+      expect(await nameOf('p2')).toBe('blurred');
       await rename('p2', 'x'.repeat(100));
       expect(await nameOf('p2')).toBe('x'.repeat(24));
       await rename('p2', '   ');

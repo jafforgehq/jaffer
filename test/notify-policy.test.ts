@@ -109,6 +109,11 @@ describe('terminalWhere: which terminal a notification is about', () => {
     expect(w).not.toMatch(/[\p{Cc}\p{Cf}]/u);
     expect(w.startsWith('abcdefgh')).toBe(true);
   });
+  it('cuts by characters, never in the middle of an emoji', () => {
+    const w = terminalWhere('main', new Map([['main', '/x/' + '😀'.repeat(60)]]), 2);
+    expect([...w]).toHaveLength(40);
+    expect(w).not.toMatch(/\p{Cs}/u); // (no lone half of a pair)
+  });
   it('reads an 8 MB folder in no time', () => {
     const t = Date.now();
     expect(terminalWhere('main', new Map([['main', '/a/' + 'b'.repeat(8_000_000)]]), 2).length).toBeLessThanOrEqual(40);

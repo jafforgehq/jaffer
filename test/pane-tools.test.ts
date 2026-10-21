@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanPaneLabel, idleToClose, movePane, reorderPanes } from '../src/shared/pane-tools';
+import { cleanPaneLabel, firstPaneId, idleToClose, movePane, reorderPanes } from '../src/shared/pane-tools';
 
 describe('cleanPaneLabel', () => {
   it('drops control and format characters, collapses spaces, trims', () => {
@@ -12,6 +12,10 @@ describe('cleanPaneLabel', () => {
   });
   it('gives an empty text for only spaces', () => {
     expect(cleanPaneLabel('   ')).toBe('');
+  });
+  it('gives an empty text for a label of only invisible characters', () => {
+    for (const t of ['\u3164', '\u2800', '\u115F\u1160', '\uFFA0 \u3164', '\uFE0F', '\u0301']) expect(cleanPaneLabel(t), JSON.stringify(t)).toBe('');
+    expect(cleanPaneLabel('\u3164a')).toBe('a'); // (a filler that draws nothing is dropped)
   });
   it('is bounded on huge input', () => {
     const t = Date.now();
@@ -52,5 +56,16 @@ describe('idleToClose', () => {
   });
   it('never returns everything', () => {
     expect(idleToClose(['main'], 'main', () => false)).toEqual([]);
+  });
+});
+
+describe('firstPaneId', () => {
+  it('is the first of main, p2, p3, p4 that exists, whatever the order of the list', () => {
+    expect(firstPaneId(['p3', 'main', 'p2'])).toBe('main');
+    expect(firstPaneId(['p4', 'p3', 'p2'])).toBe('p2');
+    expect(firstPaneId(['p4'])).toBe('p4');
+  });
+  it('is main for an empty list', () => {
+    expect(firstPaneId([])).toBe('main');
   });
 });
