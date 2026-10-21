@@ -4,7 +4,6 @@ import { effect } from '@preact/signals';
 import { activePane, activeTheme, cfg, currentClaude, focusMode, hour, openOverlay, overlay, ready, appVersion, systemDark, togglePanel, turnDone } from './state';
 import { onMenu } from './actions';
 import { PaneTree } from './components/PaneTree';
-import { Pet } from './components/Pet';
 import { DaemonBanner, TitleBar, Toasts } from './components/Chrome';
 import { ToolStrip } from './components/ToolStrip';
 import { SidePanel } from './components/SidePanel';
@@ -111,7 +110,6 @@ export function App(): VNode | null {
             <Pins />
             <PaneTree />
             <StickyHeader />
-            <Pet />
             <PasteBar />
             {overlay.value === 'find' && <FindBar />}
           </div>

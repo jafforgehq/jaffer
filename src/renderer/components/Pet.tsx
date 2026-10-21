@@ -1,6 +1,6 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { bellAt, cfg, currentClaude, fixedAt, info, lastActivityAt } from '../state';
+import { cfg, claudeFor, paneActivityAt, paneBellAt, paneFixedAt, paneInfo } from '../state';
 import { processBadge } from '../../shared/process-badge';
 import { isDozing, petMood, petTool, type PetMood } from '../../shared/pet-mood';
 import { toolCategory, type ToolCategory } from '../../shared/tool-category';
@@ -198,12 +198,13 @@ export function CompanionPreview({ companion }: { companion: Companion }): VNode
  * A little mole in a corner of the terminal, and a helper mole beside it for every background agent Claude has running. Pure
  * decoration: every pose is a CSS state, the motion stops with Settings → Animations.
  */
-export function Pet(): VNode | null {
-  const session = currentClaude();
+export function Pet({ pane }: { pane: string }): VNode | null {
+  const session = claudeFor(pane);
   const live = session?.state;
   const runningAgents = session && Array.isArray(session.subagents) ? session.subagents.filter((a) => a.status === 'running').sort((a, b) => a.startedAt - b.startedAt) : [];
   const running = runningAgents.length;
-  const busy = info.value.busy ?? null;
+  const paneBusy = paneInfo.value[pane];
+  const busy = paneBusy?.busy ?? null;
 
   // the longer something works, the harder its mole works: re-check every few seconds while anything is running
   const [, tick] = useState(0);
@@ -242,7 +243,7 @@ export function Pet(): VNode | null {
   useEffect(() => () => clearTimeout(leave.current), []);
 
   // a command that worked after three failures: a burst of sparks for a moment
-  const fixed = fixedAt.value;
+  const fixed = paneFixedAt.value[pane];
   const [burst, setBurst] = useState(0);
   useEffect(() => {
     if (!fixed || Date.now() - fixed > BURST_MS) return;
@@ -252,7 +253,7 @@ export function Pet(): VNode | null {
   }, [fixed]);
 
   // a bell: a flinch
-  const bell = bellAt.value;
+  const bell = paneBellAt.value[pane];
   const [flinch, setFlinch] = useState(false);
   useEffect(() => {
     if (!bell || Date.now() - bell > FLINCH_MS) return;
@@ -262,7 +263,8 @@ export function Pet(): VNode | null {
   }, [bell]);
 
   // ten quiet minutes: doze. Any activity (the signal changes) wakes it at once; the clock is looked at twice a minute
-  const lastActivity = lastActivityAt.value;
+  const mountedAt = useRef(Date.now());
+  const lastActivity = paneActivityAt.value[pane] ?? mountedAt.current; // (no news yet: quiet since this companion appeared)
   const [, slowTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => slowTick((n) => n + 1), 30_000);
@@ -293,7 +295,7 @@ export function Pet(): VNode | null {
   const companion = companionOf(cfg.value?.appearance.companion);
   const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
   const now = Date.now();
-  const effort = mood === 'dig' ? effortLevel(longestRunning([live === 'working' ? session?.since : undefined, busy ? info.value.busySince ?? undefined : undefined], now)) : 0;
+  const effort = mood === 'dig' ? effortLevel(longestRunning([live === 'working' ? session?.since : undefined, busy ? paneBusy?.busySince ?? undefined : undefined], now)) : 0;
   const tired = effort >= 2 ? ' · working hard' : '';
   const crew = running > 0 ? ` · ${running} background agent${running === 1 ? '' : 's'} working` : '';
   const helpers = crewMoods(running, shown);

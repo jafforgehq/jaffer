@@ -210,7 +210,10 @@ describe('Jaffer UI end to end', () => {
     // 1.0.0 allows command blocks inside the card (gutter marks, the sticky command header, the gutter menu), up to three pinned lines and
     // the paste question; still no drawer, other panel or tab
     expect(await page.locator('.sidebar, .drawer, .panel, .tabs, .tab').count()).toBe(0);
-    expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|pet-corner|sticky-cmd|findbar|pins|paste-bar)\b/.test(c)))).toEqual([]);
+    expect(await page.$$eval('.terminal-area > *', (els) => els.map((e) => e.className).filter((c) => !/^(panes|sticky-cmd|findbar|pins|paste-bar)\b/.test(c)))).toEqual([]);
+    // 1.5.0: the companion lives inside each terminal (one per .pane), no longer in the area itself
+    expect(await page.locator('.terminal-area > .pet-corner').count()).toBe(0);
+    expect(await page.locator('.pane > .pet-corner').count()).toBe(await page.locator('.pane').count());
     // 1.1.0: the one side panel (⌘B) sits beside the card; nothing else does
     expect(await page.$$eval('.workspace > *', (els) => els.map((e) => e.className).filter((c) => !/^(terminal-area|side-panel)\b/.test(c)))).toEqual([]);
     expect(await page.locator('.side-panel').count()).toBe(1);
@@ -5075,6 +5078,96 @@ describe('Jaffer UI end to end', () => {
       for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
     }
   });
+
+  it('a pet in every terminal (1.5.0): one companion inside each terminal, in its own corner and clear of its chip; it follows only that terminal\'s command; appearance.pet=false hides them all', async () => {
+    const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const moodOf = (id: string) => page.getAttribute(`.pane[data-pane="${id}"] .pet-corner .pet[data-role="main"]`, 'data-mood');
+    try {
+      await endClaude();
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { companion: 'mole', animations: true, pet: true } }));
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+      await until(async () => (await page.locator('.pane .pet-corner').count()) === 2, 5_000, 'a companion in each terminal');
+      expect(await page.locator('.terminal-area > .pet-corner').count()).toBe(0);
+      for (const id of await panesNow()) {
+        const pane = (await page.locator(`.pane[data-pane="${id}"]`).boundingBox())!;
+        const pet = (await page.locator(`.pane[data-pane="${id}"] .pet-corner`).boundingBox())!;
+        const chip = (await page.locator(`.pane[data-pane="${id}"] .pn-chip`).boundingBox())!;
+        expect(pet.x, id).toBeGreaterThanOrEqual(pane.x - 0.5);
+        expect(pet.y, id).toBeGreaterThanOrEqual(pane.y - 0.5);
+        expect(pet.x + pet.width, id).toBeLessThanOrEqual(pane.x + pane.width + 0.5);
+        expect(pet.y + pet.height, id).toBeLessThanOrEqual(pane.y + pane.height + 0.5);
+        const apart = pet.x + pet.width <= chip.x || chip.x + chip.width <= pet.x || pet.y + pet.height <= chip.y || chip.y + chip.height <= pet.y;
+        expect(apart, `${id}: the companion stays off the chip`).toBe(true);
+        expect(await page.$eval(`.pane[data-pane="${id}"] .pet-corner`, (el) => getComputedStyle(el).pointerEvents), id).toBe('none');
+      }
+      // a command in the terminal that does NOT have the keyboard: only that terminal's companion digs
+      const unfocused = 'p2';
+      const other = 'main';
+      const screen = (id: string) => page.evaluate((p) => { const b = (window as any).__jaffer.terminals.get(p)?.term.buffer.active; let o = ''; for (let i = 0; i < (b?.length ?? 0); i++) o += b.getLine(i).translateToString(true); return o; }, id);
+      await until(async () => /❯/.test(await screen(unfocused)), 15_000, 'the prompt in the new terminal');
+      await page.click(`.pane[data-pane="${other}"] .term`); // (the keyboard goes to the other one)
+      await until(async () => (await page.evaluate(() => (window as any).__jaffer.activePane())) === other, 5_000, 'the other terminal to have the focus');
+      expect(await moodOf(unfocused)).not.toBe('dig');
+      await page.evaluate((id) => window.jaffer.call('pty.write', { pane: id, data: 'sleep 4\r' }), unfocused);
+      await until(async () => (await moodOf(unfocused)) === 'dig', 5_000, 'the unfocused terminal\'s companion to dig');
+      expect(await moodOf(other)).not.toBe('dig');
+      await until(async () => (await moodOf(unfocused)) !== 'dig', 10_000, 'it to stop when the command ends');
+      // the switch hides every one of them
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { pet: false } }));
+      await until(async () => (await page.locator('.pet-corner').count()) === 0, 5_000, 'no companion with appearance.pet off');
+    } finally {
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { pet: true } }));
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal again');
+    }
+  }, 60_000);
+
+  it('the outline follows Claude\'s state (1.5.0): with two terminals the one whose Claude works or waits is outlined (a quiet pulse unless motion is off), idle ones are not, and with one terminal there is no outline', async () => {
+    const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const outline = (id: string) => page.$eval(`.pane[data-pane="${id}"]`, (el) => ({ claude: (el as HTMLElement).dataset.claude ?? null, color: getComputedStyle(el).outlineColor, anim: getComputedStyle(el).animationName }));
+    const clear = 'rgba(0, 0, 0, 0)';
+    try {
+      await endClaude();
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+      await inject([{ id: 'out-1', state: 'working', pane: 'p2' }]);
+      await until(async () => (await outline('p2')).claude === 'working', 5_000, 'p2 to be outlined as working');
+      const working = await outline('p2');
+      expect(working.color).not.toBe(clear);
+      expect(working.anim).toBe('pane-outline'); // a quiet pulse
+      expect((await outline('main')).claude).toBeNull(); // the other terminal has no Claude
+      await inject([{ id: 'out-1', state: 'needs-you', pane: 'p2' }]);
+      await until(async () => (await outline('p2')).claude === 'needs-you', 5_000, 'p2 to be outlined as needing you');
+      // no pulse with motion off, or with the system's Reduce motion
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: false } }));
+      await until(async () => (await outline('p2')).anim === 'none', 5_000, 'no pulse with animations off');
+      expect((await outline('p2')).color).not.toBe(clear);
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+      await until(async () => (await outline('p2')).anim === 'pane-outline', 5_000, 'the pulse back');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await until(async () => (await outline('p2')).anim === 'none', 5_000, 'no pulse with reduced motion');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      // idle: no state outline (the focused terminal keeps its accent line)
+      await inject([{ id: 'out-1', state: 'idle', pane: 'p2' }]);
+      await until(async () => (await outline('p2')).claude === null, 5_000, 'p2 idle');
+      expect(await page.locator('.pane[data-focused]').count()).toBe(1);
+      // with one terminal the same state draws nothing
+      await inject([{ id: 'out-1', state: 'working', pane: 'p2' }]);
+      await until(async () => (await outline('p2')).claude === 'working', 5_000, 'working again');
+      await page.evaluate(() => window.jaffer.call('pane.close', { pane: 'p2' }));
+      await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal');
+      await inject([{ id: 'out-1', state: 'working', pane: 'main' }]);
+      await until(async () => (await outline('main')).claude === 'working', 5_000, 'main working');
+      expect((await outline('main')).color).toBe(clear);
+    } finally {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
+      await endClaude();
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+    }
+  }, 60_000);
 
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
     await page.click('.term');

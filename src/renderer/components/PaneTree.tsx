@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, focusPane, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
+import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { baseName } from '../claude-ui';
 import { TerminalView, terminals } from './TerminalView';
+import { Pet } from './Pet';
 
 /**
  * The split view (1.4.0): up to four terminals, each its own shell, opened only by the person (⌘D) and in the order they were opened; a
@@ -133,11 +134,13 @@ export function PaneTree(): VNode {
     <div ref={box} class="panes" data-tour="panes" data-count={list.length} style={{ gridTemplateColumns: `repeat(${g.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${g.rows}, minmax(0, 1fr))` }}>
       {list.map((id, i) => {
         const c = g.cells[i]!;
+        const live = claudeFor(id)?.state; // (the outline: only 'working' and 'needs-you' draw one)
         return (
-          <div key={paneKey(id)} class="pane" data-pane={id} data-focused={multi && activePane.value === id ? '' : undefined} style={{ gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` }} onMouseDown={() => focusPane(id)}>
+          <div key={paneKey(id)} class="pane" data-pane={id} data-claude={live === 'working' || live === 'needs-you' ? live : undefined} data-focused={multi && activePane.value === id ? '' : undefined} style={{ gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` }} onMouseDown={() => focusPane(id)}>
             <TerminalView pane={id} />
             <Chip id={id} alone={!multi} />
             {closeAsk.value === id && <Confirm id={id} />}
+            <Pet pane={id} />
           </div>
         );
       })}

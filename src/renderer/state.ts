@@ -118,6 +118,10 @@ export function removePane(id: string): void {
     const { [id]: _label, ...labels } = paneLabels.value;
     paneLabels.value = labels;
     if (zoomPane.value === id) zoomPane.value = null;
+    for (const s of [paneActivityAt, paneFixedAt, paneBellAt]) {
+      const { [id]: _t, ...left } = s.value;
+      s.value = left;
+    }
     if (activePane.value === id && next.length) focusPane(next[Math.min(i, next.length - 1)]!);
     if (closeAsk.value === id) closeAsk.value = null; // (the question goes with it: an id opened again starts without it)
   });
@@ -216,6 +220,11 @@ export const lastActivityAt = signal(Date.now());
 /** When a command last worked after three failures in a row (the companion's "Fixed it!" burst), and when a bell last rang (its flinch); 0 = never. */
 export const fixedAt = signal(0);
 export const bellAt = signal(0);
+/** The same three, per terminal (1.5.0: each terminal's companion reads only its own). Memory only; a closed terminal's go with it. */
+export const paneActivityAt = signal<Record<string, number>>({});
+export const paneFixedAt = signal<Record<string, number>>({});
+export const paneBellAt = signal<Record<string, number>>({});
+const stamp = (s: typeof paneActivityAt, pane: string, t: number): void => void (s.value = { ...s.value, [pane]: t });
 /** Failures in a row, per terminal (a fix in one terminal is not the end of another's failures). */
 const fails = new Map<string, FailTracker>();
 const failTracker = (pane: string): FailTracker => fails.get(pane) ?? (fails.set(pane, new FailTracker()), fails.get(pane)!);
@@ -336,6 +345,9 @@ export const currentClaude = (): ClaudeSession | null => {
 };
 /** The Claude of one terminal, when its hooks named that terminal and it has not ended. */
 export const claudeIn = (pane: string): ClaudeSession | null => claudeLive.value.find((s) => s.state !== 'ended' && s.pane === pane) ?? null;
+/** `claudeIn`, and for the first terminal also a session that names no terminal of ours (a hook without `JAFFER_PANE`: the daemon treats it as the first pane's). */
+export const claudeFor = (pane: string): ClaudeSession | null =>
+  claudeIn(pane) ?? (pane === panes.value[0] ? claudeLive.value.find((s) => s.state !== 'ended' && !(s.pane && panes.value.includes(s.pane))) ?? null : null);
 async function loadClaudeState(): Promise<void> {
   try {
     setClaude(await jaffer().call('claude.state', {}));
@@ -419,7 +431,9 @@ function setClaude(data: { sessions?: ClaudeSession[]; today?: { usd: number; da
   batch(() => {
     claudeLive.value = Array.isArray(data?.sessions) ? data.sessions : [];
     claudeToday.value = typeof data?.today?.usd === 'number' ? data.today : null;
-    if (claudeLive.value.some((c) => c?.state === 'working' || c?.state === 'needs-you')) lastActivityAt.value = Date.now();
+    const busy = claudeLive.value.filter((c) => c?.state === 'working' || c?.state === 'needs-you');
+    if (busy.length) lastActivityAt.value = Date.now();
+    for (const c of busy) stamp(paneActivityAt, c.pane && panes.value.includes(c.pane) ? c.pane : panes.value[0] ?? 'main', Date.now());
   });
   const before = seen;
   seen = new Map();
@@ -536,20 +550,26 @@ export async function bootstrap(): Promise<void> {
       const pane = typeof data?.pane === 'string' ? data.pane : 'main';
       if (event === 'pty.start') {
         lastActivityAt.value = Date.now();
+        stamp(paneActivityAt, pane, Date.now());
         setPaneInfo(pane, { busy: data.cmd || 'command', busySince: Date.now() });
         if (pane === activePane.value) port.value = null;
         refreshInfoSoon(pane);
       } else if (event === 'pty.command') {
         lastActivityAt.value = Date.now();
+        stamp(paneActivityAt, pane, Date.now());
         setPaneInfo(pane, { busy: null, busySince: null });
         if (pane === activePane.value) port.value = null;
-        if (failTracker(pane).record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) fixedAt.value = Date.now();
+        if (failTracker(pane).record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) {
+          fixedAt.value = Date.now();
+          stamp(paneFixedAt, pane, Date.now());
+        }
         remember({ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, at: Date.now(), durMs: Number(data.durMs) || 0, cwd: typeof data.cwd === 'string' && data.cwd ? data.cwd : paneInfo.value[pane]?.cwd });
         if (Number(data.durMs) >= 30_000 && !windowFocused.value) away = [{ cmd: String(data.cmd ?? ''), exit: data.exit ?? null, durMs: Number(data.durMs) }, ...away].slice(0, 50);
         refreshInfoSoon(pane);
       } else if (event === 'pty.bell') {
         const now = Date.now();
         if (now - bellAt.value >= BELL_GAP_MS) bellAt.value = now;
+        if (now - (paneBellAt.value[pane] ?? 0) >= BELL_GAP_MS) stamp(paneBellAt, pane, now);
       } else if (event === 'pty.cwd') {
         setPaneInfo(pane, { cwd: data.cwd });
         refreshInfoSoon(pane);

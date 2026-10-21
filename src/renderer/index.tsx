@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { App } from './app';
-import { activePane, bootstrap, lastActivityAt, turnHistory } from './state';
+import { activePane, bootstrap, lastActivityAt, paneActivityAt, panes, turnHistory } from './state';
 import './styles.css';
 
 render(<App />, document.getElementById('root')!);
@@ -14,5 +14,5 @@ void window.jaffer?.appInfo().then((i) => ((window as unknown as { __home?: stri
 
 // Test hook: lets end-to-end tests read terminal buffers. Only active with ?debug in the URL.
 if (location.search.includes('debug')) {
-  void Promise.all([import('./components/TerminalView'), import('./components/Blocks')]).then(([m, b]) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals, blocks: b.currentBlocks, activity: lastActivityAt, activePane: () => activePane.value, turns: () => turnHistory.value.length }));
+  void Promise.all([import('./components/TerminalView'), import('./components/Blocks')]).then(([m, b]) => ((window as unknown as { __jaffer: unknown }).__jaffer = { terminals: m.terminals, blocks: b.currentBlocks, activity: { set value(v: number) { lastActivityAt.value = v; paneActivityAt.value = Object.fromEntries(panes.value.map((p) => [p, v])); } }, activePane: () => activePane.value, turns: () => turnHistory.value.length }));
 }

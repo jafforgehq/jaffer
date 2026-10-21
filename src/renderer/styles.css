@@ -210,6 +210,13 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 /* 1.4.0, the split view: a hairline round each terminal, the focused one's in the accent */
 .panes:not([data-count='1']) > .pane { outline-color: var(--line); }
 .panes:not([data-count='1']) > .pane[data-focused] { outline-color: var(--accent-line); }
+/* 1.5.0: while a terminal's Claude works or waits for the person, its outline says so (the working and needs-you colours of the chip's dot); idle, the focused one keeps the accent line */
+.panes:not([data-count='1']) > .pane[data-claude] { outline-width: 2px; outline-offset: -2px; }
+.panes:not([data-count='1']) > .pane[data-claude='working'] { outline-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+.panes:not([data-count='1']) > .pane[data-claude='needs-you'] { outline-color: var(--warn); }
+:root:not([data-motion='off']) .panes:not([data-count='1']) > .pane[data-claude] { animation: pane-outline 2.4s ease-in-out infinite; }
+@keyframes pane-outline { 50% { outline-color: color-mix(in srgb, var(--line) 80%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .panes > .pane[data-claude] { animation: none !important; } }
 /* each terminal's chip (its Claude, its folder, ✕), small in its top right corner, and the question under it */
 .pn-chip {
   position: absolute; top: 5px; right: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 40px); height: 20px;
