@@ -218,7 +218,7 @@ describe('invariants of CLAUDE.md', () => {
       'src/renderer/actions.ts': 1, // a pinned line: the first line of a block's command, from safeCommand's head
       'src/renderer/components/TerminalView.tsx': 1, // the first line of a paste, cut by firstLine
       'src/renderer/state.ts': 2, // the cwd sliced to 4 * COMMAND_HEAD; safeCommand's head (COMMAND_HEAD)
-      'src/shared/notify-policy.ts': 1, // the command's head (COMMAND_HEAD)
+      'src/shared/notify-policy.ts': 2, // the command's head (COMMAND_HEAD); a terminal's folder name, cut from the last 4 * COMMAND_HEAD of its cwd
       'src/shared/recent-commands.ts': 1, // a command of at most 4 * COMMAND_HEAD (longer ones are never kept)
       'src/shared/redact.ts': 1, // its own definition
       'src/shared/resume-action.ts': 1, // the busy command, from the daemon's bounded command line

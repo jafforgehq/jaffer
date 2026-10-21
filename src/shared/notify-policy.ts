@@ -1,6 +1,7 @@
 import type { ClaudeSession } from '../core/claude/watcher';
 import { isSensitiveCommand, redactText } from './redact';
 import { COMMAND_HEAD } from './process-badge';
+import { isPaneId } from './session-id';
 
 /** Claude Code's own terminal notification (OSC 9) and ours must not both fire for one event. */
 const TERMINAL_NOTIFY_WINDOW_MS = 10_000;
@@ -12,12 +13,27 @@ const TERMINAL_NOTIFY_WINDOW_MS = 10_000;
 export function needsYouNotification(
   prev: ClaudeSession[],
   next: ClaudeSession[],
-  ctx: { windowFocused: boolean; lastTerminalNotifyAt: number; now: number },
-): { title: string; body: string } | null {
+  ctx: { windowFocused: boolean; lastTerminalNotifyAt: number; now: number; where?: (s: ClaudeSession) => string },
+): { title: string; body: string; pane?: string } | null {
   if (ctx.windowFocused || ctx.now - ctx.lastTerminalNotifyAt < TERMINAL_NOTIFY_WINDOW_MS) return null;
   const was = new Map(prev.map((s) => [s.id, s.state]));
   const hit = next.find((s) => s.state === 'needs-you' && was.get(s.id) !== 'needs-you');
-  return hit ? { title: 'Claude needs you', body: hit.notice || 'Claude is waiting for your permission.' } : null;
+  if (!hit) return null;
+  const where = ctx.where?.(hit);
+  return { title: 'Claude needs you', body: `${where ? `${where}: ` : ''}${hit.notice || 'Claude is waiting for your permission.'}`, ...(hit.pane ? { pane: hit.pane } : {}) };
+}
+
+/**
+ * (1.5.0) Which terminal a notification is about: its folder's name, only with two or more terminals (with one there is nothing to tell
+ * apart) and only for a plain pane id. The folder is the daemon's `cwd`, which a program can set to anything: only its last 4 * COMMAND_HEAD
+ * characters are read, the last folder name is taken, control and format characters leave it, it is redacted and cut to 40.
+ */
+export function terminalWhere(pane: string | undefined, folders: ReadonlyMap<string, string>, paneCount: number): string {
+  if (paneCount < 2 || !isPaneId(pane)) return '';
+  const tail = (folders.get(pane) ?? '').slice(-4 * COMMAND_HEAD);
+  const base = tail.split('/').filter(Boolean).pop() ?? '';
+  const clean = redactText(base.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')).trim().slice(0, 40);
+  return clean || 'another terminal';
 }
 
 /** A command that ran this long while Jaffer was in the background is worth a notification when it ends. */

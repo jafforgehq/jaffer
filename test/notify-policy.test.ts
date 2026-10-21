@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandNotification, needsYouNotification, shouldBounce } from '../src/shared/notify-policy';
+import { commandNotification, needsYouNotification, shouldBounce, terminalWhere } from '../src/shared/notify-policy';
 import type { ClaudeSession, ClaudeState } from '../src/core/claude/watcher';
 
 const s = (state: ClaudeState, notice?: string, id = 's1'): ClaudeSession => ({ id, state, since: 1, startedAt: 1, turns: 0, calls: [], counts: {}, files: [], subagents: [], notice });
@@ -86,5 +86,42 @@ describe('shouldBounce: the Dock bounces for a bell at most once in five seconds
   });
   it('a clock that went backwards waits', () => {
     expect(shouldBounce(1_000, 50_000)).toBe(false);
+  });
+});
+
+describe('terminalWhere: which terminal a notification is about', () => {
+  const folders = new Map([['main', '/Users/me/code/api'], ['p2', '/Users/me/code/web/'], ['p3', '/']]);
+  it('names nothing with one terminal, or for a pane id that is not one', () => {
+    expect(terminalWhere('main', folders, 1)).toBe('');
+    expect(terminalWhere(undefined, folders, 2)).toBe('');
+    expect(terminalWhere('../x', folders, 2)).toBe('');
+    expect(terminalWhere('a b', folders, 2)).toBe('');
+  });
+  it('is the folder name with several terminals, another terminal when there is none', () => {
+    expect(terminalWhere('main', folders, 2)).toBe('api');
+    expect(terminalWhere('p2', folders, 2)).toBe('web');
+    expect(terminalWhere('p3', folders, 2)).toBe('another terminal');
+    expect(terminalWhere('p4', folders, 2)).toBe('another terminal');
+  });
+  it('keeps a hostile folder name short and clean', () => {
+    const w = terminalWhere('main', new Map([['main', '/x/ab\u202ecd\n\u0007ef\u200bgh' + 'z'.repeat(5000)]]), 2);
+    expect(w.length).toBeLessThanOrEqual(40);
+    expect(w).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+    expect(w.startsWith('abcdefgh')).toBe(true);
+  });
+  it('reads an 8 MB folder in no time', () => {
+    const t = Date.now();
+    expect(terminalWhere('main', new Map([['main', '/a/' + 'b'.repeat(8_000_000)]]), 2).length).toBeLessThanOrEqual(40);
+    expect(terminalWhere('main', new Map([['main', 'a/'.repeat(4_000_000)]]), 2).length).toBeLessThanOrEqual(40);
+    expect(Date.now() - t).toBeLessThan(50);
+  });
+});
+
+describe('needsYouNotification with a terminal name', () => {
+  it('prefixes the body with it; without a name, or when it is empty, nothing changes', () => {
+    const where = (x: ClaudeSession) => (x.id === 's1' ? 'api' : '');
+    expect(needsYouNotification([s('working')], [s('needs-you', 'Claude needs your permission to use Bash')], { ...away, where })).toEqual({ title: 'Claude needs you', body: 'api: Claude needs your permission to use Bash' });
+    expect(needsYouNotification([s('working')], [s('needs-you')], { ...away, where })?.body).toBe('api: Claude is waiting for your permission.');
+    expect(needsYouNotification([s('working', undefined, 's2')], [s('needs-you', 'x', 's2')], { ...away, where })?.body).toBe('x');
   });
 });

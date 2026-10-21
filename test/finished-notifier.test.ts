@@ -196,3 +196,34 @@ describe('took', () => {
     expect(took(0)).toBe('0s');
   });
 });
+
+describe('FinishedNotifier with a terminal name', () => {
+  it('puts it first: "api · 4 min · ≈ $0.31"; no name, nothing changes', () => {
+    let name = 'api';
+    const sent2: { title: string; body: string }[] = [];
+    const n = new FinishedNotifier({
+      enabled: () => true,
+      showCost: () => true,
+      windowFocused: () => false,
+      lastTerminalNotifyAt: () => 0,
+      now: () => now,
+      notify: (x) => sent2.push(x),
+      setTimer: (fn, ms) => {
+        const t = { fn, at: now + ms, id: timers.length, live: true };
+        timers.push(t);
+        return t.id;
+      },
+      clearTimer: () => undefined,
+      where: () => name,
+    });
+    n.update([working(45_000)]);
+    n.update([session('idle', { turnStartedAt: now - 45_000 })]);
+    n.update([session('idle', { cost: withCost(0.12, 1) })]);
+    expect(sent2).toEqual([{ title: 'Claude finished', body: 'api · 45s · ≈ $0.12' }]);
+    name = '';
+    n.update([working(45_000)]);
+    n.update([session('idle', { turnStartedAt: now - 45_000 })]);
+    n.update([session('idle', { cost: withCost(0.12, 2) })]);
+    expect(sent2[1]!.body).toBe('45s · ≈ $0.12');
+  });
+});

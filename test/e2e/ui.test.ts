@@ -5169,6 +5169,65 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('a click on a notification focuses the terminal of its session (1.5.0): app.focus-pane focuses a known terminal (the keyboard too), an invalid or unknown id does nothing, and "Answer in terminal" focuses the terminal of the session that asks', async () => {
+    const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const focused = () => page.evaluate(() => (window as any).__jaffer.activePane() as string);
+    const keyboardIn = () => page.evaluate(() => (document.activeElement?.closest('.pane') as HTMLElement | null)?.dataset.pane ?? null);
+    const ev = (name: string, data: unknown) => page.evaluate(([n, d]) => (window as any).__event(n as string, d), [name, data] as const);
+    const push = (d: object) => page.evaluate((x) => (window as any).__event('claude.approvals', x), d);
+    try {
+      await endClaude();
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+      const [a, b] = await panesNow();
+      // a click on a notification: the terminal of its session
+      await page.click(`.pane[data-pane="${a}"] .term`);
+      await until(async () => (await focused()) === a && (await keyboardIn()) === a, 5_000, 'the first terminal to have the focus');
+      await ev('app.focus-pane', { pane: b });
+      await until(async () => (await focused()) === b && (await keyboardIn()) === b, 5_000, 'the event to focus the second terminal');
+      // nothing else does anything: a bad id, an unknown pane, no data
+      for (const bad of [{ pane: 'main/../x' }, { pane: 'p9' }, { pane: 42 }, { pane: { x: 1 } }, null, {}]) {
+        await ev('app.focus-pane', bad);
+        await sleep(150);
+        expect(await focused()).toBe(b);
+      }
+      // "Answer in terminal" goes to the terminal of the session that asks
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__fpReal = w.jaffer.call;
+        w.__fpCalls = [];
+        w.jaffer.call = (m: string, p: unknown) => (m === 'claude.approval.answer' ? (w.__fpCalls.push(p), Promise.resolve({ ok: true })) : w.__fpReal(m, p));
+      });
+      await inject([{ id: 'fp-sess', state: 'needs-you', turnStartedAtAgo: 5_000, pane: a }]);
+      await page.click(`.pane[data-pane="${b}"] .term`);
+      await until(async () => (await focused()) === b && (await keyboardIn()) === b, 5_000, 'the second terminal to have the focus');
+      await push({ items: [{ id: 'fp-1', sessionId: 'fp-sess', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 15_000 }] });
+      await page.waitForSelector('.session-pill .needs-chip[data-approval] .ap-term');
+      await page.click('.session-pill .needs-chip[data-approval] .ap-term');
+      await until(async () => (await focused()) === a && (await keyboardIn()) === a, 5_000, 'the asking terminal to have the focus');
+      expect(await page.evaluate(() => (window as any).__fpCalls)).toEqual([{ id: 'fp-1', decision: 'ask' }]);
+      // a session that names no terminal: the focus stays
+      await page.click(`.pane[data-pane="${b}"] .term`);
+      await until(async () => (await focused()) === b, 5_000, 'the second again');
+      await inject([{ id: 'fp-sess', state: 'needs-you', turnStartedAtAgo: 5_000 }]);
+      await push({ items: [{ id: 'fp-2', sessionId: 'fp-sess', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 15_000 }] });
+      await page.waitForSelector('.session-pill .needs-chip[data-approval] .ap-ask[data-id="fp-2"] .ap-term');
+      await page.click('.session-pill .needs-chip[data-approval] .ap-ask[data-id="fp-2"] .ap-term');
+      await until(async () => (await page.evaluate(() => (window as any).__fpCalls.length)) === 2, 3_000, 'the second ask');
+      await sleep(150);
+      expect(await focused()).toBe(b);
+    } finally {
+      await page.evaluate(() => {
+        const w = window as any;
+        if (w.__fpReal) w.jaffer.call = w.__fpReal;
+      });
+      await push({ items: [] });
+      await endClaude();
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal again');
+    }
+  }, 90_000);
+
   it('zoom one terminal (1.5.0): the zoom fills the area and the others stay alive at their size (no pty.resize for them), it follows the focus, leaving it restores every size, a new terminal or closing the zoomed one ends it, and one terminal says so', async () => {
     const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
     const termSizes = () => page.evaluate(() => Object.fromEntries([...(window as any).__jaffer.terminals.entries()].map(([id, h]: [string, any]) => [id, `${h.term.cols}x${h.term.rows}`])) as Record<string, string>);

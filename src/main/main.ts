@@ -8,7 +8,8 @@ import { autoUpdater } from 'electron-updater';
 import { makePaths } from '../shared/paths';
 import { readJson, sleep, writeJson } from '../shared/util';
 import { QUIT_WAIT_MS, startOwnedDaemon, tryConnect, waitForSocketGone, type ChildExit, type Launcher, type OwnedDaemon } from '../core/daemon-client';
-import { commandNotification, needsYouNotification, shouldBounce } from '../shared/notify-policy';
+import { commandNotification, needsYouNotification, shouldBounce, terminalWhere } from '../shared/notify-policy';
+import { isPaneId } from '../shared/session-id';
 import { appearanceChanged, dropdownBounds, isAppUrl, keepsBounds, isWebUrl, MIN_WINDOW_HEIGHT, vibrancyFor } from '../shared/window-policy';
 import { FinishedNotifier } from '../shared/finished-notifier';
 import type { ClaudeSession } from '../core/claude/watcher';
@@ -118,6 +119,27 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
 
 /** The command each terminal's shell runs now (from the daemon's events and `pane.list`), for the question at ⌘Q: any terminal counts. */
 const runningCommands = new Map<string, string>();
+/** (1.5.0) Each terminal's folder (`pane.list`, `pty.cwd`, `session.lifecycle`), for naming the terminal in a notification. Memory only. */
+const paneFolders = new Map<string, string>();
+/** The name of the terminal a session lives in, for a notification: nothing with one terminal. */
+const whereOf = (s: ClaudeSession): string => terminalWhere(s.pane, paneFolders, paneFolders.size);
+/** Brings the window back and, for a session in a known terminal, asks the page to focus it (the page checks the id again). */
+function showAndFocus(pane?: string): void {
+  showWindow();
+  if (isPaneId(pane)) sendToRenderer('jaffer:event', 'app.focus-pane', { pane });
+}
+function loadPaneFolders(c: RpcClient): void {
+  void c
+    .call('pane.list', {})
+    .then((list: { id: string; cwd?: unknown; busy?: string | null }[]) => {
+      paneFolders.clear();
+      for (const p of list) {
+        if (p.busy) runningCommands.set(p.id, p.busy);
+        if (typeof p.id === 'string') paneFolders.set(p.id, typeof p.cwd === 'string' ? p.cwd : '');
+      }
+    })
+    .catch(() => undefined);
+}
 
 function wireClient(c: RpcClient, o: OwnedDaemon): void {
   c.on('*', ({ event, data }: { event: string; data: unknown }) => {
@@ -132,6 +154,15 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
       maybeNotifyCommand(data as { cmd: string; exit: number | null; durMs: number });
       recentCommands.add((data as { cmd?: unknown }).cmd as string);
     }
+    if (event === 'pty.cwd' && paneFolders.has(id) && typeof (data as { cwd?: unknown }).cwd === 'string') paneFolders.set(id, (data as { cwd: string }).cwd);
+    if (event === 'session.lifecycle') {
+      const l = (data as { lifecycle?: unknown } | null)?.lifecycle;
+      if (l === 'closed') paneFolders.delete(id);
+      else if (l === 'spawned') {
+        paneFolders.set(id, '');
+        loadPaneFolders(c); // (the event has no folder; the list does)
+      }
+    }
     if (event === 'pty.exit' || event === 'session.lifecycle') runningCommands.delete(id); // (a fresh shell runs nothing, a closed terminal nothing at all)
     if (event === 'claude.state') onClaudeState((data as { sessions: ClaudeSession[]; today?: DayTotal }).sessions, (data as { today?: DayTotal }).today);
     if (event === 'config.changed') applyConfig(data as typeof appCfg);
@@ -141,12 +172,7 @@ function wireClient(c: RpcClient, o: OwnedDaemon): void {
     .call('config.get', {})
     .then((x) => applyConfig(x as typeof appCfg))
     .catch(() => undefined);
-  void c
-    .call('pane.list', {})
-    .then((list: { id: string; busy?: string | null }[]) => {
-      for (const p of list) if (p.busy) runningCommands.set(p.id, p.busy);
-    })
-    .catch(() => undefined);
+  loadPaneFolders(c);
   c.onClose.on(() => {
     onApprovals([]); // (no answer can reach the terminal any more)
     void onConnectionLost(o);
@@ -159,6 +185,7 @@ async function startTerminal(): Promise<void> {
   owned = o;
   client = o.client;
   runningCommands.clear();
+  paneFolders.clear();
   prevClaude = []; // a fresh terminal has no Claude yet: nothing of the old one's may count (the quit question, "needs you")
   syncTrayState(); // (nor the menu bar icon)
   wireClient(o.client, o);
@@ -186,6 +213,7 @@ async function restartTerminal(): Promise<void> {
 async function onChildExit(o: OwnedDaemon, how: ChildExit): Promise<void> {
   if (owned !== o) return;
   runningCommands.clear();
+  paneFolders.clear();
   const action = childExitAction({ ...how, quitting });
   if (action === 'ignore') return;
   if (action === 'quit') {
@@ -337,7 +365,8 @@ const finished = new FinishedNotifier({
   windowFocused: () => !!win?.isFocused(),
   lastTerminalNotifyAt: () => lastTerminalNotifyAt,
   now: Date.now,
-  notify: (n) => notify(n.title, n.body, 'finished'),
+  where: whereOf,
+  notify: (n) => notify(n.title, n.body, 'finished', n.pane),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (t) => clearTimeout(t as NodeJS.Timeout),
 });
@@ -365,14 +394,14 @@ function claudeBusy(): boolean {
 function onClaudeState(sessions: ClaudeSession[], today?: DayTotal): void {
   const wasBusy = claudeBusy();
   finished.update(sessions);
-  const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now() });
+  const n = needsYouNotification(prevClaude, sessions, { windowFocused: !!win?.isFocused(), lastTerminalNotifyAt, now: Date.now(), where: whereOf });
   prevClaude = sessions;
   claudeToday = today;
   if (tray && wasBusy && !claudeBusy()) void refreshPastConversations(); // (a finished turn changes the list)
   syncTrayState();
   if (!n || focus.hold('needs-you')) return; // (focus mode: no bounce and no notice, one line in the summary instead)
   app.dock?.bounce('critical');
-  notify(n.title, n.body, 'needs-you'); // (not held again: focus mode returned above)
+  notify(n.title, n.body, 'needs-you', n.pane); // (not held again: focus mode returned above)
 }
 
 /**
@@ -412,13 +441,13 @@ function maybeNotifyCommand(c: { cmd: string; exit: number | null; durMs: number
  * "Claude needs you" and "Claude finished" also get a Show button; it and a click on the notification bring the window back, also from
  * the menu bar.
  */
-function notify(title: string, body: string, kind?: HoldKind): void {
+function notify(title: string, body: string, kind?: HoldKind, pane?: string): void {
   if (kind && focus.hold(kind)) return;
   if (!Notification.isSupported()) return;
   const withShow = kind === 'needs-you' || kind === 'finished';
   const note = new Notification({ title, body: body.slice(0, 240), ...(withShow ? { actions: [{ type: 'button' as const, text: 'Show' }] } : {}) });
-  note.on('click', () => showWindow());
-  if (withShow) note.on('action', () => showWindow());
+  note.on('click', () => showAndFocus(pane));
+  if (withShow) note.on('action', () => showAndFocus(pane));
   note.show();
 }
 
@@ -441,22 +470,24 @@ function onApprovals(items: unknown): void {
     if (approvalNotes.has(a.id)) continue;
     approvalNotes.set(a.id, null);
     if (win?.isFocused() || focus.hold('needs-you') || !Notification.isSupported()) continue; // (in front: the title bar and the panel ask)
+    const asking = prevClaude.find((s) => s.id === a.sessionId);
+    const where = asking ? whereOf(asking) : '';
     const note = new Notification({
       title: `Claude asks to use ${String(a.tool).slice(0, 64) || 'a tool'}`,
-      body: String(a.detail ?? '').slice(0, 120),
+      body: `${where ? `${where}: ` : ''}${String(a.detail ?? '').slice(0, 120)}`,
       actions: [
         { type: 'button', text: 'Show' },
         { type: 'button', text: 'Deny' },
       ],
     });
     const answer = (decision: 'deny' | 'ask') => void client?.call('claude.approval.answer', { id: a.id, decision }).catch(() => undefined);
-    note.on('click', () => showWindow());
+    note.on('click', () => showAndFocus(asking?.pane));
     note.on('action', (e, index) => {
       const i = typeof (e as { actionIndex?: unknown })?.actionIndex === 'number' ? (e as { actionIndex: number }).actionIndex : index;
       if (i === 1) answer('deny');
       else {
         answer('ask');
-        showWindow();
+        showAndFocus(asking?.pane);
       }
     });
     approvalNotes.set(a.id, note);

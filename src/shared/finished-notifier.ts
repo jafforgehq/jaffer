@@ -15,7 +15,9 @@ export interface FinishedDeps {
   windowFocused(): boolean;
   lastTerminalNotifyAt(): number;
   now(): number;
-  notify(n: { title: string; body: string }): void;
+  /** (1.5.0) The terminal's name when several are open, else ''. */
+  where?(s: ClaudeSession): string;
+  notify(n: { title: string; body: string; pane?: string }): void;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(t: unknown): void;
 }
@@ -68,8 +70,10 @@ export class FinishedNotifier {
     if (!p) return;
     this.cancel(id);
     if (!this.d.enabled() || this.d.windowFocused() || this.d.now() - this.d.lastTerminalNotifyAt() < TERMINAL_NOTIFY_WINDOW_MS) return;
-    const cost = this.prev.find((s) => s.id === id)?.cost;
+    const session = this.prev.find((s) => s.id === id);
+    const cost = session?.cost;
+    const where = session ? this.d.where?.(session) : '';
     const usd = this.d.showCost() && cost && cost.answers > p.answersBefore ? cost.last.usd : undefined;
-    this.d.notify({ title: 'Claude finished', body: `${took(p.durMs)}${usd !== undefined ? ` · ≈ ${formatUsd(usd)}` : ''}` });
+    this.d.notify({ title: 'Claude finished', ...(session?.pane ? { pane: session.pane } : {}), body: `${where ? `${where} · ` : ''}${took(p.durMs)}${usd !== undefined ? ` · ≈ ${formatUsd(usd)}` : ''}` });
   }
 }

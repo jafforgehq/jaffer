@@ -19,6 +19,7 @@ import { formatUsd } from '../shared/claude-cost';
 import { FailTracker } from './fail-tracker';
 import { shouldTip, TIPS, type TipId } from '../shared/tips';
 import { resolveTheme, type JafferTheme } from './themes';
+import { isPaneId } from '../shared/session-id';
 import { cleanPaneLabel, movePane, reorderPanes } from '../shared/pane-tools';
 
 export { fmtDuration };
@@ -405,6 +406,12 @@ async function loadApprovals(): Promise<void> {
 }
 /** The person clicked Allow, Deny or "Answer in terminal" (`ask`; the daemon takes it only for a prompt that still waits, and Allow only for one shown whole). */
 export function answerApproval(id: string, decision: 'allow' | 'deny' | 'ask'): void {
+  if (decision === 'ask') {
+    // (1.5.0) "Answer in terminal": the prompt is in the asking session's terminal, so the focus goes there (a session in no known terminal: nothing)
+    const sid = approvals.value.find((a) => a.id === id)?.sessionId;
+    const pane = claudeLive.value.find((s) => s.id === sid)?.pane;
+    if (pane && panes.value.includes(pane)) focusPane(pane);
+  }
   void jaffer().call('claude.approval.answer', { id, decision }).catch(() => undefined);
 }
 export const timesAnswered = (sessionId: string, tool: string): number => answered.get(`${sessionId}\n${tool}`) ?? 0;
@@ -582,6 +589,10 @@ export async function bootstrap(): Promise<void> {
     else if (event === 'claude.approvals') setApprovals(data);
     else if (event === 'update.state') updateState.value = data;
     else if (event === 'app.accessibility') assistiveTech.value = data === true;
+    else if (event === 'app.focus-pane') {
+      // (1.5.0) a click on a notification: the terminal of the session it was about (main sends a pane id; an unknown or odd one does nothing)
+      if (isPaneId(data?.pane) && panes.value.includes(data.pane)) focusPane(data.pane);
+    }
     else if (event === 'app.digest' && typeof data?.text === 'string') {
       // (1.4.0) the weekly digest, from main: its line, and the side panel a click away
       toast({ kind: 'info', text: data.text.slice(0, 200), actions: [{ label: 'Open panel', run: () => void (panelOpen() || patchPanel({ open: true })) }] });
