@@ -5169,6 +5169,75 @@ describe('Jaffer UI end to end', () => {
     }
   }, 60_000);
 
+  it('zoom one terminal (1.5.0): the zoom fills the area and the others stay alive at their size (no pty.resize for them), it follows the focus, leaving it restores every size, a new terminal or closing the zoomed one ends it, and one terminal says so', async () => {
+    const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const termSizes = () => page.evaluate(() => Object.fromEntries([...(window as any).__jaffer.terminals.entries()].map(([id, h]: [string, any]) => [id, `${h.term.cols}x${h.term.rows}`])) as Record<string, string>);
+    const ptySizes = async () => Object.fromEntries(((await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string; cols: number; rows: number }[]).map((p) => [p.id, `${p.cols}x${p.rows}`]));
+    const shown = () => page.$$eval('.panes > .pane', (els) => els.filter((e) => getComputedStyle(e).display !== 'none').map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const zoomedIn = (id: string) => until(async () => (await shown()).join() === id, 5_000, `only ${id} to show`);
+    const fills = async (id: string) => {
+      const box = (await page.locator('.panes').boundingBox())!;
+      const b = (await page.locator(`.pane[data-pane="${id}"]`).boundingBox())!;
+      for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(b[k] - box[k]), `${id} ${k}`).toBeLessThanOrEqual(2);
+    };
+    try {
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 2, 10_000, 'two terminals');
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 3, 10_000, 'three terminals');
+      await until(async () => (await page.evaluate(() => (window as any).__jaffer.activePane())) === 'p3', 5_000, 'p3 focused');
+      await sleep(500);
+      const before = await termSizes();
+      await until(async () => JSON.stringify(await ptySizes()) === JSON.stringify(await termSizes()), 5_000, 'the shells to have the terminals sizes');
+      await countResizes();
+      await menu('zoom-terminal');
+      await zoomedIn('p3');
+      await fills('p3');
+      expect(await page.locator('.pane[data-pane="p3"] .pn-chip[data-zoomed]').count()).toBe(1);
+      expect(await page.locator('.pane[data-pane="main"] .pn-chip[data-zoomed]').count()).toBe(0);
+      // the zoomed terminal refits to the whole area (once); the hidden ones keep their size and never ask the shell for another
+      await until(async () => (await termSizes()).p3 !== before.p3 && (await ptySizes()).p3 === (await termSizes()).p3, 5_000, 'p3 to refit');
+      await sleep(400);
+      const during = await termSizes();
+      expect(during.main).toBe(before.main);
+      expect(during.p2).toBe(before.p2);
+      const r = await page.evaluate(() => (window as any).__resizes.map((x: { pane: string }) => x.pane) as string[]);
+      expect(r.filter((x) => x !== 'p3'), 'no pty.resize for a hidden terminal').toEqual([]);
+      expect(r.filter((x) => x === 'p3').length, 'the zoomed one refits once').toBe(1);
+      // the zoom follows the focus
+      await menu('focus-terminal-2');
+      await zoomedIn('p2');
+      await fills('p2');
+      await until(async () => (await ptySizes()).p2 === (await termSizes()).p2 && (await termSizes()).p2 !== before.p2, 5_000, 'p2 to refit');
+      // leaving the zoom puts every terminal back at its old size
+      await menu('zoom-terminal');
+      await until(async () => (await shown()).length === 3, 5_000, 'all three to show');
+      await until(async () => JSON.stringify(await termSizes()) === JSON.stringify(before) && JSON.stringify(await ptySizes()) === JSON.stringify(before), 8_000, 'the old sizes');
+      expect(await page.locator('.pn-chip[data-zoomed]').count()).toBe(0);
+      // a new terminal ends the zoom
+      await menu('zoom-terminal');
+      await zoomedIn('p2');
+      await menu('split-terminal');
+      await until(async () => (await panesNow()).length === 4, 10_000, 'four terminals');
+      await until(async () => (await shown()).length === 4, 5_000, 'the zoom to end with the new terminal');
+      // closing the zoomed terminal ends it
+      await menu('zoom-terminal');
+      const z = (await shown())[0]!;
+      await zoomedIn(z);
+      await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), z);
+      await until(async () => (await panesNow()).length === 3 && (await shown()).length === 3, 10_000, 'three terminals, none zoomed');
+      // one terminal: nothing to zoom
+      for (const id of (await panesNow()).slice(1)) await page.evaluate((p) => window.jaffer.call('pane.close', { pane: p }), id);
+      await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal');
+      await menu('zoom-terminal');
+      await page.locator('.toast', { hasText: 'Only one terminal.' }).waitFor({ timeout: 5_000 });
+      expect(await page.locator('.pane[data-hidden]').count()).toBe(0);
+    } finally {
+      for (const p of (await page.evaluate(() => window.jaffer.call('pane.list'))) as { id: string }[]) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal again');
+    }
+  }, 90_000);
+
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
     await page.click('.term');
     await page.keyboard.type('cat <<EOF');

@@ -207,6 +207,9 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .terminal-area { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; display: grid; gap: 2px; min-width: 0; min-height: 0; }
 .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; outline: 1px solid transparent; outline-offset: -1px; }
+/* 1.5.0, zoom (⇧⌘↩): the others are not drawn (so a hidden terminal is under 20 px and keeps its size), the zoomed chip says so */
+.pane[data-hidden] { display: none; }
+.pn-chip[data-zoomed]::before { content: 'zoomed'; color: var(--accent); }
 /* 1.4.0, the split view: a hairline round each terminal, the focused one's in the accent */
 .panes:not([data-count='1']) > .pane { outline-color: var(--line); }
 .panes:not([data-count='1']) > .pane[data-focused] { outline-color: var(--accent-line); }

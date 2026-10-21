@@ -1,4 +1,4 @@
-import { activePane, addPin, cfg, focusMode, info, lastFind, openGlossary, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, startTour, toast, togglePanel } from './state';
+import { activePane, addPin, cfg, focusMode, info, lastFind, openGlossary, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, startTour, toast, toggleZoom, togglePanel } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
@@ -91,6 +91,7 @@ export const actions: Action[] = [
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', { pane: activePane.value }), 'Shell restarted in the same folder.') },
   { id: 'split-terminal', title: 'Split terminal', section: 'Terminal', keys: '⌘D', keywords: 'new pane split view second shell', run: splitTerminal },
   { id: 'close-terminal', title: 'Close terminal', section: 'Terminal', keys: '⇧⌘W', keywords: 'end pane split delete', run: () => closeTerminal() },
+  { id: 'zoom-terminal', title: 'Zoom terminal', section: 'Terminal', keys: '⇧⌘Return', keywords: 'pane split maximize full fill one', run: toggleZoom },
   { id: 'next-terminal', title: 'Next terminal', section: 'Terminal', keys: '⌘]', keywords: 'pane split focus', run: () => cycleTerminal(1) },
   { id: 'prev-terminal', title: 'Previous terminal', section: 'Terminal', keys: '⌘[', keywords: 'pane split focus', run: () => cycleTerminal(-1) },
   { id: 'focus-terminal-1', title: 'Terminal 1', section: 'Terminal', keys: '⌘1', keywords: 'pane split focus first', run: () => focusTerminal(1) },

@@ -904,6 +904,7 @@ function buildMenu(): void {
         { type: 'separator' },
         item('split-terminal'),
         item('close-terminal'),
+        item('zoom-terminal'),
       ],
     },
     { role: 'editMenu' },

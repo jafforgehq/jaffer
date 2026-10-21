@@ -22,6 +22,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   // 1.4.0: up to four terminals (⌘D, ⇧⌘W, ⌘1..⌘4, ⌘] and ⌘[ are no role's: the Window menu role has no Close on macOS)
   'split-terminal': { label: 'Split Terminal', accelerator: 'Cmd+D' },
   'close-terminal': { label: 'Close Terminal', accelerator: 'Shift+Cmd+W' },
+  'zoom-terminal': { label: 'Zoom Terminal', accelerator: 'Shift+Cmd+Return' }, // (1.5.0)
   'next-terminal': { label: 'Next Terminal', accelerator: 'Cmd+]' },
   'prev-terminal': { label: 'Previous Terminal', accelerator: 'Cmd+[' },
   'focus-terminal-1': { label: 'Terminal 1', accelerator: 'Cmd+1' },

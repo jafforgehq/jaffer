@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
+import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast, zoomPane } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { baseName } from '../claude-ui';
@@ -80,12 +80,12 @@ async function endTerminal(id: string): Promise<void> {
   }
 }
 
-function Chip({ id, alone }: { id: string; alone: boolean }): VNode {
+function Chip({ id, alone, zoomed }: { id: string; alone: boolean; zoomed: boolean }): VNode {
   const c = claudeIn(id);
   const cwd = paneInfo.value[id]?.cwd ?? '';
   const label = alone ? 'Restart terminal' : 'Close terminal';
   return (
-    <div class="pn-chip">
+    <div class="pn-chip" data-zoomed={zoomed ? '' : undefined}>
       {c && <span class="pn-dot" data-state={c.state} title={c.state === 'needs-you' ? 'Claude needs you' : c.state === 'working' ? 'Claude is working' : 'Claude is waiting'} />}
       <span class="pn-name" title={tildePath(cwd)}>
         {baseName(cwd) || '~'}
@@ -124,6 +124,7 @@ export function PaneTree(): VNode {
   const list = panes.value.slice(0, MAX_PANES);
   const g = paneGrid(list.length);
   const multi = list.length > 1;
+  const zoom = multi && zoomPane.value && list.includes(zoomPane.value) ? zoomPane.value : null; // (⇧⌘↩: one terminal over the whole area, the others hidden but alive)
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const ro = new ResizeObserver(() => paneLayout.value++);
@@ -135,10 +136,11 @@ export function PaneTree(): VNode {
       {list.map((id, i) => {
         const c = g.cells[i]!;
         const live = claudeFor(id)?.state; // (the outline: only 'working' and 'needs-you' draw one)
+        const cell = zoom === id ? { gridColumn: '1 / -1', gridRow: '1 / -1' } : { gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` };
         return (
-          <div key={paneKey(id)} class="pane" data-pane={id} data-claude={live === 'working' || live === 'needs-you' ? live : undefined} data-focused={multi && activePane.value === id ? '' : undefined} style={{ gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` }} onMouseDown={() => focusPane(id)}>
+          <div key={paneKey(id)} class="pane" data-pane={id} data-claude={live === 'working' || live === 'needs-you' ? live : undefined} data-focused={multi && activePane.value === id ? '' : undefined} data-hidden={zoom && zoom !== id ? '' : undefined} style={cell} onMouseDown={() => focusPane(id)}>
             <TerminalView pane={id} />
-            <Chip id={id} alone={!multi} />
+            <Chip id={id} alone={!multi} zoomed={zoom === id} />
             {closeAsk.value === id && <Confirm id={id} />}
             <Pet pane={id} />
           </div>

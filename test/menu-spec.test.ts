@@ -71,10 +71,11 @@ describe('the menu and the palette agree', () => {
     expect(/role: 'help',\s*submenu: \[[^\]]*item\('whats-new'\),\s*item\('shortcuts'\)/.test(main)).toBe(true);
   });
 
-  it('split terminals (1.4.0): Split Terminal ⌘D, Close Terminal ⇧⌘W, ⌘1..⌘4 and ⌘] / ⌘[ in the palette and the menus, and no role of the Window menu owns ⇧⌘W', () => {
+  it('split terminals (1.4.0, Zoom Terminal ⇧⌘Return 1.5.0): Split Terminal ⌘D, Close Terminal ⇧⌘W, ⌘1..⌘4 and ⌘] / ⌘[ in the palette and the menus, and no role of the Window menu owns ⇧⌘W', () => {
     const want: Record<string, [string, string, string]> = {
       'split-terminal': ['Split Terminal', 'Cmd+D', '⌘D'],
       'close-terminal': ['Close Terminal', 'Shift+Cmd+W', '⇧⌘W'],
+      'zoom-terminal': ['Zoom Terminal', 'Shift+Cmd+Return', '⇧⌘Return'],
       'next-terminal': ['Next Terminal', 'Cmd+]', '⌘]'],
       'prev-terminal': ['Previous Terminal', 'Cmd+[', '⌘['],
       'focus-terminal-1': ['Terminal 1', 'Cmd+1', '⌘1'],
