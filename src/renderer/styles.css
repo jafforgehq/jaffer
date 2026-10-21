@@ -257,7 +257,36 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .sp-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; border-radius: 1px; background: transparent; transition: background 0.12s; }
 .sp-handle:hover::after, .sp-handle[data-drag]::after, .sp-handle:focus-visible::after { background: var(--accent-line); }
 .sp-handle:focus-visible { outline: none; }
-.sp-convos { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 8px 8px; font-size: 12px; color: var(--muted); }
+/* 1.5.0: the Terminals section (between the Now card and the past conversations) */
+.tm-card { flex: 0 1 auto; min-height: 30px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; max-height: 45%; padding: 0 8px 6px; font-size: 12px; color: var(--muted); }
+.tm-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 4px; color: var(--text); font-weight: 550; font-size: 12px; }
+.tm-count { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.tm-head-acts { display: flex; align-items: center; gap: 4px; }
+.tm-idle { padding: 0 4px; border: 0; background: none; color: var(--faint); font-size: 11px; font-weight: 400; cursor: pointer; }
+.tm-idle:hover, .tm-idle[aria-expanded='true'] { color: var(--text); }
+.tm-ask { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; padding: 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--raised); color: var(--text); }
+.tm-ask-btns { display: flex; justify-content: flex-end; gap: 6px; }
+.tm-list { flex: 1; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.tm-row { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 4px 6px; border-radius: var(--r-sm); border: 1px solid transparent; }
+.tm-row:hover { background: var(--hover); }
+.tm-row[data-focused] { background: var(--accent-soft); border-color: var(--accent-line); }
+.tm-row[data-dragging] { opacity: 0.5; }
+.tm-row[data-drop='before'] { box-shadow: 0 -2px 0 var(--accent); }
+.tm-row[data-drop='after'] { box-shadow: 0 2px 0 var(--accent); }
+.tm-dot { grid-row: 1 / span 2; width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 1px solid var(--faint); box-sizing: border-box; }
+.tm-row:not([data-state='none']) .tm-dot { border-color: transparent; background: var(--faint); }
+.tm-row[data-state='working'] .tm-dot { background: var(--ok); }
+.tm-row[data-state='needs-you'] .tm-dot { background: var(--warn); }
+.tm-name { min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tm-meta { min-width: 0; grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
+.tm-rename { min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--accent-line); border-radius: var(--r-xs); background: var(--hover); color: var(--text); font-size: 12px; box-shadow: none; }
+/* the row's buttons lie over its right end, shown on hover, with the keyboard and on the focused terminal */
+.tm-acts { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); display: flex; padding-left: 4px; border-radius: var(--r-sm); background: var(--surface); opacity: 0; }
+.tm-row:hover .tm-acts, .tm-row:focus-within .tm-acts, .tm-row[data-focused] .tm-acts { opacity: 1; }
+.tm-acts .icon-btn { color: var(--faint); }
+.tm-acts .icon-btn:hover:not([disabled]), .tm-acts .icon-btn[aria-pressed='true'] { color: var(--text); }
+.tm-acts .icon-btn[aria-pressed='true'] { color: var(--accent); }
+.sp-convos { flex: 1; min-height: 44px; /* (1.5.0: the Terminals section gives way first) */ display: flex; flex-direction: column; padding: 0 8px 8px; font-size: 12px; color: var(--muted); }
 /* past conversations: a heading with the refresh button, the search, then the list with its own scroll */
 .conv-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px; color: var(--text); font-weight: 550; font-size: 12px; }
 .conv-head-acts { display: flex; align-items: center; gap: 2px; }

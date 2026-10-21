@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast, zoomPane } from '../state';
+import { activePane, addPane, focusPane, claudeFor, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, paneName, panes, removePane, safeCommand, tildePath, toast, zoomPane } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
-import { baseName } from '../claude-ui';
 import { TerminalView, terminals } from './TerminalView';
 import { Pet } from './Pet';
 
@@ -16,11 +15,11 @@ import { Pet } from './Pet';
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
 
 
-/** ⌘D: one more terminal in the focused one's folder (the daemon reads it from the terminal named), and it takes the keyboard. */
-export async function splitTerminal(): Promise<void> {
+/** ⌘D: one more terminal in the focused one's folder (the daemon reads it from the terminal named; the panel's *Split here* names its own row), and it takes the keyboard. */
+export async function splitTerminal(from: string = activePane.value): Promise<void> {
   if (panes.value.length >= MAX_PANES) return void toast({ kind: 'info', text: 'At most four terminals.' });
   try {
-    const p = await call<{ id: string }>('pane.split', { pane: activePane.value });
+    const p = await call<{ id: string }>('pane.split', { pane: from });
     addPane(p.id);
     focusPane(p.id);
   } catch (e) {
@@ -42,7 +41,7 @@ export function cycleTerminal(dir: 1 | -1): void {
 }
 
 /** What closing this terminal would stop, as the question says it (the command through `safeCommand`); null when nothing runs. */
-function whatRuns(id: string): string | null {
+export function whatRuns(id: string): string | null {
   const busy = paneInfo.value[id]?.busy;
   if (claudeIn(id) || (busy && isClaudeCommand(busy))) return 'Claude is running here';
   if (!busy) return null;
@@ -61,7 +60,7 @@ export function closeTerminal(id = activePane.value): void {
 const ending = new Set<string>();
 
 /** With several terminals this one closes; the last one restarts (a fresh shell in the same folder, a blank screen). */
-async function endTerminal(id: string): Promise<void> {
+export async function endTerminal(id: string): Promise<void> {
   closeAsk.value = null;
   if (ending.has(id)) return; // (a double click, or ⇧⌘W twice: one request)
   ending.add(id);
@@ -88,7 +87,7 @@ function Chip({ id, alone, zoomed }: { id: string; alone: boolean; zoomed: boole
     <div class="pn-chip" data-zoomed={zoomed ? '' : undefined}>
       {c && <span class="pn-dot" data-state={c.state} title={c.state === 'needs-you' ? 'Claude needs you' : c.state === 'working' ? 'Claude is working' : 'Claude is waiting'} />}
       <span class="pn-name" title={tildePath(cwd)}>
-        {baseName(cwd) || '~'}
+        {paneName(id)}
       </span>
       <button class="pn-x" aria-label={label} title={label} onClick={() => closeTerminal(id)}>
         ×

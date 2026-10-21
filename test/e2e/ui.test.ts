@@ -4522,7 +4522,7 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.side-panel .sx-setup');
     try {
       // the third section, at the bottom, collapsed: nothing read yet
-      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'now-card', 'sp-convos', 'sx-setup']);
+      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'now-card', 'tm-card', 'sp-convos', 'sx-setup']);
       expect(await page.getAttribute('.sx-setup .sx-head', 'aria-expanded')).toBe('false');
       expect(await page.locator('.sx-body').count()).toBe(0);
       // the main terminal in A, a second one in B (the person's own typing, before the window is watched)
@@ -4797,7 +4797,7 @@ describe('Jaffer UI end to end', () => {
       await page.waitForSelector('.ex-card[aria-busy="true"]');
       expect(await page.textContent('.ex-card')).toContain('Asking Claude…');
       await page.waitForSelector('.ex-card .ex-body', { timeout: 15_000 });
-      expect(await page.locator('.side-panel > *').evaluateAll((els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'ex-card', 'now-card', 'sp-convos', 'sx-setup']);
+      expect(await page.locator('.side-panel > *').evaluateAll((els) => els.map((e) => e.className.split(' ')[0]).filter((c) => c !== 'wn-card'))).toEqual(['sp-handle', 'ex-card', 'now-card', 'tm-card', 'sp-convos', 'sx-setup']);
       expect(await page.textContent('.ex-body strong')).toBe('fixed');
       expect(await page.textContent('.ex-body code')).toBe('npm test');
       expect(await page.locator('.ex-body img').count()).toBe(0);
@@ -4946,7 +4946,7 @@ describe('Jaffer UI end to end', () => {
       expect(await page.locator('.side-panel').count()).toBe(0);
       await page.locator('.toast', { hasText: `Jaffer updated to ${version}` }).locator('.toast-act', { hasText: "What's new" }).click();
       await page.waitForSelector('.side-panel > .wn-card');
-      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'sp-convos', 'sx-setup']); // the card is the one new child, above Now (1.4.0: Setup, the third section, at the bottom)
+      expect(await page.$$eval('.side-panel > *', (els) => els.map((e) => e.className.split(' ')[0]))).toEqual(['sp-handle', 'wn-card', 'now-card', 'tm-card', 'sp-convos', 'sx-setup']); // the card is the one new child, above Now (1.4.0: Setup, the third section, at the bottom)
       expect(await page.locator('.sp-convos, .now-card').count()).toBe(2);
       const text = (await page.textContent('.wn-card')) ?? '';
       expect(text).toContain(`What's new in ${unseen[0]!.version}`);
@@ -5237,6 +5237,173 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal again');
     }
   }, 90_000);
+
+  it('the Terminals section (1.5.0): a row per terminal with a restart or a close, + up to four, click focuses, rename (Enter, Esc, 24 characters, empty, gone with the terminal), drag and ⌥↑ reorder the grid and ⌘1, Split here uses the row\'s folder, the second line, and Close idle… ends only idle terminals but the focused one', async () => {
+    const rows = () => page.$$eval('.tm-card .tm-row', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const gridOrder = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
+    const nameOf = (id: string) => page.locator(`.tm-row[data-pane="${id}"] .tm-name`).textContent();
+    const metaOf = (id: string) => page.locator(`.tm-row[data-pane="${id}"] .tm-meta`).textContent();
+    const row = (id: string, sel: string) => page.locator(`.tm-row[data-pane="${id}"] ${sel}`);
+    const focusedPane = () => page.evaluate(() => (window as any).__jaffer.activePane() as string);
+    const daemonPanes = () => page.evaluate(() => window.jaffer.call('pane.list')) as Promise<{ id: string; cwd: string }[]>;
+    const count = (n: number) => until(async () => (await rows()).length === n, 10_000, `${n} rows`);
+    const rename = async (id: string, text: string) => {
+      await row(id, '.tm-name').dblclick();
+      await page.fill('.tm-rename', text);
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.tm-rename', { state: 'detached' });
+    };
+    const dir = path.join(env.userHome, 'tm-split');
+    fs.mkdirSync(dir, { recursive: true });
+    try {
+      await endClaude();
+      if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+      await page.waitForSelector('.side-panel .tm-card');
+      expect(await page.locator('.tm-card').getAttribute('aria-label')).toBe('Terminals');
+      // one terminal: one row, its button restarts, no Close idle…, no zoom
+      expect(await rows()).toEqual(['main']);
+      expect(await page.locator('.tm-card .tm-count').textContent()).toBe('1');
+      expect(await row('main', '.tm-close').getAttribute('aria-label')).toBe('Restart');
+      expect(await row('main', '.tm-zoom').isDisabled()).toBe(true);
+      expect(await page.locator('.tm-idle').count()).toBe(0);
+      expect(await metaOf('main')).toBe('idle');
+      await row('main', '.tm-close').click();
+      await page.locator('.toast', { hasText: 'Shell restarted in the same folder.' }).waitFor({ timeout: 10_000 });
+      expect(await rows()).toEqual(['main']);
+
+      // + adds up to four, then it is disabled
+      const plus = page.locator('.tm-new');
+      for (const n of [2, 3, 4]) {
+        await plus.click();
+        await count(n);
+      }
+      expect(await rows()).toEqual(['main', 'p2', 'p3', 'p4']);
+      expect(await plus.isDisabled()).toBe(true);
+      expect(await plus.getAttribute('title')).toMatch(/four/);
+      expect(await row('main', '.tm-close').getAttribute('aria-label')).toBe('Close');
+      expect(await gridOrder()).toEqual(['main', 'p2', 'p3', 'p4']);
+
+      // a click on a row focuses that terminal
+      await row('main', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'main', 5_000, 'main focused');
+      expect(await page.locator('.tm-row[data-focused]').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.pane))).toEqual(['main']);
+      expect(await page.locator('.pane[data-focused]').getAttribute('data-pane')).toBe('main');
+      await row('p3', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'p3', 5_000, 'p3 focused');
+      expect(await page.locator('.tm-row[data-focused]').getAttribute('data-pane')).toBe('p3');
+
+      // rename: Enter saves (row and pane chip), Esc cancels, 100 characters are cut to 24, empty clears
+      await rename('p2', 'build');
+      expect(await nameOf('p2')).toBe('build');
+      await until(async () => (await page.locator('.pane[data-pane="p2"] .pn-chip .pn-name').textContent()) === 'build', 5_000, 'the chip to show the label');
+      await row('p2', '.tm-name').dblclick();
+      await page.fill('.tm-rename', 'zzz');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.tm-rename', { state: 'detached' });
+      expect(await nameOf('p2')).toBe('build');
+      await rename('p2', 'x'.repeat(100));
+      expect(await nameOf('p2')).toBe('x'.repeat(24));
+      await rename('p2', '   ');
+      const folder = (await nameOf('p2'))!;
+      expect(folder).not.toContain('xxxx');
+      expect(folder.length).toBeGreaterThan(0);
+      expect(await page.locator('.pane[data-pane="p2"] .pn-chip .pn-name').textContent()).toBe(folder);
+      // F2 on the focused name button edits too
+      await row('p2', '.tm-name').focus();
+      await page.keyboard.press('F2');
+      await page.waitForSelector('.tm-rename');
+      await page.keyboard.press('Escape');
+      // a closed terminal's label goes with it: p2 reopened is not "old"
+      await rename('p2', 'old');
+      await row('p2', '.tm-close').click();
+      await count(3);
+      expect(await rows()).toEqual(['main', 'p3', 'p4']);
+      await plus.click();
+      await count(4);
+      expect(await rows()).toEqual(['main', 'p3', 'p4', 'p2']);
+      expect(await nameOf('p2')).not.toBe('old');
+
+      // drag the 3rd row onto the 1st: the grid and the numbers follow
+      await page.dragAndDrop('.tm-row[data-pane="p4"] .tm-meta', '.tm-row[data-pane="main"] .tm-meta');
+      await until(async () => (await rows()).join() === 'p4,main,p3,p2', 5_000, 'the rows to follow the drop');
+      expect(await gridOrder()).toEqual(['p4', 'main', 'p3', 'p2']);
+      expect(await page.locator('.tm-row[data-drop]').count()).toBe(0); // (the marker is gone)
+      await menu('focus-terminal-1');
+      await until(async () => (await focusedPane()) === 'p4', 5_000, '⌘1 to focus the new first');
+      // ⌥↑ / ⌥↓ move one step and keep the keyboard on the row
+      await row('p3', '.tm-name').focus();
+      await page.keyboard.press('Alt+ArrowUp');
+      await until(async () => (await rows()).join() === 'p4,p3,main,p2', 5_000, '⌥↑');
+      expect(await gridOrder()).toEqual(['p4', 'p3', 'main', 'p2']);
+      await until(async () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.closest('.tm-row')?.getAttribute('data-pane') === 'p3'), 5_000, 'the keyboard to stay on the row');
+      await page.keyboard.press('Alt+ArrowDown');
+      await until(async () => (await rows()).join() === 'p4,main,p3,p2', 5_000, '⌥↓');
+
+      // the second line: Claude's figures with claude.showCost, else the command that runs or idle
+      await inject([{ id: 'tm-1', state: 'working', pane: 'p3', cost: { usd: 0.5, at: Date.now() }, context: { tokens: 100000, window: 1000000, at: Date.now() } }]);
+      await until(async () => /≈ \$0\.5/.test((await metaOf('p3')) ?? ''), 5_000, 'the cost on p3');
+      expect(await metaOf('p3')).toMatch(/Context 10%/);
+      expect(await page.locator('.tm-row[data-pane="p3"]').getAttribute('data-state')).toBe('working');
+      expect(await metaOf('p2')).toBe('idle');
+      await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: false } }));
+      await until(async () => !/≈|Context/.test((await metaOf('p3')) ?? ''), 5_000, 'no figures without showCost');
+      await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
+      await endClaude();
+      await until(async () => (await page.locator('.tm-row[data-pane="p3"]').getAttribute('data-state')) === 'none', 5_000, 'p3 without Claude');
+
+      // Split here opens the new terminal in that row's folder (not the focused one's)
+      await row('p2', '.tm-close').click();
+      await count(3);
+      await row('p3', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'p3', 5_000, 'p3 focused');
+      await page.keyboard.type(`cd '${dir}'`, { delay: 4 });
+      await page.keyboard.press('Enter');
+      await until(async () => (await nameOf('p3')) === 'tm-split', 10_000, 'p3 to be in the folder');
+      await row('main', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'main', 5_000, 'main focused');
+      await row('p3', '.tm-split').click();
+      await count(4);
+      const made = (await rows()).find((id) => !['p4', 'main', 'p3'].includes(id))!;
+      expect((await daemonPanes()).find((p) => p.id === made)!.cwd.endsWith('tm-split')).toBe(true);
+      await until(async () => (await nameOf(made)) === 'tm-split', 5_000, 'the new row to show the folder');
+      expect(await focusedPane()).toBe(made);
+
+      // Close idle…: the focused terminal never closes, a running one is kept; Cancel keeps all
+      await row('p4', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'p4', 5_000, 'p4 focused');
+      await page.keyboard.type('sleep 20', { delay: 4 });
+      await page.keyboard.press('Enter');
+      await until(async () => (await metaOf('p4')) === 'sleep 20', 10_000, 'the running command on the second line');
+      await row('main', '.tm-name').click();
+      await until(async () => (await focusedPane()) === 'main', 5_000, 'main focused again');
+      await page.click('.tm-idle');
+      await page.waitForSelector('.tm-ask');
+      expect(await page.textContent('.tm-ask-text')).toBe('End 2 idle terminals?');
+      await until(async () => page.evaluate(() => document.activeElement?.textContent === 'Cancel'), 3_000, 'Cancel to have the keyboard');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.tm-ask', { state: 'detached' });
+      expect((await rows()).length).toBe(4);
+      await page.click('.tm-idle');
+      await page.locator('.tm-ask .btn', { hasText: 'Cancel' }).click();
+      await page.waitForSelector('.tm-ask', { state: 'detached' });
+      expect((await rows()).length).toBe(4);
+      await page.click('.tm-idle');
+      await page.locator('.tm-ask .btn', { hasText: 'End' }).first().click();
+      await count(2);
+      expect((await rows()).sort()).toEqual(['main', 'p4']);
+      expect((await daemonPanes()).map((p) => p.id).sort()).toEqual(['main', 'p4']);
+      // nothing idle to end now: the button is gone
+      expect(await page.locator('.tm-idle').count()).toBe(0);
+      await row('p4', '.tm-name').click();
+      await page.keyboard.press('Control+c');
+      await until(async () => (await metaOf('p4')) === 'idle', 10_000, 'p4 idle again');
+    } finally {
+      await endClaude();
+      await page.evaluate(() => window.jaffer.call('config.patch', { claude: { showCost: true } }));
+      for (const p of await daemonPanes()) if (p.id !== 'main') await page.evaluate((id) => window.jaffer.call('pane.close', { pane: id }), p.id);
+      await until(async () => (await rows()).length === 1, 10_000, 'one terminal again');
+    }
+  }, 180_000);
 
   it('Shift+Enter inserts a newline for multi-line input (as Claude Code expects)', async () => {
     await page.click('.term');

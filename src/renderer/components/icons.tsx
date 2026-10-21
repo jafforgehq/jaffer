@@ -136,3 +136,19 @@ export const IconEyeOff = ({ size, class: c }: P): VNode => (
     <path d="M4 4l16 16" />
   </svg>
 );
+export const IconPlus = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+export const IconSplit = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <rect x="4" y="5" width="16" height="14" rx="2" />
+    <path d="M12 5v14" />
+  </svg>
+);
+export const IconZoom = ({ size, class: c }: P): VNode => (
+  <svg {...base(size)} class={c}>
+    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+  </svg>
+);

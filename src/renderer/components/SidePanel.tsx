@@ -4,6 +4,7 @@ import { activePane, approvals, cfg, claudeToday, clock, currentClaude, layoutHo
 import { COST_ESTIMATE } from '../claude-ui';
 import { nowCardModel, panelWidth, todayTimeline } from '../panel';
 import { Conversations } from './Conversations';
+import { Terminals } from './Terminals';
 import { Setup } from './Setup';
 import { WhatsNew } from './WhatsNew';
 import { askToExplain, Explain, explainCard, explainLast, explainSupported } from './Explain';
@@ -245,6 +246,7 @@ export function SidePanel(): VNode | null {
       <WhatsNew />
       <Explain />
       <NowCard />
+      <Terminals />
       <Conversations />
       <Setup />
     </aside>
