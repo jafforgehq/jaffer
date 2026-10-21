@@ -19,6 +19,7 @@ import { formatUsd } from '../shared/claude-cost';
 import { FailTracker } from './fail-tracker';
 import { shouldTip, TIPS, type TipId } from '../shared/tips';
 import { resolveTheme, type JafferTheme } from './themes';
+import { cleanPaneLabel, movePane, reorderPanes } from '../shared/pane-tools';
 
 export { fmtDuration };
 
@@ -70,6 +71,40 @@ export function addPane(id: string): void {
   if (panes.value.includes(id)) return;
   paneGen.set(id, (paneGen.get(id) ?? 0) + 1);
   panes.value = [...panes.value, id];
+  zoomPane.value = null; // (a new terminal ends the zoom)
+}
+/** Each terminal's label, as the person typed it (cleaned). Memory only; a closed terminal's label goes with it. */
+export const paneLabels = signal<Record<string, string>>({});
+/** Sets (or, with an empty text, clears) a terminal's label. */
+export function setPaneLabel(id: string, raw: string): void {
+  if (!panes.value.includes(id)) return;
+  const label = cleanPaneLabel(raw);
+  const { [id]: _old, ...rest } = paneLabels.value;
+  paneLabels.value = label ? { ...rest, [id]: label } : rest;
+}
+/** What a terminal is called: its label, else its folder's name, else `Terminal n`. */
+export function paneName(id: string): string {
+  return paneLabels.value[id] || baseName(paneInfo.value[id]?.cwd ?? '') || `Terminal ${panes.value.indexOf(id) + 1}`;
+}
+/** The terminal shown alone over the whole area (null: the grid). Follows the focus; memory only. */
+export const zoomPane = signal<string | null>(null);
+/** ⇧⌘↩: zoom the focused terminal, or leave the zoom. Nothing to do with one terminal. */
+export function toggleZoom(): void {
+  if (panes.value.length < 2) return void toast({ kind: 'info', text: 'Only one terminal.' });
+  zoomPane.value = zoomPane.value ? null : activePane.value;
+}
+/** The one way to focus a terminal: a zoom moves with the focus. */
+export function focusPane(id: string): void {
+  activePane.value = id;
+  if (zoomPane.value) zoomPane.value = id;
+}
+/** Drag and drop: `id` takes the place of `to` (the grid cell and ⌘1..⌘4 follow the order). */
+export function reorderPane(id: string, to: string): void {
+  panes.value = reorderPanes(panes.value, id, to);
+}
+/** ⌥↑ / ⌥↓ on a row: one step. */
+export function shiftPane(id: string, dir: -1 | 1): void {
+  panes.value = movePane(panes.value, id, dir);
 }
 /** A terminal was closed: its info goes, and the focus moves to the one now in its place (or the one before it). */
 export function removePane(id: string): void {
@@ -80,7 +115,10 @@ export function removePane(id: string): void {
     panes.value = next;
     const { [id]: _gone, ...rest } = paneInfo.value;
     paneInfo.value = rest;
-    if (activePane.value === id && next.length) activePane.value = next[Math.min(i, next.length - 1)]!;
+    const { [id]: _label, ...labels } = paneLabels.value;
+    paneLabels.value = labels;
+    if (zoomPane.value === id) zoomPane.value = null;
+    if (activePane.value === id && next.length) focusPane(next[Math.min(i, next.length - 1)]!);
     if (closeAsk.value === id) closeAsk.value = null; // (the question goes with it: an id opened again starts without it)
   });
   fails.delete(id);
@@ -482,7 +520,7 @@ async function refreshPanes(): Promise<void> {
     batch(() => {
       for (const id of panes.value) if (!list.includes(id)) removePane(id);
       for (const id of list) addPane(id);
-      if (!panes.value.includes(activePane.value)) activePane.value = panes.value[0] ?? 'main';
+      if (!panes.value.includes(activePane.value)) focusPane(panes.value[0] ?? 'main');
     });
     await Promise.all(panes.value.map(refreshInfo));
   } catch {

@@ -10,7 +10,7 @@ import { ImageAddon } from '@xterm/addon-image';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { osc52Provider } from '../../shared/window-policy';
 import '@xterm/xterm/css/xterm.css';
-import { activePane, activeTheme, assistiveTech, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
+import { activePane, activeTheme, focusPane, assistiveTech, cfg, firstLine, homeDir, layoutHold, lineCount, overlay, paneInfo, pasteAsk, port, ptyBus, toast, windowFocused, daemonUp } from '../state';
 import { findPaths, type FoundPath } from '../../shared/find-paths';
 import { findPorts } from '../../shared/find-ports';
 import { linkRefusal, safeLinkUrl } from '../../shared/safe-link';
@@ -344,7 +344,7 @@ export function TerminalView({ pane }: { pane: string }) {
     };
     el.addEventListener('drop', onDrop);
     el.addEventListener('dragover', onDragOver);
-    el.addEventListener('mousedown', () => (activePane.value = pane));
+    el.addEventListener('mousedown', () => focusPane(pane));
 
     const handle: TermHandle = {
       term,

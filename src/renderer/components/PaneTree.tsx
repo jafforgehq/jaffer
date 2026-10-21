@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
+import { activePane, addPane, focusPane, claudeIn, closeAsk, paneLayout, paneInfo, paneKey, panes, removePane, safeCommand, tildePath, toast } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { baseName } from '../claude-ui';
@@ -21,7 +21,7 @@ export async function splitTerminal(): Promise<void> {
   try {
     const p = await call<{ id: string }>('pane.split', { pane: activePane.value });
     addPane(p.id);
-    activePane.value = p.id;
+    focusPane(p.id);
   } catch (e) {
     toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
   }
@@ -30,14 +30,14 @@ export async function splitTerminal(): Promise<void> {
 /** ⌘1..⌘4: the nth terminal (nothing when there are fewer). */
 export function focusTerminal(n: number): void {
   const id = panes.value[n - 1];
-  if (id) activePane.value = id;
+  if (id) focusPane(id);
 }
 
 /** ⌘] / ⌘[: the next or the previous terminal, round. */
 export function cycleTerminal(dir: 1 | -1): void {
   const list = panes.value;
   const i = list.indexOf(activePane.value);
-  activePane.value = list[(i + dir + list.length) % list.length] ?? activePane.value;
+  focusPane(list[(i + dir + list.length) % list.length] ?? activePane.value);
 }
 
 /** What closing this terminal would stop, as the question says it (the command through `safeCommand`); null when nothing runs. */
@@ -52,7 +52,7 @@ function whatRuns(id: string): string | null {
 /** The chip's ✕ and ⇧⌘W: asks first when something runs there, else ends the terminal at once. */
 export function closeTerminal(id = activePane.value): void {
   if (!whatRuns(id)) return void endTerminal(id);
-  activePane.value = id;
+  focusPane(id);
   closeAsk.value = id;
 }
 
@@ -134,7 +134,7 @@ export function PaneTree(): VNode {
       {list.map((id, i) => {
         const c = g.cells[i]!;
         return (
-          <div key={paneKey(id)} class="pane" data-pane={id} data-focused={multi && activePane.value === id ? '' : undefined} style={{ gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` }} onMouseDown={() => (activePane.value = id)}>
+          <div key={paneKey(id)} class="pane" data-pane={id} data-focused={multi && activePane.value === id ? '' : undefined} style={{ gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` }} onMouseDown={() => focusPane(id)}>
             <TerminalView pane={id} />
             <Chip id={id} alone={!multi} />
             {closeAsk.value === id && <Confirm id={id} />}
