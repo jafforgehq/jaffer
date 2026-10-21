@@ -20,7 +20,7 @@ With more than one terminal (1.4.0) the person can only add, close and find term
 ## Rulings
 - Version **1.5.0**, not 1.4.3: a new panel section changes the documented layout.
 - The earlier idea "pet in the panel / corner / off setting" is dropped: the owner chose a pet in every terminal; no setting.
-- Notification text uses the folder name (from the session's `cwd`, redacted, ≤ 40 characters), not the label: labels live in the window only (memory), main must not learn them (no new channel).
+- Notification text uses the folder name (the session has no cwd: main keeps each terminal's folder from daemon events, `paneFolders`, memory only; redacted, ≤ 40 characters), not the label: labels live in the window only (memory), main must not learn them (no new channel).
 - Rows show no pet (the owner wants the pets in the terminals).
 
 ## Rules that change (CLAUDE.md, README, ARCHITECTURE, SECURITY unchanged in claims)
