@@ -4,6 +4,7 @@ import { cleanPaneLabel, idleToClose, movePane, reorderPanes } from '../src/shar
 describe('cleanPaneLabel', () => {
   it('drops control and format characters, collapses spaces, trims', () => {
     expect(cleanPaneLabel('  a‮b\n c  ')).toBe('ab c');
+    expect(cleanPaneLabel('a\nb\tc')).toBe('a b c'); // (a line break or tab is a space)
   });
   it('clips to 24 code points', () => {
     expect([...cleanPaneLabel('x'.repeat(100))]).toHaveLength(24);

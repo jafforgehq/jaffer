@@ -6,7 +6,7 @@ const INPUT_MAX = 200;
 /** A terminal's label as typed: no control or format characters, spaces collapsed, at most 24 characters. '' means no label. */
 export function cleanPaneLabel(raw: string): string {
   const head = String(raw).slice(0, INPUT_MAX); // (bounded before any regex work)
-  const t = head.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').replace(/\s+/g, ' ').trim();
+  const t = head.replace(/\p{Cf}/gu, '').replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim(); // (a line break or tab is a space; a format character, such as a right-to-left mark, is gone)
   return [...t].slice(0, LABEL_MAX).join('').trim();
 }
 
