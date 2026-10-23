@@ -1,16 +1,12 @@
 # Third-party notices
 
-Jaffer is licensed under GPL-3.0-or-later (see `LICENSE`). It bundles or uses the components below.
+Jaffer is licensed under GPL-3.0-or-later (see `LICENSE`). The voice feature uses the components below.
 
 ## espeak-ng (GPL-3.0-or-later)
 
 Text-to-phoneme conversion for speech output. Copyright the espeak-ng authors. Licensed GPL-3.0-or-later; source: https://github.com/espeak-ng/espeak-ng
 
-espeak-ng itself includes or builds on:
-
-- BSD-2-Clause code (e.g. parts of the original eSpeak and Klatt synthesiser code)
-- Apache-2.0 code (e.g. the `ucd-tools` Unicode character data helpers)
-- Unicode data under the Unicode License (https://www.unicode.org/license.txt)
+The espeak-ng source tree also carries `COPYING.BSD2` (its README says this covers the `getopt.c` compatibility code from NetBSD, used on Windows), `COPYING.APACHE` and `COPYING.UCD` (Unicode data terms). Other parts of the source tree may be under these licences; see the espeak-ng source for the full list.
 
 ## Kokoro model weights (Apache-2.0)
 
