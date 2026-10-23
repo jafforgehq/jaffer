@@ -1,7 +1,7 @@
 {
   "name": "jaffer",
   "productName": "Jaffer",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A calm terminal for macOS with a companion that shows what Claude Code is doing.",
   "private": true,
   "license": "GPL-3.0-or-later",
