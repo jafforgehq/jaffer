@@ -172,6 +172,15 @@ describe('invariants of CLAUDE.md', () => {
     expect(main.match(/\bpagePermission\b/g)).toHaveLength(3); // (the definition and the two handlers: no other use)
   });
 
+  // (voice) "the window's Electron session cancels every http(s)/ws(s)/ftp request": a worker on a `file://` page has no CSP and a dynamic
+  // `import()` cannot be guarded from JavaScript, so the session is the boundary; nothing in main may add a listener that loosens it
+  it('the window session refuses every network request, and nothing else hooks its requests', () => {
+    const main = code.get('src/main/main.ts')!;
+    expect(main).toMatch(/win\.webContents\.session\.webRequest\.onBeforeRequest\(\{ urls: BLOCKED_URL_FILTER \}, \(details, cb\) => cb\(\{ cancel: !requestAllowed\(details\.url\) \}\)\);/);
+    expect(hits(/\bonBeforeRequest\(/)).toEqual([expect.stringMatching(/^src\/main\/main\.ts:\d+$/)]);
+    expect(hits(/\bonBeforeSendHeaders\(|\bonHeadersReceived\(|\bprotocol\.(handle|intercept\w*|register\w*)\(/, (f) => f.startsWith('src/main/'))).toEqual([]);
+  });
+
   // "`jaffer:open-external` (http(s) only) ... Nothing printed in the terminal is ever run, and only web links are opened": every
   // `shell.openExternal(` call site is known (file and argument); a new one fails until it is added here with the reason it is safe
   it('shell.openExternal is called only from the known sites', () => {

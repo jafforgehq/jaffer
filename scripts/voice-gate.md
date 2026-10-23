@@ -129,3 +129,143 @@ declare const gate: { log(m: string): void; done(ok: boolean): void };
   } catch (e) { gate.log('ERROR ' + e); gate.done(false); }
 })();
 ```
+
+## The session block (Task 6b)
+
+Jaffer's window session cancels every `http(s)`, `ws(s)` and `ftp` request (`BLOCKED_URL_FILTER` and `requestAllowed` in
+`src/shared/request-policy.ts`, wired in `createWindow`). Two checks prove it holds in a real Electron renderer for the page **and** for
+workers, which have no CSP and no net guard of their own here.
+
+**1. The gate above with the block on.** In `main.cjs` replace the `onBeforeRequest` line with the app's own filter (bundle the policy
+first: `npx esbuild /path/to/jaffer/src/shared/request-policy.ts --format=cjs --platform=node --outfile=$G/app/request-policy.cjs`):
+
+```js
+  const { requestAllowed, BLOCKED_URL_FILTER } = require('./request-policy.cjs');
+  win.webContents.session.webRequest.onBeforeRequest({ urls: BLOCKED_URL_FILTER }, (d, cb) => cb({ cancel: !requestAllowed(d.url) }));
+```
+
+Expected: `GATE PASS` as before (the worker needs no network).
+
+**2. The probe.** A page with **no CSP** (so the session is the only barrier) runs the same probes itself, from a dedicated worker
+without the net guard, and from a blob module worker whose static `import` names the network: `fetch`, XHR, dynamic `import()`,
+`WebSocket` and an image, each against a local `127.0.0.1` server that counts hits and WebSocket upgrades, and, with the block on, against
+`https://example.com`, `https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js` and `wss://example.com`. `BLOCK=0` is the control (the
+probes must reach the server); never run the control with the external targets. Put these files in `$G/app3` with `request-policy.cjs`, then:
+
+```sh
+cd $G/app3 && for B in 0 1; do HOME=$G/home JAFFER_HOME=$G/home/.jaffer-gate BLOCK=$B \
+  /path/to/jaffer/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron main.cjs; done
+```
+
+Expected (2026-10-23, Electron 44): `BLOCK=0 server hits=8 ws upgrades=2` and every local fetch, XHR and import `LOADED` (the image fails
+to decode the server's text but still hits it); `BLOCK=1 server hits=0 ws upgrades=0`, every probe `failed`, the callback saw 17
+requests (`xhr`, `script`, `webSocket`, `image`; 10 local, 7 external) and cancelled all 17; `data:` image, `blob:` image and the
+`file:` page `LOADED` in both runs.
+
+### `app3/main.cjs`
+
+```js
+// Probe for Task 6b: does the window session's onBeforeRequest see (and cancel) requests made by the page AND by a worker?
+// BLOCK=1 turns the block on; BLOCK=0 is the control run (the probes must then reach the local server).
+const { app, BrowserWindow, ipcMain } = require('electron');
+const http = require('node:http'); const path = require('node:path');
+const { requestAllowed, BLOCKED_URL_FILTER } = require('./request-policy.cjs');
+const BLOCK = process.env.BLOCK === '1';
+let hits = 0, upgrades = 0; const seen = {}; let cancelled = 0;
+const srv = http.createServer((req, res) => { hits++; res.writeHead(200, { 'content-type': req.url.endsWith('.js') ? 'text/javascript' : req.url.endsWith('.png') ? 'image/png' : 'text/plain', 'access-control-allow-origin': '*' }); res.end(req.url.endsWith('.js') ? 'export default 42;' : 'ok'); });
+srv.on('upgrade', (_req, sock) => { upgrades++; sock.destroy(); });
+const results = [];
+ipcMain.on('log', (_e, m) => { results.push(m); console.log('[probe]', m); });
+ipcMain.on('done', () => {
+  setTimeout(() => {
+    console.log(`BLOCK=${BLOCK ? 1 : 0} server hits=${hits} ws upgrades=${upgrades} callbacks by resourceType=${JSON.stringify(seen)} cancelled=${cancelled}`);
+    app.exit(0);
+  }, 1500);
+});
+app.whenReady().then(() => srv.listen(0, '127.0.0.1', () => {
+  const port = srv.address().port;
+  const win = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false } });
+  const allow = (wc, p) => wc === win.webContents && p === 'clipboard-sanitized-write';
+  win.webContents.session.setPermissionRequestHandler((wc, p, cb) => cb(allow(wc, p)));
+  win.webContents.session.setPermissionCheckHandler((wc, p) => allow(wc, p));
+  if (BLOCK) win.webContents.session.webRequest.onBeforeRequest({ urls: BLOCKED_URL_FILTER }, (d, cb) => {
+    const k = `${d.resourceType}:${new URL(d.url).protocol}`; seen[k] = (seen[k] ?? 0) + 1;
+    const c = !requestAllowed(d.url); if (c) cancelled++; cb({ cancel: c });
+  });
+  win.webContents.on('console-message', (e) => console.log('[console]', e.message.slice(0, 200)));
+  win.loadFile(path.join(__dirname, 'index.html'), { query: { port: String(port), ext: BLOCK ? '1' : '0' } });
+  setTimeout(() => { console.log('PROBE TIMEOUT', `hits=${hits}`); app.exit(2); }, 60000);
+}));
+```
+
+### `app3/preload.cjs`
+
+```js
+const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('probe', { log: (m) => ipcRenderer.send('log', m), done: () => ipcRenderer.send('done') });
+```
+
+### `app3/index.html` (no CSP on purpose)
+
+```html
+<!doctype html><html><head><meta charset="utf-8"><title>probe</title></head><body><script src="page.js"></script></body></html>
+```
+
+### `app3/probes.js`
+
+```js
+// shared by page and worker: each probe resolves to a short outcome string
+async function runProbes(where, port, ext) {
+  const L = `http://127.0.0.1:${port}`;
+  const t = (p, ms = 5000) => Promise.race([p, new Promise((r) => setTimeout(() => r('timeout'), ms))]);
+  const ok = (v) => 'LOADED ' + String(v).slice(0, 30), bad = (e) => 'failed: ' + String(e && e.message || e).slice(0, 60);
+  const ws = (u) => new Promise((r) => { try { const s = new WebSocket(u); s.onopen = () => r('OPEN'); s.onerror = () => r('failed: error event'); s.onclose = (e) => r('closed ' + e.code); } catch (e) { r(bad(e)); } });
+  const out = [];
+  const add = async (name, p) => out.push(`${where} ${name}: ${await t(p.then(ok, bad))}`);
+  await add('fetch local', fetch(`${L}/${where}-fetch`).then((r) => r.text()));
+  await add('import local', import(`${L}/${where}-import.js`).then((m) => m.default));
+  out.push(`${where} websocket local: ${await t(ws(`ws://127.0.0.1:${port}/${where}-ws`))}`);
+  await add('xhr local', new Promise((res, rej) => { const x = new XMLHttpRequest(); x.open('GET', `${L}/${where}-xhr`); x.onload = () => res(x.status); x.onerror = () => rej('xhr error'); x.send(); }));
+  if (typeof Image !== 'undefined') await add('img local', new Promise((res, rej) => { const i = new Image(); i.onload = () => res('img'); i.onerror = () => rej('img error'); i.src = `${L}/${where}-x.png`; }));
+  if (ext) {
+    await add('fetch https://example.com', fetch('https://example.com').then((r) => r.status));
+    await add('import jsdelivr lodash', import('https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js').then(() => 'module'));
+    out.push(`${where} websocket wss://example.com: ${await t(ws('wss://example.com'))}`);
+    if (typeof Image !== 'undefined') await add('img https://example.com/x.png', new Promise((res, rej) => { const i = new Image(); i.onload = () => res('img'); i.onerror = () => rej('img error'); i.src = 'https://example.com/x.png'; }));
+  }
+  return out;
+}
+```
+
+### `app3/worker.js`
+
+```js
+importScripts('probes.js'); // a file: URL, allowed
+onmessage = async (e) => { postMessage(await runProbes('worker', e.data.port, e.data.ext)); };
+```
+
+### `app3/page.js`
+
+```js
+(async () => {
+  const q = new URLSearchParams(location.search); const port = q.get('port'), ext = q.get('ext') === '1';
+  await new Promise((r) => { const s = document.createElement('script'); s.src = 'probes.js'; s.onload = r; document.head.append(s); });
+  for (const l of await runProbes('page', port, ext)) probe.log(l);
+  // the same probes from a dedicated worker that has NO net guard
+  const w = new Worker('worker.js');
+  const lines = await new Promise((r) => { w.onmessage = (e) => r(e.data); w.onerror = (e) => r(['worker error ' + e.message]); w.postMessage({ port, ext }); });
+  for (const l of lines) probe.log(l);
+  // and from a module worker made from a blob (the worker's own static import of a network URL)
+  const src = `import v from 'http://127.0.0.1:${port}/blobmod-import.js'; postMessage('blob module worker LOADED ' + v);`;
+  const mw = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
+  probe.log(await new Promise((r) => { mw.onmessage = (e) => r(e.data); mw.onerror = () => r('blob module worker static import: failed (error event)'); setTimeout(() => r('blob module worker: timeout'), 5000); }));
+  // local schemes still load: data: and blob: images, and this file:// page itself
+  const img = (u) => new Promise((r) => { const i = new Image(); i.onload = () => r('LOADED'); i.onerror = () => r('failed'); i.src = u; });
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  probe.log('data: image ' + await img(png));
+  const blob = await (await fetch(png)).blob();
+  probe.log('blob: image ' + await img(URL.createObjectURL(blob)));
+  probe.log('file:// page ' + location.protocol);
+  probe.done();
+})();
+```

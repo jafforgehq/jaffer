@@ -39,6 +39,7 @@ import { trashAsk, trashConversations } from './trash-conversations';
 import { assertVoiceDir, downloadVoice, readVoiceFile, removeVoice, voiceStatus, VoiceDownloadError } from './voice-models';
 import { VOICE_RUNTIME_WASM } from '../shared/voice-manifest';
 import { pageMayUseMic } from '../shared/voice-permission';
+import { BLOCKED_URL_FILTER, requestAllowed } from '../shared/request-policy';
 import { VoiceEpoch } from '../shared/voice-epoch';
 import { MAX_REMOVE, type Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
@@ -662,6 +663,12 @@ function createWindow(): void {
   const pagePermission = (wc: Electron.WebContents | null, permission: string, mediaTypes?: readonly string[]) => !!win && wc === win.webContents && (permission === 'clipboard-sanitized-write' || pageMayUseMic(appCfg.permissions?.voice === true, permission, mediaTypes));
   win.webContents.session.setPermissionRequestHandler((wc, permission, cb, details) => cb(pagePermission(wc, permission, 'mediaTypes' in details ? details.mediaTypes : undefined)));
   win.webContents.session.setPermissionCheckHandler((wc, permission, _origin, details) => pagePermission(wc, permission, details.mediaType ? [details.mediaType] : undefined));
+  // (voice) The window's session refuses every network request (`requestAllowed`: http(s), ws(s), ftp), from the page, its workers and
+  // any library they load. A worker on a `file://` page has no CSP, and a dynamic `import()` of a URL cannot be guarded from JavaScript,
+  // so this is the boundary (verified for page and worker fetch, XHR, import, WebSocket and images: scripts/voice-gate.md). Nothing is
+  // logged. Not covered, by design: main's own Node `fetch` (the consented model download), `electron-updater` (its own partition) and
+  // `shell.openExternal` (which opens the browser).
+  win.webContents.session.webRequest.onBeforeRequest({ urls: BLOCKED_URL_FILTER }, (details, cb) => cb({ cancel: !requestAllowed(details.url) }));
   win.once('ready-to-show', () => win?.show());
   win.on('closed', () => {
     syncSystemStats();
