@@ -9,7 +9,7 @@
   <a href="https://github.com/jafforgehq/jaffer/actions/workflows/ci.yml"><img src="https://github.com/jafforgehq/jaffer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/jafforgehq/jaffer/releases/latest"><img src="https://img.shields.io/github/v/release/jafforgehq/jaffer?label=release" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%C2%B7%20Intel-lightgrey" alt="macOS, Apple Silicon and Intel" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue" alt="GPLv3 license" /></a>
 </p>
 
 <p align="center">
@@ -281,4 +281,4 @@ None of this counts as verified until the owner of the Mac has checked it there.
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0-or-later](LICENSE). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

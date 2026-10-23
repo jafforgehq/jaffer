@@ -4,7 +4,7 @@
   "version": "1.5.0",
   "description": "A calm terminal for macOS with a companion that shows what Claude Code is doing.",
   "private": true,
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "dist/main/main.cjs",
   "author": "Jaffer",

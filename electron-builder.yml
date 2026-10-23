@@ -49,3 +49,6 @@ publish:
   owner: jafforgehq
   repo: jaffer
 artifactName: "${productName}-${version}-${arch}.${ext}"
+extraResources:
+  - from: THIRD-PARTY-NOTICES.md
+    to: THIRD-PARTY-NOTICES.md
