@@ -466,18 +466,18 @@ describe('panel: the side panel (1.1.0)', () => {
 
 describe('permissions (1.4.0)', () => {
   it('has its defaults (explain and deepSearch off, resumeTyping and trash on), also for a config file saved before it existed', () => {
-    expect(DEFAULT_CONFIG.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    expect(DEFAULT_CONFIG.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false });
     fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true, appearance: { theme: 'nord' } }));
-    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false });
   });
 
   it('a choice is kept, and a value of the wrong kind (or a section that is no object) leaves what was there', () => {
     const store = new ConfigStore(env.paths);
     store.patch({ permissions: { resumeTyping: false, explain: true } });
     store.patch({ permissions: { trash: 'no', deepSearch: 1 } } as never);
-    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: true, deepSearch: false, resumeTyping: false, trash: true });
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: true, deepSearch: false, resumeTyping: false, trash: true, voice: false });
     fs.writeFileSync(env.paths.config, JSON.stringify({ permissions: 'off' }));
-    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
+    expect(new ConfigStore(env.paths).get().permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false });
   });
 });
 
@@ -524,5 +524,42 @@ describe('1.4.0: tour.done, tips.enabled and tips.seen', () => {
     expect(new ConfigStore(env.paths).get()).toMatchObject({ tour: { done: true }, tips: { enabled: false, seen: ['compaction'] } });
     fs.writeFileSync(env.paths.config, JSON.stringify({ tips: 'off', tour: [] }));
     expect(new ConfigStore(env.paths).get()).toMatchObject({ tour: { done: false }, tips: { enabled: true, seen: [] } });
+  });
+});
+
+describe('permissions.voice and voice.speed (voice)', () => {
+  it('default off and speed 1, also for a config file saved before they existed', () => {
+    expect(DEFAULT_CONFIG.permissions.voice).toBe(false);
+    expect(DEFAULT_CONFIG.voice.speed).toBe(1);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ onboarded: true }));
+    const c = new ConfigStore(env.paths).get();
+    expect(c.permissions.voice).toBe(false);
+    expect(c.voice.speed).toBe(1);
+  });
+
+  it('permissions.voice survives a patch round trip (conform would drop a key with no default)', () => {
+    const store = new ConfigStore(env.paths);
+    store.patch({ permissions: { voice: true } });
+    expect(store.get().permissions.voice).toBe(true);
+    expect(JSON.parse(fs.readFileSync(env.paths.config, 'utf8')).permissions.voice).toBe(true);
+    expect(new ConfigStore(env.paths).get().permissions.voice).toBe(true);
+  });
+
+  it('keeps the kinds: a wrong kind falls back, speed is clamped to 0.5..2', () => {
+    fs.writeFileSync(env.paths.config, JSON.stringify({ voice: 'x', permissions: { voice: 'yes' } }));
+    let c = new ConfigStore(env.paths).get();
+    expect(c.voice).toEqual({ speed: 1 });
+    expect(c.permissions.voice).toBe(false);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ voice: { speed: 'fast' } }));
+    expect(new ConfigStore(env.paths).get().voice.speed).toBe(1);
+    fs.writeFileSync(env.paths.config, JSON.stringify({ voice: { speed: 9 } }));
+    expect(new ConfigStore(env.paths).get().voice.speed).toBe(2);
+    const store = new ConfigStore(env.paths);
+    store.patch({ voice: { speed: 0.1 } });
+    expect(store.get().voice.speed).toBe(0.5);
+    store.patch({ voice: { speed: 1.5 } });
+    expect(store.get().voice.speed).toBe(1.5);
+    store.patch({ voice: { speed: 'x' as unknown as number } });
+    expect(store.get().voice.speed).toBe(1.5);
   });
 });

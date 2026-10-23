@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
+import { disableVoice, enableVoice, refreshVoiceStatus, removeVoiceFiles, voiceError, voiceFilesPresent, voiceProgress, voiceStatus } from '../voice/status';
+import { aboutMb, percent } from '../../shared/voice-ui';
 import { activePane, appVersion, cfg, claudeLive, commands, dismissToast, fmtAgo, glossaryAt, historyItems, homeDir, lastFind, openGlossary, overlay, pasteAsk, patchConfig, pins, safeCommand, setTips, settingsAt, startTour, toast, updateState, type ClaudeAuthState } from '../state';
 import { conversationName, paletteConversations } from '../../shared/history-label';
 import { groupByFolder } from '../../shared/recent-commands';
@@ -505,6 +507,73 @@ type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'help' |
  * Privacy and permissions (1.4.0): what Jaffer may read, send or do, one switch each, in plain words. Shared by Settings and the last
  * stage of first run; a switch writes at once (the daemon keeps it). The locked rules have no switch.
  */
+/** (voice) Settings → Privacy → "Talk with Claude by voice". Turning it on opens an inline confirmation first; the config is patched only after "Download and turn on". */
+function VoiceField({ on }: { on: boolean }): VNode {
+  const [ask, setAsk] = useState(false);
+  useEffect(() => void refreshVoiceStatus(), []);
+  const st = voiceStatus.value;
+  const { done, total } = voiceProgress.value;
+  const pct = percent(done, total);
+  return (
+    <>
+      <Field label="Talk with Claude by voice" id="pv-voice" hint="Dictate with /voice and hear Claude's replies. Speech models run on this Mac; nothing you say or hear is sent anywhere. Off: no microphone, no download.">
+        <span class="switch">
+          <input
+            type="checkbox"
+            id="pv-voice"
+            checked={on}
+            onChange={(e) => {
+              const el = e.target as HTMLInputElement;
+              if (el.checked) {
+                el.checked = false; // (not on until the person confirms)
+                setAsk(true);
+              } else {
+                setAsk(false);
+                void disableVoice().catch(() => undefined);
+              }
+            }}
+          />
+          <i />
+        </span>
+      </Field>
+      {ask && !on && (
+        <div class="vc-ask" role="group" aria-label="Turn on voice">
+          <p>
+            Turning this on downloads about {aboutMb()} MB of speech models to this Mac. The microphone is used only while you dictate with /voice. Claude's reply text is read by a model on this Mac to speak it aloud; it does not leave your Mac.
+          </p>
+          <div class="vc-btns">
+            <button class="btn" onClick={() => setAsk(false)}>Cancel</button>
+            <button class="btn primary vc-go" onClick={() => (setAsk(false), void enableVoice().catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) })))}>Download and turn on</button>
+          </div>
+        </div>
+      )}
+      {on && (
+        <div class="vc-status" data-state={st} role="status">
+          {st === 'downloading' && (
+            <>
+              <span>Downloading voice models{total > 0 ? ` ${pct}%` : '…'}</span>
+              <span class="vc-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}><i style={{ width: `${pct}%` }} /></span>
+            </>
+          )}
+          {st === 'ready' && <span>Ready</span>}
+          {st === 'needs-download' && <span>The voice models are not on this Mac yet.</span>}
+          {st === 'error' && (
+            <>
+              <span class="vc-err">{voiceError.value ?? 'The download failed. Try again.'}</span>
+              <button class="btn vc-retry" onClick={() => void enableVoice().catch(() => undefined)}>Retry</button>
+            </>
+          )}
+        </div>
+      )}
+      {voiceFilesPresent.value && (
+        <Field buttons label="Voice files" hint="The speech models kept in Jaffer's folder. Removing them does not change the switch.">
+          <button class="btn danger vc-remove" onClick={() => void removeVoiceFiles()}>Remove voice files</button>
+        </Field>
+      )}
+    </>
+  );
+}
+
 function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p: object) => void }): VNode {
   const p = c.permissions;
   return (
@@ -524,6 +593,7 @@ function PrivacySwitches({ c, set }: { c: NonNullable<typeof cfg.value>; set: (p
       <Field label="Move conversations to the Trash" hint="Lets you remove past conversations from the panel. Always asks first; never deletes for good.">
         <Switch checked={p?.trash !== false} onChange={(v) => set({ permissions: { trash: v } })} />
       </Field>
+      <VoiceField on={p?.voice === true} />
       <Field label="Answer permission prompts from the notification" info="permission-prompt" id="pv-approvals" hint="Experimental. Claude Code waits up to 20 s for your click on the notification; if you don't answer, its own prompt appears as usual.">
         <Switch id="pv-approvals" checked={c.claude?.approvals === true} onChange={(v) => set({ claude: { approvals: v } })} />
       </Field>

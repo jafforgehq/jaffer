@@ -87,7 +87,11 @@ export interface JafferConfig {
     resumeTyping: boolean;
     /** The panel may move past conversations to the Trash (after Jaffer asks). Off: no remove buttons. */
     trash: boolean;
+    /** (voice) Talk with Claude by voice: the microphone while /voice dictates, and Claude's reply text read aloud by a model on this Mac. Off by default; turning it on asks first and downloads the model files. */
+    voice: boolean;
   };
+  /** (voice) How Claude's reply is spoken. `speed`: 1 is normal, kept between 0.5 and 2 (a value outside is clamped, not refused). */
+  voice: { speed: number };
   /** Jaffer asks before updating itself; this only controls whether it looks in the background. `seenVersion`: the newest version whose release notes the person dismissed (empty: not yet; the window decides what that means). */
   updates: { auto: boolean; seenVersion: string };
   /** What Jaffer may tell you while it is in the background. */
@@ -175,7 +179,8 @@ export const DEFAULT_CONFIG: JafferConfig = {
   shell: { path: '', args: [] },
   claude: { skipped: false, showCost: true, liveCost: true, dailyBudgetUsd: 0, typicalTurnMs: 0, toolStrip: true, turnSummary: true, approvals: false, dailyWorkBudgetMin: 0, projectBudgets: [] },
   terminal: { blocks: true, pasteGuard: true, ruler: 0, editorUrl: '', images: true, portLinks: true, screenReader: 'auto' },
-  permissions: { explain: false, deepSearch: false, resumeTyping: true, trash: true },
+  permissions: { explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false },
+  voice: { speed: 1 },
   updates: { auto: true, seenVersion: '' },
   notifications: { claudeFinished: true, weeklyDigest: true },
   usage: { week: { id: '', usd: 0, workMs: 0 }, lastWeek: { id: '', usd: 0, workMs: 0 }, digestWeek: '' },
@@ -245,12 +250,18 @@ function conform(value: unknown, ref: unknown): unknown {
   return typeof value === typeof ref ? value : ref;
 }
 
+/** `voice.speed` kept between 0.5 and 2 (clamped), after `conform` made it a number. */
+function clampVoice(c: JafferConfig): JafferConfig {
+  c.voice.speed = Math.min(2, Math.max(0.5, c.voice.speed));
+  return c;
+}
+
 export class ConfigStore {
   readonly onChange = new Emitter<JafferConfig>();
   private cfg: JafferConfig;
 
   constructor(private paths: JafferPaths) {
-    this.cfg = conform(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})), DEFAULT_CONFIG) as JafferConfig;
+    this.cfg = clampVoice(conform(merge(structuredClone(DEFAULT_CONFIG), readJson<unknown>(paths.config, {})), DEFAULT_CONFIG) as JafferConfig);
   }
 
   get(): JafferConfig {
@@ -258,7 +269,7 @@ export class ConfigStore {
   }
 
   patch(p: DeepPartial<JafferConfig>): JafferConfig {
-    this.cfg = conform(merge(this.cfg, p), this.cfg) as JafferConfig; // a value of the wrong kind leaves what was there
+    this.cfg = clampVoice(conform(merge(this.cfg, p), this.cfg) as JafferConfig); // a value of the wrong kind leaves what was there
     writeJson(this.paths.config, this.cfg);
     this.onChange.emit(this.cfg);
     return this.cfg;

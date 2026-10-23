@@ -20,6 +20,7 @@ import { FailTracker } from './fail-tracker';
 import { shouldTip, TIPS, type TipId } from '../shared/tips';
 import { resolveTheme, type JafferTheme } from './themes';
 import { isPaneId } from '../shared/session-id';
+import { handleVoiceEvent, refreshVoiceStatus } from './voice/status';
 import { cleanPaneLabel, firstPaneId, movePane, reorderPanes } from '../shared/pane-tools';
 
 export { fmtDuration };
@@ -597,6 +598,7 @@ export async function bootstrap(): Promise<void> {
       // (1.4.0) the weekly digest, from main: its line, and the side panel a click away
       toast({ kind: 'info', text: data.text.slice(0, 200), actions: [{ label: 'Open panel', run: () => void (panelOpen() || patchPanel({ open: true })) }] });
     }
+    else if (event.startsWith('voice.')) handleVoiceEvent(event, data);
     else if (event === 'config.changed') cfg.value = data;
     else if (event === 'session.lifecycle' && typeof data?.pane === 'string') {
       if (data.lifecycle === 'closed') removePane(data.pane);
@@ -634,6 +636,7 @@ export async function bootstrap(): Promise<void> {
   // after an update: one toast (not on a first start, which has nothing unseen, and not when the open panel already shows the card)
   if (config.onboarded && !panelOpen() && unseenReleaseNotes().length) toast({ kind: 'info', text: `Jaffer updated to ${app.version}`, actions: [{ label: "What's new", run: showWhatsNew }] });
   await Promise.all([refreshPanes(), loadClaudeState(), loadApprovals()]);
+  void refreshVoiceStatus(); // (voice: are the model files there? the setting's card and its Remove button follow)
   void Promise.resolve(j.updates?.state?.()).then((s) => s && (updateState.value = s)).catch(() => undefined);
   ready.value = true;
 }
