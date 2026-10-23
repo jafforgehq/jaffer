@@ -37,13 +37,12 @@ Wake word or always-on listening; saved audio or transcripts; speech when voice 
 ## Components
 
 - `src/main/voice-models.ts`: downloads the model files from a fixed host list over HTTPS, checks a pinned SHA-256 for each, writes them to `~/.jaffer/voice/` (0700). It is the only new network code and runs once, after consent. A mismatch deletes the file and reports an error. No retry loop.
-- Main serves the verified files to the page through the app's own page origin. The page never fetches models itself and `file://` stays blocked.
+- The page is a `file://` page and cannot fetch the files, so main hands their bytes to the page over one IPC channel (`jaffer:voice-file`, which checks `trusted(e)` and refuses while the switch is off). The page never fetches models itself and `file://` stays blocked. If the worker, WASM or model loading does not work from a `file://` page (the plan's feasibility gate), the fallback is a custom `app://` protocol, which needs a spec amendment.
 - `src/renderer/voice/worker.ts`: a Web Worker holding Kokoro (`kokoro-js`, with espeak-ng WASM for phonemes) and Whisper (`whisper-base.en`), both on transformers.js, WASM with WebGPU where available. Audio stays in memory.
 - `src/renderer/voice/session.ts`: the state machine `off`, `ready`, `listening`, `transcribing`, `speaking`. Memory only.
 - `src/shared/voice-text.ts` (pure): turns a reply into speakable prose. Skips code blocks, paths and tool output, redacts, clips to about 1,500 characters. Reply text comes from `lastReply` in `src/core/claude/explain.ts`, so the same confinement and redaction apply.
 - `src/shared/voice-policy.ts` (pure): decides whether dictated text may be typed.
 - A `/voice` palette action (`actions.ts`) and a small voice indicator in the panel's Now card. No title-bar control.
-- The page's content security policy gains `wasm-unsafe-eval` and nothing else.
 
 ## Voice mode
 
@@ -70,7 +69,7 @@ If any check fails the text is copied to the clipboard and a toast says why. Not
 
 ## Privacy and permissions
 
-- Microphone: the window's permission handlers grant `media` with `audioCapture` only, only to the app's own page, and only while `permissions.voice` is on. Every other permission stays refused. `NSMicrophoneUsageDescription` and the audio-input entitlement are added in the packaging (`build/entitlements.mac.plist` and the app's Info.plist settings).
+- Microphone: the window's permission handlers grant `media` with `audioCapture` only, only to the app's own page, and only while `permissions.voice` is on. Every other permission stays refused. The existing `NSMicrophoneUsageDescription` text is reworded and the audio-input entitlement is added (`build/entitlements.mac.plist`).
 - Audio is held in memory for one recording and dropped after transcription. It is never logged or written. Transcribed text is typed or copied and not kept.
 - The model download host list and the files written to `~/.jaffer/voice/` are listed in `SECURITY.md`.
 
