@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, readdir, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { Writable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { VoiceFile } from '../src/shared/voice-manifest';
 import { VoiceDownloadError, downloadVoice, readVoiceFile, removeVoice, voiceStatus } from '../src/main/voice-models';
@@ -86,6 +88,38 @@ describe('voice models', () => {
     expect(await code(downloadVoice(dir, opts(slow, { signal: ac.signal })))).toBe('aborted');
     expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.part') || n.endsWith('.bin'))).toEqual([]);
   });
+
+  // F1: a write error (ENOSPC) destroys the stream and it never drains; the wait must not hang the download (and the off switch).
+  it('a write error rejects with code disk, removes the .part and does not hang', async () => {
+    const createStream = (file: string) => {
+      writeFileSync(file, 'x'); // (a .part exists, as with the real stream)
+      return new Writable({ highWaterMark: 1, write(_c, _e, cb) { cb(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })); } });
+    };
+    expect(await code(downloadVoice(dir, opts(okFetch(), { createStream })))).toBe('disk');
+    expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.part') || n.endsWith('.bin'))).toEqual([]);
+  }, 3000);
+
+  it('an abort during a stalled drain settles as aborted and removes the .part', async () => {
+    const ac = new AbortController();
+    const createStream = (file: string) => {
+      writeFileSync(file, 'x');
+      setTimeout(() => ac.abort(), 20);
+      return new Writable({ highWaterMark: 1, write() { /* never calls back: the stream never drains */ } });
+    };
+    expect(await code(downloadVoice(dir, opts(okFetch(), { createStream, signal: ac.signal })))).toBe('aborted');
+    expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.part') || n.endsWith('.bin'))).toEqual([]);
+  }, 3000);
+
+  // I6: a body longer than the manifest's size is refused as soon as it passes the size, before a byte past it is written.
+  it('a body longer than the declared size is refused without writing past it', async () => {
+    let written = 0;
+    const createStream = (file: string) => { writeFileSync(file, ''); return new Writable({ write(c, _e, cb) { written += c.length; cb(); } }); };
+    let pulls = 0; // (64 chunks of 4 bytes: far past A's size, but finite so a failing run still ends)
+    const endless = (async () => new Response(new ReadableStream({ pull(c) { if (++pulls > 64) c.close(); else c.enqueue(new Uint8Array(4)); } }), { status: 200 })) as typeof fetch;
+    expect(await code(downloadVoice(dir, opts(endless, { createStream })))).toBe('checksum');
+    expect(written).toBeLessThanOrEqual(A.length);
+    expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.part') || n.endsWith('.bin'))).toEqual([]);
+  }, 3000);
 
   it('readVoiceFile refuses unknown names and wrong sizes', async () => {
     await downloadVoice(dir, opts(okFetch()));

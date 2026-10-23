@@ -50,5 +50,7 @@ publish:
   repo: jaffer
 artifactName: "${productName}-${version}-${arch}.${ext}"
 extraResources:
+  - from: LICENSE
+    to: LICENSE
   - from: THIRD-PARTY-NOTICES.md
     to: THIRD-PARTY-NOTICES.md

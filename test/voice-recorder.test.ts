@@ -1,11 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_RECORDING_MS } from '../src/shared/voice-vad';
 import { record, RECORDER_NAME, RECORDER_WORKLET } from '../src/renderer/voice/recorder';
 
 /** `record()` against a fake MediaDevices, AudioContext and worklet port: the worklet's frames are pushed by hand (2048 samples = 128 ms at 16 kHz). */
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const FRAME = 2048;
 
-let tracks: Array<{ stopped: boolean; stop(): void }>;
+type FakeTrack = { stopped: boolean; stop(): void; on: Record<string, Array<() => void>>; addEventListener(t: string, f: () => void): void; removeEventListener(t: string, f: () => void): void };
+let tracks: FakeTrack[];
+const track = (): FakeTrack => ({
+  stopped: false, on: {},
+  stop() { this.stopped = true; },
+  addEventListener(t, f) { (this.on[t] ??= []).push(f); },
+  removeEventListener(t, f) { this.on[t] = (this.on[t] ?? []).filter((g) => g !== f); },
+});
 let asked: MediaStreamConstraints | undefined;
 let ctxs: Array<{ closed: boolean; opts: unknown; module?: string }>;
 let nodes: Array<{ port: { onmessage: ((e: { data: unknown }) => void) | null }; name: string; connected: boolean }>;
@@ -20,7 +28,7 @@ const mediaDevices = () => ({
 }) as unknown as MediaDevices;
 
 beforeEach(() => {
-  tracks = [{ stopped: false, stop() { this.stopped = true; } }];
+  tracks = [track()];
   ctxs = [];
   nodes = [];
   deny = null;
@@ -41,7 +49,7 @@ beforeEach(() => {
     disconnect() {}
   };
 });
-afterEach(() => { delete (globalThis as any).AudioContext; delete (globalThis as any).AudioWorkletNode; });
+afterEach(() => { vi.useRealTimers(); delete (globalThis as any).AudioContext; delete (globalThis as any).AudioWorkletNode; });
 
 const ready = async () => { for (let i = 0; i < 10 && !nodes[0]?.port.onmessage; i++) await tick(); expect(nodes[0]?.port.onmessage).toBeTruthy(); };
 const push = (rms: number, n = 1) => { for (let i = 0; i < n; i++) nodes[0]!.port.onmessage!({ data: { rms, samples: new Float32Array(FRAME).fill(rms) } }); };
@@ -119,6 +127,33 @@ describe('record()', () => {
     await ready();
     push(0.2, 470); // 60.03 s after the first frame
     expect((await p)!.length).toBe(470 * FRAME);
+  });
+
+  // F2: a recording has a wall-clock bound too: a worklet that stops posting (suspended context, sleep, device gone) must not hold the mic.
+  it('resolves null at MAX_RECORDING_MS + 5 s when the frames stop coming; every track stopped', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const p = record({ signal: new AbortController().signal, mediaDevices: mediaDevices() });
+    for (let i = 0; i < 50 && !nodes[0]?.port.onmessage; i++) await Promise.resolve();
+    push(0.2, 3); // (then silence from the worklet: no more frames at all)
+    let out: unknown = 'pending';
+    void p.then((v) => (out = v));
+    await vi.advanceTimersByTimeAsync(MAX_RECORDING_MS + 4999);
+    expect(out).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(out).toBeNull();
+    expect(allStopped()).toBe(true);
+    expect(tracks[0]!.on.ended ?? []).toEqual([]);
+  });
+
+  it("a track's 'ended' event (unplugged, revoked) resolves null; every track stopped", async () => {
+    tracks.push(track());
+    const p = record({ signal: new AbortController().signal, mediaDevices: mediaDevices() });
+    await ready();
+    push(0.2, 3);
+    for (const f of tracks[1]!.on.ended ?? []) f();
+    expect(await p).toBeNull();
+    expect(allStopped()).toBe(true);
+    expect(tracks.every((t) => (t.on.ended ?? []).length === 0)).toBe(true);
   });
 
   it('a refused microphone rejects mic-denied, a missing one mic-missing; nothing is left open', async () => {

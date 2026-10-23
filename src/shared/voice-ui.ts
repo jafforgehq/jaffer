@@ -11,6 +11,7 @@ const ERRORS: Record<string, string> = {
   checksum: 'A downloaded file did not match what Jaffer expected, so it was thrown away. Try again.',
   host: 'The download was refused because it did not come from the expected server.',
   aborted: 'The download was cancelled.',
+  disk: 'The download stopped because Jaffer could not write the file. Check that the disk has space and try again.',
 };
 
 /** One plain sentence for a main-process error code; an unknown code (or anything else) gets the generic one. */

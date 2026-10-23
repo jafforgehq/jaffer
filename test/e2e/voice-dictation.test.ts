@@ -85,7 +85,7 @@ beforeAll(async () => {
     // the microphone: a stream whose track counts stops; the worklet node posts frames when the test says `play`
     navigator.mediaDevices.getUserMedia = async () => {
       w.__w.opened++;
-      const track = { stop: () => void w.__w.stopped++ };
+      const track = Object.assign(new EventTarget(), { stop: () => void w.__w.stopped++ }); // (an EventTarget, like a real track: the recorder listens for 'ended')
       return { getTracks: () => [track] } as unknown as MediaStream;
     };
     w.AudioContext = class {

@@ -2,7 +2,7 @@
  * Voice mode in the window (spec "Voice mode", "Speaking"): the signals around `flow.ts` and the places that feed it events. `/voice` (the palette,
  * `toggleVoice`) turns it on for the terminal that is focused then (the voice-start pane) and starts the engine; only that terminal's Claude is
  * spoken. Events fed here: Esc (twice in `ready` leaves), the start pane closing, the window hidden, `permissions.voice` turned off, the start pane's
- * Claude changing state. Memory only: the mode, the start pane and the reply text for the call. Dictation (Task 8): `record` opens the microphone
+ * Claude changing state, the window's blur (cancels a recording). Memory only: the mode, the start pane and the reply text for the call. Dictation (Task 8): `record` opens the microphone
  * (`recorder.ts`), `window.jaffer.voice.mic()` asks macOS once per voice session, and the text goes into the start pane through the one
  * `type()` call below (the typing rule is `flow.ts`'s `deliver`), or to the clipboard with the reason (`copyToTerminal`). The samples and
  * the text live for the call only.
@@ -40,6 +40,7 @@ const flow = createFlow({
     voiceOn: () => cfg.value?.permissions?.voice === true,
     startPane: () => voicePane.value,
     activePane: () => activePane.value,
+    windowFocused: () => document.hasFocus(),
     claudeState: (pane) => claudeFor(pane)?.state,
     type: (pane, text) => terminals.get(pane)?.type(text), // the only typing of dictation: the cleaned text, no Enter
     copy: copyToTerminal,
@@ -75,6 +76,8 @@ if (typeof window !== 'undefined') {
     flow.esc(); // (never stopped or prevented: the terminal still gets its Esc)
   }, true);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flow.end('window-hidden'); });
+  // the window lost the focus: a recording or transcription is cancelled (no text typed); voice stays on and listens again after the next turn
+  window.addEventListener('blur', () => flow.blur());
   // the switch withdrawn (Settings, `jaffer config`, another window)
   effect(() => { if (voiceMode.value !== 'off' && cfg.value?.permissions?.voice !== true) flow.end('switch-off'); });
   // the start pane closed

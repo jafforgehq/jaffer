@@ -66,6 +66,46 @@ const hits = (re: RegExp, only?: (file: string) => boolean): string[] => {
   }
   return out;
 };
+/** (voice) CR or LF in any escape spelling and any case, a bracketed paste, a pty write or a built character: none may appear in src/renderer/voice. */
+const NEWLINE_OR_PASTE = /\\r|\\n|\\x0[ad]|\\u000[ad]|\\u\{0*[ad]\}|\.paste\(|pty\.write|String\.fromCharCode/i;
+/**
+ * The line numbers of template literals that hold a raw newline (strings in '' and "" are skipped; `${…}` is read up to its closing
+ * brace, a nested template inside it included). Applied to every template literal of src/renderer/voice, not only those passed to
+ * `type()`: stricter than needed, and simple enough to trust.
+ */
+function rawNewlineTemplates(src: string): number[] {
+  const out: number[] = [];
+  const line = (i: number) => src.slice(0, i).split('\n').length;
+  const tpl = (i: number): number => { // i is just past the opening backtick; returns the index past the closing one
+    const start = i;
+    let raw = false;
+    while (i < src.length && src[i] !== '`') {
+      if (src[i] === '\\') i += 2;
+      else if (src[i] === '$' && src[i + 1] === '{') { i = expr(i + 2); }
+      else { if (src[i] === '\n') raw = true; i++; }
+    }
+    if (raw) out.push(line(start));
+    return i + 1;
+  };
+  const expr = (i: number): number => { // inside `${`: up to its closing brace
+    let depth = 1;
+    while (i < src.length && depth > 0) {
+      const c = src[i]!;
+      if (c === '`') i = tpl(i + 1);
+      else if (c === "'" || c === '"') i = quoted(i);
+      else { if (c === '{') depth++; else if (c === '}') depth--; i++; }
+    }
+    return i;
+  };
+  const quoted = (i: number): number => { const q = src[i]; i++; while (i < src.length && src[i] !== q && src[i] !== '\n') i += src[i] === '\\' ? 2 : 1; return i + 1; };
+  for (let i = 0; i < src.length;) {
+    const c = src[i]!;
+    if (c === '`') i = tpl(i + 1);
+    else if (c === "'" || c === '"') i = quoted(i);
+    else i++;
+  }
+  return out;
+}
 /**
  * The channels of `ipcMain.handle(` whose handler does not call `trusted(`: each handler's body is the call's own parentheses
  * (strings skipped), cut at the next `ipcMain.handle(` whatever happens.
@@ -272,6 +312,16 @@ describe('invariants of CLAUDE.md', () => {
     expect(hits(/\binnerHTML\b|\bouterHTML\b|dangerouslySetInnerHTML|insertAdjacentHTML|document\.write\b|(?<![.\w])eval\s*\(|\bnew\s+Function\b/, (f) => f.startsWith('src/renderer/'))).toEqual([]);
   });
 
+  // (voice) the scan below must catch every spelling of CR/LF (any case, `\u{d}`), a raw newline in a template literal and `.paste(`
+  // (`TermHandle.paste` bracket-pastes): planted in throwaway text here, never in the repo's source
+  it('the dictation newline scan catches \\x0D, \\u000A, \\u{d}, .paste( and a raw newline in a template literal', () => {
+    for (const planted of ["t.type('a\\x0D')", "t.type('a\\u000A')", "t.type('a\\u{d}')", "t.type(`a\\u{A}`)", "terminals.get(p)?.paste(text)"]) {
+      expect(planted.match(NEWLINE_OR_PASTE), planted).not.toBeNull();
+    }
+    expect(rawNewlineTemplates("const a = 'x';\nt.type(`one\ntwo`);\nconst b = `ok`;")).toEqual([2]);
+    expect(rawNewlineTemplates("const q = \"`\";\nconst r = '`';\nt.type(`one ${'`'} two`);")).toEqual([]);
+  });
+
   // (voice) "Dictated text is typed only under the five conditions ... and never with Enter"; "Audio is never written or logged"
   it('dictation types only through the one type() call, never Enter or pty.write, and no voice code writes audio; getUserMedia only in recorder.ts', () => {
     const voice = (f: string) => f.startsWith('src/renderer/voice/');
@@ -279,7 +329,8 @@ describe('invariants of CLAUDE.md', () => {
     expect(hits(/\.type\(/, voice)).toEqual([expect.stringMatching(/^src\/renderer\/voice\/controller\.ts:\d+$/), expect.stringMatching(/^src\/renderer\/voice\/flow\.ts:\d+$/)]);
     expect(code.get('src/renderer/voice/controller.ts')).toMatch(/type: \(pane, text\) => terminals\.get\(pane\)\?\.type\(text\),/);
     expect(code.get('src/renderer/voice/flow.ts')).toMatch(/dz\.type\(start, text\);/);
-    expect(hits(/\\r|\\n|\\x0[ad]|\\u000[ad]|pty\.write|String\.fromCharCode/, voice)).toEqual([]);
+    expect(hits(NEWLINE_OR_PASTE, voice)).toEqual([]);
+    expect([...code].filter(([f]) => voice(f)).flatMap(([f, src]) => rawNewlineTemplates(src).map((l) => `${f}:${l}`))).toEqual([]);
     expect(hits(/\bwriteFile|\bMediaRecorder\b|\bcreateObjectURL\b|\bnew\s+Blob\b|\bdownload\s*=|console\.(log|info|warn|error|debug)\(/, voice)).toEqual([]);
     expect(hits(/getUserMedia/)).toEqual([expect.stringMatching(/^src\/renderer\/voice\/recorder\.ts:\d+$/)]);
   });

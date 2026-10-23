@@ -13,6 +13,7 @@ describe('voice step', () => {
   });
   it('esc cancels a recording; esc-esc leaves; a lone esc stays ready', () => {
     expect(step('listening', 'esc')).toBe('ready');
+    expect(step('transcribing', 'esc')).toBe('ready'); // (F3: Esc cancels a transcription too; its text is dropped by the flow)
     expect(step('ready', 'esc')).toBe('ready');
     expect(step('ready', 'esc-esc')).toBe('off');
   });

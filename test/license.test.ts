@@ -12,6 +12,12 @@ describe('licence', () => {
     expect(l.trimStart().startsWith('GNU GENERAL PUBLIC LICENSE')).toBe(true);
     expect(l).toContain('Version 3, 29 June 2007');
   });
+  // SECURITY.md: "The licence text and the third-party notices ship with the app (`LICENSE`, `THIRD-PARTY-NOTICES.md`)"
+  it('ships LICENSE and THIRD-PARTY-NOTICES.md in the app (electron-builder extraResources)', () => {
+    const y = read('electron-builder.yml');
+    for (const f of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) expect(y, f).toMatch(new RegExp(`\\n  - from: ${f.replace(/\./g, '\\.')}\\n    to: ${f.replace(/\./g, '\\.')}\\n`));
+    expect(read('SECURITY.md')).toContain('ship with the app (`LICENSE`, `THIRD-PARTY-NOTICES.md`)');
+  });
   it('names espeak-ng in the third-party notices', () => {
     const n = read('THIRD-PARTY-NOTICES.md');
     expect(n).toContain('espeak-ng');

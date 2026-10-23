@@ -10,12 +10,13 @@ describe('voice-ui', () => {
     expect(aboutMb(1)).toBe(5);
   });
   it('gives a plain sentence per code, with no path', () => {
-    for (const c of ['network', 'checksum', 'host', 'aborted', 'unknown', 'toString', 5, undefined]) {
+    for (const c of ['network', 'checksum', 'host', 'aborted', 'disk', 'unknown', 'toString', 5, undefined]) {
       const s = voiceErrorSentence(c);
       expect(s).toMatch(/\.$/);
       expect(s).not.toMatch(/[/\\]/);
     }
     expect(voiceErrorSentence('network')).toMatch(/network/);
+    expect(voiceErrorSentence('disk')).toMatch(/disk/); // (a full disk is not a network failure)
     expect(voiceErrorSentence('toString')).toBe(voiceErrorSentence('unknown'));
   });
   it('percent is clamped', () => {

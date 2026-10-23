@@ -94,8 +94,11 @@ describe('Settings → Privacy → voice', () => {
     expect(ask).toMatch(/microphone is used only while you dictate with \/voice/);
     expect(ask).toMatch(/reply text.*on this Mac/);
     expect(await page.isChecked('#pv-voice')).toBe(false); // not on until confirmed
+    // the question takes the keyboard on Cancel (the safe answer), and gives it back to the switch when it closes
+    expect(await page.evaluate(() => document.activeElement?.closest('.vc-ask') !== null && document.activeElement?.textContent)).toBe('Cancel');
     await page.click('.vc-ask button:has-text("Cancel")');
     expect(await page.locator('.vc-ask').count()).toBe(0);
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('pv-voice');
     expect(onDisk().permissions?.voice ?? false).toBe(false);
     expect(await page.evaluate(() => (window as any).__v.calls)).not.toContain('download');
 

@@ -4,10 +4,11 @@
  * `voice-recorder.worklet.js` (built from `recorder.worklet.ts`, loaded by a relative URL next to the page: `script-src 'self'`), which
  * posts each ~2048 samples with their RMS. `EndOfSpeech` decides the end; its clock is the sample count (always finite, and it cannot
  * drift from the audio). Resolves with the samples on 'end' (1.5 s of quiet after speech, or 60 s), null on 'none' (8 s without speech)
- * or abort; a `getUserMedia` refusal rejects `'mic-denied'` (NotAllowedError, SecurityError) or `'mic-missing'` (anything else).
+ * or abort, and also null on a wall clock of MAX_RECORDING_MS + 5 s (the worklet stopped posting: a suspended context, sleep, a device
+ * change) or a track's 'ended' (unplugged, revoked), so the microphone is never held open by a silent pipeline; a `getUserMedia` refusal rejects `'mic-denied'` (NotAllowedError, SecurityError) or `'mic-missing'` (anything else).
  * Every path stops every track and closes the context. The samples live in memory for the call only: never logged, never written.
  */
-import { EndOfSpeech } from '../../shared/voice-vad';
+import { EndOfSpeech, MAX_RECORDING_MS } from '../../shared/voice-vad';
 
 export type MicError = 'mic-denied' | 'mic-missing';
 export const RECORDER_WORKLET = 'voice-recorder.worklet.js';
@@ -27,6 +28,7 @@ export async function record(opts: { onLevel?(rms: number): void; signal: AbortS
   let src: MediaStreamAudioSourceNode | null = null;
   let node: AudioWorkletNode | null = null;
   let onAbort = () => {};
+  let bound: ReturnType<typeof setTimeout> | undefined;
   try {
     if (opts.signal.aborted) return null;
     ctx = new AudioContext({ sampleRate: RATE });
@@ -42,6 +44,8 @@ export async function record(opts: { onLevel?(rms: number): void; signal: AbortS
     return await new Promise<Float32Array | null>((resolve) => {
       onAbort = () => resolve(null);
       opts.signal.addEventListener('abort', onAbort, { once: true });
+      bound = setTimeout(onAbort, MAX_RECORDING_MS + 5000);
+      for (const t of stream.getTracks()) t.addEventListener('ended', onAbort);
       n.port.onmessage = (e: MessageEvent<{ rms?: unknown; samples?: unknown }>) => {
         const samples = e.data?.samples;
         if (!(samples instanceof Float32Array)) return;
@@ -63,6 +67,8 @@ export async function record(opts: { onLevel?(rms: number): void; signal: AbortS
     });
   } finally {
     opts.signal.removeEventListener('abort', onAbort);
+    clearTimeout(bound);
+    for (const t of stream.getTracks()) t.removeEventListener('ended', onAbort);
     if (node) { node.port.onmessage = null; try { node.disconnect(); } catch { /* not connected */ } }
     try { src?.disconnect(); } catch { /* not connected */ }
     for (const t of stream.getTracks()) t.stop();

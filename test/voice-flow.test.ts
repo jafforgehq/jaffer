@@ -221,8 +221,9 @@ function drig(o: { claude?: string; reply?: string; transcribe?: () => Promise<s
   const said: string[] = [];
   const spoken: string[] = [];
   const holds: Array<() => void> = [];
-  const env = { voiceOn: true, voicePane: 'main' as string | null, active: 'main', claude: { main: 'claude' in o ? o.claude : 'idle' } as Record<string, string | undefined> };
+  const env = { voiceOn: true, focused: true, voicePane: 'main' as string | null, active: 'main', claude: { main: 'claude' in o ? o.claude : 'idle' } as Record<string, string | undefined> };
   let micAsks = 0;
+  let recordCalls = 0;
   let pendingText: ((t: string) => void) | null = null;
   let t = 1000;
   const engine: Engine = {
@@ -236,10 +237,11 @@ function drig(o: { claude?: string; reply?: string; transcribe?: () => Promise<s
     engine, reply: async () => o.reply ?? '```\ncode only\n```', speed: () => 1, say: (m) => said.push(m), onMode: () => {}, onPreparing: () => {}, now: () => t,
     dictation: {
       micAccess: async () => (micAsks++, o.mic ?? 'granted'),
-      record: (signal) => (o.recordErr ? Promise.reject(o.recordErr) : new Promise((done) => recs.push({ signal, done }))),
+      record: (signal) => (recordCalls++, o.recordErr ? Promise.reject(o.recordErr) : new Promise((done) => recs.push({ signal, done }))),
       voiceOn: () => env.voiceOn,
       startPane: () => env.voicePane,
       activePane: () => env.active,
+      windowFocused: () => env.focused,
       claudeState: (p) => env.claude[p],
       type: (pane, text) => typed.push({ pane, text }),
       copy: (text, why) => copied.push({ text, why }),
@@ -248,7 +250,7 @@ function drig(o: { claude?: string; reply?: string; transcribe?: () => Promise<s
   const observe = (state: string) => flow.observe({ id: 's', state });
   const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
   return {
-    flow, env, typed, copied, recs, said, spoken, holds, settle, observe, mics: () => micAsks, advance: (ms: number) => (t += ms),
+    flow, env, typed, copied, recs, said, spoken, holds, settle, observe, mics: () => micAsks, records: () => recordCalls, advance: (ms: number) => (t += ms),
     /** the recording ends with speech; Whisper answers `text` */
     hear: async (text: string) => { recs.at(-1)!.done(new Float32Array(1600)); await settle(); pendingText?.(text); await settle(); },
     /** starts voice mode with the start pane's Claude in `state` (observed first, as the controller's effect does) */
@@ -342,6 +344,96 @@ describe('dictation: when the microphone opens', () => {
     expect(b.flow.mode()).toBe('ready');
   });
 
+  // F4: the microphone opens only while the person is looking at it: the window focused and the voice-start terminal focused.
+  it('does not open while another terminal is focused, nor while the window is not focused', async () => {
+    const p = drig({ claude: 'working' });
+    await p.on('working');
+    p.env.active = 'p2';
+    await p.turn();
+    expect(p.recs.length).toBe(0);
+    expect(p.mics()).toBe(0);
+    expect(p.flow.mode()).toBe('ready');
+    p.env.active = 'main';
+    await p.turn(); // (the next finished turn, with the start pane focused again)
+    expect(p.recs.length).toBe(1);
+
+    const w = drig();
+    w.env.focused = false;
+    await w.on('idle');
+    expect(w.recs.length).toBe(0);
+    expect(w.flow.mode()).toBe('ready');
+    const t = drig({ claude: 'working' });
+    await t.on('working');
+    t.env.focused = false;
+    await t.turn();
+    expect(t.recs.length).toBe(0);
+  });
+
+  it('a window blur while listening or transcribing cancels (mic closed, nothing typed); focus coming back does not reopen it', async () => {
+    const r = drig();
+    await r.on('idle');
+    expect(r.flow.mode()).toBe('listening');
+    r.env.focused = false;
+    r.flow.blur();
+    expect(r.recs[0]!.signal.aborted).toBe(true);
+    expect(r.flow.mode()).toBe('ready');
+    r.env.focused = true;
+    await r.settle();
+    expect(r.recs.length).toBe(1);
+
+    const tr = drig();
+    await tr.on('idle');
+    tr.recs[0]!.done(new Float32Array(10));
+    await tr.settle();
+    expect(tr.flow.mode()).toBe('transcribing');
+    tr.flow.blur();
+    expect(tr.flow.mode()).toBe('ready');
+    await tr.hear('run the tests');
+    expect(tr.typed).toEqual([]);
+    expect(tr.copied).toEqual([]);
+
+    const idle = drig({ claude: 'working' });
+    await idle.on('working');
+    idle.flow.blur(); // (in ready: nothing to cancel, and it is not an Esc)
+    expect(idle.flow.mode()).toBe('ready');
+  });
+
+  // F3: Esc while Whisper works cancels: the text that comes back is neither typed nor copied.
+  it('Esc while transcribing cancels: nothing typed, nothing copied, mode ready', async () => {
+    const r = drig();
+    await r.on('idle');
+    r.recs[0]!.done(new Float32Array(10));
+    await r.settle();
+    expect(r.flow.mode()).toBe('transcribing');
+    r.flow.esc();
+    expect(r.flow.mode()).toBe('ready');
+    await r.hear('run the tests');
+    expect(r.typed).toEqual([]);
+    expect(r.copied).toEqual([]);
+    expect(r.flow.mode()).toBe('ready');
+  });
+
+  // M1: a refused microphone is said once per voice session; later finished turns neither ask again nor repeat the toast.
+  it('a refused microphone is not asked or said again at later turns of the same voice session; a new session asks again', async () => {
+    const r = drig({ mic: 'denied' });
+    await r.on('idle');
+    await r.turn();
+    await r.turn();
+    expect(r.said.length).toBe(1);
+    expect(r.mics()).toBe(1);
+    expect(r.recs.length).toBe(0);
+    await r.flow.toggle(); // off
+    await r.on('idle'); // a new voice session
+    expect(r.mics()).toBe(2);
+    expect(r.said.length).toBe(2);
+
+    const p = drig({ recordErr: 'mic-denied' }); // (the page's own refusal, after macOS said yes)
+    await p.on('idle');
+    await p.turn();
+    expect(p.said.length).toBe(1);
+    expect(p.records()).toBe(1);
+  });
+
   it('a refused microphone (macOS or the page) says so once and stays ready, with no retry', async () => {
     const r = drig({ mic: 'denied' });
     await r.on('idle');
@@ -391,15 +483,6 @@ describe('dictation: what is typed', () => {
     expect(r.typed).toEqual([]);
     expect(r.copied[0]!.why).toMatch(/terminal changed/);
 
-    // the focus came back to the start pane, but the recording began in another one: still copied
-    const b = drig({ claude: 'working' });
-    await b.on('working');
-    b.env.active = 'p2';
-    await b.turn();
-    b.env.active = 'main';
-    await b.hear('run the tests');
-    expect(b.typed).toEqual([]);
-    expect(b.copied.length).toBe(1);
   });
 
   it.each(['/clear everything', '!rm -rf x', '# remember this'])('copies %j (a command character first) with its own sentence', async (text) => {

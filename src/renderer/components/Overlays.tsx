@@ -510,7 +510,11 @@ type Section = 'appearance' | 'terminal' | 'integrations' | 'privacy' | 'help' |
 /** (voice) Settings → Privacy → "Talk with Claude by voice". Turning it on opens an inline confirmation first; the config is patched only after "Download and turn on". */
 function VoiceField({ on }: { on: boolean }): VNode {
   const [ask, setAsk] = useState(false);
+  const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => void refreshVoiceStatus(), []);
+  useLayoutEffect(() => { if (ask) cancel.current?.focus(); }, [ask]); // (the question opens with the keyboard on Cancel, the safe answer)
+  /** The question closes: the keyboard goes back to the switch it came from. */
+  const closeAsk = () => { setAsk(false); document.getElementById('pv-voice')?.focus(); };
   const st = voiceStatus.value;
   const { done, total } = voiceProgress.value;
   const pct = percent(done, total);
@@ -542,8 +546,8 @@ function VoiceField({ on }: { on: boolean }): VNode {
             Turning this on downloads about {aboutMb()} MB of speech models to this Mac. The microphone is used only while you dictate with /voice. Claude's reply text is read by a model on this Mac to speak it aloud; it does not leave your Mac.
           </p>
           <div class="vc-btns">
-            <button class="btn" onClick={() => setAsk(false)}>Cancel</button>
-            <button class="btn primary vc-go" onClick={() => (setAsk(false), void enableVoice().catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) })))}>Download and turn on</button>
+            <button class="btn" ref={cancel} onClick={closeAsk}>Cancel</button>
+            <button class="btn primary vc-go" onClick={() => (closeAsk(), void enableVoice().catch((e) => toast({ kind: 'error', text: e instanceof Error ? e.message : String(e) })))}>Download and turn on</button>
           </div>
         </div>
       )}

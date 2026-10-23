@@ -5,9 +5,11 @@
  * (`chunkForSpeech`: a short first chunk for an early first sound). Nothing here is written anywhere; text lives for the call.
  * Dictation (Task 8, `dictation` in the deps): the microphone opens only (a) when voice mode starts, once the engine is ready, if the start
  * pane's Claude is idle, and (b) once after each finished turn of that Claude, after its reply was spoken (or when there was nothing to
- * speak), while the mode is `ready`. Never while speaking or preparing, and never again after no speech, a cancel, noise, or a typed or
- * copied result until the next finished turn. A recording is `heard` (mic open) -> `stop` (transcribing) -> `text` (ready); Esc and every
- * end of voice abort it. The text is cleaned (`cleanDictation`); a command character first is copied; otherwise it is typed only when
+ * speak), while the mode is `ready`, and in both cases only while the window has the focus and the focused terminal is the start pane
+ * (else it stays closed until the next finished turn). Never while speaking or preparing, and never again after no speech, a cancel, noise,
+ * or a typed or copied result until the next finished turn; a refused microphone is said once and not asked again in that voice session.
+ * A recording is `heard` (mic open) -> `stop` (transcribing) -> `text` (ready); Esc (also while transcribing: the text is dropped), a
+ * window blur and every end of voice abort it. The text is cleaned (`cleanDictation`); a command character first is copied; otherwise it is typed only when
  * `mayType` allows at that moment (after Whisper), into the start pane, without Enter; else copied with the reason.
  */
 import { chunkForSpeech, speakable } from '../../shared/voice-text';
@@ -35,6 +37,8 @@ export interface Dictation {
   /** The terminal that was focused when voice mode started. */
   startPane(): string | null;
   activePane(): string;
+  /** Whether the window has the keyboard focus (`document.hasFocus()`): the microphone opens only while the person is looking. */
+  windowFocused(): boolean;
   /** That terminal's Claude state (the watcher's), undefined when none runs there. */
   claudeState(pane: string): string | undefined;
   /** Types the text into that terminal (the one typing call of dictation). */
@@ -77,6 +81,7 @@ export function createFlow(d: FlowDeps) {
   let last: Observed | null = null;
   let rec: AbortController | null = null; // the recording now open
   let micChecked = false; // macOS's access was asked in this voice session
+  let micDenied = false; // the microphone was refused in this voice session: said once, not asked again until voice starts again
   let typedAt = -Infinity; // the last dictation typed (the one-shot lock)
 
   const cur = (): VoiceMode => mode; // (TypeScript cannot see `send` or an await change it)
@@ -101,6 +106,7 @@ export function createFlow(d: FlowDeps) {
     send('start');
     d.onPreparing(true);
     micChecked = false;
+    micDenied = false;
     const my = ++gen;
     const prev = run;
     const mine: Promise<boolean> = (async () => {
@@ -124,7 +130,7 @@ export function createFlow(d: FlowDeps) {
   function esc(): void {
     if (mode === 'off') return;
     if (mode === 'speaking') { stopSpeech('esc'); return; }
-    if (mode === 'listening') closeMic();
+    if (mode === 'listening' || mode === 'transcribing') closeMic(); // (transcribing: the aborted signal drops the text that comes back)
     if (mode !== 'ready') { send('esc'); lastEsc = -Infinity; return; }
     const t = d.now();
     if (t - lastEsc <= ESC_ESC_MS) end('esc-esc');
@@ -162,42 +168,60 @@ export function createFlow(d: FlowDeps) {
   }
 
   const closeMic = () => { rec?.abort(); rec = null; };
+  /** The person is looking: the window has the focus and the focused terminal is the voice-start pane. */
+  const looking = (dz: Dictation) => dz.windowFocused() && dz.activePane() === dz.startPane();
+  const denied = () => { micDenied = true; d.say(MIC_DENIED); };
 
   /** One recording, its transcript and the text's fate (typed or copied). Only from `ready`; see the header for when it is called. */
   async function listen(): Promise<void> {
     const dz = d.dictation;
-    if (!dz || mode !== 'ready' || rec) return;
+    if (!dz || mode !== 'ready' || rec || micDenied || !looking(dz)) return;
     const my = gen;
     if (!micChecked) {
       const a = await dz.micAccess().catch(() => 'denied' as const);
-      if (my !== gen || cur() !== 'ready') return;
-      if (a !== 'granted') return d.say(MIC_DENIED);
+      if (my !== gen || cur() !== 'ready' || micDenied) return;
+      if (a !== 'granted') return denied();
       micChecked = true;
+      if (!looking(dz)) return; // (the focus moved while macOS answered)
     }
     const pane = dz.activePane(); // the recording-start pane: the one that must still be focused at the moment of typing
+    // `rec` stays this recording's until its text is delivered: Esc or a blur while transcribing aborts it, and the text is then dropped
     const ctl = (rec = new AbortController());
-    send('heard');
-    let pcm: Float32Array | null;
     try {
-      pcm = await dz.record(ctl.signal);
-    } catch (e) {
+      send('heard');
+      let pcm: Float32Array | null;
+      try {
+        pcm = await dz.record(ctl.signal);
+      } catch (e) {
+        if (my === gen && cur() === 'listening' && !ctl.signal.aborted) {
+          send('esc');
+          if (e === 'mic-denied') denied(); else d.say(MIC_MISSING);
+        }
+        return;
+      }
+      if (my !== gen || cur() !== 'listening' || ctl.signal.aborted) return; // (cancelled, or voice ended: nothing more)
+      if (!pcm) return void send('esc'); // 8 s without speech: back to ready, no retry
+      send('stop');
+      let raw: string;
+      try { raw = await d.engine.transcribe(pcm); } catch {
+        if (my === gen && cur() === 'transcribing' && !ctl.signal.aborted) send('text'); // (a crash ends voice through onCrash; one failed call just drops the audio)
+        return;
+      }
+      pcm = null; // (the audio is dropped)
+      if (my !== gen || cur() !== 'transcribing' || ctl.signal.aborted) return; // voice ended or Esc/blur cancelled meanwhile: nothing is typed or copied
+      deliver(dz, raw, pane);
+      send('text');
+    } finally {
       if (rec === ctl) rec = null;
-      if (my === gen && cur() === 'listening' && !ctl.signal.aborted) { send('esc'); d.say(e === 'mic-denied' ? MIC_DENIED : MIC_MISSING); }
-      return;
     }
-    if (rec === ctl) rec = null;
-    if (my !== gen || cur() !== 'listening' || ctl.signal.aborted) return; // (cancelled, or voice ended: nothing more)
-    if (!pcm) return void send('esc'); // 8 s without speech: back to ready, no retry
-    send('stop');
-    let raw: string;
-    try { raw = await d.engine.transcribe(pcm); } catch {
-      if (my === gen && cur() === 'transcribing') send('text'); // (a crash ends voice through onCrash; one failed call just drops the audio)
-      return;
-    }
-    pcm = null; // (the audio is dropped)
-    if (my !== gen || cur() !== 'transcribing') return; // voice ended meanwhile: nothing is typed or copied
-    deliver(dz, raw, pane);
-    send('text');
+  }
+
+  /** The window lost the focus: a recording or a transcription is cancelled like Esc (nothing typed); it does not reopen on focus. */
+  function blur(): void {
+    if (mode !== 'listening' && mode !== 'transcribing') return;
+    closeMic();
+    send('esc');
+    lastEsc = -Infinity;
   }
 
   /** The typing rule, checked now (after Whisper): typed into the start pane with no Enter, or copied with the reason; noise does nothing. */
@@ -234,5 +258,5 @@ export function createFlow(d: FlowDeps) {
     end('worker-crashed');
   });
 
-  return { mode: () => mode, toggle, esc, stopButton, end, observe, send };
+  return { mode: () => mode, toggle, esc, blur, stopButton, end, observe, send };
 }

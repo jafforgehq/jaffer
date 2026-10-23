@@ -58,6 +58,14 @@ describe('claude.reply', () => {
       expect(r.text).toContain('I fixed the build.');
       expect(r.text).toContain('Run the tests next.');
       expect(r.text).not.toMatch(/SECRET/);
+      // (I4) a long answer is spoken from its beginning, not from the middle (Explain keeps its tail)
+      const long = Array.from({ length: 800 }, (_, i) => `Step ${i} is done.`).join(' ');
+      fs.appendFileSync(file, [line({ type: 'user', message: { role: 'user', content: 'go on' } }), line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: long }] } })].join('\n') + '\n');
+      const l: any = await c.call('claude.reply', { session: ID });
+      expect(l.ok).toBe(true);
+      expect(l.text.startsWith('Step 0 is done. Step 1 is done.')).toBe(true);
+      expect(l.text.length).toBeLessThanOrEqual(6000);
+      expect(l.text.endsWith('is done.')).toBe(true);
     } finally {
       await c.call('config.patch', { permissions: { voice: false } });
       await c.call('claude.event', { session_id: ID, hook_event_name: 'SessionEnd' });

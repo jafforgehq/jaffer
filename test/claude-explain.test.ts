@@ -74,6 +74,29 @@ describe('lastReply (1.4.0, Explain): the text of Claude\'s latest answer, and n
     expect(r).toMatch(/^word\d+ /); // (no piece of a word at the start)
   });
 
+  // (voice, I4) a long answer is read aloud from its beginning: keep 'head' cuts at a sentence end (or a word) from the end side
+  it("keep: 'head' gives the beginning of a long answer, cut at a sentence end, even past 16 K characters over many lines; Explain keeps the tail", async () => {
+    const sentences = Array.from({ length: 1200 }, (_, i) => `Sentence ${i} is here.`); // ~27 K characters
+    const lines = [user('go'), ...Array.from({ length: 12 }, (_, k) => reply(text(sentences.slice(k * 100, k * 100 + 100).join(' '))))];
+    const file = write(lines);
+    const head = (await lastReply(file, claudeDir, { keep: 'head' }))!;
+    expect(head.startsWith('Sentence 0 is here. Sentence 1 is here.')).toBe(true);
+    expect(head.length).toBeLessThanOrEqual(EXPLAIN_MAX);
+    expect(head.length).toBeGreaterThan(EXPLAIN_MAX / 2);
+    expect(head.endsWith('is here.')).toBe(true); // (a whole sentence last)
+    const tail = (await lastReply(file, claudeDir))!;
+    expect(tail.endsWith('Sentence 1199 is here.')).toBe(true);
+    expect(tail).not.toContain('Sentence 0 is here.');
+
+    const words = Array.from({ length: 3000 }, (_, i) => `word${i}`).join(' '); // no sentence end at all: cut at a word
+    const w = (await lastReply(write([user('go'), reply(text(words))]), claudeDir, { keep: 'head' }))!;
+    expect(w.startsWith('word0 word1 ')).toBe(true);
+    expect(w.length).toBeLessThanOrEqual(EXPLAIN_MAX);
+    expect(w).toMatch(/ word\d+$/);
+    expect(words.startsWith(w)).toBe(true); // (no piece of a word at the end)
+    expect(words[w.length]).toBe(' ');
+  });
+
   it('confined: a file outside <claudeDir>/projects, or a link out of it, is not read', async () => {
     const outside = path.join(env.userHome, 'outside.jsonl');
     fs.writeFileSync(outside, [user('go'), reply(text('SECRET-OUTSIDE'))].join('\n') + '\n');

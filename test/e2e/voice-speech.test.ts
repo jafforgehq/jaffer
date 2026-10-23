@@ -104,9 +104,15 @@ describe('/voice speech output', () => {
   });
 
   it('on and ready: the mode becomes ready and the Now card shows the voice line', async () => {
-    await page.evaluate(async () => { await (window as any).jaffer.call('config.patch', { permissions: { voice: true } }); (window as any).__event('voice.done', {}); });
-    await until(async () => page.evaluate(() => (window as any).__jaffer?.cfg?.value?.permissions?.voice !== false), 3000).catch(() => {});
-    await new Promise((r) => setTimeout(r, 300));
+    await page.evaluate(() => (window as any).jaffer.call('config.patch', { permissions: { voice: true } }));
+    // the two conditions /voice checks, as the page sees them: the switch on in its config and the files ready (Settings looks at the disk)
+    await page.keyboard.press('Meta+,');
+    await page.waitForSelector('.settings');
+    await page.click('.settings-nav button:has-text("Privacy")');
+    await page.waitForSelector('#pv-voice:checked');
+    await page.waitForSelector('.vc-status[data-state="ready"]');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.settings', { state: 'detached' });
     await runVoiceAction();
     await page.waitForSelector('.now-card .voice-line');
     await until(async () => /Voice on/.test((await page.textContent('.voice-line')) ?? ''), 8000, 'Voice on');
