@@ -3,7 +3,7 @@
  * a `resolve/<commit sha>/` URL (never `main`) so the SHA-256 stays valid. Kokoro 82M q8 with the
  * `af_heart` and `bm_george` voices, Whisper base.en q8. The espeak-ng WASM is not listed: the
  * `phonemizer` npm package embeds it in its bundle. `name` is the path under `~/.jaffer/voice/`.
- * Main downloads these once, after consent (`src/main/voice-models.ts`), and only from VOICE_HOSTS.
+ * Main downloads these once, after consent (`src/main/voice-models.ts`), and only over https from huggingface.co or *.hf.co (the host policy lives there: no userinfo, no port).
  */
 export interface VoiceFile { name: string; url: string; sha256: string; bytes: number }
 
@@ -87,8 +87,5 @@ export const VOICE_FILES: readonly VoiceFile[] = [
     "bytes": 282662
   }
 ];
-
-/** Hosts a download may contact: the Hub, and the CDN host its redirects were seen to land on. */
-export const VOICE_HOSTS: readonly string[] = ['huggingface.co', 'us.aws.cdn.hf.co'];
 
 export const VOICE_TOTAL_BYTES: number = VOICE_FILES.reduce((n, f) => n + f.bytes, 0);

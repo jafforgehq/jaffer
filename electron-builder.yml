@@ -31,7 +31,7 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
-    NSMicrophoneUsageDescription: "Programs you run in Jaffer may ask to use the microphone."
+    NSMicrophoneUsageDescription: "Jaffer listens only while you dictate to Claude with /voice. Programs you run in Jaffer may also ask to use the microphone."
     NSCameraUsageDescription: "Programs you run in Jaffer may ask to use the camera."
     NSAppleEventsUsageDescription: "Programs you run in Jaffer may ask to control other apps."
     NSDesktopFolderUsageDescription: "Programs you run in Jaffer may access your Desktop folder."

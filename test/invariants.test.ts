@@ -151,20 +151,24 @@ describe('invariants of CLAUDE.md', () => {
     expect(hits(/\bopenPath\b(?!\s*[:(])/, (f) => f.startsWith('src/main/'))).toEqual([]); // (never passed on as a value)
   });
 
-  // "Permission handlers (1.4.1): the window's session grants exactly one web permission, `clipboard-sanitized-write`, and only to the app's own
-  // webContents; every other permission, `clipboard-read` included, is refused in both the request and the check handler. Don't add another."
-  it('the permission handlers grant only clipboard-sanitized-write', () => {
+  // "Permission handlers (1.4.1): the window's session grants `clipboard-sanitized-write`, and (voice) `media` for audio only while
+  // `permissions.voice` is on (`pageMayUseMic`), only to the app's own webContents; every other permission, `clipboard-read` included, is refused
+  // in both the request and the check handler. Don't add another."
+  it('the permission handlers grant only clipboard-sanitized-write and, for audio with voice on, media', () => {
     expect(hits(/\bsetPermissionRequestHandler\(/)).toHaveLength(1);
     expect(hits(/\bsetPermissionCheckHandler\(/)).toHaveLength(1);
     expect(hits(/\bsetDevicePermissionHandler\(|\bsetDisplayMediaRequestHandler\(|\bsetBluetoothPairingHandler\(|\bsetUSBProtocolHandler\(/)).toEqual([]);
     const main = code.get('src/main/main.ts')!;
     const decide = main.match(/const pagePermission = ([^\n]*);\n/)?.[1];
     expect(decide, 'the one decision function').toBeTruthy();
-    expect([...decide!.matchAll(/'([^']*)'|"([^"]*)"|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3])).toEqual(['clipboard-sanitized-write']); // (the only permission named)
+    expect([...decide!.matchAll(/'([^']*)'|"([^"]*)"|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3])).toEqual(['clipboard-sanitized-write']); // (the only permission named here; the microphone goes through pageMayUseMic)
+    expect(decide).toMatch(/pageMayUseMic\(/);
+    const mic = code.get('src/shared/voice-permission.ts')!; // (the only other place that names a permission, and the only kind it allows)
+    expect([...mic.matchAll(/'([^']*)'|"([^"]*)"|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3])).toEqual(['media', 'audio']);
     expect(decide).toMatch(/wc === win\.webContents/); // (only the app's own page)
     // both handlers only ever answer with that function: no `true`, no other test
-    expect(main).toMatch(/setPermissionRequestHandler\(\(wc, permission, cb\) => cb\(pagePermission\(wc, permission\)\)\);/);
-    expect(main).toMatch(/setPermissionCheckHandler\(\(wc, permission\) => pagePermission\(wc, permission\)\);/);
+    expect(main).toMatch(/setPermissionRequestHandler\(\(wc, permission, cb, details\) => cb\(pagePermission\(wc, permission, 'mediaTypes' in details \? details\.mediaTypes : undefined\)\)\);/);
+    expect(main).toMatch(/setPermissionCheckHandler\(\(wc, permission, _origin, details\) => pagePermission\(wc, permission, details\.mediaType \? \[details\.mediaType\] : undefined\)\);/);
     expect(main.match(/\bpagePermission\b/g)).toHaveLength(3); // (the definition and the two handlers: no other use)
   });
 

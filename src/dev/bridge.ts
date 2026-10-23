@@ -48,6 +48,7 @@ const SHIM = `(() => {
     saveText: async (text, name) => { (window.__saved = window.__saved || []).push({ text, name }); return { saved: true }; }, // the person picked a file
     openPath: async (p) => { (window.__openedPath = window.__openedPath || []).push(p); return window.__openPathAnswer || { opened: true }; }, // a test may answer otherwise
     revealPath: async (p) => { (window.__revealed = window.__revealed || []).push(p); return { revealed: true }; },
+    voice: { status: async () => ({ complete: false, missing: [] }), download: async () => { throw new Error('Voice is not available in the bridge.'); }, cancel: async () => {}, file: async () => { throw new Error('Voice is not available in the bridge.'); }, remove: async () => {} },
     trashConversations: async (ids) => { (window.__trashed = window.__trashed || []).push(ids); return window.__trashAnswer || { trashed: ids, refused: [] }; }, // the person said Move to Trash; nothing is moved (a test moves the files itself)
   };
 })();`;

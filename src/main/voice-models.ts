@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { assertJafferHome } from '../core/reset';
 import { VOICE_FILES, type VoiceFile } from '../shared/voice-manifest';
 
 /**
@@ -117,6 +118,14 @@ export async function readVoiceFile(dir: string, name: string, files: readonly V
   const buf = await readFile(target(dir, f.name));
   if (buf.length !== f.bytes) throw new Error('Voice file has the wrong size.');
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.length);
+}
+
+/** `rm -rf` is only ever pointed at `<Jaffer home>/voice`: the name is `voice` and the parent passes `assertJafferHome` (throws otherwise). */
+export function assertVoiceDir(dir: string, userHome: string): string {
+  const d = path.resolve(dir);
+  if (path.basename(d) !== 'voice') throw new Error('Not the voice folder.');
+  assertJafferHome(path.dirname(d), userHome);
+  return d;
 }
 
 export async function removeVoice(dir: string): Promise<void> {
