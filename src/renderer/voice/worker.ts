@@ -4,11 +4,12 @@
  * WASM and data) speaks, Whisper base.en transcribes, both on transformers.js over onnxruntime-web's WASM backend.
  *
  * **No network, by construction** (the page is a `file://` page and a worker loaded from it has no CSP of its own, so the guards are
- * here): the page hands over every byte in `load` (the 13 manifest files and the ORT binary, read by main through `jaffer:voice-file`);
+ * here, and `net-guard.ts`, imported first, installs them before any library code runs): the page hands over every byte in `load`
+ * (the 13 manifest files and the ORT binary, read by main through `jaffer:voice-file`);
  * transformers.js reads models only from the custom cache below (`allowRemoteModels = false`; `allowLocalModels` must stay true or
  * transformers.js refuses to start when both are off, and its local path points nowhere and goes through the fetch guard); kokoro-js
- * reads its voice files from `caches.open()`, which this worker replaces with the same in-memory cache; `fetch` is replaced by a guard
- * that serves only `data:` and `blob:` URLs and `XMLHttpRequest` is removed; and `wasmPaths` is cleared, because transformers.js sets it
+ * reads its voice files from `caches.open()`, which this worker replaces with the same in-memory cache; `fetch` serves only `data:` and
+ * `blob:` URLs and the other network APIs are gone (`net-guard.ts`); and `wasmPaths` is cleared at module level, because transformers.js sets it
  * to cdn.jsdelivr.net at import and ORT would then `import()` its glue code from there (the feasibility gate saw that request) instead of
  * the copy embedded in its bundle (`import.meta.url` is defined as the worker's own URL by the build so ORT finds it).
  * One thread (`numThreads = 1`: a `file://` page is not cross-origin isolated, so there is no SharedArrayBuffer).
@@ -16,6 +17,7 @@
  * Kokoro runs on WASM only: on the gate's Mac, Kokoro q8 on WebGPU loaded and ran but its audio was garbled (Whisper heard "Okay, thing,
  * thing, thing." for "Hello, this is a test.") and it was no faster than WASM. Audio stays in memory and is never logged.
  */
+import './net-guard'; // first: it must run before any library code below
 import { env, pipeline, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
 import { KokoroTTS, TextSplitterStream } from 'kokoro-js';
 
@@ -39,16 +41,14 @@ const VOICE = 'af_heart';
 /** A model id in a request becomes the manifest folder: `.../<repo>/[resolve/<rev>/]<file>` -> `<dir>/<file>`. */
 const REPOS: Record<string, string> = { [`${KOKORO}/`]: 'kokoro/', [`${WHISPER}/`]: 'whisper/' };
 
-const scope = self as unknown as { postMessage(m: FromWorker, t?: Transferable[]): void; onmessage: ((e: MessageEvent<ToWorker>) => void) | null; fetch: typeof fetch; XMLHttpRequest?: unknown };
+const scope = self as unknown as { postMessage(m: FromWorker, t?: Transferable[]): void; onmessage: ((e: MessageEvent<ToWorker>) => void) | null };
 const post = (m: FromWorker, t?: Transferable[]) => scope.postMessage(m, t);
 
-const realFetch = scope.fetch.bind(self);
-scope.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-  const u = String(input instanceof Request ? input.url : input);
-  if (u.startsWith('data:') || u.startsWith('blob:')) return realFetch(input, init);
-  return Promise.reject(new TypeError('The voice worker has no network.'));
-}) as typeof fetch;
-scope.XMLHttpRequest = undefined;
+// right after the imports: transformers.js set this to cdn.jsdelivr.net, and ORT would `import()` its glue code from there
+const ow = env.backends.onnx.wasm!;
+ow.wasmPaths = undefined;
+ow.numThreads = 1;
+ow.proxy = false;
 
 let files: Record<string, Uint8Array> = {};
 const lookup = (key: unknown): Uint8Array | undefined => {
@@ -81,11 +81,7 @@ let jobs = Promise.resolve();
 
 async function load(m: Extract<ToWorker, { type: 'load' }>) {
   files = m.files;
-  const ow = env.backends.onnx.wasm!;
   ow.wasmBinary = m.wasm;
-  ow.numThreads = 1;
-  ow.proxy = false;
-  ow.wasmPaths = undefined;
   tts = await KokoroTTS.from_pretrained(KOKORO, { dtype: 'q8', device: 'wasm' });
   // (typed loosely: the overloads of `pipeline` are a union too large for tsc)
   const make = pipeline as unknown as (task: 'automatic-speech-recognition', model: string, o: object) => Promise<AutomaticSpeechRecognitionPipeline>;

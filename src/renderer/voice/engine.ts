@@ -27,6 +27,8 @@ let worker: Worker | null = null;
 let starting: Promise<void> | null = null;
 /** Fails a start still waiting for the models (stopEngine during the load). */
 let failStart: (() => void) | null = null;
+/** Bumped by `stopEngine`: a start that began before it gives up after its reads (consent withdrawn while ~173 MB is read). */
+let generation = 0;
 let deps: EngineDeps = defaults;
 let seq = 0;
 const pending = new Map<number, Pending>();
@@ -77,11 +79,14 @@ export function startEngine(inject?: EngineDeps): Promise<void> {
   if (worker && !starting) return Promise.resolve();
   if (starting) return starting;
   deps = inject ?? defaults;
+  const gen = generation;
   const run = (async () => {
     let w: Worker | null = null;
     try {
       const names = VOICE_FILES.map((f) => f.name);
       const bytes = await Promise.all([...names, VOICE_RUNTIME_WASM].map((n) => deps.file(n)));
+      if (gen !== generation) throw new Error('stopped');
+
       const files = Object.fromEntries(names.map((n, i) => [n, bytes[i]!]));
       const wasm = bytes[names.length]!;
       w = deps.worker();
@@ -138,6 +143,7 @@ export function transcribe(pcm16k: Float32Array): Promise<string> {
 
 /** Ends the worker (its memory with it) and the audio; whatever is pending is rejected with 'unavailable', speech resolves. */
 export function stopEngine(): void {
+  generation++;
   failStart?.();
   endSpeech();
   worker?.terminate();

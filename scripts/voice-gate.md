@@ -11,6 +11,8 @@ Never point it at a real `~/.jaffer`: `HOME` and `JAFFER_HOME` are throwaway fol
 
 ## Steps
 
+Replace `/path/to/jaffer` everywhere below (also inside `page-src.ts` and `dl.ts`) with the absolute path of your Jaffer checkout.
+
 ```sh
 G=$TMPDIR/voice-gate            # any throwaway folder outside the repo
 mkdir -p $G/home/.jaffer-gate $G/app

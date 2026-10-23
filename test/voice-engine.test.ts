@@ -91,7 +91,8 @@ describe('voice engine (page side)', () => {
     const q = speak('Three.', 1);
     const id2 = w.last('speak').id;
     w.reply({ type: 'audio', id: id2, pcm: new Float32Array(10), rate: 24000 });
-    w.reply({ type: 'audio', id: id - 0, pcm: new Float32Array(10), rate: 24000 }); // a stale id plays nothing
+    const staleId = id;
+    w.reply({ type: 'audio', id: staleId, pcm: new Float32Array(10), rate: 24000 }); // a stale id plays nothing
     expect(sources).toHaveLength(3);
     stopSpeaking();
     await q;
@@ -104,6 +105,17 @@ describe('voice engine (page side)', () => {
     stopSpeaking();
     expect(w.last('stop')).toBeTruthy();
     await expect(p).resolves.toBeUndefined();
+  });
+
+  it('stopEngine while the files are still being read: no worker is made and the start rejects', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let made = 0;
+    const p = startEngine(deps({ file: async () => { await gate; return new Uint8Array(1); }, worker: () => { made++; w = new FakeWorker(); return w as unknown as Worker; } }));
+    stopEngine();
+    release();
+    await expect(p).rejects.toBe('unavailable');
+    expect(made).toBe(0);
   });
 
   it('transcribe returns the worker text', async () => {
@@ -135,19 +147,28 @@ describe('voice engine (page side)', () => {
 });
 
 describe('voice worker has no network (source scan)', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/voice/worker.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
-  it('turns remote models off and feeds models only from the custom cache', () => {
+  const strip = (f: string) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+  const src = strip('src/renderer/voice/worker.ts');
+  const guard = strip('src/renderer/voice/net-guard.ts');
+  it('imports the net guard first, before any library', () => {
+    expect(src.match(/^import\s[^;]*;/m)?.[0]).toBe("import './net-guard';");
+  });
+  it('turns remote models off, feeds models only from the custom cache, one WASM thread, no proxy', () => {
     expect(src).toMatch(/env\.allowRemoteModels\s*=\s*false/);
     expect(src).toMatch(/env\.useCustomCache\s*=\s*true/);
     expect(src).toMatch(/env\.useBrowserCache\s*=\s*false/);
-    // ORT would otherwise import its glue code from cdn.jsdelivr.net (transformers sets that default)
-    expect(src).toMatch(/wasmPaths\s*=\s*undefined/);
+    // ORT would otherwise import its glue code from cdn.jsdelivr.net (transformers sets that default); cleared at module level
+    expect(src).toMatch(/^ow\.wasmPaths\s*=\s*undefined;/m);
+    expect(src).toMatch(/^ow\.numThreads\s*=\s*1;/m);
+    expect(src).toMatch(/^ow\.proxy\s*=\s*false;/m);
   });
-  it('calls fetch only through the guard that refuses everything but data: and blob:', () => {
-    expect(src).not.toMatch(/(?<![A-Za-z])fetch\(/); // only realFetch(, inside the guard
-    expect(src).toMatch(/startsWith\('data:'\) \|\| u\.startsWith\('blob:'\)/);
-    expect(src).not.toMatch(/https?:\/\//);
-    expect(src).not.toMatch(/importScripts|XMLHttpRequest\(|WebSocket\(|EventSource\(/);
+  it('the worker reaches no network API itself; the guard fetches only data: and blob:', () => {
+    for (const s of [src, guard]) {
+      expect(s).not.toMatch(/(?<![A-Za-z])fetch\(/); // only realFetch(, inside the guard
+      expect(s).not.toMatch(/https?:\/\//);
+      expect(s).not.toMatch(/importScripts\(|new XMLHttpRequest|new WebSocket|new EventSource|sendBeacon\(/);
+    }
+    expect(guard).toMatch(/startsWith\('data:'\) \|\| u\.startsWith\('blob:'\)/);
   });
   it('the main bundle never imports the worker or transformers.js', () => {
     const renderer = path.join(__dirname, '..', 'src/renderer');
