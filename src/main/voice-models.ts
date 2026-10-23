@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { VOICE_FILES, VOICE_HOSTS, type VoiceFile } from '../shared/voice-manifest';
+import { VOICE_FILES, type VoiceFile } from '../shared/voice-manifest';
 
 /**
  * The only network code for voice: downloads the pinned model files over HTTPS from a fixed host
@@ -31,14 +31,17 @@ export async function voiceStatus(dir: string, files: readonly VoiceFile[] = VOI
   return { complete: missing.length === 0, missing };
 }
 
-function checkHost(url: string, hosts: readonly string[]): URL {
+/** Fixed policy: Hugging Face and its `.hf.co` CDN edges (they vary by region). The pinned SHA-256 carries integrity. */
+const hubHost = (h: string) => h === 'huggingface.co' || h.endsWith('.hf.co');
+
+function checkHost(url: string, hosts: readonly string[] | undefined): URL {
   let u: URL;
   try { u = new URL(url); } catch { throw new VoiceDownloadError('host', 'Bad address.'); }
-  if (u.protocol !== 'https:' || !hosts.includes(u.host)) throw new VoiceDownloadError('host', `Refused host ${u.host}.`);
+  if (u.protocol !== 'https:' || u.username || u.password || !(hosts ? hosts.includes(u.host) : hubHost(u.hostname)) || u.port) throw new VoiceDownloadError('host', `Refused host ${u.host || url.slice(0, 80)}.`);
   return u;
 }
 
-async function fetchFollow(url: string, o: { fetchImpl: typeof fetch; hosts: readonly string[]; signal: AbortSignal }): Promise<Response> {
+async function fetchFollow(url: string, o: { fetchImpl: typeof fetch; hosts: readonly string[] | undefined; signal: AbortSignal }): Promise<Response> {
   let cur = checkHost(url, o.hosts).href;
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     const res = await o.fetchImpl(cur, { redirect: 'manual', signal: o.signal });
@@ -54,7 +57,7 @@ async function fetchFollow(url: string, o: { fetchImpl: typeof fetch; hosts: rea
   throw new VoiceDownloadError('network', 'Too many redirects.');
 }
 
-async function fetchOne(dir: string, f: VoiceFile, o: { fetchImpl: typeof fetch; hosts: readonly string[]; signal: AbortSignal; add(n: number): void }): Promise<void> {
+async function fetchOne(dir: string, f: VoiceFile, o: { fetchImpl: typeof fetch; hosts: readonly string[] | undefined; signal: AbortSignal; add(n: number): void }): Promise<void> {
   const dest = target(dir, f.name);
   const part = `${dest}.part`;
   await mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
@@ -92,7 +95,7 @@ export async function downloadVoice(dir: string, opts: {
   fetchImpl?: typeof fetch; files?: readonly VoiceFile[]; hosts?: readonly string[];
 }): Promise<void> {
   const files = opts.files ?? VOICE_FILES;
-  const hosts = opts.hosts ?? VOICE_HOSTS;
+  const hosts = opts.hosts; // undefined: the fixed Hub policy above
   const fetchImpl = opts.fetchImpl ?? fetch;
   const total = files.reduce((n, f) => n + f.bytes, 0);
   await mkdir(dir, { recursive: true, mode: 0o700 });

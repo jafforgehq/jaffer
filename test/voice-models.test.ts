@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, stat, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -35,6 +35,28 @@ describe('voice models', () => {
     expect(seen.at(-1)).toBe(A.length + B.length);
     expect((await readdir(dir, { recursive: true })).some((n) => n.endsWith('.part'))).toBe(false);
   }, 20000);
+
+  it('tightens an existing loose folder to 0700', async () => {
+    await mkdir(dir, { recursive: true });
+    await chmod(dir, 0o777);
+    await downloadVoice(dir, opts(okFetch()));
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+  });
+
+  it('default host policy: hub and .hf.co edges only, https, no userinfo', async () => {
+    const via = (to: string) => {
+      const f = (async (u: string | URL | Request) => String(u) === 'https://huggingface.co/a.bin'
+        ? new Response(null, { status: 302, headers: { location: to } })
+        : new Response(new Uint8Array(A), { status: 200 })) as typeof fetch;
+      return downloadVoice(dir, { onProgress() {}, signal: new AbortController().signal, fetchImpl: f, files: [file('a.bin', A, 'huggingface.co')] });
+    };
+    await via('https://cas-bridge.xethub.hf.co/x');
+    await removeVoice(dir);
+    for (const bad of ['https://huggingface.co.evil.com/x', 'https://evilhf.co/x', 'https://hf.co.evil.com/x', 'http://cas-bridge.xethub.hf.co/x', 'https://u:p@cas-bridge.xethub.hf.co/x', 'https://huggingface.co@evil.com/x']) {
+      await removeVoice(dir);
+      expect(await code(via(bad)), bad).toBe('host');
+    }
+  });
 
   it('a checksum mismatch deletes the file and throws code checksum', async () => {
     const bad = (async () => new Response(new Uint8Array(Buffer.from('xxxxxxxxxxx')), { status: 200 })) as typeof fetch;
