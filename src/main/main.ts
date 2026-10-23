@@ -37,6 +37,7 @@ import { historyMenuItems, resumeCommand } from '../shared/history-label';
 import { parseNames } from '../shared/history-names';
 import { trashAsk, trashConversations } from './trash-conversations';
 import { assertVoiceDir, downloadVoice, readVoiceFile, removeVoice, voiceStatus, VoiceDownloadError } from './voice-models';
+import { VOICE_RUNTIME_WASM } from '../shared/voice-manifest';
 import { pageMayUseMic } from '../shared/voice-permission';
 import { VoiceEpoch } from '../shared/voice-epoch';
 import { MAX_REMOVE, type Conversation } from '../core/claude/history';
@@ -1303,6 +1304,8 @@ ipcMain.handle('jaffer:voice-file', async (e, p: unknown) => {
   const name = (p as { name?: unknown } | null)?.name;
   if (typeof name !== 'string') throw new Error('Not a voice file.');
   if (!(await voiceAllowed())) throw new Error('Voice is off.');
+  // the onnxruntime-web binary ships with the app (the build copies it next to the page); a fixed name, never a path from the page
+  if (name === VOICE_RUNTIME_WASM) return new Uint8Array(await fs.promises.readFile(path.join(distRoot, 'renderer', VOICE_RUNTIME_WASM)));
   return readVoiceFile(voiceDir, name); // (refuses a name the manifest does not list)
 });
 ipcMain.handle('jaffer:voice-remove', async (e) => {

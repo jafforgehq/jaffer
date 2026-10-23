@@ -89,3 +89,10 @@ export const VOICE_FILES: readonly VoiceFile[] = [
 ];
 
 export const VOICE_TOTAL_BYTES: number = VOICE_FILES.reduce((n, f) => n + f.bytes, 0);
+
+/**
+ * The onnxruntime-web WASM binary the voice worker runs. It is not downloaded: the build copies it from `onnxruntime-web/dist` into
+ * `dist/renderer/`, and main hands its bytes to the page through `jaffer:voice-file` like a model file (the page is a `file://` page
+ * and cannot fetch it). The JSEP build is the one the bundled `onnxruntime-web` loads.
+ */
+export const VOICE_RUNTIME_WASM = 'ort-wasm-simd-threaded.jsep.wasm';
