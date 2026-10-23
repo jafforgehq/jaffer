@@ -38,6 +38,7 @@ import { parseNames } from '../shared/history-names';
 import { trashAsk, trashConversations } from './trash-conversations';
 import { assertVoiceDir, downloadVoice, readVoiceFile, removeVoice, voiceStatus, VoiceDownloadError } from './voice-models';
 import { pageMayUseMic } from '../shared/voice-permission';
+import { VoiceEpoch } from '../shared/voice-epoch';
 import { MAX_REMOVE, type Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
@@ -323,7 +324,7 @@ function applyConfig(next: typeof appCfg): void {
   const changed = appearanceChanged(appCfg, next);
   const dropdownWas = dropdownOn();
   appCfg = next;
-  if (appCfg.permissions?.voice !== true) void cancelVoiceDownload(); // (voice off: a running download stops; the files stay until the person removes them)
+  if (appCfg.permissions?.voice !== true) { voiceEpoch.bump(); void cancelVoiceDownload(); } // (voice off: a running download stops; the files stay until the person removes them)
   if (dropdownWas && !dropdownOn()) restoreBounds();
   if (changed.systemStats) syncSystemStats();
   if (changed.blur) syncVibrancy();
@@ -1263,6 +1264,7 @@ ipcMain.handle('jaffer:trash-conversations', async (e, p: unknown) => {
 // both the download and the read unless the daemon's own config says `permissions.voice` (read at each call: the page patches the config
 // and calls right after, before `config.changed` reaches main). Events to the page carry numbers and a code, never a path or a message.
 const voiceDir = path.join(paths.home, 'voice');
+const voiceEpoch = new VoiceEpoch(); // (a cancel, a remove or Voice turned off while the config is being read keeps the download from starting)
 let voiceJob: { ctl: AbortController; settled: Promise<void> } | null = null;
 async function voiceAllowed(): Promise<boolean> {
   try { return ((await client?.call<typeof appCfg>('config.get', {}))?.permissions?.voice) === true; } catch { return false; }
@@ -1280,8 +1282,9 @@ ipcMain.handle('jaffer:voice-status', async (e) => {
 ipcMain.handle('jaffer:voice-download', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
   if (voiceJob) return; // (one at a time: the running one reports to the page)
+  const t = voiceEpoch.take();
   if (!(await voiceAllowed())) throw new Error('Voice is off.');
-  if (voiceJob) return; // (a second ask arrived while the config was read)
+  if (voiceJob || !voiceEpoch.still(t)) return; // (a second ask arrived while the config was read)
   const ctl = new AbortController();
   const settled = downloadVoice(voiceDir, { signal: ctl.signal, onProgress: (done, total) => sendToRenderer('jaffer:event', 'voice.progress', { done, total }) })
     .then(() => sendToRenderer('jaffer:event', 'voice.done', {}))
@@ -1292,6 +1295,7 @@ ipcMain.handle('jaffer:voice-download', async (e) => {
 });
 ipcMain.handle('jaffer:voice-cancel', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
+  voiceEpoch.bump();
   await cancelVoiceDownload();
 });
 ipcMain.handle('jaffer:voice-file', async (e, p: unknown) => {
@@ -1303,6 +1307,7 @@ ipcMain.handle('jaffer:voice-file', async (e, p: unknown) => {
 });
 ipcMain.handle('jaffer:voice-remove', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');
+  voiceEpoch.bump();
   await cancelVoiceDownload();
   await removeVoice(assertVoiceDir(voiceDir, os.homedir())); // (rm -rf only ever of <Jaffer home>/voice)
 });
