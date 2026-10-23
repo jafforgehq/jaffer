@@ -226,6 +226,7 @@ describe('invariants of CLAUDE.md', () => {
       'src/shared/recent-commands.ts': 1, // a command of at most 4 * COMMAND_HEAD (longer ones are never kept)
       'src/shared/redact.ts': 1, // its own definition
       'src/shared/resume-action.ts': 1, // the busy command, from the daemon's bounded command line
+      'src/shared/voice-text.ts': 1, // the reply clipped to 4 * COMMAND_HEAD first; only shorter text is redacted
     };
     expect(perFile(hits(/\bredactText\(/))).toEqual(KNOWN);
   });
