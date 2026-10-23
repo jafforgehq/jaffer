@@ -147,5 +147,22 @@ describe('Settings → Privacy → voice', () => {
     await page.click('.vc-remove');
     await until(async () => page.evaluate(() => (window as any).__v.calls.includes('remove')), 5000, 'remove called');
     await page.waitForSelector('.vc-remove', { state: 'detached' });
+    await page.waitForSelector('.vc-status[data-state="needs-download"] .vc-download'); // switch still on: Download stays offered
+  });
+
+  it('voice on in the config but files missing: a Download button, no new question, then progress', async () => {
+    await page.evaluate(() => (window as any).jaffer.call('config.patch', { permissions: { voice: true } }));
+    await page.goto(`${url}?renderer=dom`);
+    await page.waitForSelector('.terminal-area');
+    await fakeVoice(false);
+    await page.evaluate(() => { (window as any).__v.downloadMode = 'hang'; });
+    await openPrivacy();
+    await page.waitForSelector('.vc-status[data-state="needs-download"] .vc-download');
+    await page.click('.vc-download');
+    expect(await page.locator('.vc-ask').count()).toBe(0);
+    await until(async () => page.evaluate(() => (window as any).__v.calls.includes('download')), 5000, 'download called');
+    await page.evaluate(() => (window as any).__event('voice.progress', { done: 100, total: 200 }));
+    await page.waitForSelector('.vc-status[data-state="downloading"]');
+    expect(await page.textContent('.vc-status')).toContain('50%');
   });
 });

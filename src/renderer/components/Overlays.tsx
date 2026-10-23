@@ -556,7 +556,12 @@ function VoiceField({ on }: { on: boolean }): VNode {
             </>
           )}
           {st === 'ready' && <span>Ready</span>}
-          {st === 'needs-download' && <span>The voice models are not on this Mac yet.</span>}
+          {st === 'needs-download' && (
+            <>
+              <span>The voice models are not on this Mac yet.</span>
+              <button class="btn primary vc-download" onClick={() => void enableVoice().catch(() => undefined)}>Download</button>
+            </>
+          )}
           {st === 'error' && (
             <>
               <span class="vc-err">{voiceError.value ?? 'The download failed. Try again.'}</span>

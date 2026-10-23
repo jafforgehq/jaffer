@@ -56,7 +56,7 @@ export async function enableVoice(): Promise<void> {
   eventSeen = false;
   voiceError.value = null;
   voiceProgress.value = { done: 0, total: 0 };
-  await patchConfig({ permissions: { voice: true } });
+  if (!isOn()) await patchConfig({ permissions: { voice: true } }); // (already consented: Download in the card, no patch)
   voiceStatus.value = 'downloading';
   try {
     await bridge().download();
