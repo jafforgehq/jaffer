@@ -11,6 +11,7 @@ import { askToExplain, Explain, explainCard, explainLast, explainSupported } fro
 import { terminals } from './TerminalView';
 import { ApprovalAsk } from './Chrome';
 import { InfoButton } from './InfoButton';
+import { VoiceLine } from './VoiceLine';
 
 const SLIDE_MS = 180;
 /** The arrow keys on the edge write `panel.width` (and fit the terminal) once they stop for this long. */
@@ -38,6 +39,7 @@ export function NowCard(): VNode {
         {m.elapsed && <span class="now-elapsed">{m.elapsed}</span>}
         <InfoButton id="session" tour="now-info" />
       </div>
+      <VoiceLine />
       {m.tool && <div class="now-tool">{m.tool}</div>}
       {ap && <ApprovalAsk key={ap.id} a={ap} place="card" />}
       {m.hint && <div class="now-hint">{m.hint}</div>}

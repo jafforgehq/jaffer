@@ -1165,3 +1165,8 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .vc-bar { position: relative; flex: 1; height: 4px; border-radius: 2px; background: var(--hover); overflow: hidden; }
 .vc-bar i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--ok); }
 .vc-err { color: var(--danger); flex: 1; }
+
+/* voice line in the Now card */
+.voice-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 12px; }
+.voice-line-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-line[data-mode='speaking'] .voice-line-label { color: var(--ok); }

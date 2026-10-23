@@ -49,3 +49,39 @@ function cut(t: string): string {
   const sp = head.lastIndexOf(' ');
   return (sp > 0 ? head.slice(0, sp) : head.replace(/[\ud800-\udbff]$/, '')).trim();
 }
+
+const FIRST_MAX = 80;
+const CHUNK_MAX = 300;
+/** Index just past the cut for `s` (longer than `max`): the last sentence end within max, else the last space; `first` takes the FIRST sentence end, else the last clause boundary, else the last space. Bounded scans only. */
+function cutAt(s: string, max: number, first: boolean): number {
+  const head = s.slice(0, max + 1);
+  const at = (re: RegExp, pick: 'first' | 'last') => {
+    let r = 0;
+    for (const m of head.matchAll(re)) { const e = m.index! + 1; if (e > max) break; r = e; if (pick === 'first') break; }
+    return r;
+  };
+  const end = at(/[.!?](?=\s)/g, first ? 'first' : 'last');
+  if (end) return end;
+  const clause = first ? at(/[,;:](?=\s)/g, 'last') : 0;
+  if (clause) return clause;
+  const sp = head.lastIndexOf(' ');
+  return sp > 0 ? sp : max; // shortcut: an unbroken run longer than max is cut hard (no word to keep whole)
+}
+
+/**
+ * The speakable text as chunks for first-audio latency: a SHORT first chunk (the first sentence, else a clause, within ~80 characters, never mid-word)
+ * so speech starts sooner, then sentence-aligned chunks of at most ~300. Joined with a space they give back the text (whitespace collapsed).
+ */
+export function chunkForSpeech(text: string): string[] {
+  let rest = text.replace(/\s+/g, ' ').trim();
+  const out: string[] = [];
+  let first = true;
+  while (rest) {
+    const max = first ? FIRST_MAX : CHUNK_MAX;
+    const n = rest.length <= max ? rest.length : cutAt(rest, max, first);
+    out.push(rest.slice(0, n).trim());
+    rest = rest.slice(n).trim();
+    first = false;
+  }
+  return out.filter(Boolean);
+}

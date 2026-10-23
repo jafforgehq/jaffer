@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { speakable } from '../src/shared/voice-text';
+import { chunkForSpeech, speakable } from '../src/shared/voice-text';
 
 describe('speakable', () => {
   it('drops fenced code, also an unclosed fence, and indented code', () => {
@@ -46,5 +46,52 @@ describe('speakable', () => {
         expect(Date.now() - t).toBeLessThan(1000);
       }
     }
+  });
+});
+
+describe('chunkForSpeech', () => {
+  const join = (a: string[]) => a.join(' ');
+  it('empty -> none; short text -> one chunk', () => {
+    expect(chunkForSpeech('')).toEqual([]);
+    expect(chunkForSpeech('  ')).toEqual([]);
+    expect(chunkForSpeech('Done.')).toEqual(['Done.']);
+  });
+  it('the first chunk is the first sentence when it is short', () => {
+    const t = 'I fixed the build. Then I ran the tests and they all passed, which is good news for everyone.';
+    expect(chunkForSpeech(t)[0]).toBe('I fixed the build.');
+    expect(join(chunkForSpeech(t))).toBe(t);
+  });
+  it('a long first sentence is cut at a clause boundary within ~80 chars, never mid-word', () => {
+    const t = 'First we read the configuration file, then we parse every single entry in it with great care and attention to detail, and finally we write it back.';
+    const c = chunkForSpeech(t);
+    expect(c[0]!.length).toBeLessThanOrEqual(80);
+    expect(c[0]).toBe('First we read the configuration file,');
+    expect(join(c)).toBe(t);
+  });
+  it('no clause boundary: cut at the last space before 80', () => {
+    const t = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ');
+    const c = chunkForSpeech(t);
+    expect(c[0]!.length).toBeLessThanOrEqual(80);
+    expect(t.startsWith(c[0]!)).toBe(true);
+    expect(t[c[0]!.length]).toBe(' ');
+    expect(join(c)).toBe(t);
+  });
+  it('the rest is chunked at sentence ends into <= ~300 chars', () => {
+    const t = Array.from({ length: 40 }, (_, i) => `This is sentence number ${i} of the reply.`).join(' ');
+    const c = chunkForSpeech(t);
+    expect(c.length).toBeGreaterThan(3);
+    for (const x of c.slice(1)) expect(x.length).toBeLessThanOrEqual(300);
+    expect(join(c)).toBe(t);
+  });
+  it('a sentence longer than 300 with no end is split at spaces', () => {
+    const t = 'x'.repeat(10) + ' ' + Array.from({ length: 200 }, () => 'abc').join(' ');
+    const c = chunkForSpeech(t);
+    for (const x of c) expect(x.length).toBeLessThanOrEqual(300);
+    expect(join(c)).toBe(t);
+  });
+  it('a single unbroken run longer than the limit is hard-cut (progress guaranteed)', () => {
+    const c = chunkForSpeech('y'.repeat(1000));
+    expect(c.join('')).toBe('y'.repeat(1000));
+    for (const x of c) expect(x.length).toBeLessThanOrEqual(300);
   });
 });

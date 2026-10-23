@@ -14,6 +14,7 @@ export const ALLOWED_PAGE_METHODS: ReadonlySet<string> = new Set([
   'claude.hooks',
   'claude.mcp',
   'claude.old',
+  'claude.reply',
   'claude.search',
   'claude.setup',
   'claude.state',
