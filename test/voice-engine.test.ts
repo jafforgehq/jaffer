@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { speak, startEngine, stopEngine, stopSpeaking, transcribe, type EngineDeps } from '../src/renderer/voice/engine';
+import { onCrash, speak, startEngine, stopEngine, stopSpeaking, transcribe, type EngineDeps } from '../src/renderer/voice/engine';
 import { VOICE_FILES, VOICE_RUNTIME_WASM } from '../src/shared/voice-manifest';
 
 /** A stand-in for the voice worker: records what the page posts and lets the test answer. */
@@ -183,5 +183,23 @@ describe('voice worker has no network (source scan)', () => {
     } };
     walk(renderer);
     expect(offenders).toEqual([]);
+  });
+
+  it('onCrash fires once when the worker dies after startup, before its speech is settled; our own stopEngine and a failed start never fire it', async () => {
+    let fired = 0;
+    let speechSettled = false;
+    const off = onCrash(() => { fired++; expect(speechSettled).toBe(false); });
+    await startEngine(deps());
+    const p = speak('Hi.', 1).then(() => { speechSettled = true; });
+    w.onerror?.({});
+    w.onerror?.({}); // (a second event of the same crash)
+    await p;
+    expect(fired).toBe(1);
+    await startEngine(deps());
+    stopEngine(); // ours
+    expect(fired).toBe(1);
+    await expect(startEngine(deps({ file: async () => { throw new Error('x'); } }))).rejects.toBe('unavailable');
+    expect(fired).toBe(1);
+    off();
   });
 });

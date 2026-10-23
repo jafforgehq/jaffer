@@ -7,7 +7,7 @@
 import { effect, signal } from '@preact/signals';
 import { activePane, cfg, claudeFor, openSettings, overlay, panes, toast } from '../state';
 import { createFlow } from './flow';
-import { speak, startEngine, stopEngine, stopSpeaking } from './engine';
+import { onCrash, speak, startEngine, stopEngine, stopSpeaking } from './engine';
 import type { VoiceMode } from './session';
 import { voiceStatus } from './status';
 
@@ -18,7 +18,7 @@ export const voicePreparing = signal(false);
 export const voicePane = signal<string | null>(null);
 
 const flow = createFlow({
-  engine: { startEngine: () => startEngine(), stopEngine, speak, stopSpeaking },
+  engine: { startEngine: () => startEngine(), stopEngine, speak, stopSpeaking, onCrash },
   reply: async (session) => {
     const r = await window.jaffer.call<{ ok: boolean; text?: string }>('claude.reply', { session });
     return r?.ok === true && typeof r.text === 'string' ? r.text : null;

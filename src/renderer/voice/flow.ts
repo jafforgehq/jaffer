@@ -13,6 +13,8 @@ export interface Engine {
   stopEngine(): void;
   speak(text: string, speed: number): Promise<void>;
   stopSpeaking(): void;
+  /** Fires once per worker crash after startup (never for our own stopEngine, nor a failed start). */
+  onCrash?(cb: () => void): void;
 }
 export interface FlowDeps {
   engine: Engine;
@@ -122,12 +124,20 @@ export function createFlow(d: FlowDeps) {
     const was = last;
     last = now ? { ...now } : null;
     if (mode === 'off' || !now) return;
+    if (was && was.id !== now.id) return; // another session: a new one, not a turn of the same (never read its reply)
     if (was?.state === 'working' && now.state === 'idle' && !now.cutShort) void speakReply(now.id);
     else if (was?.state !== 'working' && now.state === 'working') {
       speechGen++; // (also a reply still being fetched)
       if (mode === 'speaking') { d.engine.stopSpeaking(); send('stop'); }
     }
   }
+
+  // an engine crash ends voice at once, whatever the mode; a speech pending is dropped (end bumps speechGen), not finished
+  d.engine.onCrash?.(() => {
+    if (mode === 'off') return;
+    d.say('Voice stopped working. Turn it on again with /voice.');
+    end('worker-crashed');
+  });
 
   return { mode: () => mode, toggle, esc, stopButton, end, observe, send };
 }

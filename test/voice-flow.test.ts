@@ -5,14 +5,16 @@ import type { VoiceMode } from '../src/renderer/voice/session';
 const defer = <T = void>() => { let resolve!: (v: T) => void, reject!: (e: unknown) => void; const p = new Promise<T>((a, b) => ((resolve = a), (reject = b))); return { p, resolve, reject }; };
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-function rig(over: { start?: () => Promise<void>; reply?: () => Promise<string | null>; speakErr?: string } = {}) {
+function rig(over: { start?: () => Promise<void>; reply?: () => Promise<string | null>; speakErr?: string; speakAfterCrash?: boolean } = {}) {
   const log: string[] = [];
   const spoken: string[] = [];
   const said: string[] = [];
   const modes: VoiceMode[] = [];
   let t = 1000;
   const holds: Array<() => void> = [];
+  let crashCb: (() => void) | null = null;
   const engine: Engine = {
+    onCrash: (cb) => (crashCb = cb),
     startEngine: over.start ?? (async () => { log.push('start'); }),
     stopEngine: () => void log.push('stop'),
     speak: (c) => (spoken.push(c), over.speakErr ? Promise.reject(over.speakErr) : new Promise<void>((r) => holds.push(r))),
@@ -22,7 +24,7 @@ function rig(over: { start?: () => Promise<void>; reply?: () => Promise<string |
     engine, reply: over.reply ?? (async () => 'I fixed the build. Then I ran the tests.\n```\nrm -rf SECRET\n```'),
     speed: () => 1, say: (m) => said.push(m), onMode: (m) => modes.push(m), onPreparing: () => {}, now: () => t,
   });
-  return { flow, log, spoken, said, modes, holds, advance: (ms: number) => (t += ms) };
+  return { flow, log, spoken, said, modes, holds, crash: () => { crashCb?.(); holds.splice(0).forEach((x) => x()); /* (the engine then settles the speech) */ }, advance: (ms: number) => (t += ms) };
 }
 const finishTurn = async (r: ReturnType<typeof rig>) => { r.flow.observe({ id: 's', state: 'working' }); r.flow.observe({ id: 's', state: 'idle' }); await tick(); await tick(); };
 
@@ -161,5 +163,51 @@ describe('voice flow', () => {
     await finishTurn(r);
     expect(r.flow.mode()).toBe('off');
     expect(r.said[0]).toMatch(/stopped working/);
+  });
+
+  it('an engine crash ends voice at once in ready, with one toast', async () => {
+    const r = rig();
+    await r.flow.toggle();
+    r.crash();
+    r.crash();
+    expect(r.flow.mode()).toBe('off');
+    expect(r.said.length).toBe(1);
+    expect(r.said[0]).toMatch(/stopped working/);
+  });
+
+  it('a crash mid-chunk, or on the last chunk, ends voice as off (never spoke -> ready), one toast', async () => {
+    for (const reply of ['First sentence here. Second one follows.', 'Only one short sentence.']) {
+      const r = rig({ reply: async () => reply });
+      await r.flow.toggle();
+      await finishTurn(r);
+      expect(r.flow.mode()).toBe('speaking');
+      r.crash();
+      await tick(); await tick();
+      expect(r.flow.mode()).toBe('off');
+      expect(r.modes.at(-1)).toBe('off');
+      expect(r.said.length).toBe(1);
+      expect(r.spoken.length).toBe(1);
+    }
+  });
+
+  it('our own end (leaving) does not toast; the crash callback after it does nothing', async () => {
+    const r = rig();
+    await r.flow.toggle();
+    r.flow.end('switch-off');
+    r.crash();
+    expect(r.said).toEqual([]);
+  });
+
+  it('a working -> idle across different session ids speaks nothing', async () => {
+    const r = rig();
+    await r.flow.toggle();
+    r.flow.observe({ id: 'a', state: 'working' });
+    r.flow.observe({ id: 'b', state: 'idle' });
+    await tick(); await tick();
+    expect(r.spoken).toEqual([]);
+    r.flow.observe({ id: 'b', state: 'working' });
+    r.flow.observe({ id: 'b', state: 'idle' });
+    await tick(); await tick();
+    expect(r.spoken.length).toBe(1);
   });
 });

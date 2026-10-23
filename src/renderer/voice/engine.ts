@@ -100,8 +100,8 @@ export function startEngine(inject?: EngineDeps): Promise<void> {
         w!.onerror = () => reject(new Error('worker failed'));
         send({ type: 'load', files, wasm }, [...new Set(bytes.map((b) => b.buffer as ArrayBuffer))]);
       });
-      w.onerror = () => stopEngine();
-      w.onmessageerror = () => stopEngine();
+      w.onerror = () => crashed(w!);
+      w.onmessageerror = () => crashed(w!);
     } catch {
       if (w) { w.terminate(); if (worker === w) worker = null; }
       throw 'unavailable';
@@ -112,6 +112,19 @@ export function startEngine(inject?: EngineDeps): Promise<void> {
   })();
   starting = run;
   return run;
+}
+
+const crashListeners = new Set<() => void>();
+/** Calls `cb` once per worker crash after startup (never for a failed start, which rejects, nor for our own `stopEngine`). Returns the unsubscribe. */
+export function onCrash(cb: () => void): () => void {
+  crashListeners.add(cb);
+  return () => void crashListeners.delete(cb);
+}
+/** The worker died on its own: tell the listeners first (so they can drop a pending speech as a crash, not as finished), then end the engine. */
+function crashed(w: Worker) {
+  if (worker !== w) return; // (already stopped, by us or by an earlier crash event)
+  for (const cb of [...crashListeners]) { try { cb(); } catch { /* a listener must not keep the engine alive */ } }
+  stopEngine();
 }
 
 /** Speaks `text` at `speed` (Kokoro's speed, 1 = normal); a speech already playing is stopped first. */
