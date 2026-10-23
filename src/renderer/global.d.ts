@@ -30,6 +30,8 @@ export interface JafferBridge {
     cancel(): Promise<void>;
     file(name: string): Promise<Uint8Array>;
     remove(): Promise<void>;
+    /** macOS's microphone access for Jaffer (asks once when it was never decided); 'denied' while Voice is off or on any failure. */
+    mic(): Promise<'granted' | 'denied'>;
   };
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */

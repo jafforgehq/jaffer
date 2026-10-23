@@ -271,4 +271,16 @@ describe('invariants of CLAUDE.md', () => {
   it('the renderer has no HTML or code sinks', () => {
     expect(hits(/\binnerHTML\b|\bouterHTML\b|dangerouslySetInnerHTML|insertAdjacentHTML|document\.write\b|(?<![.\w])eval\s*\(|\bnew\s+Function\b/, (f) => f.startsWith('src/renderer/'))).toEqual([]);
   });
+
+  // (voice) "Dictated text is typed only under the five conditions ... and never with Enter"; "Audio is never written or logged"
+  it('dictation types only through the one type() call, never Enter or pty.write, and no voice code writes audio; getUserMedia only in recorder.ts', () => {
+    const voice = (f: string) => f.startsWith('src/renderer/voice/');
+    // two: the controller's wiring of `type` to the terminal, and flow.ts's one call of it in `deliver`
+    expect(hits(/\.type\(/, voice)).toEqual([expect.stringMatching(/^src\/renderer\/voice\/controller\.ts:\d+$/), expect.stringMatching(/^src\/renderer\/voice\/flow\.ts:\d+$/)]);
+    expect(code.get('src/renderer/voice/controller.ts')).toMatch(/type: \(pane, text\) => terminals\.get\(pane\)\?\.type\(text\),/);
+    expect(code.get('src/renderer/voice/flow.ts')).toMatch(/dz\.type\(start, text\);/);
+    expect(hits(/\\r|\\n|\\x0[ad]|\\u000[ad]|pty\.write|String\.fromCharCode/, voice)).toEqual([]);
+    expect(hits(/\bwriteFile|\bMediaRecorder\b|\bcreateObjectURL\b|\bnew\s+Blob\b|\bdownload\s*=|console\.(log|info|warn|error|debug)\(/, voice)).toEqual([]);
+    expect(hits(/getUserMedia/)).toEqual([expect.stringMatching(/^src\/renderer\/voice\/recorder\.ts:\d+$/)]);
+  });
 });

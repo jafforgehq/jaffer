@@ -61,6 +61,17 @@ const targets = [
     define: { ...define, 'process.env.NODE_ENV': '"production"', 'import.meta.url': 'self.location.href' },
     logLevel: 'warning',
   },
+  {
+    // (voice) the recorder's AudioWorklet: a file next to the page, loaded by relative URL (`script-src 'self'`; no blob: or data: module)
+    name: 'voice-recorder',
+    entryPoints: [path.join(root, 'src/renderer/voice/recorder.worklet.ts')],
+    outfile: path.join(root, 'dist/renderer/voice-recorder.worklet.js'),
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome140',
+    logLevel: 'warning',
+  },
 ].filter((t) => fs.existsSync(t.entryPoints[0]) && (!only || t.name === only));
 
 const { name: _n, ...rest } = {};

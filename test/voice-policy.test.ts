@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanDictation, mayType } from '../src/shared/voice-policy';
+import { cleanDictation, mayType, startsLikeCommand } from '../src/shared/voice-policy';
 
 const ok = { voiceOn: true, startPane: 'main', activePane: 'main', claudeState: 'idle', typing: false };
 
@@ -45,4 +45,9 @@ describe('cleanDictation', () => {
       }
     }
   });
+});
+
+describe('startsLikeCommand', () => {
+  it.each(['/clear', '!ls', '#remember this'])('true for %s (slash command, bash and memory modes)', (t) => expect(startsLikeCommand(t)).toBe(true));
+  it.each(['run the tests', 'what is /etc', 'a # b', '', ' /x'])('false for %j', (t) => expect(startsLikeCommand(t)).toBe(false));
 });

@@ -32,3 +32,11 @@ export function cleanDictation(raw: string): string {
   if (!/[\p{L}\p{N}]/u.test(s.replace(ANNOTATION, ' '))) return ''; // only [BLANK_AUDIO], (music), *sighs*, ♪ or punctuation
   return Array.from(s.slice(0, 4 * MAX_DICTATION)).slice(0, MAX_DICTATION).join('').trim();
 }
+
+/**
+ * Dictation that Claude Code would not take as prose: a first `/` (slash command), `!` (bash mode) or `#` (memory). Such text is copied,
+ * never typed (it is cleaned, so a leading space is already gone).
+ */
+export function startsLikeCommand(text: string): boolean {
+  return /^[/!#]/.test(text);
+}

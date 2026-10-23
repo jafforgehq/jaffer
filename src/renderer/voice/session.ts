@@ -1,7 +1,7 @@
 /**
  * Voice mode as a pure reducer (no signals, no DOM: the controller keeps the signal). Spec "Voice mode".
  * 'start' is the /voice toggle: off -> ready, and /voice again from any running mode -> off.
- * 'heard' (speech began) ready -> listening; 'stop' ends a recording (listening -> transcribing) or speech (speaking -> ready);
+ * 'heard' (a recording started: the microphone opened) ready -> listening; 'stop' ends a recording (listening -> transcribing) or speech (speaking -> ready);
  * 'text' (the transcript arrived) transcribing -> ready; 'reply' (a finished turn's prose is to be read; beyond the brief's list) ready -> speaking;
  * 'spoke' (speech ended) speaking -> ready. 'esc' cancels a recording (listening -> ready) or stops speech; a lone 'esc' in ready stays ready and
  * 'esc-esc' (the controller saw two in a row; kept out of this function so it stays pure) leaves. switch-off, window-hidden and worker-crashed

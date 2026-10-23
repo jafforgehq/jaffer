@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog as electronDialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, Tray, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog as electronDialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1314,6 +1314,19 @@ ipcMain.handle('jaffer:voice-file', async (e, p: unknown) => {
   // the onnxruntime-web binary ships with the app (the build copies it next to the page); a fixed name, never a path from the page
   if (name === VOICE_RUNTIME_WASM) return new Uint8Array(await fs.promises.readFile(path.join(distRoot, 'renderer', VOICE_RUNTIME_WASM)));
   return readVoiceFile(voiceDir, name); // (refuses a name the manifest does not list)
+});
+// macOS's own microphone access (System Settings → Privacy & Security → Microphone): asked only when it was never decided, and only while
+// Voice is on (the daemon's config, as for the files). Never throws: any failure is 'denied'. The page's own permission is `pageMayUseMic`.
+ipcMain.handle('jaffer:voice-mic', async (e) => {
+  if (!trusted(e)) throw new Error('untrusted sender');
+  try {
+    if (!(await voiceAllowed())) return 'denied';
+    const s = systemPreferences.getMediaAccessStatus('microphone');
+    if (s === 'not-determined') return (await systemPreferences.askForMediaAccess('microphone')) ? 'granted' : 'denied';
+    return s === 'granted' ? 'granted' : 'denied';
+  } catch {
+    return 'denied';
+  }
 });
 ipcMain.handle('jaffer:voice-remove', async (e) => {
   if (!trusted(e)) throw new Error('untrusted sender');

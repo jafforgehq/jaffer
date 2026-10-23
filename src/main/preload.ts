@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('jaffer', {
     cancel: () => ipcRenderer.invoke('jaffer:voice-cancel'),
     file: (name: string) => ipcRenderer.invoke('jaffer:voice-file', { name }),
     remove: () => ipcRenderer.invoke('jaffer:voice-remove'),
+    mic: () => ipcRenderer.invoke('jaffer:voice-mic'),
   },
   updates: {
     state: () => ipcRenderer.invoke('jaffer:update-state'),

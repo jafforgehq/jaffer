@@ -2,12 +2,18 @@
  * Voice mode in the window (spec "Voice mode", "Speaking"): the signals around `flow.ts` and the places that feed it events. `/voice` (the palette,
  * `toggleVoice`) turns it on for the terminal that is focused then (the voice-start pane) and starts the engine; only that terminal's Claude is
  * spoken. Events fed here: Esc (twice in `ready` leaves), the start pane closing, the window hidden, `permissions.voice` turned off, the start pane's
- * Claude changing state. Memory only: the mode, the start pane and the reply text for the call. Nothing is typed, nothing recorded (Task 8 adds that).
+ * Claude changing state. Memory only: the mode, the start pane and the reply text for the call. Dictation (Task 8): `record` opens the microphone
+ * (`recorder.ts`), `window.jaffer.voice.mic()` asks macOS once per voice session, and the text goes into the start pane through the one
+ * `type()` call below (the typing rule is `flow.ts`'s `deliver`), or to the clipboard with the reason (`copyToTerminal`). The samples and
+ * the text live for the call only.
  */
 import { effect, signal } from '@preact/signals';
 import { activePane, cfg, claudeFor, openSettings, overlay, panes, toast } from '../state';
+import { terminals } from '../components/TerminalView';
+import { copyToTerminal } from '../resume';
+import { record } from './recorder';
 import { createFlow } from './flow';
-import { onCrash, speak, startEngine, stopEngine, stopSpeaking } from './engine';
+import { onCrash, speak, startEngine, stopEngine, stopSpeaking, transcribe } from './engine';
 import type { VoiceMode } from './session';
 import { voiceStatus } from './status';
 
@@ -18,7 +24,7 @@ export const voicePreparing = signal(false);
 export const voicePane = signal<string | null>(null);
 
 const flow = createFlow({
-  engine: { startEngine: () => startEngine(), stopEngine, speak, stopSpeaking, onCrash },
+  engine: { startEngine: () => startEngine(), stopEngine, speak, stopSpeaking, onCrash, transcribe },
   reply: async (session) => {
     const r = await window.jaffer.call<{ ok: boolean; text?: string }>('claude.reply', { session });
     return r?.ok === true && typeof r.text === 'string' ? r.text : null;
@@ -28,6 +34,16 @@ const flow = createFlow({
   onMode: (m) => { voiceMode.value = m; if (m === 'off') voicePane.value = null; },
   onPreparing: (on) => (voicePreparing.value = on),
   now: () => Date.now(),
+  dictation: {
+    micAccess: () => window.jaffer.voice.mic(),
+    record: (signal) => record({ signal }),
+    voiceOn: () => cfg.value?.permissions?.voice === true,
+    startPane: () => voicePane.value,
+    activePane: () => activePane.value,
+    claudeState: (pane) => claudeFor(pane)?.state,
+    type: (pane, text) => terminals.get(pane)?.type(text), // the only typing of dictation: the cleaned text, no Enter
+    copy: copyToTerminal,
+  },
 });
 
 /** What `/voice` runs: needs the switch on and the files ready (else Settings → Privacy says why), then turns voice mode on or off. */
