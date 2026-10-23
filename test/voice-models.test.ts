@@ -1,0 +1,92 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, readdir, rm, stat, mkdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { VoiceFile } from '../src/shared/voice-manifest';
+import { VoiceDownloadError, downloadVoice, readVoiceFile, removeVoice, voiceStatus } from '../src/main/voice-models';
+
+const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+const A = Buffer.from('alpha-bytes');
+const B = Buffer.from('bravo-bytes-longer');
+const file = (name: string, b: Buffer, host = 'good.test'): VoiceFile => ({ name, url: `https://${host}/${name}`, sha256: sha(b), bytes: b.length });
+const FILES = [file('a.bin', A), file('sub/b.bin', B)];
+const HOSTS = ['good.test', 'cdn.good.test'];
+const BODY: Record<string, Buffer> = { 'https://good.test/a.bin': A, 'https://good.test/sub/b.bin': B };
+
+let dir: string;
+beforeEach(async () => { dir = path.join(await mkdtemp(path.join(os.tmpdir(), 'jaffer-voice-')), 'voice'); });
+afterEach(async () => { await rm(path.dirname(dir), { recursive: true, force: true }); });
+
+const okFetch = (calls: string[] = []): typeof fetch => (async (url: string | URL | Request) => {
+  const u = String(url); calls.push(u);
+  const b = BODY[u];
+  return b ? new Response(new Uint8Array(b), { status: 200 }) : new Response('no', { status: 404 });
+}) as typeof fetch;
+const opts = (fetchImpl: typeof fetch, extra = {}) => ({ onProgress() {}, signal: new AbortController().signal, fetchImpl, files: FILES, hosts: HOSTS, ...extra });
+const code = async (p: Promise<unknown>) => p.then(() => 'none', (e) => (e instanceof VoiceDownloadError ? e.code : String(e)));
+
+describe('voice models', () => {
+  it('downloads and verifies every file', async () => {
+    const seen: number[] = [];
+    await downloadVoice(dir, opts(okFetch(), { onProgress: (d: number) => seen.push(d) }));
+    expect(await voiceStatus(dir, FILES)).toEqual({ complete: true, missing: [] });
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    expect(seen.at(-1)).toBe(A.length + B.length);
+    expect((await readdir(dir, { recursive: true })).some((n) => n.endsWith('.part'))).toBe(false);
+  }, 20000);
+
+  it('a checksum mismatch deletes the file and throws code checksum', async () => {
+    const bad = (async () => new Response(new Uint8Array(Buffer.from('xxxxxxxxxxx')), { status: 200 })) as typeof fetch;
+    expect(await code(downloadVoice(dir, opts(bad)))).toBe('checksum');
+    expect((await voiceStatus(dir, FILES)).complete).toBe(false);
+    expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.bin') || n.endsWith('.part'))).toEqual([]);
+  });
+
+  it('a host outside the list throws code host, also for redirect hops', async () => {
+    expect(await code(downloadVoice(dir, opts(okFetch(), { files: [file('a.bin', A, 'evil.test')] })))).toBe('host');
+    const redir = (to: string) => (async () => new Response(null, { status: 302, headers: { location: to } })) as typeof fetch;
+    expect(await code(downloadVoice(dir, opts(redir('https://evil.test/x'))))).toBe('host');
+    expect(await code(downloadVoice(dir, opts(redir('http://cdn.good.test/x'))))).toBe('host');
+    // allowed hop works
+    const hop = (async (u: string | URL | Request) => String(u).startsWith('https://good.test/')
+      ? new Response(null, { status: 302, headers: { location: `https://cdn.good.test/z/${String(u).split('/').pop()}` } })
+      : new Response(new Uint8Array(String(u).endsWith('a.bin') ? A : B), { status: 200 })) as typeof fetch;
+    await downloadVoice(dir, opts(hop));
+    expect((await voiceStatus(dir, FILES)).complete).toBe(true);
+  });
+
+  it('abort removes partial files and throws code aborted', async () => {
+    const ac = new AbortController();
+    const slow = (async () => new Response(new ReadableStream({
+      start(c) { c.enqueue(new Uint8Array([1, 2, 3])); setTimeout(() => ac.abort(), 10); },
+    }), { status: 200 })) as typeof fetch;
+    expect(await code(downloadVoice(dir, opts(slow, { signal: ac.signal })))).toBe('aborted');
+    expect((await readdir(dir, { recursive: true })).filter((n) => n.endsWith('.part') || n.endsWith('.bin'))).toEqual([]);
+  });
+
+  it('readVoiceFile refuses unknown names and wrong sizes', async () => {
+    await downloadVoice(dir, opts(okFetch()));
+    expect(Buffer.from(await readVoiceFile(dir, 'a.bin', FILES)).equals(A)).toBe(true);
+    await expect(readVoiceFile(dir, '../x', FILES)).rejects.toThrow();
+    await expect(readVoiceFile(dir, '/etc/passwd', FILES)).rejects.toThrow();
+    await writeFile(path.join(dir, 'a.bin'), 'short');
+    await expect(readVoiceFile(dir, 'a.bin', FILES)).rejects.toThrow();
+  });
+
+  it('a file already present with the right hash is not fetched again', async () => {
+    await downloadVoice(dir, opts(okFetch()));
+    const calls: string[] = [];
+    await downloadVoice(dir, opts(okFetch(calls)));
+    expect(calls).toEqual([]);
+    await writeFile(path.join(dir, 'a.bin'), 'corrupt-same-len');
+    await downloadVoice(dir, opts(okFetch(calls)));
+    expect(calls).toEqual(['https://good.test/a.bin']);
+  });
+
+  it('removeVoice deletes the folder', async () => {
+    await mkdir(dir, { recursive: true });
+    await removeVoice(dir);
+    await expect(stat(dir)).rejects.toThrow();
+  });
+});
