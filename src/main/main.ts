@@ -951,6 +951,7 @@ function buildMenu(): void {
         item('focus-mode'),
         { type: 'separator' },
         item('run-claude'),
+        item('voice'),
         item('restart-shell'),
         { type: 'separator' },
         item('split-terminal'),

@@ -19,6 +19,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'focus-mode': { label: 'Focus Mode', accelerator: 'Alt+Cmd+F' }, // (⌃⌘F is Full Screen's, which macOS and Electron's own role hold)
   'run-claude': { label: 'Run Claude Code', accelerator: 'Shift+Cmd+C' },
   'restart-shell': { label: 'Restart Shell' },
+  voice: { label: 'Voice Mode' }, // (1.6.1: the palette's /voice, on and off)
   // 1.4.0: up to four terminals (⌘D, ⇧⌘W, ⌘1..⌘4, ⌘] and ⌘[ are no role's: the Window menu role has no Close on macOS)
   'split-terminal': { label: 'Split Terminal', accelerator: 'Cmd+D' },
   'close-terminal': { label: 'Close Terminal', accelerator: 'Shift+Cmd+W' },
