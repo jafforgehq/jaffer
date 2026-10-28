@@ -2,6 +2,7 @@ import os from 'node:os';
 import type { JafferPaths } from '../shared/paths';
 import { migrateToPlainTerminal, type MigrateOptions } from '../core/migrate';
 import { findClaude } from '../core/integrations/claude';
+import { removeVoiceLeftovers } from '../core/voice-leftovers';
 
 /**
  * One-time work on Jaffer's home at the app's start, after an older Jaffer's background session has been ended and before the app starts
@@ -23,4 +24,5 @@ export async function prepareHome(
   } catch {
     /* never in the terminal's way */
   }
+  removeVoiceLeftovers(paths.home, deps.userHome ?? os.homedir()); // voice mode (1.6.0, 1.6.1) was removed in 1.6.2
 }

@@ -47,6 +47,19 @@ command -v node  >/dev/null || die "Node.js 22+ is required."
 VERSION="$(node -p "require('./package.json').version")"
 TAG="v$VERSION"
 
+# ---- 0. version guard -------------------------------------------------------------------------------------------
+# A local checkout can miss tags (1.5.1 was once published under 1.6.1, which installed apps never offer as an update).
+if [ "$PUBLISH" = 1 ]; then
+  command -v gh >/dev/null || die "the GitHub CLI is needed to publish: brew install gh && gh auth login"
+  say "Checking $TAG against the releases and tags on GitHub"
+  git fetch --tags --quiet origin || die "could not fetch tags from origin."
+  NEWEST="$( { gh release list --limit 100 --json tagName -q '.[].tagName'; git tag; } | sed -n 's/^v\([0-9][0-9.]*\)$/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  if [ -n "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$VERSION" "$NEWEST" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" != "$VERSION" ]; then
+    die "package.json says $VERSION but v$NEWEST already exists. Installed apps only update to a higher version: bump package.json above $NEWEST."
+  fi
+  [ -f "docs/releases/$TAG.md" ] || die "docs/releases/$TAG.md is missing."
+fi
+
 # ---- 1. certificate ---------------------------------------------------------------------------------------------
 say "Looking for a Developer ID Application certificate in your keychain"
 IDENTITIES="$(security find-identity -v -p codesigning | grep 'Developer ID Application' || true)"
