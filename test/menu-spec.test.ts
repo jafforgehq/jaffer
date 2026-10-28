@@ -105,13 +105,6 @@ describe('the menu and the palette agree', () => {
     expect(/role: 'help',\s*submenu: \[[^\]]*item\('shortcuts'\),\s*item\('glossary'\),\s*item\('start-tour'\)/.test(main)).toBe(true);
   });
 
-  it('Voice Mode is in the Shell menu after Run Claude Code, the palette\'s /voice, with no accelerator (1.6.1)', () => {
-    expect(MENU_ITEMS['voice']).toEqual({ label: 'Voice Mode' });
-    expect(actions.find((a) => a.id === 'voice')).toEqual({ id: 'voice', keys: undefined });
-    const main = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
-    expect(/label: 'Shell',\s*submenu: \[[^\]]*item\('run-claude'\),\s*item\('voice'\)/.test(main)).toBe(true);
-  });
-
   it('no accelerator is used twice, and none takes ⌃⌘F (Full Screen) or ⌘Q', () => {
     const all = [...Object.values(MENU_ITEMS).map((i) => i.accelerator), 'Cmd+Q', TOGGLE_FULLSCREEN].filter(Boolean);
     expect(all.length).toBeGreaterThan(15);

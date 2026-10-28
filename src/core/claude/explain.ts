@@ -46,28 +46,13 @@ const fromWord = (s: string): string => {
   return i < 0 ? '' : s.slice(i + 1);
 };
 
-/** Up to the last whole word: a cut that ended inside a word (or a token) drops that piece. */
-const toWord = (s: string): string => {
-  const m = /\s\S*$/.exec(s);
-  return m ? s.slice(0, m.index) : '';
-};
-/** Up to the last sentence end (`.`, `!` or `?` before a space) when it lies in the second half, else up to the last whole word. */
-const toSentence = (s: string): string => {
-  let end = -1;
-  for (const m of s.matchAll(/[.!?](?=\s)/g)) end = m.index;
-  return end >= s.length / 2 ? s.slice(0, end + 1) : toWord(s);
-};
-
 /**
  * The text parts of the assistant lines since the last real prompt (the person's own words: not a tool result, meta, compaction, sidechain
  * or `<tag>` line), in order, from the last 256 KB of `file`, which must be a regular `.jsonl` file whose real path is inside
  * `<claudeDir>/projects` (opened without following a link). Never a tool call, a tool result, thinking or any other field. The end of
  * it, clipped before redaction to `4 * COMMAND_HEAD` and after to `EXPLAIN_MAX`. Undefined when there is none or it cannot be read.
- * `keep: 'head'` (voice, which reads an answer aloud from its start) keeps the beginning instead, cut at a sentence end or a whole
- * word on the end side; the default `'tail'` (Explain) keeps the end.
  */
-export async function lastReply(file: string, claudeDir: string, opts: { keep?: 'head' | 'tail' } = {}): Promise<string | undefined> {
-  const head = opts.keep === 'head';
+export async function lastReply(file: string, claudeDir: string): Promise<string | undefined> {
   let fh: fs.promises.FileHandle | undefined;
   try {
     const opened = await openTranscript(claudeDir, file);
@@ -78,7 +63,7 @@ export async function lastReply(file: string, claudeDir: string, opts: { keep?: 
     const ls = lines(await readAt(fh, from, st.size - from), from === 0, true);
     const parts: string[] = [];
     let n = 0;
-    for (let i = ls.length - 1; i >= 0 && (head || n < 4 * COMMAND_HEAD); i--) { // (head: back to the prompt, within the 256 KB read)
+    for (let i = ls.length - 1; i >= 0 && n < 4 * COMMAND_HEAD; i--) {
       const o = parse(ls[i]!);
       if (!o || o.isMeta === true || o.isSidechain === true || o.isCompactSummary === true) continue;
       const m = o.message && typeof o.message === 'object' ? (o.message as Record<string, unknown>) : undefined;
@@ -94,9 +79,9 @@ export async function lastReply(file: string, claudeDir: string, opts: { keep?: 
       }
     }
     let t = parts.join('\n\n');
-    if (t.length > 4 * COMMAND_HEAD) t = head ? toWord(t.slice(0, 4 * COMMAND_HEAD)) : fromWord(t.slice(-4 * COMMAND_HEAD));
+    if (t.length > 4 * COMMAND_HEAD) t = fromWord(t.slice(-4 * COMMAND_HEAD));
     t = redactText(t);
-    if (t.length > EXPLAIN_MAX) t = head ? toSentence(t.slice(0, EXPLAIN_MAX)) : fromWord(t.slice(-EXPLAIN_MAX));
+    if (t.length > EXPLAIN_MAX) t = fromWord(t.slice(-EXPLAIN_MAX));
     return t.trim() || undefined;
   } catch {
     return undefined;

@@ -131,12 +131,6 @@ export const GLOSSARY: GlossaryEntry[] = [
     short: 'Press ⌘D to split the window into up to four terminals, each with its own shell. ⌘1 to ⌘4 move between them and ⇧⌘W closes one.',
     more: 'The terminal with the outline is the focused one: the Now card, resume and the menus act on it. Quitting Jaffer ends every terminal, and none of them is saved.',
   },
-  {
-    id: 'voice-mode',
-    title: 'Voice mode',
-    short: 'Off by default. Jaffer reads Claude\'s replies aloud and types what you say into the prompt, never pressing Enter. Start it with /voice in the palette.',
-    more: 'Turn it on in Settings, Privacy and permissions; that downloads about 175 MB of speech models once and nothing else leaves your Mac. The microphone is open only while Jaffer listens, and the audio is dropped after it is turned into text. Speech and listening run on this Mac, in English only. Esc cancels, and Esc twice leaves voice mode.',
-  },
 ];
 
 export const glossaryEntry = (id: string): GlossaryEntry | undefined => GLOSSARY.find((e) => e.id === id);

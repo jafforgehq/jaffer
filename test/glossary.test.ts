@@ -4,7 +4,6 @@ import { GLOSSARY, glossaryEntry, searchGlossary } from '../src/shared/glossary'
 describe('the glossary (1.4.0)', () => {
   it('has at least 16 entries with unique lowercase-dash ids, a title, a short line of at most 220 characters and more of at most 700', () => {
     expect(GLOSSARY.length).toBeGreaterThanOrEqual(16);
-    expect(glossaryEntry('voice-mode')?.title).toBe('Voice mode'); // (1.6.0)
     const ids = GLOSSARY.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const e of GLOSSARY) {

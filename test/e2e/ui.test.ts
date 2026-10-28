@@ -174,10 +174,10 @@ describe('Jaffer UI end to end', () => {
     await page.click('.onboard .btn.primary');
     await page.waitForSelector('.onboard[data-step="privacy"]');
     expect(await page.locator('.onboard .btn.primary').textContent()).toBe('Looks good');
-    expect(await page.locator('.onboard .pv-list .field').count()).toBe(6);
+    expect(await page.locator('.onboard .pv-list .field').count()).toBe(5);
     expect(await page.locator('.onboard .pv-locked').count()).toBe(1);
     const defaults = async () => page.$$eval('.onboard .pv-list .field input[type="checkbox"]', (b) => b.map((x) => (x as HTMLInputElement).checked));
-    expect(await defaults()).toEqual([false, false, true, true, false, false]); // (the voice switch is the fifth, approvals the sixth)
+    expect(await defaults()).toEqual([false, false, true, true, false]);
     await page.locator('.onboard .pv-list .field', { hasText: 'Move conversations to the Trash' }).locator('.switch').click(); // a switch writes at once
     await until(async () => (await page.evaluate(() => window.jaffer.call('config.get'))).permissions.trash === false, 5_000, 'the trash switch to be written');
     await page.locator('.onboard .pv-list .field', { hasText: 'Move conversations to the Trash' }).locator('.switch').click();
@@ -3014,14 +3014,13 @@ describe('Jaffer UI end to end', () => {
     await page.waitForSelector('.settings');
     await page.click('.settings-nav button:has-text("Privacy and permissions")');
     const fields = page.locator('.settings .pv-list .field');
-    expect(await fields.count()).toBe(6);
+    expect(await fields.count()).toBe(5);
     const labels = await page.$$eval('.settings .pv-list .field .field-label', (l) => l.map((x) => x.firstChild?.textContent));
     expect(labels).toEqual([
       'Explain the last answer with a helper Claude',
       'Search the text of past conversations',
       'Type the resume line for you',
       'Move conversations to the Trash',
-      'Talk with Claude by voice',
       'Answer permission prompts from the notification',
     ]);
     const hints = await page.$$eval('.settings .pv-list .field small', (l) => l.map((x) => x.textContent ?? ''));
@@ -3029,8 +3028,7 @@ describe('Jaffer UI end to end', () => {
     expect(hints[1]).toMatch(/Shows only which conversations match\. Nothing is stored\./);
     expect(hints[2]).toMatch(/types claude --resume into an idle terminal\. Off: it only copies the command\./);
     expect(hints[3]).toMatch(/Always asks first; never deletes for good\./);
-    expect(hints[4]).toMatch(/Dictate with \/voice.*nothing you say or hear is sent anywhere\. Off: no microphone, no download\./);
-    expect(hints[5]).toMatch(/Experimental\./);
+    expect(hints[4]).toMatch(/Experimental\./);
     const locked = (await page.textContent('.settings .pv-locked')) ?? '';
     expect(locked).toContain('Always locked');
     expect(locked).toMatch(/Allow .* needs your own click, with the whole request shown/);
@@ -3042,7 +3040,7 @@ describe('Jaffer UI end to end', () => {
     const read = () => page.evaluate(() => window.jaffer.call('config.get'));
     const flip = (label: string) => page.locator('.settings .pv-list .field', { hasText: label }).locator('.switch').click();
     const perms = async () => (await read()).permissions;
-    expect(await perms()).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false });
+    expect(await perms()).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
     for (const [label, key, now] of [
       ['Explain the last answer', 'explain', true],
       ['Search the text of past conversations', 'deepSearch', true],
@@ -3051,7 +3049,7 @@ describe('Jaffer UI end to end', () => {
     ] as const) {
       await flip(label);
       await until(async () => (await perms())[key] === now, 5_000, `${key} to be written`);
-      expect(await perms(), key).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false, [key]: now }); // only that key moved
+      expect(await perms(), key).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, [key]: now }); // only that key moved
       await flip(label);
       await until(async () => (await perms())[key] === !now, 5_000, `${key} to be written back`);
     }
@@ -6515,7 +6513,7 @@ describe('Jaffer UI end to end', () => {
     expect(await page.locator('.panes > .pane').count()).toBe(1);
     expect(((await page.evaluate(() => window.jaffer.call('pane.list'))) as unknown[]).length).toBe(1);
     const c = await page.evaluate(() => window.jaffer.call('config.get'));
-    expect(c.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true, voice: false });
+    expect(c.permissions).toEqual({ explain: false, deepSearch: false, resumeTyping: true, trash: true });
     expect([c.history.tags, c.history.hidden, c.claude.projectBudgets]).toEqual([[], [], []]);
     expect([c.tour.done, c.tips.enabled]).toEqual([true, false]);
     expect(c.claude.approvals).toBe(false);

@@ -5,7 +5,6 @@ import { isClaudeCommand } from '../shared/process-badge';
 import { FIND_OPTS, terminals } from './components/TerminalView';
 import { THEMES } from './themes';
 import { resumeLast } from './resume';
-import { toggleVoice } from './voice/controller';
 import { closeTerminal, cycleTerminal, focusTerminal, splitTerminal } from './components/PaneTree';
 
 const call = <T = any,>(m: string, p?: unknown) => window.jaffer.call<T>(m, p);
@@ -71,7 +70,6 @@ async function guarded(fn: () => Promise<unknown>, ok?: string): Promise<void> {
 }
 
 export const actions: Action[] = [
-  { id: 'voice', title: '/voice — talk to Claude', section: 'Claude', keywords: 'voice speak dictate microphone talk', run: toggleVoice },
   { id: 'run-claude', title: 'Run Claude Code in the terminal', section: 'Terminal', keys: '⇧⌘C', keywords: 'claude code cli', run: runClaude },
   { id: 'hide-window', title: 'Hide the window', section: 'Terminal', keys: '⌘W', run: () => window.close() },
   { id: 'clear', title: 'Clear screen', section: 'Terminal', keys: '⌘K', run: () => term()?.clear() },

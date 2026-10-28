@@ -1,10 +1,10 @@
 {
   "name": "jaffer",
   "productName": "Jaffer",
-  "version": "1.6.1",
+  "version": "1.5.1",
   "description": "A calm terminal for macOS with a companion that shows what Claude Code is doing.",
   "private": true,
-  "license": "GPL-3.0-or-later",
+  "license": "MIT",
   "type": "module",
   "main": "dist/main/main.cjs",
   "author": "Jaffer",
@@ -36,7 +36,6 @@
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "@huggingface/transformers": "3.8.1",
     "@preact/signals": "^2.11.3",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
@@ -53,8 +52,6 @@
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
-    "kokoro-js": "1.2.1",
-    "phonemizer": "1.2.1",
     "playwright-core": "^1.56.1",
     "preact": "^10.27.0",
     "typescript": "^5.9.0",

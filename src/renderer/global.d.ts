@@ -23,16 +23,6 @@ export interface JafferBridge {
   revealPath(path: string): Promise<{ revealed: boolean }>;
   /** Moves these past conversations to the Trash, after the app's own question (at most 200; a running one is refused). */
   trashConversations(ids: string[]): Promise<TrashResult>;
-  /** Voice model files (Settings → Privacy and permissions → Voice). Progress and failure arrive as events `voice.progress` {done,total}, `voice.done`, `voice.error` {code}. */
-  voice: {
-    status(): Promise<{ complete: boolean; missing: string[] }>;
-    download(): Promise<void>;
-    cancel(): Promise<void>;
-    file(name: string): Promise<Uint8Array>;
-    remove(): Promise<void>;
-    /** macOS's microphone access for Jaffer (asks once when it was never decided); 'denied' while Voice is off or on any failure. */
-    mic(): Promise<'granted' | 'denied'>;
-  };
   updates: { state(): Promise<UpdateState>; check(): Promise<UpdateState> };
   /** Start over (the app asks first; true when the person said no and nothing changed). */
   reset(): Promise<{ cancelled: boolean }>;

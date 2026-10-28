@@ -808,17 +808,6 @@ export class JafferService {
       this.explaining = { session: s.id, p: run };
       return run;
     });
-    // (voice) The latest answer of a session, for the window to read aloud (it keeps only the prose, `speakable`). Only while this daemon's own
-    // permissions.voice is on, read at each call. Same session choice as Explain; a long answer keeps its beginning (Explain keeps its end). Nothing is logged, cached or sent anywhere: the text goes back to the caller.
-    r.handle('claude.reply', async (p: { session?: unknown } | null): Promise<{ ok: true; text: string } | { ok: false; reason: 'off' | 'no-reply' }> => {
-      if (this.config.get().permissions.voice !== true) return { ok: false, reason: 'off' };
-      const id = p?.session;
-      const live = this.claudeWatcher.sessions();
-      const s = id === undefined || id === null ? live.find((x) => x.state !== 'ended') : live.find((x) => x.id === id);
-      if (!s?.transcriptPath) return { ok: false, reason: 'no-reply' };
-      const text = await lastReply(s.transcriptPath, this.claudeDir(), { keep: 'head' }); // (read aloud from its start: a long answer is not begun mid-text)
-      return text ? { ok: true, text } : { ok: false, reason: 'no-reply' };
-    });
     // (1.4.0) Can this `claude` run the helper (no tools, no saved session)? `claude --help` only; true/false kept once a probe worked, null
     // (unknown) when it failed. The window asks when the switch goes on, to hide the button and say why.
     r.handle('claude.explain.supported', async () => {

@@ -47,31 +47,6 @@ const targets = [
     loader: { '.css': 'css', '.ttf': 'dataurl', '.woff2': 'dataurl' },
     logLevel: 'info',
   },
-  {
-    // (voice) the worker: its own bundle, so transformers.js, onnxruntime-web and kokoro-js never enter app.js. `import.meta.url` is
-    // the worker's own URL, so onnxruntime-web uses the glue code embedded in its bundle instead of importing it from wasmPaths.
-    name: 'voice-worker',
-    entryPoints: [path.join(root, 'src/renderer/voice/worker.ts')],
-    outfile: path.join(root, 'dist/renderer/voice-worker.js'),
-    bundle: true,
-    platform: 'browser',
-    format: 'iife',
-    target: 'chrome140',
-    sourcemap: true,
-    define: { ...define, 'process.env.NODE_ENV': '"production"', 'import.meta.url': 'self.location.href' },
-    logLevel: 'warning',
-  },
-  {
-    // (voice) the recorder's AudioWorklet: a file next to the page, loaded by relative URL (`script-src 'self'`; no blob: or data: module)
-    name: 'voice-recorder',
-    entryPoints: [path.join(root, 'src/renderer/voice/recorder.worklet.ts')],
-    outfile: path.join(root, 'dist/renderer/voice-recorder.worklet.js'),
-    bundle: true,
-    platform: 'browser',
-    format: 'iife',
-    target: 'chrome140',
-    logLevel: 'warning',
-  },
 ].filter((t) => fs.existsSync(t.entryPoints[0]) && (!only || t.name === only));
 
 const { name: _n, ...rest } = {};
@@ -96,11 +71,5 @@ const rdst = path.join(root, 'dist/renderer');
 if (fs.existsSync(path.join(rsrc, 'index.html')) && (!only || only === 'renderer')) {
   fs.mkdirSync(rdst, { recursive: true });
   for (const f of ['index.html']) fs.copyFileSync(path.join(rsrc, f), path.join(rdst, f));
-}
-// (voice) the onnxruntime-web binary the worker runs; main reads it from here for `jaffer:voice-file` (VOICE_RUNTIME_WASM)
-if (!only || only === 'voice-worker') {
-  fs.mkdirSync(rdst, { recursive: true });
-  const wasm = 'ort-wasm-simd-threaded.jsep.wasm';
-  fs.copyFileSync(path.join(root, 'node_modules/onnxruntime-web/dist', wasm), path.join(rdst, wasm));
 }
 if (!watch) console.log('build complete');

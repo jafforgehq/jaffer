@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog as electronDialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog as electronDialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, nativeTheme, screen, session, shell, Tray, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,11 +36,6 @@ import { RecentCommands } from '../shared/recent-commands';
 import { historyMenuItems, resumeCommand } from '../shared/history-label';
 import { parseNames } from '../shared/history-names';
 import { trashAsk, trashConversations } from './trash-conversations';
-import { assertVoiceDir, downloadVoice, readVoiceFile, removeVoice, voiceStatus, VoiceDownloadError } from './voice-models';
-import { VOICE_RUNTIME_WASM } from '../shared/voice-manifest';
-import { pageMayUseMic } from '../shared/voice-permission';
-import { BLOCKED_URL_FILTER, requestAllowed } from '../shared/request-policy';
-import { VoiceEpoch } from '../shared/voice-epoch';
 import { MAX_REMOVE, type Conversation } from '../core/claude/history';
 import { TrayIconPlayer, trayMenuLines, trayState, trayTitle, type MenuBarTitle, type TrayFrame } from '../shared/tray-state';
 import type { DayTotal } from '../shared/claude-cost';
@@ -318,7 +313,7 @@ let appCfg: {
   onboarded?: boolean;
   updates?: { seenVersion?: string };
   history?: { names?: string[] };
-  permissions?: { trash?: boolean; voice?: boolean };
+  permissions?: { trash?: boolean };
 } = {};
 
 /** A new config: the blur and the system stats are touched only when they changed (every config change would set the vibrancy again). */
@@ -326,7 +321,6 @@ function applyConfig(next: typeof appCfg): void {
   const changed = appearanceChanged(appCfg, next);
   const dropdownWas = dropdownOn();
   appCfg = next;
-  if (appCfg.permissions?.voice !== true) { voiceEpoch.bump(); void cancelVoiceDownload(); } // (voice off: a running download stops; the files stay until the person removes them)
   if (dropdownWas && !dropdownOn()) restoreBounds();
   if (changed.systemStats) syncSystemStats();
   if (changed.blur) syncVibrancy();
@@ -656,19 +650,12 @@ function createWindow(): void {
     backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
   });
-  // (1.4.1) The page needs no web permission (camera, notifications, clipboard reads, ...): all are refused. Its own notifications go
-  // through main. Two exceptions, both only for the app's own webContents: writing the clipboard (Copy buttons, OSC 52, Copy as image),
-  // which may run outside a click, so the page keeps it (reading it stays refused); and, (voice) `media` for the microphone alone
-  // (`pageMayUseMic`: audio only, never video, and only while `permissions.voice` is on; read each time, so turning it off ends it).
-  const pagePermission = (wc: Electron.WebContents | null, permission: string, mediaTypes?: readonly string[]) => !!win && wc === win.webContents && (permission === 'clipboard-sanitized-write' || pageMayUseMic(appCfg.permissions?.voice === true, permission, mediaTypes));
-  win.webContents.session.setPermissionRequestHandler((wc, permission, cb, details) => cb(pagePermission(wc, permission, 'mediaTypes' in details ? details.mediaTypes : undefined)));
-  win.webContents.session.setPermissionCheckHandler((wc, permission, _origin, details) => pagePermission(wc, permission, details.mediaType ? [details.mediaType] : undefined));
-  // (voice) The window's session refuses every network request (`requestAllowed`: http(s), ws(s), ftp), from the page, its workers and
-  // any library they load. A worker on a `file://` page has no CSP, and a dynamic `import()` of a URL cannot be guarded from JavaScript,
-  // so this is the boundary (verified for page and worker fetch, XHR, import, WebSocket and images: scripts/voice-gate.md). Nothing is
-  // logged. Not covered, by design: main's own Node `fetch` (the consented model download), `electron-updater` (its own partition) and
-  // `shell.openExternal` (which opens the browser).
-  win.webContents.session.webRequest.onBeforeRequest({ urls: BLOCKED_URL_FILTER }, (details, cb) => cb({ cancel: !requestAllowed(details.url) }));
+  // (1.4.1) The page needs no web permission (camera, microphone, notifications, clipboard reads, ...): all are refused. Its own
+  // notifications go through main. The one exception is writing the clipboard (Copy buttons, OSC 52, Copy as image), which may
+  // run outside a click (OSC 52, or after the image is drawn), so the page keeps it; reading the clipboard stays refused.
+  const pagePermission = (wc: Electron.WebContents | null, permission: string) => permission === 'clipboard-sanitized-write' && !!win && wc === win.webContents;
+  win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(pagePermission(wc, permission)));
+  win.webContents.session.setPermissionCheckHandler((wc, permission) => pagePermission(wc, permission));
   win.once('ready-to-show', () => win?.show());
   win.on('closed', () => {
     syncSystemStats();
@@ -951,7 +938,6 @@ function buildMenu(): void {
         item('focus-mode'),
         { type: 'separator' },
         item('run-claude'),
-        item('voice'),
         item('restart-shell'),
         { type: 'separator' },
         item('split-terminal'),
@@ -1266,74 +1252,6 @@ ipcMain.handle('jaffer:trash-conversations', async (e, p: unknown) => {
       return s.sessions.filter((x) => x.state !== 'ended').map((x) => x.id);
     },
   });
-});
-
-// ---------------------------------------------------------------- voice (Settings → Privacy and permissions → Voice, off by default)
-// The model files live in `<Jaffer home>/voice`. The page asks main to fetch (one download at a time), read and remove them; main refuses
-// both the download and the read unless the daemon's own config says `permissions.voice` (read at each call: the page patches the config
-// and calls right after, before `config.changed` reaches main). Events to the page carry numbers and a code, never a path or a message.
-const voiceDir = path.join(paths.home, 'voice');
-const voiceEpoch = new VoiceEpoch(); // (a cancel, a remove or Voice turned off while the config is being read keeps the download from starting)
-let voiceJob: { ctl: AbortController; settled: Promise<void> } | null = null;
-async function voiceAllowed(): Promise<boolean> {
-  try { return ((await client?.call<typeof appCfg>('config.get', {}))?.permissions?.voice) === true; } catch { return false; }
-}
-async function cancelVoiceDownload(): Promise<void> {
-  const j = voiceJob;
-  if (!j) return;
-  j.ctl.abort();
-  await j.settled;
-}
-ipcMain.handle('jaffer:voice-status', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  return voiceStatus(voiceDir);
-});
-ipcMain.handle('jaffer:voice-download', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  if (voiceJob) return; // (one at a time: the running one reports to the page)
-  const t = voiceEpoch.take();
-  if (!(await voiceAllowed())) throw new Error('Voice is off.');
-  if (voiceJob || !voiceEpoch.still(t)) return; // (a second ask arrived while the config was read)
-  const ctl = new AbortController();
-  const settled = downloadVoice(voiceDir, { signal: ctl.signal, onProgress: (done, total) => sendToRenderer('jaffer:event', 'voice.progress', { done, total }) })
-    .then(() => sendToRenderer('jaffer:event', 'voice.done', {}))
-    .catch((err) => sendToRenderer('jaffer:event', 'voice.error', { code: err instanceof VoiceDownloadError ? err.code : 'unknown' }))
-    .finally(() => { voiceJob = null; });
-  voiceJob = { ctl, settled };
-  await settled;
-});
-ipcMain.handle('jaffer:voice-cancel', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  voiceEpoch.bump();
-  await cancelVoiceDownload();
-});
-ipcMain.handle('jaffer:voice-file', async (e, p: unknown) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  const name = (p as { name?: unknown } | null)?.name;
-  if (typeof name !== 'string') throw new Error('Not a voice file.');
-  if (!(await voiceAllowed())) throw new Error('Voice is off.');
-  // the onnxruntime-web binary ships with the app (the build copies it next to the page); a fixed name, never a path from the page
-  if (name === VOICE_RUNTIME_WASM) return new Uint8Array(await fs.promises.readFile(path.join(distRoot, 'renderer', VOICE_RUNTIME_WASM)));
-  return readVoiceFile(voiceDir, name); // (refuses a name the manifest does not list)
-});
-// macOS's own microphone access (System Settings → Privacy & Security → Microphone): asked only when it was never decided, and only while
-// Voice is on (the daemon's config, as for the files). Never throws: any failure is 'denied'. The page's own permission is `pageMayUseMic`.
-ipcMain.handle('jaffer:voice-mic', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  try {
-    if (!(await voiceAllowed())) return 'denied';
-    const s = systemPreferences.getMediaAccessStatus('microphone');
-    if (s === 'not-determined') return (await systemPreferences.askForMediaAccess('microphone')) ? 'granted' : 'denied';
-    return s === 'granted' ? 'granted' : 'denied';
-  } catch {
-    return 'denied';
-  }
-});
-ipcMain.handle('jaffer:voice-remove', async (e) => {
-  if (!trusted(e)) throw new Error('untrusted sender');
-  voiceEpoch.bump();
-  await cancelVoiceDownload();
-  await removeVoice(assertVoiceDir(voiceDir, os.homedir())); // (rm -rf only ever of <Jaffer home>/voice)
 });
 
 /** A path the page names, as an absolute path that exists (a printed path is untrusted: it is only ever revealed, or handed to an editor). */
