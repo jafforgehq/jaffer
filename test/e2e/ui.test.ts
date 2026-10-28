@@ -298,6 +298,29 @@ describe('Jaffer UI end to end', () => {
     await shot('02-terminal');
   }, 40_000);
 
+  it('the last row is never clipped: every terminal row fits inside the terminal, at any window height', async () => {
+    for (const height of [700, 713, 720, 860, 900, 1117]) {
+      await page.setViewportSize({ width: 1360, height });
+      const over = await until(async () => {
+        const o = await page.evaluate(() => {
+          const x = document.querySelector('.term .xterm')!.getBoundingClientRect();
+          const s = document.querySelector('.term .xterm-screen')!.getBoundingClientRect();
+          return { bottom: s.bottom - x.bottom, right: s.right - x.right, h: innerHeight };
+        });
+        return o.h === height ? o : false;
+      }, 5000, `layout at ${height}`);
+      await sleep(250); // the refit after a resize
+      const again = await page.evaluate(() => {
+        const x = document.querySelector('.term .xterm')!.getBoundingClientRect();
+        const s = document.querySelector('.term .xterm-screen')!.getBoundingClientRect();
+        return { bottom: s.bottom - x.bottom, right: s.right - x.right };
+      });
+      expect(again.bottom, `bottom overflow at height ${height} (was ${over.bottom})`).toBeLessThanOrEqual(0);
+      expect(again.right, `right overflow at height ${height}`).toBeLessThanOrEqual(0);
+    }
+    await page.setViewportSize({ width: 1360, height: 860 });
+  });
+
   it('the title bar follows the shell (cwd)', async () => {
     await page.keyboard.type('cd /tmp');
     await page.keyboard.press('Enter');

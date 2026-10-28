@@ -481,11 +481,13 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .now-more { color: var(--faint); font-size: 11px; }
 
 .term { transition: opacity 0.15s; }
-.term { flex: 1; min-width: 0; min-height: 0; padding: 10px 6px 6px 18px; user-select: text; -webkit-user-select: text; }
+.term { flex: 1; min-width: 0; min-height: 0; user-select: text; -webkit-user-select: text; }
 .term.bell { animation: bell 0.16s; }
 @keyframes bell { 50% { background: var(--accent-soft); } }
 .term { position: relative; }
-.term .xterm { height: 100%; }
+/* the padding is on .xterm, not .term: the fit addon takes the PARENT's height and subtracts only the xterm element's padding, so padding
+   on .term made it count 16 px too many and clipped the last line (worst at some window heights, e.g. full screen) */
+.term .xterm { height: 100%; padding: 10px 6px 6px 18px; }
 /* Settings → Terminal → Column ruler: a faint line at a column (placed by the view from the screen's width and columns) */
 .term .col-ruler { position: absolute; top: 10px; bottom: 6px; width: 1px; background: var(--line-strong); pointer-events: none; z-index: 1; }
 .term .xterm-viewport { background: transparent !important; }
