@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
-import { BlockModel, blockOutputText, fenceText, saveName, type Block, type MarkKind } from '../blocks';
+import { BlockModel, blockOutputText, failedPrompt, fenceText, saveName, type Block, type MarkKind } from '../blocks';
 import { activePane, activeTheme, cfg, paneLayout, safeCommand, toast } from '../state';
 import { drawBlockImage, layoutBlockImage } from '../block-image';
 import { isSensitiveCommand } from '../../shared/redact';
@@ -23,6 +23,10 @@ export interface BlocksHandle {
   list(): Block[];
   /** ⌘↑ / ⌘↓: the prompt above or below the top of the view. */
   jump(dir: -1 | 1): void;
+  /** ⌥⌘↑ / ⌥⌘↓: the failed command (a non-zero exit) above or below the top of the view, flashed for a moment. */
+  jumpFailed(dir: -1 | 1): void;
+  /** ⌥⌘A: select the output of the last command (scrolled to the bottom) or of the block at the top of the view. */
+  selectOutput(): void;
   /** ⌥⌘C: the selection as Markdown, with its block's command when it lies inside one block's output. */
   copyMarkdown(): void;
 }
@@ -126,6 +130,7 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
   let handlers: IDisposable[] = [];
   let hl: IDecoration | undefined;
   let raf = 0;
+  let flash = 0;
 
   /** Lines move when the scrollback is trimmed: the markers know where they are now (a disposed marker knows nothing: line -1). */
   const sync = () => {
@@ -192,6 +197,15 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
     return text || undefined;
   };
 
+  /** Selects a block's output lines (⌘C copies them); false when it has none. */
+  const selectBlock = (b: Block): boolean => {
+    sync();
+    const end = b.outputEnd ?? term.buffer.active.length - 1;
+    if (b.outputStart === undefined || end < b.outputStart) return false;
+    term.selectLines(b.outputStart, end);
+    return true;
+  };
+
   const menuFor = (b: Block): MenuItem[] => {
     const items: MenuItem[] = [];
     if (b.cmd && !isSensitiveCommand(b.cmd)) items.push({ label: 'Copy command', run: () => copy(b.cmd!, 'Copied') }); // the raw text, to the person's own clipboard
@@ -215,6 +229,7 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
             );
         },
       },
+      { label: 'Select output', run: () => void selectBlock(b) },
       { label: 'Copy as Markdown', run: () => copy(fenceText(output(b), shownCommand(b)), 'Copied as Markdown') },
       {
         label: 'Copy as image',
@@ -245,9 +260,7 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
         el.addEventListener('mousedown', (e) => (e.stopPropagation(), e.preventDefault())); // not the start of a text selection
         el.addEventListener('click', (e) => {
           e.stopPropagation();
-          sync();
-          const end = b.outputEnd ?? term.buffer.active.length - 1;
-          if (b.outputStart !== undefined && end >= b.outputStart) term.selectLines(b.outputStart, end);
+          selectBlock(b);
         });
         el.addEventListener('contextmenu', (e) => {
           e.preventDefault();
@@ -379,6 +392,7 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
       disable();
       for (const s of subs) s.dispose();
       cancelAnimationFrame(raf);
+      clearTimeout(flash);
       if (live.get(pane) === handle) live.delete(pane);
       const { [pane]: _gone, ...rest } = sticky.value;
       sticky.value = rest;
@@ -392,6 +406,31 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
       const target = dir < 0 ? lines.filter((l) => l < top).at(-1) : lines.find((l) => l > top);
       if (target !== undefined) term.scrollToLine(target);
       else if (dir > 0) term.scrollToBottom();
+    },
+    jumpFailed: (dir) => {
+      if (!on || term.buffer.active.type !== 'normal') return;
+      sync();
+      const live = model.blocks().filter((b) => tracked.has(b.id));
+      const target = failedPrompt(live, term.buffer.active.viewportY, dir);
+      if (target === undefined) {
+        toast({ kind: 'info', text: dir < 0 ? 'No failed command above' : 'No failed command below' }, 2500);
+        return;
+      }
+      term.scrollToLine(target);
+      const b = live.find((x) => x.promptLine === target);
+      if (b) {
+        light(b);
+        clearTimeout(flash);
+        flash = window.setTimeout(unlight, 900);
+      }
+    },
+    selectOutput: () => {
+      if (!on || term.buffer.active.type !== 'normal') return;
+      sync();
+      const buf = term.buffer.active;
+      const withOutput = model.blocks().filter((b) => tracked.has(b.id) && b.outputStart !== undefined);
+      const b = buf.viewportY >= buf.baseY ? withOutput.at(-1) : model.blockAt(buf.viewportY);
+      if (!b || !selectBlock(b)) toast({ kind: 'info', text: 'No output to select' }, 2500);
     },
     copyMarkdown: () => {
       const text = term.getSelection();
