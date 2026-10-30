@@ -30,7 +30,7 @@ xcrun notarytool store-credentials jaffer-notary --apple-id you@example.com --te
 scripts/release-mac.sh --publish
 ```
 
-The script builds both architectures, signs everything with the hardened runtime and the entitlements in
+The build also puts the official Node runtime into the app (`scripts/after-pack.cjs` downloads the pinned version from nodejs.org once, into `node_modules/.cache`, and checks its SHA-256; it needs the network the first time). The script builds both architectures, signs everything with the hardened runtime and the entitlements in
 `build/entitlements.mac.plist`, submits the apps and disk images to Apple's notary service, staples the tickets, checks
 `codesign`, `spctl` and `stapler`, launches the signed app once for a self-test, writes `SHA256SUMS.txt` and uploads to
 the GitHub release for the version in `package.json` (creating it if needed). Notarization usually takes a few minutes.

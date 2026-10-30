@@ -45,6 +45,6 @@ Jaffer is a terminal for one person on their own Mac. The model is local trust:
 ## Out of scope
 
 - Findings that need another program already running as your user, or root.
-- The macOS entitlements and Electron fuses of the signed app (known; listed in the README's limits as work for a later release).
+- The one relaxed entitlement left, `disable-library-validation` (known; the README's limits say why). Since 1.6.5 the app's binary does not run as Node (its RunAsNode, `NODE_OPTIONS` and `--inspect` fuses are off), it takes no `DYLD_*` variables, and its terminal host and CLI run on the Node runtime inside the app.
 - Denial of service by a local process of the same user.
 - Bugs in Claude Code, Electron or macOS themselves (report those upstream; tell us if Jaffer makes one worse).

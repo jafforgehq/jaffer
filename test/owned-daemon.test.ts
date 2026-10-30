@@ -215,6 +215,21 @@ setInterval(() => {}, 1000);
     expect(owned.ended).toBe(true);
   }, 40_000);
 
+  it('the packaged app\'s way (plain Node with --disable-sigusr1): a NODE_OPTIONS of the environment never reaches the child, and the CLI wrapper runs with the same flag', async () => {
+    const e = env();
+    const cli = path.join(root, 'dist', 'cli', 'jaffer.cjs'); // (npm run build first, as for the other daemon tests)
+    const l = launcherFor(e);
+    // a NODE_OPTIONS that stops any Node that honours it (as one set with `launchctl setenv` would run its code)
+    const owned = await startOwnedDaemon(e.paths, { ...l, execArgs: ['--disable-sigusr1'], cliScript: cli, env: { ...l.env, NODE_OPTIONS: '--require /nonexistent/jaffer-test.js' } });
+    started.add(owned.pid);
+    void owned.exited.then(() => started.delete(owned.pid));
+    expect((await owned.client.call('hello', {})).pid).toBe(owned.pid);
+    const wrapper = fs.readFileSync(path.join(e.paths.binDir, 'jaffer'), 'utf8');
+    expect(wrapper).toContain(` --disable-sigusr1 '${cli}' "$@"`);
+    expect(wrapper).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(await owned.stop()).toEqual({ code: 0, signal: null });
+  }, 40_000);
+
   it('the start never takes a daemon that is not its own: with another one on the socket, its child stops and the start fails', async () => {
     const e = env();
     const l = launcherFor(e);
@@ -247,6 +262,16 @@ describe('how the app starts its child, and how ensureDaemon starts a detached o
     expect(s.options.env).toMatchObject({ JAFFER_OWNED: '1', JAFFER_HOME: paths.home, JAFFER_CLI_SCRIPT: launcher.cliScript, ELECTRON_RUN_AS_NODE: '1', HOME: '/Users/someone', JAFFER_NO_LAUNCHCTL: '1' });
     expect(ownedSpawnArgs(paths, launcher).options.stdio).toEqual(['pipe', 'ignore', 'ignore']);
     expect(ownedSpawnArgs(paths, { ...launcher, electron: false }).options.env!.ELECTRON_RUN_AS_NODE).toBe(process.env.ELECTRON_RUN_AS_NODE); // (not added for node)
+  });
+
+  it('the packaged app: its own Node with --disable-sigusr1 before the script, no ELECTRON_RUN_AS_NODE, and never a NODE_OPTIONS', () => {
+    const node: Launcher = { execPath: '/Applications/Jaffer.app/Contents/Resources/node/node', execArgs: ['--disable-sigusr1'], daemonScript: launcher.daemonScript, cliScript: launcher.cliScript, env: { HOME: '/Users/someone', NODE_OPTIONS: '--require /tmp/x.js' } };
+    for (const s of [ownedSpawnArgs(paths, node), detachedSpawnArgs(paths, node)]) {
+      expect(s.command).toBe(node.execPath);
+      expect(s.args).toEqual(['--disable-sigusr1', launcher.daemonScript]);
+      expect(s.options.env).not.toHaveProperty('NODE_OPTIONS');
+      expect(s.options.env!.ELECTRON_RUN_AS_NODE).toBe(process.env.ELECTRON_RUN_AS_NODE);
+    }
   });
 
   it('the detached daemon of ensureDaemon (tests, the dev bridge): detached, nothing on its stdin, and never JAFFER_OWNED, even when the environment has it', () => {

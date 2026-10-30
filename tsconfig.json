@@ -19,5 +19,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "test", "scripts/**/*.ts", "vitest.config.ts", "vitest.e2e.config.ts"]
+  "include": ["src", "test", "scripts/**/*.ts", "vitest.config.ts", "vitest.e2e.config.ts", "vitest.electron.config.ts"]
 }

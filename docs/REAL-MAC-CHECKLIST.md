@@ -8,6 +8,7 @@ Setup: install the signed build from the Releases page (or let 1.4.0 offer the u
 - [ ] Open the downloaded app: no Gatekeeper warning (it is signed and notarized). *Expect:* it opens.
 - [ ] Older version installed? *Settings → Updates → Check*, then **Update and restart**. *Expect:* the prompt says the terminal ends; the new version starts with one terminal and a What's New card.
 - [ ] Start Jaffer twice (open it again from Finder). *Expect:* the second one exits and the first comes to the front.
+- [ ] In Terminal.app (not in Jaffer): `ELECTRON_RUN_AS_NODE=1 /Applications/Jaffer.app/Contents/MacOS/Jaffer -e 'console.log(42)'`. *Expect:* no `42`: Jaffer opens (or comes to the front) instead.
 
 ## 2. Quit and close (4 min)
 - [ ] Run `sleep 300`. Press **⌘Q**. *Expect:* a question (Cancel is the default; Esc and Return both cancel). Cancel keeps `sleep` running.

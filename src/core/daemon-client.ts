@@ -32,8 +32,10 @@ export async function waitForSocketGone(paths: JafferPaths, ms: number): Promise
 }
 
 export interface Launcher {
-  /** Binary to run (Electron's own binary with ELECTRON_RUN_AS_NODE, or node). */
+  /** Binary to run (the packaged app's own Node runtime, Electron's binary with ELECTRON_RUN_AS_NODE in a dev run, or node). */
   execPath: string;
+  /** Runtime flags before the script (the bundled Node's `--disable-sigusr1`). */
+  execArgs?: string[];
   daemonScript: string;
   cliScript?: string;
   electron?: boolean;
@@ -54,6 +56,7 @@ export type SpawnFn = (command: string, args: readonly string[], options: SpawnO
 function daemonEnv(paths: JafferPaths, l: Launcher): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...l.env, JAFFER_HOME: paths.home };
   delete env.JAFFER_OWNED; // only the app's own child gets it, from ownedSpawnArgs
+  delete env.NODE_OPTIONS; // one set with `launchctl setenv` would run its code in Jaffer's child (the shells never got it: STRIP_ENV)
   if (l.electron) env.ELECTRON_RUN_AS_NODE = '1';
   if (l.cliScript) env.JAFFER_CLI_SCRIPT = l.cliScript;
   return env;
@@ -65,12 +68,12 @@ function daemonEnv(paths: JafferPaths, l: Launcher): NodeJS.ProcessEnv {
  * the daemon nor the shell outlives the app. `out` is where its stdout and stderr go (the log, opened by the caller).
  */
 export function ownedSpawnArgs(paths: JafferPaths, l: Launcher, out: number | 'ignore' = 'ignore'): DaemonSpawn {
-  return { command: l.execPath, args: [l.daemonScript], options: { stdio: ['pipe', out, out], env: { ...daemonEnv(paths, l), JAFFER_OWNED: '1' } } };
+  return { command: l.execPath, args: [...(l.execArgs ?? []), l.daemonScript], options: { stdio: ['pipe', out, out], env: { ...daemonEnv(paths, l), JAFFER_OWNED: '1' } } };
 }
 
 /** The daemon that `ensureDaemon` starts (the tests and the dev bridge only): detached, nothing on its stdin, never owned. */
 export function detachedSpawnArgs(paths: JafferPaths, l: Launcher): DaemonSpawn {
-  return { command: l.execPath, args: [l.daemonScript], options: { detached: true, stdio: 'ignore', env: daemonEnv(paths, l) } };
+  return { command: l.execPath, args: [...(l.execArgs ?? []), l.daemonScript], options: { detached: true, stdio: 'ignore', env: daemonEnv(paths, l) } };
 }
 
 /** Start the daemon, detached, so it outlives whoever started it. Only for the tests and the dev bridge: the app starts its own child. */

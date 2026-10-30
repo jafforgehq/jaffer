@@ -132,8 +132,8 @@ describe('invariants of CLAUDE.md', () => {
   // "any new dialog must go through that wrapper, never `electron.dialog` directly, or a sheet would hide its own window" (drop-down mode)
   it('every dialog goes through the counting wrapper in main.ts', () => {
     expect(perFile(hits(/\belectronDialog\.show\w+/))).toEqual({ 'src/main/main.ts': 4 }); // (the two lines of the wrapper, each naming it twice)
-    expect(code.get('src/main/main.ts')).toMatch(/showMessageBox: counted\(electronDialog\.showMessageBox\.bind\(electronDialog\)\)/);
-    expect(code.get('src/main/main.ts')).toMatch(/showSaveDialog: counted\(electronDialog\.showSaveDialog\.bind\(electronDialog\)\)/);
+    expect(code.get('src/main/main.ts')).toMatch(/showMessageBox: counted\(\(\.\.\.a: unknown\[\]\) => Reflect\.apply\(electronDialog\.showMessageBox, electronDialog, a\)\)/);
+    expect(code.get('src/main/main.ts')).toMatch(/showSaveDialog: counted\(\(\.\.\.a: unknown\[\]\) => Reflect\.apply\(electronDialog\.showSaveDialog, electronDialog, a\)\)/);
     // `dialog` from electron is imported only under that name, only there, and electron's own dialog is never reached another way
     for (const [f, src] of code) {
       for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'electron'/g)) {
@@ -256,5 +256,18 @@ describe('invariants of CLAUDE.md', () => {
   // "no `innerHTML` or `eval` sinks in the renderer" (the release notes are rendered by mini-md into elements, never as HTML)
   it('the renderer has no HTML or code sinks', () => {
     expect(hits(/\binnerHTML\b|\bouterHTML\b|dangerouslySetInnerHTML|insertAdjacentHTML|document\.write\b|(?<![.\w])eval\s*\(|\bnew\s+Function\b/, (f) => f.startsWith('src/renderer/'))).toEqual([]);
+  });
+  // "the packaged app never runs as Node": the RunAsNode, NODE_OPTIONS and --inspect fuses stay off, the host and the CLI run on the
+  // bundled Node (pinned and checksum-checked), and the app has no DYLD_* entitlement
+  it('the packaged app keeps its Node fuses off and runs its host on the bundled Node', () => {
+    const builder = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+    for (const fuse of ['runAsNode', 'enableNodeOptionsEnvironmentVariable', 'enableNodeCliInspectArguments']) expect(builder).toMatch(new RegExp(`^  ${fuse}: false$`, 'm'));
+    expect(builder).toMatch(/^afterPack: scripts\/after-pack\.cjs$/m);
+    const hook = fs.readFileSync(path.join(root, 'scripts', 'after-pack.cjs'), 'utf8');
+    expect(hook).toMatch(/arm64: '[0-9a-f]{64}'/);
+    expect(hook).toMatch(/x64: '[0-9a-f]{64}'/);
+    expect(fs.readFileSync(path.join(root, 'build', 'entitlements.mac.plist'), 'utf8')).not.toMatch(/allow-dyld-environment-variables/);
+    expect(code.get('src/main/main.ts')).toMatch(/app\.isPackaged\s*\?\s*\{ execPath: path\.join\(process\.resourcesPath, 'node', 'node'\), execArgs: \['--disable-sigusr1'\]/);
+    expect(code.get('src/core/daemon-client.ts')).toMatch(/delete env\.NODE_OPTIONS;/);
   });
 });

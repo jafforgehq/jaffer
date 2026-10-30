@@ -53,12 +53,16 @@ const paths = makePaths();
 const distRoot = path.join(__dirname, '..');
 /** The one page the window may show. Anything else (a file dropped on it, a link) is not given the daemon bridge. */
 const indexUrl = pathToFileURL(path.join(distRoot, 'renderer', 'index.html')).href;
-const launcher: Launcher = {
-  execPath: process.execPath,
-  daemonScript: path.join(distRoot, 'daemon', 'jafferd.cjs'),
-  cliScript: path.join(distRoot, 'cli', 'jaffer.cjs'),
-  electron: true,
-};
+const daemonScript = path.join(distRoot, 'daemon', 'jafferd.cjs');
+const cliScript = path.join(distRoot, 'cli', 'jaffer.cjs');
+/**
+ * The packaged app runs its terminal host (and, through the wrapper the host writes, the CLI) on the Node runtime inside it
+ * (`scripts/after-pack.cjs`): its own binary has the RunAsNode fuse off. `--disable-sigusr1`: no other program can open a debugger in it.
+ * A dev run (`npm run dev`, the Electron-driven tests) still runs the host as Electron-as-Node.
+ */
+const launcher: Launcher = app.isPackaged
+  ? { execPath: path.join(process.resourcesPath, 'node', 'node'), execArgs: ['--disable-sigusr1'], daemonScript, cliScript }
+  : { execPath: process.execPath, daemonScript, cliScript, electron: true };
 /** How long the start waits for an older Jaffer's session to let go of the socket once it was asked to end. */
 const LEGACY_END_MS = 10_000;
 /** Before asking about such a session, how long the start lets one that is already on its way out (an update just ended it) go by itself. */
@@ -87,9 +91,10 @@ const counted = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (.
     dialogsOpen--;
   }
 };
+// (electron's function is looked up at each call, not bound once: the Electron-driven tests stand in for the native dialog)
 const dialog = {
-  showMessageBox: counted(electronDialog.showMessageBox.bind(electronDialog)) as typeof electronDialog.showMessageBox,
-  showSaveDialog: counted(electronDialog.showSaveDialog.bind(electronDialog)) as typeof electronDialog.showSaveDialog,
+  showMessageBox: counted((...a: unknown[]) => Reflect.apply(electronDialog.showMessageBox, electronDialog, a)) as typeof electronDialog.showMessageBox,
+  showSaveDialog: counted((...a: unknown[]) => Reflect.apply(electronDialog.showSaveDialog, electronDialog, a)) as typeof electronDialog.showSaveDialog,
 };
 /** The child was ended for the quit (or did not end in time and was killed): the quit goes on. */
 let childStopped = false;

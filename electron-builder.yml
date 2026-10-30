@@ -18,6 +18,16 @@ files:
   - node_modules/@lydell/node-pty/**
   - node_modules/@lydell/node-pty-darwin-arm64/**
   - node_modules/@lydell/node-pty-darwin-x64/**
+# adds the pinned Node runtime (Contents/Resources/node/node) that runs the terminal host and the CLI
+afterPack: scripts/after-pack.cjs
+# The app's own binary never runs as Node: another program of the user could otherwise run code as Jaffer and borrow what macOS
+# granted it (README, Limitations). The terminal host and the CLI run on the bundled Node instead.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  # an unsigned build (no certificate: CI previews) is re-signed ad hoc after the flip, or arm64 kills the modified binary
+  resetAdHocDarwinSignature: true
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.png

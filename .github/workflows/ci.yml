@@ -69,8 +69,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '0' # the Electron-driven tests below launch it
       - name: Unit, integration and daemon tests (real PTYs, bash + zsh)
         run: npm test
+      - name: The main process through the real Electron (quit, close, crash reload, a killed app, permissions, one instance)
+        run: npm run build && npm run test:electron
 
   mac-app:
     name: Build macOS app
@@ -142,6 +146,10 @@ jobs:
           export JAFFER_SMOKE=1
           release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
           grep -q "SMOKE OK" smoke.log
+          # the app never runs as Node: its fuses are off and the terminal host ran on the bundled Node
+          npx @electron/fuses read --app release/mac-arm64/Jaffer.app | tee fuses.txt
+          for f in RunAsNode EnableNodeOptionsEnvironmentVariable EnableNodeCliInspectArguments; do grep -q "$f is Disabled" fuses.txt; done
+          grep -q "Resources/node/node' --disable-sigusr1 " "$JAFFER_HOME/bin/jaffer"
           rm -rf release
 
       - name: Import the signing certificate into a temporary keychain
