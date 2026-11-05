@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { BlockModel, MAX_BLOCKS, blockOutputText, fenceText, saveName, type Block } from '../src/renderer/blocks';
+import { BlockModel, MAX_BLOCKS, blockOutputText, failedPrompt, fenceText, saveName, type Block } from '../src/renderer/blocks';
 import { SAVE_TEXT_MAX, utf8Bytes } from '../src/shared/save-text';
 import { COMMAND_HEAD } from '../src/shared/process-badge';
 
@@ -220,5 +220,32 @@ describe('blockOutputText: a block\'s output from the buffer', () => {
     const out = blockOutputText(buf, block(0, 99));
     expect(out.length).toBeLessThanOrEqual(SAVE_TEXT_MAX);
     expect(out).toMatch(/\n\[cut at 32 MB\]$/);
+  });
+});
+
+describe('failedPrompt: the nearest failed command above or below the top of the view', () => {
+  const blocks = (): Block[] => {
+    const m = new BlockModel();
+    run(m, { prompt: 0, start: 1, end: 1 }, 'true', '0');
+    run(m, { prompt: 2, start: 3, end: 3 }, 'false', '1');
+    run(m, { prompt: 4, start: 5, end: 5 }, 'kill -9 $$', ''); // exit unknown: not a failure
+    run(m, { prompt: 6, start: 7, end: 7 }, 'ls nope', '2');
+    run(m, { prompt: 8, start: 9, end: 9 }, 'pwd', '0');
+    return [...m.blocks()];
+  };
+
+  it('goes to the closest failure strictly above or below the top line', () => {
+    const b = blocks();
+    expect(failedPrompt(b, 8, -1)).toBe(6);
+    expect(failedPrompt(b, 6, -1)).toBe(2);
+    expect(failedPrompt(b, 2, 1)).toBe(6);
+    expect(failedPrompt(b, 0, 1)).toBe(2);
+  });
+
+  it('is undefined when there is none that way, and a command with an unknown exit never counts', () => {
+    const b = blocks();
+    expect(failedPrompt(b, 2, -1)).toBeUndefined();
+    expect(failedPrompt(b, 6, 1)).toBeUndefined();
+    expect(failedPrompt(b.filter((x) => x.exit === 0), 9, -1)).toBeUndefined();
   });
 });

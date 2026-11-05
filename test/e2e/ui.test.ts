@@ -1708,7 +1708,7 @@ describe('Jaffer UI end to end', () => {
     };
     await (await markOf('echo hi-block')).click({ button: 'right' });
     await page.waitForSelector('.ctx-menu');
-    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy command', 'Copy output', 'Save output…', 'Copy as Markdown', 'Copy as image']);
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy command', 'Copy output', 'Save output…', 'Select output', 'Copy as Markdown', 'Copy as image']);
     await shot('17-gutter-menu');
     await page.keyboard.press('Escape');
     await page.waitForSelector('.ctx-menu', { state: 'detached' });
@@ -1730,7 +1730,7 @@ describe('Jaffer UI end to end', () => {
     await enter('echo $NO_SUCH_TOKEN');
     await (await markOf('echo $NO_SUCH_TOKEN')).click({ button: 'right' });
     await page.waitForSelector('.ctx-menu');
-    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy output', 'Save output…', 'Copy as Markdown', 'Copy as image']);
+    expect(await page.$$eval('.ctx-menu button', (b) => b.map((x) => x.textContent))).toEqual(['Copy output', 'Save output…', 'Select output', 'Copy as Markdown', 'Copy as image']);
     await page.mouse.click(700, 420); // a click elsewhere closes it
     await page.waitForSelector('.ctx-menu', { state: 'detached' });
     await pick('echo $NO_SUCH_TOKEN', 'Copy as Markdown');
@@ -1848,6 +1848,27 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.type('prompt');
     expect(await page.textContent('.palette-list')).toMatch(/Previous prompt[\s\S]*Next prompt|Next prompt[\s\S]*Previous prompt/);
     await page.keyboard.press('Escape');
+  }, 40_000);
+
+  it('⌥⌘↑ / ⌥⌘↓ jump between failed commands, and ⌥⌘A selects the output of the last command', async () => {
+    await page.click('.term');
+    await enter('ls /no-such-dir-92'); // (the terminal is shared with the tests above: a unique command, and failures before it may exist)
+    const bad = await ended('ls /no-such-dir-92');
+    expect(bad.exit).not.toBe(0);
+    await enter('seq 1 200');
+    await ended('seq 1 200');
+    await menu('failed-prev');
+    expect(await viewTop()).toBe(bad.promptLine); // the closest failure above the bottom is the last one
+    await menu('failed-next');
+    await toastSaid('No failed command below'); // nothing failed after it
+    expect(await viewTop()).toBe(bad.promptLine);
+    await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.scrollToBottom());
+    await page.click('.term');
+    await enter('echo select-me-91');
+    await ended('echo select-me-91');
+    await menu('select-output');
+    const sel = await page.evaluate(() => (window as any).__jaffer.terminals.get('main').term.getSelection() as string);
+    expect(sel.trim()).toBe('select-me-91');
   }, 40_000);
 
   it('command blocks stand aside in the alternate screen, and Settings → Terminal → Command blocks switches them all off and on', async () => {

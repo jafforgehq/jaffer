@@ -91,6 +91,12 @@ export class BlockModel {
   }
 }
 
+/** The prompt line of the closest failed command (a known, non-zero exit) strictly above (`dir` -1) or below (1) line `top`; `blocks` in order. */
+export function failedPrompt(blocks: readonly Block[], top: number, dir: -1 | 1): number | undefined {
+  const lines = blocks.filter((b) => typeof b.exit === 'number' && b.exit !== 0 && b.promptLine >= 0).map((b) => b.promptLine);
+  return dir < 0 ? lines.filter((l) => l < top).at(-1) : lines.find((l) => l > top);
+}
+
 /** `text` in a fenced code block for Markdown, `$ <cmd>` as its first line when given; the fence is longer than any backtick run in either. */
 export function fenceText(text: string, cmd?: string): string {
   let longest = 0;
