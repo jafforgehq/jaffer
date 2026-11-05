@@ -1,8 +1,9 @@
 import { effect } from '@preact/signals';
-import { activePane, cfg, historyItems, info, overlay, toast } from './state';
+import { activePane, cfg, claudeFor, focusPane, historyItems, info, overlay, paneInfo, panes, resumeAsk, toast } from './state';
 import { freshList, lastConversation, newestOnly } from '../shared/history-label';
 import { pinnedIds } from '../shared/history-names';
-import { resumeAction } from '../shared/resume-action';
+import { resumeAction, resumeLine } from '../shared/resume-action';
+import { isClaudeCommand } from '../shared/process-badge';
 import type { Conversation } from '../core/claude/history';
 import { terminals } from './components/TerminalView';
 
@@ -25,10 +26,13 @@ export function copyToTerminal(text: string, said: string): void {
   );
 }
 
-export function resumeConversation(c: Pick<Conversation, 'id' | 'cwd'>): void {
-  const a = resumeAction(info.value, c, { allowTyping: cfg.value?.permissions?.resumeTyping !== false });
+/** `askFirst` false: a Claude at its prompt is not asked about (the answer to that question calls it again, and a second question would loop). */
+export function resumeConversation(c: Pick<Conversation, 'id' | 'cwd' | 'title'>, askFirst = true): void {
+  const claudeIdle = askFirst && claudeFor(activePane.value)?.state === 'idle';
+  const a = resumeAction(info.value, c, { allowTyping: cfg.value?.permissions?.resumeTyping !== false, claudeIdle });
   if (a.kind === 'none') return void toast({ kind: 'error', text: a.why });
   if (a.kind === 'copy') return copyToTerminal(a.text, a.why);
+  if (a.kind === 'end-first') return void (resumeAsk.value = { pane: activePane.value, id: c.id, cwd: c.cwd, title: c.title }); // (nothing typed until a click on End and resume)
   const t = terminals.get(activePane.value);
   if (!t) return;
   if (Date.now() - typedAt < 2000) return void toast({ kind: 'info', text: 'Already resuming…' }, 2500);
@@ -36,6 +40,46 @@ export function resumeConversation(c: Pick<Conversation, 'id' | 'cwd'>): void {
   t.type(a.text); // (Ctrl-E Ctrl-U Ctrl-X Ctrl-K, the line, Enter: only at an idle prompt, as ⇧⌘C types `claude`)
   toast({ kind: 'info', text: 'Resuming…' }, 2500);
   t.focus();
+}
+
+/** How long `/exit` has to end Claude (the shell's end mark) before the resume line is copied instead. */
+const EXIT_WAIT_MS = 10_000;
+/** True once the terminal's shell says nothing runs; false after `ms`. */
+const untilIdle = (pane: string, ms: number) =>
+  new Promise<boolean>((done) => {
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      if (paneInfo.value[pane]?.busy) {
+        if (Date.now() - t0 > ms) (clearInterval(tick), done(false));
+      } else (clearInterval(tick), done(true));
+    }, 100);
+  });
+
+/**
+ * *End and resume* (1.6.6): the only place Jaffer types anything into a running Claude, and only `/exit`. It is typed only after the
+ * person's click, only into the terminal the question was asked in, only while that terminal's Claude is still idle at its prompt (its hooks)
+ * and typing is allowed. Then the shell's end mark is awaited (10 s; no guess) and the usual resume typing runs, at the idle prompt.
+ */
+export async function endAndResume(): Promise<void> {
+  const ask = resumeAsk.value;
+  resumeAsk.value = null;
+  if (!ask || !panes.value.includes(ask.pane)) return;
+  const c = { id: ask.id, cwd: ask.cwd };
+  focusPane(ask.pane);
+  const busy = paneInfo.value[ask.pane]?.busy;
+  const t = terminals.get(ask.pane);
+  const stillIdle = !!busy && isClaudeCommand(busy) && claudeFor(ask.pane)?.state === 'idle' && cfg.value?.permissions?.resumeTyping !== false;
+  if (!busy) return resumeConversation(c, false); // it ended while the question was open
+  if (!stillIdle || !t) return resumeConversation(c, false); // it is busy again: the usual copy, with its reason
+  t.type('\x05\x15/exit\r'); // (Ctrl-E Ctrl-U clear a half-typed prompt, then Claude Code's own exit command)
+  toast({ kind: 'info', text: 'Ending Claude…' }, 2500);
+  const ended = await untilIdle(ask.pane, EXIT_WAIT_MS);
+  if (!panes.value.includes(ask.pane)) return;
+  void loadHistory(); // (the conversation that just ended is now in the list)
+  const line = resumeLine(paneInfo.value[ask.pane] ?? { cwd: '' }, c);
+  if (!ended) return line ? copyToTerminal(line, 'Claude did not end: command copied') : undefined;
+  if (activePane.value !== ask.pane) return line ? copyToTerminal(line, 'Claude ended. Command copied (you moved to another terminal)') : undefined;
+  resumeConversation(c, false);
 }
 
 /** The past conversations (`claude.history`, with the pinned ones even when older than the 50 newest). */
