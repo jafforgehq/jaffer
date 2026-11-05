@@ -60,6 +60,8 @@ export const info = computed<SessionInfo>(() => paneInfo.value[activePane.value]
 export const paneLayout = signal(0);
 /** The terminal whose ✕ waits for End terminal or Cancel (something runs in it). Memory only. */
 export const closeAsk = signal<string | null>(null);
+/** A click on a past conversation while that terminal's Claude waits at its prompt: the question under the terminal's chip (1.6.6). Memory only. */
+export const resumeAsk = signal<{ pane: string; id: string; cwd?: string; title?: string } | null>(null);
 /** Bumped when an id is opened again, so its view starts fresh (and attaches again) instead of keeping a closed terminal's. */
 const paneGen = new Map<string, number>();
 export const paneKey = (id: string): string => `${id}#${paneGen.get(id) ?? 0}`;
@@ -124,6 +126,7 @@ export function removePane(id: string): void {
       s.value = left;
     }
     if (activePane.value === id && next.length) focusPane(next[Math.min(i, next.length - 1)]!);
+    if (resumeAsk.value?.pane === id) resumeAsk.value = null;
     if (closeAsk.value === id) closeAsk.value = null; // (the question goes with it: an id opened again starts without it)
   });
   fails.delete(id);

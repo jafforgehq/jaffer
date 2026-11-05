@@ -31,6 +31,19 @@ describe('resume a past conversation (1.1.1): what a click types, or copies and 
     expect(resumeAction({ cwd: '/tmp', busy: 'claude' }, { id: ID, cwd: DIR })).toEqual({ kind: 'copy', text: `cd '${DIR}' && claude --resume ${ID}`, why: 'Claude is already running here: quit it first (/exit)' });
   });
 
+  it('Claude idle at its prompt (1.6.6): the window asks first (end-first, with the line to copy); nothing is typed yet', () => {
+    expect(resumeAction({ cwd: DIR, busy: 'claude' }, { id: ID, cwd: DIR }, { claudeIdle: true })).toEqual({ kind: 'end-first', text: `claude --resume ${ID}` });
+    expect(resumeAction({ cwd: '/tmp', busy: 'claude --resume x' }, { id: ID, cwd: DIR }, { claudeIdle: true })).toEqual({ kind: 'end-first', text: `cd '${DIR}' && claude --resume ${ID}` });
+  });
+
+  it('Claude idle but typing is off, the folder unknown, or it is another command: the old copy, never the question', () => {
+    const quit = 'Claude is already running here: quit it first (/exit)';
+    expect(resumeAction({ cwd: DIR, busy: 'claude' }, { id: ID, cwd: DIR }, { claudeIdle: true, allowTyping: false })).toEqual({ kind: 'copy', text: `claude --resume ${ID}`, why: quit });
+    expect(resumeAction({ cwd: DIR, busy: 'claude' }, { id: ID }, { claudeIdle: true })).toMatchObject({ kind: 'copy', why: quit });
+    expect(resumeAction({ cwd: DIR, busy: 'sleep 9' }, { id: ID, cwd: DIR }, { claudeIdle: true })).toMatchObject({ kind: 'copy', why: 'sleep 9 is running: command copied' });
+    expect(resumeAction({ cwd: DIR, busy: 'claude' }, { id: ID, cwd: DIR }, { claudeIdle: false })).toMatchObject({ kind: 'copy', why: quit });
+  });
+
   it('another command running: nothing typed, the command copied, the command named (redacted; a sensitive one not named)', () => {
     expect(resumeAction({ cwd: DIR, busy: 'npm run dev' }, { id: ID, cwd: DIR })).toEqual({ kind: 'copy', text: `claude --resume ${ID}`, why: 'npm run dev is running: command copied' });
     const r = resumeAction({ cwd: DIR, busy: 'export GITHUB_TOKEN=abc12345xyz && make' }, { id: ID, cwd: DIR });

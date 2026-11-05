@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
-import { activePane, addPane, focusPane, claudeFor, closeAsk, daemonUp, overlay, paneLayout, paneInfo, paneKey, paneName, panes, removePane, safeCommand, tildePath, toast, windowFocused, zoomPane } from '../state';
+import { activePane, addPane, focusPane, claudeFor, closeAsk, daemonUp, overlay, paneLayout, paneInfo, paneKey, paneName, panes, removePane, resumeAsk, safeCommand, tildePath, toast, windowFocused, zoomPane } from '../state';
 import { MAX_PANES, paneGrid } from '../../shared/pane-grid';
 import { isClaudeCommand } from '../../shared/process-badge';
 import { TerminalView, terminals } from './TerminalView';
 import { Pet } from './Pet';
+import { endAndResume } from '../resume';
 
 /**
  * The split view (1.4.0): up to four terminals, each its own shell, opened only by the person (⌘D) and in the order they were opened; a
@@ -119,6 +120,30 @@ function Confirm({ id }: { id: string }): VNode {
   );
 }
 
+/** 1.6.6: a past conversation was clicked while this terminal's Claude waits at its prompt. Cancel has the keyboard; only a click on End and resume types `/exit`. */
+function ResumeConfirm({ id }: { id: string }): VNode {
+  const cancelBtn = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => cancelBtn.current?.focus(), []);
+  const cancel = () => {
+    resumeAsk.value = null;
+    terminals.get(id)?.focus();
+  };
+  const title = resumeAsk.value?.title?.trim();
+  return (
+    <div class="pn-confirm" role="alertdialog" aria-label="End this conversation and resume another?" onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), e.stopPropagation(), cancel())}>
+      <div class="pn-confirm-text">{title ? `End the conversation running here and resume “${title}”?` : 'End the conversation running here and resume the one you picked?'} It stays in your past conversations.</div>
+      <div class="pn-confirm-btns">
+        <button class="btn small danger" onClick={(e) => e.isTrusted && void endAndResume()}>
+          End and resume
+        </button>
+        <button class="btn small" ref={cancelBtn} onClick={cancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PaneTree(): VNode {
   const list = panes.value.slice(0, MAX_PANES);
   const g = paneGrid(list.length);
@@ -147,6 +172,7 @@ export function PaneTree(): VNode {
             <TerminalView pane={id} />
             <Chip id={id} alone={!multi} zoomed={zoom === id} />
             {closeAsk.value === id && <Confirm id={id} />}
+            {resumeAsk.value?.pane === id && closeAsk.value !== id && <ResumeConfirm id={id} />}
             <Pet pane={id} />
           </div>
         );

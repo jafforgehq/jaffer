@@ -29,11 +29,14 @@ export function resumeLine(info: Where, c: Past): string | null {
  * Ctrl-X Ctrl-K (a half-typed line goes, wherever the cursor is: bash's Ctrl-U kills only what is before it; and zsh's whole buffer,
  * which Shift+Enter can make several lines long: Ctrl-X Ctrl-K is zsh's kill-buffer, bash only rings the bell), the resume line and Enter. While any command runs, Claude included, or when the folder is not known,
  * nothing is typed: the command is copied and `why` says so (also with `allowTyping: false`, 1.4.0: the person switched typing off). A bad id gives nothing at all.
+ * 1.6.6: a Claude that is idle at its prompt gives `end-first`: nothing is typed yet, the window asks, and only a click on *End and resume* types `/exit`.
  */
-export function resumeAction(info: Where, c: Past, opts: { allowTyping?: boolean } = {}): { kind: 'type'; text: string } | { kind: 'copy'; text: string; why: string } | { kind: 'none'; why: string } {
+export function resumeAction(info: Where, c: Past, opts: { allowTyping?: boolean; claudeIdle?: boolean } = {}): { kind: 'type'; text: string } | { kind: 'end-first'; text: string } | { kind: 'copy'; text: string; why: string } | { kind: 'none'; why: string } {
   const line = resumeLine(info, c);
   if (!line) return { kind: 'none', why: 'That conversation has no valid id.' };
   const busy = typeof info.busy === 'string' ? info.busy.slice(0, 4 * COMMAND_HEAD) : ''; // (a command line is forgeable at any length)
+  // (1.6.6) Claude waits at its own prompt (its hooks say idle) and the person allows typing: the window asks whether to end it first (`end-first`; `text` is the line to copy if it cannot)
+  if (busy && isClaudeCommand(busy) && opts.claudeIdle && opts.allowTyping !== false && okFolder(c.cwd)) return { kind: 'end-first', text: line };
   if (busy && isClaudeCommand(busy)) return { kind: 'copy', text: line, why: 'Claude is already running here: quit it first (/exit)' };
   if (busy) return { kind: 'copy', text: line, why: `${isSensitiveCommand(busy) || busy === 'command' ? 'A command' : clipLabel(redactText(busy), 40)} is running: command copied` };
   if (!okFolder(c.cwd)) return { kind: 'copy', text: line, why: 'Folder unknown: command copied' };

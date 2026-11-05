@@ -2559,6 +2559,89 @@ describe('Jaffer UI end to end', () => {
     await enter('unset -f claude');
   }, 60_000);
 
+  it('end and resume (1.6.6): a click on a past conversation while Claude idles at its prompt asks first (Cancel types nothing); End and resume types /exit, waits for the shell and then resumes; a working Claude only gets the copy', async () => {
+    await clipStub();
+    const sid = 'e0d0e5e5-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const here = path.join(env.userHome, 'endres-here');
+    fs.mkdirSync(here, { recursive: true });
+    const dir = path.join(env.userHome, '.claude', 'projects', '-endres-71');
+    fs.mkdirSync(dir, { recursive: true });
+    const at = Date.now() - 30_000;
+    const rec = (type: string, t: number, extra: object) => JSON.stringify({ type, cwd: here, timestamp: new Date(t).toISOString(), ...extra });
+    fs.writeFileSync(path.join(dir, `${sid}.jsonl`), [rec('user', at - 5000, { message: { role: 'user', content: 'End and resume me' } }), rec('assistant', at, { message: { id: 'er71', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'ok' }] } })].join('\n') + '\n');
+    const row = page.locator(`.sp-convos .conv-row[data-id="${sid}"]`);
+    const flat = () => page.evaluate(() => { const b = (window as any).__jaffer.terminals.get('main').term.buffer.active; let out = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i)!; out += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return out; });
+    const count = async (text: string) => (await flat()).split(text).length - 1;
+    const running = (cmd: string) => until(async () => (await blocks()).find((b) => b.cmd === cmd && b.endedAt === undefined), 10_000, `${cmd} to run`);
+    const idleClaude = async (session: string) => {
+      await sendHook('SessionStart', { session_id: session, cwd: here });
+      await until(async () => (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.some((x: any) => x.id === session && x.state === 'idle'), 5_000, 'the session to idle');
+    };
+
+    // a `claude` that ends when it reads /exit, and says where --resume ran (never the real one); the shell in the folder
+    await page.click('.term');
+    await page.keyboard.press('Control+c');
+    await enter('claude() { if [ "$1" = --resume ]; then echo "RESUMED:$PWD:$*"; else echo CLAUDE-UP$((8+1)); while IFS= read -r l; do [ "$l" = /exit ] && break; done; echo CLAUDE-GONE$((8+1)); fi; }');
+    await enter(`cd '${here}'`);
+    await ended(`cd '${here}'`);
+    if (!(await page.evaluate(() => window.jaffer.call('config.get'))).panel.open) await menu('toggle-panel');
+    await page.waitForSelector('.side-panel .sp-convos .conv-refresh');
+    await page.click('.sp-convos .conv-refresh');
+    await until(async () => (await row.count()) === 1, 5_000, 'the planted conversation');
+
+    // Claude idles at its prompt: the click asks, and nothing is typed
+    await page.click('.term');
+    await enter('claude');
+    await running('claude');
+    await until(async () => (await count('CLAUDE-UP9')) >= 1, 5_000, 'the stand-in claude');
+    await idleClaude('endres-1');
+    let before = await termText();
+    await row.click();
+    await page.waitForSelector('.pn-confirm[aria-label="End this conversation and resume another?"]');
+    expect(await page.textContent('.pn-confirm')).toContain('End and resume me');
+    await sleep(400);
+    expect(await termText()).toBe(before);
+    // Cancel: the card goes, nothing is typed, Claude still runs
+    await page.locator('.pn-confirm button', { hasText: 'Cancel' }).click();
+    await page.waitForSelector('.pn-confirm', { state: 'detached' });
+    await sleep(400);
+    expect(await termText()).toBe(before);
+    expect(await count('CLAUDE-GONE9')).toBe(0);
+    // End and resume: /exit ends it, then the resume line runs at the idle prompt
+    const resumeBlocks = async () => (await blocks()).filter((b) => b.cmd === `claude --resume ${sid}`).length;
+    const resumeBefore = await resumeBlocks();
+    await row.click();
+    await page.locator('.pn-confirm button', { hasText: 'End and resume' }).click();
+    await until(async () => (await count('CLAUDE-GONE9')) === 1, 8_000, 'the stand-in to end');
+    await until(async () => (await count(`RESUMED:${here}:--resume ${sid}`)) === 1, 10_000, 'the conversation to resume');
+    expect(await resumeBlocks()).toBe(resumeBefore + 1);
+
+    // a working Claude: no question, the line is copied and the toast says to quit it first
+    await page.click('.term');
+    await enter('claude');
+    await running('claude');
+    await sendHook('SessionEnd', { session_id: 'endres-1' });
+    await sendHook('SessionStart', { session_id: 'endres-2', cwd: here });
+    await sendHook('UserPromptSubmit', { session_id: 'endres-2', cwd: here, prompt: 'go' });
+    await until(async () => (await page.evaluate(() => window.jaffer.call('claude.state'))).sessions.some((x: any) => x.id === 'endres-2' && x.state === 'working'), 5_000, 'the session to work');
+    await sleep(600); // (the window learns of the state from the daemon's push)
+    before = await termText();
+    await row.click();
+    await toastSaid('Claude is already running here: quit it first (/exit)');
+    expect(await page.locator('.pn-confirm').count()).toBe(0);
+    await sleep(400);
+    expect(await termText()).toBe(before);
+    await page.click('.term');
+    await page.keyboard.type('/exit');
+    await page.keyboard.press('Enter');
+    await until(async () => (await count('CLAUDE-GONE9')) === 2, 8_000, 'the second stand-in to end');
+    await enter('unset -f claude');
+    // leave nothing behind for the removal tests, which count what is listed
+    await sendHook('SessionEnd', { session_id: 'endres-2' });
+    fs.rmSync(dir, { recursive: true, force: true });
+    await until(async () => ((await row.count()) === 0 ? true : (await page.click('.sp-convos .conv-refresh'), false)), 10_000, 'the planted conversation to leave the list'); // (a read in flight can still bring it back: read again)
+  }, 60_000);
+
   it('past conversations, 1.2.0: a name (pencil, F2) kept in history.names wins in the rows and the search, a pin (the Pinned group, an older one read through include), folder chips, cost by folder, ⇧⌘R resumes the newest of the folder, the palette finds one by its name and Enter resumes it; a running command gets nothing typed', async () => {
     await clipStub();
     const sid = (n: number) => `0000000${n}`.slice(-8) + '-aaaa-4bbb-8ccc-ddddeeeeffff';
