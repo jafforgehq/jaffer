@@ -293,6 +293,9 @@ jobs:
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain cert.pem
           "$GITHUB_WORKSPACE/scripts/ci-keychain.sh" cert.p12 dryrun
       - name: Build with signing on (no notarization), layered config
+        env:
+          # electron-builder skips signing on pull requests unless told otherwise; only the throwaway certificate is here
+          CSC_FOR_PULL_REQUEST: 'true'
         run: |
           sed 's/notarize: true/notarize: false/' electron-builder.signed.yml > electron-builder.dryrun.yml
           npx electron-builder --mac --arm64 --publish never --config electron-builder.dryrun.yml
