@@ -74,11 +74,14 @@ git tag v0.2.0 && git push origin v0.2.0
 
 You do not have to: CI also releases by itself. A push to `main` that passes the tests and the Mac build publishes the
 release for the `version` in `package.json` (and does nothing if that version already has one), so bumping the version is
-the whole release step. *Actions → CI → Run workflow* with a *release_tag* is a third way. A release made by CI is never
-marked *Latest* (installed apps follow the Latest release): `scripts/release-mac.sh --publish` sets it after it has uploaded the
-signed files and the update manifest. The newest unreleased build of `main` is the `Jaffer-macOS` artifact of the latest
+the whole release step. *Actions → CI → Run workflow* with a *release_tag* is a third way. A release made by CI starts as a
+pre-release, which installed apps ignore. When the build is signed **and** notarized, the release job then uploads the update
+manifest (`latest-mac.yml`) last and marks the release *Latest*, the same order as `scripts/release-mac.sh --publish`; it never
+moves *Latest* to an older version. An unsigned build stays a pre-release without a manifest. Pull requests never sign: the
+*Signing dry run* covers their configuration. The newest unreleased build of `main` is the `Jaffer-macOS` artifact of the latest
 *Actions → CI* run. Set the repository variable
-`REQUIRE_SIGNED_RELEASE=true` to make CI refuse to publish anything that is not signed.
+`REQUIRE_SIGNED_RELEASE=true` to make the release job fail, and publish nothing, when the build is not signed and notarized:
+`gh variable set REQUIRE_SIGNED_RELEASE --body true`.
 
 The first step of the build job, **Signing preflight**, prints `present` or `MISSING` for every secret (never the value)
 and says whether this run will be unsigned, signed, or signed and notarized. The release is published as a

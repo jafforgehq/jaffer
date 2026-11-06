@@ -124,19 +124,24 @@ jobs:
             if [ -n "$AP_ID" ] && [ -n "$AP_PW" ] && [ -n "$AP_TEAM" ]; then notarize=true; method=apple-id
             elif [ -n "$API_P8" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then notarize=true; method=api-key; fi
           fi
+          # A pull request never signs or notarizes (electron-builder would skip signing there anyway, and the real
+          # certificate should not run in a branch's workflow); the signing dry run below covers the configuration.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then sign=false; notarize=false; method=none; fi
           echo "sign=$sign"         >> "$GITHUB_OUTPUT"
           echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
           echo "method=$method"     >> "$GITHUB_OUTPUT"
-          if [ "$sign" != true ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            echo "::notice title=Pull request::Built unsigned on purpose; releases are signed on main and tags."
+          elif [ "$sign" != true ]; then
             echo "::warning title=Not signed::No Apple signing certificate is configured, so this build is NOT signed. Add the secrets described in docs/SIGNING.md."
           elif [ "$notarize" != true ]; then
             echo "::warning title=Not notarized::Certificate found but no notarization credentials: the app will be signed but not notarized, and Gatekeeper will still warn."
           fi
 
       - name: Refuse to publish an unsigned release (only when REQUIRE_SIGNED_RELEASE=true)
-        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && steps.sign.outputs.sign != 'true' && vars.REQUIRE_SIGNED_RELEASE == 'true'
+        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && steps.sign.outputs.notarize != 'true' && vars.REQUIRE_SIGNED_RELEASE == 'true'
         run: |
-          echo "::error title=Unsigned release blocked::REQUIRE_SIGNED_RELEASE is true but no signing certificate is configured. See docs/SIGNING.md."
+          echo "::error title=Unsigned release blocked::REQUIRE_SIGNED_RELEASE is true but signing or notarization credentials are missing. See docs/SIGNING.md."
           exit 1
 
       - name: Smoke test the unpacked app (real Electron + daemon + shell + renderer)
@@ -254,7 +259,15 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/*.zip.blockmap
             release/SHA256SUMS.txt
+          if-no-files-found: error
+
+      # The update manifest travels on its own: the release job uploads it last, and only for a signed, notarized build.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jaffer-update-manifest
+          path: release/latest-mac.yml
           if-no-files-found: error
 
   # Proves the whole signing path (certificate import, nested binaries, hardened runtime, entitlements, dmg signing,
@@ -344,7 +357,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           INPUT_TAG: ${{ inputs.release_tag }}
-          SIGNED: ${{ needs.mac-app.outputs.signed }}
+          NOTARIZED: ${{ needs.mac-app.outputs.notarized }}
           REQUIRE_SIGNED: ${{ vars.REQUIRE_SIGNED_RELEASE }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"
@@ -356,12 +369,12 @@ jobs:
             echo "::error::$TAG is not a version like v0.1.0"; exit 1
           fi
           publish=true
-          if [ "$REQUIRE_SIGNED" = true ] && [ "$SIGNED" != true ]; then
-            echo "::warning::REQUIRE_SIGNED_RELEASE is on and this build is unsigned, so $TAG was not published."
-            publish=false
-          elif [ "$GITHUB_REF_TYPE" != tag ] && [ -z "$INPUT_TAG" ] && gh release view "$TAG" > /dev/null 2>&1; then
+          if [ "$GITHUB_REF_TYPE" != tag ] && [ -z "$INPUT_TAG" ] && gh release view "$TAG" > /dev/null 2>&1; then
             echo "Release $TAG already exists, nothing to publish. Bump the version in package.json to release again."
             publish=false
+          elif [ "$REQUIRE_SIGNED" = true ] && [ "$NOTARIZED" != true ]; then
+            echo "::error title=Unsigned release blocked::REQUIRE_SIGNED_RELEASE is on and this build is not signed and notarized, so $TAG was not published. Add the signing secrets (docs/SIGNING.md)."
+            exit 1
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
@@ -388,6 +401,9 @@ jobs:
             echo
             echo "**Which file?** Apple Silicon (M1 and later): \`arm64\`. Intel Macs: \`x64\`. Use the \`.dmg\` (drag to Applications) or the \`.zip\`. Verify downloads with \`SHA256SUMS.txt\`."
           } > notes.md
+          # what is new in this version, written by hand in docs/releases/vX.Y.Z.md (optional), goes first
+          TAG="${{ steps.plan.outputs.tag }}"
+          if [ -f "docs/releases/$TAG.md" ]; then { cat "docs/releases/$TAG.md"; echo; cat notes.md; } > notes.full.md && mv notes.full.md notes.md; fi
       - uses: softprops/action-gh-release@v2
         if: steps.plan.outputs.publish == 'true'
         with:
@@ -396,7 +412,39 @@ jobs:
           files: dist/*
           body_path: notes.md
           generate_release_notes: true
-          prerelease: ${{ needs.mac-app.outputs.signed != 'true' }}
-          # Installed apps update from the release marked Latest, and only scripts/release-mac.sh uploads the update manifest
-          # (latest-mac.yml) and then promotes the release. A release made here must never become Latest on its own.
+          # Installed apps update from the release marked Latest and only see a release once its update manifest is there.
+          # So everything starts as a pre-release; the next step uploads the manifest last and promotes a signed, notarized one.
+          prerelease: true
           make_latest: false
+
+      # Same order as scripts/release-mac.sh: files first, the manifest (latest-mac.yml) last, then Latest. Only a build that
+      # is signed and notarized gets here; an unsigned build stays a pre-release without a manifest, which installed apps ignore.
+      - uses: actions/download-artifact@v4
+        if: steps.plan.outputs.publish == 'true' && needs.mac-app.outputs.notarized == 'true'
+        with:
+          name: Jaffer-update-manifest
+          path: manifest
+      - name: Upload the update manifest and make this the Latest release
+        if: steps.plan.outputs.publish == 'true' && needs.mac-app.outputs.notarized == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          M=manifest/latest-mac.yml
+          grep -q "^version: $VERSION\$" "$M" || { echo "::error::$M names another version than $TAG"; exit 1; }
+          for A in arm64 x64; do
+            grep -q "url: Jaffer-$VERSION-$A.zip" "$M" || { echo "::error::$M does not list Jaffer-$VERSION-$A.zip"; exit 1; }
+            [ -f "dist/Jaffer-$VERSION-$A.zip" ] || { echo "::error::Jaffer-$VERSION-$A.zip is missing"; exit 1; }
+          done
+          grep -q "sha512:" "$M" || { echo "::error::$M has no checksums"; exit 1; }
+          # never move Latest backwards: an older tag re-run must not strand the apps already on a newer release
+          NEWEST="$(gh release list --limit 100 --json tagName -q '.[].tagName' | sed -n 's/^v\([0-9][0-9.]*\)$/\1/p' | sort -V | tail -1)"
+          if [ -n "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$VERSION" "$NEWEST" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "::warning::v$NEWEST is newer than $TAG, so $TAG stays a pre-release."; exit 0
+          fi
+          gh release upload "$TAG" "$M" --clobber
+          gh release edit "$TAG" --prerelease=false --latest
+          gh release view "$TAG" --json url -q .url
