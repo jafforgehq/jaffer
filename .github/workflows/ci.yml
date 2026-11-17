@@ -13,14 +13,20 @@ on:
         default: ''
 
 env:
-  ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # tests never launch Electron; the app job downloads it
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # the Electron-driven steps and the app job turn it back on
+
+# Every job runs on the owner's Mac (a self-hosted runner, label `jaffer`), not on GitHub's runners. A self-hosted runner on a public
+# repository must never run a stranger's code: a job runs only for pushes, tags, manual runs and pull requests from branches of this
+# repository (`TRUSTED` below); a pull request from a fork is skipped. Also set Settings -> Actions -> General -> "Fork pull request
+# workflows" to "Require approval for all outside collaborators". One runner runs one job at a time, so the jobs queue.
 
 jobs:
-  # Gates the release: typecheck, generated-file check, unit/integration/daemon tests with real PTYs (bash + zsh) and the UI
-  # end-to-end tests. The Mac app itself is built and smoke-tested on macOS by `mac-app` and `signing-dry-run` below.
+  # Gates the release: typecheck, generated-file check, unit/integration/daemon tests with real PTYs (bash + zsh), the UI end-to-end
+  # tests, and (advisory) the main process through the real Electron. The Mac app itself is built and smoke-tested by `mac-app`.
   test:
-    name: Test (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: Test (Mac runner)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, jaffer]
     steps:
       - name: Check the release version (manual release runs only)
         if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
@@ -34,19 +40,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - name: Install zsh
-        run: sudo apt-get update && sudo apt-get install -y zsh
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '0' # the Electron-driven step below launches it
       - run: npm run typecheck
       - run: node scripts/gen-shell.mjs --check
+      - name: Use an empty home from here on (the tests never touch the owner's real files, Claude Code or its login)
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
       - name: Unit, integration and daemon tests (real PTYs, bash + zsh)
         run: npm test
-      - name: UI end-to-end tests (headless Chromium)
+      - name: UI end-to-end tests (headless, the Chrome installed on this Mac)
         run: |
-          npx playwright@1.56.1 install --with-deps chromium
-          export JAFFER_CHROME="$(find ~/.cache/ms-playwright -name chrome -path '*chromium-*' -type f | head -1)"
+          export JAFFER_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          test -x "$JAFFER_CHROME" || { echo "::error::Google Chrome must be installed on the runner"; exit 1; }
           npx vitest run --config vitest.e2e.config.ts
+      # Advisory: it opens windows briefly on the Mac, and its timing-sensitive checks can flake when the Mac is busy. A failure
+      # shows in the run; it does not block `release`.
+      - name: The main process through the real Electron (quit, close, crash reload, a killed app, permissions, one instance)
+        continue-on-error: true
+        run: npm run build && npm run test:electron
       - name: Upload UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -55,30 +69,10 @@ jobs:
           path: /tmp/jaffer-shots
           if-no-files-found: ignore
 
-  # The same tests on macOS (zsh is the default shell there, and it has found real macOS-only bugs). They are advisory: the
-  # timing-sensitive ones (real shells, a real daemon, async learning) flaked on shared macOS runners, and a flaky test must
-  # not stop a release. A failure here still shows up in the run; it does not block `release`.
-  test-macos:
-    name: Test (macos-latest, advisory)
-    runs-on: macos-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '0' # the Electron-driven tests below launch it
-      - name: Unit, integration and daemon tests (real PTYs, bash + zsh)
-        run: npm test
-      - name: The main process through the real Electron (quit, close, crash reload, a killed app, permissions, one instance)
-        run: npm run build && npm run test:electron
-
   mac-app:
     name: Build macOS app
-    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, jaffer]
     outputs:
       signed: ${{ steps.sign.outputs.sign }}
       notarized: ${{ steps.sign.outputs.notarize }}
@@ -87,7 +81,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
@@ -144,7 +137,8 @@ jobs:
           npx electron-builder --dir --arm64 --publish never
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
-          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
+          # own user-data folder: the owner's Jaffer may be running on this Mac and would hold the single-instance lock (Electron ignores $HOME for it)
+          HOME="$(mktemp -d)" release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer --user-data-dir="$(mktemp -d)" 2>&1 | tee smoke.log
           grep -q "SMOKE OK" smoke.log
           # the app never runs as Node: its fuses are off and the terminal host ran on the bundled Node
           npx @electron/fuses read --app release/mac-arm64/Jaffer.app | tee fuses.txt
@@ -238,7 +232,8 @@ jobs:
         run: |
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
-          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke-shipped.log
+          # own user-data folder: the owner's Jaffer may be running on this Mac and would hold the single-instance lock (Electron ignores $HOME for it)
+          HOME="$(mktemp -d)" release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer --user-data-dir="$(mktemp -d)" 2>&1 | tee smoke-shipped.log
           grep -q "SMOKE OK" smoke-shipped.log
 
       - name: Checksums
@@ -260,8 +255,12 @@ jobs:
   # Proves the whole signing path (certificate import, nested binaries, hardened runtime, entitlements, dmg signing,
   # and that the signed app still launches) with a throwaway self-signed certificate. It cannot prove Apple's trust or
   # notarization, which need your real credentials, but it catches every configuration mistake before they are used.
+  # It adds a throwaway trusted root to the SYSTEM keychain with sudo, so it never runs on the owner's Mac: it stays on a GitHub
+  # runner and runs only when the repository variable SIGNING_DRY_RUN is `true` (real releases are signed on the Mac by
+  # scripts/release-mac.sh).
   signing-dry-run:
     name: Signing dry run (self-signed)
+    if: vars.SIGNING_DRY_RUN == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -329,8 +328,8 @@ jobs:
     # package.json, unless that version already has one (bump the version to release again). Pushing a v* tag, or Actions →
     # CI → Run workflow with a release_tag, also works. Pull requests never publish.
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: [test, mac-app, signing-dry-run]
-    runs-on: ubuntu-latest
+    needs: [test, mac-app]
+    runs-on: [self-hosted, macOS, ARM64, jaffer]
     concurrency:
       group: release
       cancel-in-progress: false
