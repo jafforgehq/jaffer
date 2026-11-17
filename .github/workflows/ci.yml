@@ -137,7 +137,8 @@ jobs:
           npx electron-builder --dir --arm64 --publish never
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
-          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
+          # an own empty HOME: the owner's Jaffer may be running on this Mac and would hold the single-instance lock
+          HOME="$(mktemp -d)" release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke.log
           grep -q "SMOKE OK" smoke.log
           # the app never runs as Node: its fuses are off and the terminal host ran on the bundled Node
           npx @electron/fuses read --app release/mac-arm64/Jaffer.app | tee fuses.txt
@@ -231,7 +232,8 @@ jobs:
         run: |
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
-          release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke-shipped.log
+          # an own empty HOME: the owner's Jaffer may be running on this Mac and would hold the single-instance lock
+          HOME="$(mktemp -d)" release/mac-arm64/Jaffer.app/Contents/MacOS/Jaffer 2>&1 | tee smoke-shipped.log
           grep -q "SMOKE OK" smoke-shipped.log
 
       - name: Checksums
