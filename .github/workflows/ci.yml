@@ -134,7 +134,8 @@ jobs:
 
       - name: Smoke test the unpacked app (real Electron + daemon + shell + renderer)
         run: |
-          npx electron-builder --dir --arm64 --publish never
+          # CI never signs with a certificate found in this Mac's keychain (releases are signed by scripts/release-mac.sh)
+          CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --dir --arm64 --publish never
           export JAFFER_HOME="$(mktemp -d)/jaffer-home"
           export JAFFER_SMOKE=1
           # own user-data folder: the owner's Jaffer may be running on this Mac and would hold the single-instance lock (Electron ignores $HOME for it)
@@ -182,6 +183,7 @@ jobs:
             fi
           else
             echo "No signing certificate configured: building ad-hoc signed apps."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false   # never pick up a certificate from this Mac's keychain
           fi
           npx electron-builder --mac --arm64 --x64 --publish never --config "$CONFIG"
           ls -la release
