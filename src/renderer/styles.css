@@ -282,7 +282,7 @@ body.mac .titlebar { padding-left: 88px; } /* room for the traffic lights: the w
 .tm-meta { min-width: 0; grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
 .tm-rename { min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--accent-line); border-radius: var(--r-xs); background: var(--hover); color: var(--text); font-size: 12px; box-shadow: none; }
 /* the row's buttons lie over its right end, shown on hover, with the keyboard and on the focused terminal */
-.tm-acts { position: absolute; top: 50%; right: 2px; transform: translateY(-50%); display: flex; padding-left: 4px; border-radius: var(--r-sm); background: var(--surface); opacity: 0; }
+.tm-acts { /* 1.5.1: on the name's line, so the second line (cost, context) stays readable */ position: absolute; top: 0; right: 2px; display: flex; padding-left: 4px; border-radius: var(--r-sm); background: var(--surface); opacity: 0; }
 .tm-row:hover .tm-acts, .tm-row:focus-within .tm-acts, .tm-row[data-focused] .tm-acts { opacity: 1; }
 .tm-acts .icon-btn { color: var(--faint); }
 .tm-acts .icon-btn:hover:not([disabled]), .tm-acts .icon-btn[aria-pressed='true'] { color: var(--text); }
