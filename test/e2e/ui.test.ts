@@ -5252,7 +5252,7 @@ describe('Jaffer UI end to end', () => {
 
   it('the outline follows Claude\'s state (1.5.0): with two terminals the one whose Claude works or waits is outlined (a quiet pulse unless motion is off), idle ones are not, and with one terminal there is no outline', async () => {
     const panesNow = () => page.$$eval('.panes > .pane', (els) => els.map((e) => (e as HTMLElement).dataset.pane ?? ''));
-    const outline = (id: string) => page.$eval(`.pane[data-pane="${id}"]`, (el) => ({ claude: (el as HTMLElement).dataset.claude ?? null, color: getComputedStyle(el).outlineColor, anim: getComputedStyle(el).animationName }));
+    const outline = (id: string) => page.$eval(`.pane[data-pane="${id}"]`, (el) => ({ claude: (el as HTMLElement).dataset.claude ?? null, color: getComputedStyle(el, '::after').borderTopColor, anim: getComputedStyle(el, '::after').animationName, drawn: getComputedStyle(el, '::after').content !== 'none' }));
     const clear = 'rgba(0, 0, 0, 0)';
     try {
       await endClaude();
@@ -5287,7 +5287,7 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await panesNow()).length === 1, 10_000, 'one terminal');
       await inject([{ id: 'out-1', state: 'working', pane: 'main' }]);
       await until(async () => (await outline('main')).claude === 'working', 5_000, 'main working');
-      expect((await outline('main')).color).toBe(clear);
+      expect((await outline('main')).drawn).toBe(false);
     } finally {
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       await page.evaluate(() => window.jaffer.call('config.patch', { appearance: { animations: true } }));
