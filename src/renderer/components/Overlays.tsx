@@ -301,7 +301,7 @@ export function RecentCommands(): VNode {
             }}
           />
           {(['failed', 'slow'] as const).map((m) => (
-            <button key={m} class={`rc-toggle ${mode === m ? 'on' : ''}`} aria-pressed={mode === m} title={m === 'failed' ? 'Only the commands that failed' : 'The commands that took longest, longest first'} onClick={() => (setMode(mode === m ? 'all' : m), input.current?.focus())}>
+            <button key={m} class={`rc-mode ${mode === m ? 'on' : ''}`} aria-pressed={mode === m} title={m === 'failed' ? 'Only the commands that failed' : 'The commands that took longest, longest first'} onClick={() => (setMode(mode === m ? 'all' : m), input.current?.focus())}>
               {m === 'failed' ? 'Failed' : 'Slowest'}
             </button>
           ))}
