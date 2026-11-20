@@ -67,3 +67,22 @@ describe('groupByFolder: ⌘R by folder (1.2.0)', () => {
     expect(groupByFolder([], '/Users/maya')).toEqual([]);
   });
 });
+
+import { filterRecent } from '../src/shared/recent-commands';
+
+describe('filterRecent: ⌘R Failed and Slowest (1.7.0)', () => {
+  const rows = [
+    { cmd: 'a', exit: 0, durMs: 50 },
+    { cmd: 'b', exit: 1, durMs: 4000 },
+    { cmd: 'c', exit: null, durMs: 9000 },
+    { cmd: 'd', exit: 2, durMs: 100 },
+    { cmd: 'e', exit: 0, durMs: 2500 },
+  ];
+  it('all keeps everything in order', () => expect(filterRecent(rows, 'all')).toEqual(rows));
+  it('failed keeps only a known, non-zero exit', () => expect(filterRecent(rows, 'failed').map((r) => r.cmd)).toEqual(['b', 'd']));
+  it('slow keeps a second or more, longest first, and does not reorder the original', () => {
+    expect(filterRecent(rows, 'slow').map((r) => r.cmd)).toEqual(['c', 'b', 'e']);
+    expect(rows.map((r) => r.cmd)).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+  it('slow is at most 20', () => expect(filterRecent(Array.from({ length: 50 }, (_, i) => ({ exit: 0, durMs: 1000 + i })), 'slow')).toHaveLength(20));
+});

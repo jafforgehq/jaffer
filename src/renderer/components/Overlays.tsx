@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import type { VNode } from 'preact';
 import { activePane, appVersion, cfg, claudeLive, commands, dismissToast, fmtAgo, glossaryAt, historyItems, homeDir, lastFind, openGlossary, overlay, pasteAsk, patchConfig, pins, safeCommand, setTips, settingsAt, startTour, toast, updateState, type ClaudeAuthState } from '../state';
 import { conversationName, paletteConversations } from '../../shared/history-label';
-import { groupByFolder } from '../../shared/recent-commands';
+import { filterRecent, groupByFolder, type RecentMode } from '../../shared/recent-commands';
 import { SECTION_ORDER, filterShortcuts, shortcutGroups } from '../../shared/shortcuts';
 import { parseNames } from '../../shared/history-names';
 import { loadHistory, resumeConversation } from '../resume';
@@ -12,7 +12,7 @@ import { InstallCommand } from './ClaudeInstall';
 import { actions, runClaude, type Action } from '../actions';
 import { FIND_OPTS, terminals } from './TerminalView';
 import { THEMES } from '../themes';
-import { hookHealthWarning } from '../claude-ui';
+import { fmtDuration, hookHealthWarning } from '../claude-ui';
 import { COMPANIONS, PET_SIZES, companionOf, petScale } from '../../shared/companions';
 import { CompanionPreview } from './Pet';
 import { explainSupported } from './Explain';
@@ -261,13 +261,15 @@ export function RecentCommands(): VNode {
   useLayoutEffect(() => input.current?.focus(), []);
   /** By folder (1.2.0): the rows under their folder, the newest folder first; memory only, like the list. */
   const [byFolder, setByFolder] = useState(false);
+  /** (1.7.0) *Failed* and *Slowest*: memory only, like the list. */
+  const [mode, setMode] = useState<RecentMode>('all');
   const groups = useMemo(() => {
     const t = q.trim().toLowerCase();
-    const rows = commands.value.map((c) => ({ c, cwd: c.cwd, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
+    const rows = filterRecent(commands.value, mode).map((c) => ({ c, cwd: c.cwd, shown: safeCommand(c.cmd).replace(/\s+/g, ' ').trim() })).filter((r) => !t || r.shown.toLowerCase().includes(t));
     return byFolder ? groupByFolder(rows, homeDir()) : [{ label: '', items: rows }];
-  }, [q, commands.value, byFolder]); // (a command that ends while the list is open shows up)
+  }, [q, commands.value, byFolder, mode]); // (a command that ends while the list is open shows up)
   const rows = groups.flatMap((g) => g.items);
-  useEffect(() => setSel(0), [q, byFolder]);
+  useEffect(() => setSel(0), [q, byFolder, mode]);
   useEffect(() => {
     list.current?.querySelector('.pal-row.sel')?.scrollIntoView({ block: 'nearest' });
   }, [sel]);
@@ -298,16 +300,23 @@ export function RecentCommands(): VNode {
               else if (e.key === 'Enter') (e.preventDefault(), pick(sel));
             }}
           />
+          {(['failed', 'slow'] as const).map((m) => (
+            <button key={m} class={`rc-mode ${mode === m ? 'on' : ''}`} aria-pressed={mode === m} title={m === 'failed' ? 'Only the commands that failed' : 'The commands that took longest, longest first'} onClick={() => (setMode(mode === m ? 'all' : m), input.current?.focus())}>
+              {m === 'failed' ? 'Failed' : 'Slowest'}
+            </button>
+          ))}
           <button class={`rc-toggle ${byFolder ? 'on' : ''}`} aria-pressed={byFolder} title="Group the commands by the folder they ran in" onClick={() => (setByFolder(!byFolder), input.current?.focus())}>
             By folder
           </button>
         </div>
         <div class="palette-list" ref={list}>
-          {rows.length === 0 && <div class="pal-group">{commands.value.length ? 'No match' : 'No commands yet in this session'}</div>}
+          {rows.length === 0 && <div class="pal-group">{commands.value.length ? (mode === 'failed' ? 'No failed commands' : mode === 'slow' ? 'Nothing took a second or more' : 'No match') : 'No commands yet in this session'}</div>}
           {rows.slice(0, 200).flatMap((r, i) => {
             const row = (
               <button key={`${r.c.at}-${i}`} class={`pal-row ${i === sel ? 'sel' : ''}`} data-exit={r.c.exit ?? ''} onMouseEnter={() => setSel(i)} onClick={() => pick(i)}>
                 <span class="pal-title recent-cmd">{highlight(r.shown.slice(0, 200), q)}</span>
+                {mode === 'failed' && typeof r.c.exit === 'number' && <span class="recent-tag" data-kind="fail">exit {r.c.exit}</span>}
+                {mode === 'slow' && <span class="recent-tag">{fmtDuration(r.c.durMs)}</span>}
                 <span class="recent-ago">{fmtAgo(r.c.at)}</span>
               </button>
             );
@@ -744,6 +753,13 @@ export function Settings({ at }: { at?: Section } = {}): VNode {
                   );
                 })}
               </div>
+              <Field label="Theme by folder" hint="one per line, a folder and a theme: ~/code/prod-api=Ember. The window wears that theme while the focused terminal is in the folder (or below it)">
+                <textarea class="budget-lines" rows={3} spellcheck={false} placeholder="~/code/prod-api=Ember" defaultValue={(c.appearance.folderThemes ?? []).join('\n')}
+                  onBlur={(e) => {
+                    const lines = (e.target as HTMLTextAreaElement).value.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 4200).slice(0, 20);
+                    if (lines.join('\n') !== (cfg.value?.appearance.folderThemes ?? []).join('\n')) set({ appearance: { folderThemes: lines } });
+                  }} />
+              </Field>
               <Field label="Companion size" info="companion" id="ap-pet-size" hint="Makes the mole or the scene bigger or smaller in the corner.">
                 <select id="ap-pet-size" value={PET_SIZES.find((s) => petScale(c.appearance.petSize) === s.scale)?.id ?? 'normal'} onChange={(e) => set({ appearance: { petSize: (e.target as HTMLSelectElement).value } })}>
                   {PET_SIZES.map((s) => (
@@ -751,6 +767,12 @@ export function Settings({ at }: { at?: Section } = {}): VNode {
                       {s.name}
                     </option>
                   ))}
+                </select>
+              </Field>
+              <Field label="Companion corner" id="ap-pet-corner" hint="Which bottom corner of each terminal. It also steps back (fades) when printed text is under it.">
+                <select id="ap-pet-corner" value={c.appearance.petCorner === 'left' ? 'left' : 'right'} onChange={(e) => set({ appearance: { petCorner: (e.target as HTMLSelectElement).value } })}>
+                  <option value="right">Bottom right</option>
+                  <option value="left">Bottom left</option>
                 </select>
               </Field>
               <Field label="Seasonal touches" hint="a small hat or heart on the mole, and a few drifting dots in the scenes, around Halloween, the winter holidays and Valentine's Day">

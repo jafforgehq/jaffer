@@ -627,8 +627,8 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 /* ⌘R: this session's commands, in the palette's look */
 .recent-list .recent-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
 .recent-list .recent-ago { flex: none; font-size: 11px; color: var(--faint); }
-.recent-list .rc-toggle { flex: none; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-sm); background: none; color: var(--muted); font-size: 11.5px; }
-.recent-list .rc-toggle.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.recent-list :is(.rc-toggle, .rc-mode) { flex: none; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-sm); background: none; color: var(--muted); font-size: 11.5px; }
+.recent-list :is(.rc-toggle, .rc-mode).on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 .recent-list .rc-folder { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ⌘/: the shortcuts sheet, in the palette's look (rows are not buttons: nothing runs from it) */
 .ks-sheet .palette-list { max-height: 60vh; }
@@ -840,7 +840,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 :root:not([data-motion='off']) .pet[data-mood='dig'][data-effort='2'] .pet-sweat, :root:not([data-motion='off']) .pet[data-mood='dig'][data-effort='3'] .pet-sweat { animation: pet-sweat 1.1s ease-in infinite; }
 @keyframes pet-sweat { 0% { transform: translateY(-2px) scale(0.6); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(9px) scale(1); opacity: 0; } }
 :root:not([data-motion='off']) .pet[data-mood='rest'] .pet-body, :root:not([data-motion='off']) .pet[data-mood='sleep'] .pet-body { animation: pet-breathe 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
-:root:not([data-motion='off']) .pet[data-mood='rest'] .pet-eyes { animation: pet-blink 5s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; }
+:root:not([data-motion='off']) .pet[data-mood='rest'] .pet-eyes { animation: pet-idle-eyes 9s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; } /* (1.7.0: a blink, a glance left, a glance right) */
 :root:not([data-motion='off']) .pet[data-mood='sleep'] .pet-zs text { animation: pet-z 2.6s ease-in-out infinite; }
 :root:not([data-motion='off']) .pet[data-mood='sleep'] .pet-zs text:nth-child(2) { animation-delay: 1.1s; }
 :root:not([data-motion='off']) .pet[data-mood='alert'] .pet-bang { animation: pet-pop 0.7s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
@@ -879,7 +879,7 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
    and macOS Reduce motion (the rule near the top of this file) ends every animation at once, back at the still pose. */
 .pet-corner[data-companion]:not([data-companion='mole']) { right: 16px; }
 /* Seasonal touches (Settings → Appearance → Seasonal touches): the mole's accessory and a few drifting dots in a scene, by [data-season]. */
-.pet[data-tool='agent'] .pet-season, .pet[data-mood='dig'][data-effort='3'] .pet-season { display: none; } /* (the hard hat takes the head) */
+.pet[data-tool='agent'] .pet-season, .pet[data-mood='dig'][data-effort='3'] .pet-season, .pet[data-tool='agent'] .pet-cap, .pet[data-mood='dig'][data-effort='3'] .pet-cap { display: none; } /* (the hard hat takes the head) */
 .pet-season .ps-a { fill: var(--accent); }
 .pet-season .ps-line { fill: none; stroke: color-mix(in srgb, var(--accent) 55%, #000); stroke-width: 0.9; stroke-linecap: round; }
 .pet-season .ps-stem { fill: none; stroke: var(--ok); stroke-width: 1.8; stroke-linecap: round; }
@@ -1160,3 +1160,231 @@ kbd { display: inline-flex; align-items: center; height: 18px; font-size: 10.5px
 .lr-dots li[aria-current] { background: var(--accent); }
 .lr-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .lr-btns .btn { white-space: nowrap; }
+
+
+/* ---- 1.7.0: the companion's poses (thinking, a failed command, compacting, a long wait), the context pile, the night cap, idle life and the pop between moods.
+   Every pose is a data attribute, so it is right with Animations off too; the motion is only under :root:not([data-motion='off']). ---- */
+.pet-think, .pet-box, .pet-ctxpile, .pet-cap { opacity: 0; }
+.pet-think { fill: color-mix(in srgb, var(--text) 86%, var(--bg-solid)); stroke: var(--fur-deep); stroke-width: 0.6; }
+.pet-think .td { fill: var(--fur-deep); stroke: none; }
+.pet-box rect:first-child { fill: color-mix(in srgb, var(--warn) 34%, var(--soil)); stroke: var(--fur-deep); stroke-width: 0.6; }
+.pet-box .tape { fill: color-mix(in srgb, var(--text) 52%, var(--bg-solid)); }
+.pet-box path { fill: color-mix(in srgb, var(--warn) 28%, var(--soil)); stroke: var(--fur-deep); stroke-width: 0.7; stroke-linejoin: round; }
+.pet-ctxpile { fill: var(--soil); transform-box: fill-box; transform-origin: 50% 100%; transform: scale(var(--ctx, 0)); transition: transform 0.8s ease-out, opacity 0.3s, fill 0.3s; }
+.pet[data-ctx] .pet-ctxpile { opacity: 1; }
+.pet[data-ctx='full'] .pet-ctxpile { fill: color-mix(in srgb, var(--warn) 45%, var(--soil)); }
+.pet[data-ctx='full'] .pet-sweat { opacity: 1; }
+.pet-cap { fill: color-mix(in srgb, var(--info) 55%, var(--surface)); }
+.pet-cap rect, .pet-cap circle { fill: #f4f1ea; }
+.pet[data-night] .pet-cap { opacity: 1; }
+.pet[data-fx='think'] { --pet-y: 6px; }
+.pet[data-fx='think'] .pet-think { opacity: 1; }
+.pet[data-fx='think'] .pet-arm-r { transform: rotate(75deg); }
+.pet[data-fx='wince'] { --pet-y: 7px; }
+.pet[data-fx='wince'] .pet-lids { opacity: 1; }
+.pet[data-fx='wince'] .pet-eyes { opacity: 0; }
+.pet[data-fx='wince'] .pet-sweat { opacity: 1; }
+.pet[data-fx='wince'] .pet-fur { fill: color-mix(in srgb, var(--danger) 16%, var(--fur)); }
+.pet[data-fx='compact'] { --pet-y: 4px; }
+.pet[data-fx='compact'] .pet-box { opacity: 1; }
+.pet[data-fx='impatient'] .pet-arm-r { transform: rotate(-70deg); }
+.pet[data-idle='drowsy'] .pet-lids { opacity: 0.7; }
+.pet[data-idle='drowsy'] .pet-eyes { opacity: 0.35; }
+@keyframes pet-idle-eyes {
+  0%, 22%, 100% { transform: translate(0, 0) scaleY(1); }
+  24% { transform: translate(0, 0) scaleY(0.1); }
+  26%, 40% { transform: translate(0, 0) scaleY(1); }
+  44%, 54% { transform: translate(-2.2px, 0) scaleY(1); }
+  58%, 68% { transform: translate(2.2px, 0) scaleY(1); }
+  72%, 78% { transform: translate(0, 0) scaleY(1); }
+  80% { transform: translate(0, 0) scaleY(0.1); }
+  82% { transform: translate(0, 0) scaleY(1); }
+}
+@keyframes pet-swap { from { transform: translateY(18px); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
+@keyframes pet-peek { 0%, 84%, 100% { transform: none; } 87%, 93% { transform: translateY(-10px); } }
+@keyframes pet-peek-eyes { 0%, 84%, 100% { opacity: 0; } 87%, 93% { opacity: 1; } }
+@keyframes pet-peek-lids { 0%, 84%, 100% { opacity: 1; } 87%, 93% { opacity: 0; } }
+@keyframes pet-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-3px); } 40% { transform: translateX(3px); } 60% { transform: translateX(-2px); } 80% { transform: translateX(2px); } }
+@keyframes pet-squish { 0%, 100% { transform: translateY(var(--pet-y)) scale(1, 1); } 50% { transform: translateY(var(--pet-y)) scale(1.06, 0.9); } }
+@keyframes pet-arm-wave { from { transform: rotate(-52deg); } to { transform: rotate(-96deg); } }
+@keyframes pet-stretch-l { 0%, 58%, 100% { transform: rotate(0); } 68%, 84% { transform: rotate(82deg); } }
+@keyframes pet-stretch-r { 0%, 58%, 100% { transform: rotate(0); } 68%, 84% { transform: rotate(-82deg); } }
+@keyframes pet-dots { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+:root:not([data-motion='off']) .pet[data-swapped] .pet-swap { animation: pet-swap 0.45s ease-out; }
+:root:not([data-motion='off']) .pet[data-mood='sleep']:not([data-idle]) .pet-swap { animation: pet-peek 26s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-swapped][data-mood='sleep']:not([data-idle]) .pet-swap { animation: pet-swap 0.45s ease-out, pet-peek 26s ease-in-out 0.45s infinite; }
+:root:not([data-motion='off']) .pet[data-mood='sleep']:not([data-idle]) .pet-eyes { animation: pet-peek-eyes 26s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-mood='sleep']:not([data-idle]) .pet-lids { animation: pet-peek-lids 26s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-fx='think'] .pet-think .td { animation: pet-dots 1.2s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-fx='think'] .pet-think .td:nth-of-type(2) { animation-delay: 0.2s; }
+:root:not([data-motion='off']) .pet[data-fx='think'] .pet-think .td:nth-of-type(3) { animation-delay: 0.4s; }
+:root:not([data-motion='off']) .pet[data-fx='wince'] { animation: pet-shake 0.4s ease-in-out 3; }
+:root:not([data-motion='off']) .pet[data-fx='compact'] .pet-body { animation: pet-squish 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+:root:not([data-motion='off']) .pet[data-fx='impatient'] .pet-arm-r { animation: pet-arm-wave 0.3s ease-in-out infinite alternate; }
+:root:not([data-motion='off']) .pet[data-fx='impatient'] .pet-bang { animation-duration: 0.35s; }
+:root:not([data-motion='off']) .pet[data-ctx='full'] .pet-body { animation: pet-bob 1.1s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-idle='drowsy'] .pet-arm-l { animation: pet-stretch-l 7s ease-in-out infinite; }
+:root:not([data-motion='off']) .pet[data-idle='drowsy'] .pet-arm-r { animation: pet-stretch-r 7s ease-in-out infinite; }
+
+/* the scenes follow the same events: a word in the corner, a flash, three dots, a context gauge along the bottom edge, a dimmer night */
+.sc-flash { fill: var(--danger); opacity: 0; }
+.sc-think { fill: var(--c); opacity: 0; }
+.sc-word { font: 700 7.5px ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: 0.08em; fill: var(--c); opacity: 0; }
+.sc-ctx { fill: var(--ok); opacity: 0.75; transition: width 0.8s ease-out; }
+.scene[data-ctx='full'] .sc-ctx { fill: var(--warn); opacity: 1; }
+.scene[data-fx] .sc-word { opacity: 0.9; }
+.scene[data-fx='think'] .sc-think { opacity: 1; }
+.scene[data-fx='wince'] { --c: var(--danger); }
+.scene[data-fx='wince'] .sc-flash { opacity: 0.22; }
+.scene[data-fx='compact'] { --c: var(--info); }
+.scene[data-fx='impatient'] { --c: var(--warn); }
+.scene[data-night] .scene-art { filter: brightness(0.8); }
+.scene[data-idle='drowsy'] { opacity: 0.8; }
+.mx-glitch rect { fill: var(--danger); opacity: 0; }
+.scene[data-fx='wince'] .mx-glitch rect { opacity: 0.5; }
+.rd-fail { fill: none; stroke: var(--danger); stroke-width: 1.5; opacity: 0; transform-box: fill-box; transform-origin: 50% 50%; }
+.scene[data-fx='wince'] .rd-fail { opacity: 0.7; transform: scale(2.6); }
+.ws-jump line { stroke: var(--text); stroke-width: 1; opacity: 0; stroke-dasharray: 0.3 1; }
+.scene[data-variant='core'][data-ctx='full'] .co-ring { stroke: var(--danger); }
+.scene[data-variant='core'][data-ctx='full'] .co-glow { fill: var(--danger); }
+@keyframes sc-flash { 0% { opacity: 0.45; } 100% { opacity: 0.1; } }
+@keyframes sc-squeeze { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.92); } }
+@keyframes sc-edge { from { opacity: 0.35; } to { opacity: 1; } }
+@keyframes mx-glitch { 0% { transform: translateX(0); opacity: 0.7; } 50% { transform: translateX(4px); opacity: 0.25; } 100% { transform: translateX(-2px); opacity: 0.5; } }
+@keyframes rd-fail { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(4.2); opacity: 0; } }
+@keyframes ws-jump { from { stroke-dashoffset: 0.3; opacity: 1; } to { stroke-dashoffset: -1; opacity: 0; } }
+@keyframes co-heat { 0%, 100% { stroke-width: 1; } 50% { stroke-width: 2.4; } }
+:root:not([data-motion='off']) .scene[data-fx='think'] .sc-think circle { animation: pet-dots 1.2s ease-in-out infinite; animation-delay: calc(var(--n) * 0.2s); }
+:root:not([data-motion='off']) .scene[data-fx='wince'] { animation: pet-shake 0.4s ease-in-out 2; }
+:root:not([data-motion='off']) .scene[data-fx='wince'] .sc-flash { animation: sc-flash 1s ease-out both; }
+:root:not([data-motion='off']) .scene[data-fx='compact'] .scene-art { animation: sc-squeeze 0.9s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+:root:not([data-motion='off']) .scene[data-fx='impatient'] .scene-edge { animation: sc-edge 0.35s ease-in-out infinite alternate; }
+:root:not([data-motion='off']) .scene[data-fx='wince'] .mx-glitch rect { animation: mx-glitch 0.5s steps(4) 3; }
+:root:not([data-motion='off']) .scene[data-fx='wince'] .rd-fail { animation: rd-fail 0.9s ease-out both; }
+:root:not([data-motion='off']) .scene[data-variant='warp'][data-mood='cheer'] .ws-jump line { animation: ws-jump 0.9s ease-out both; animation-delay: calc(var(--n) * 0.05s); }
+:root:not([data-motion='off']) .scene[data-variant='core'][data-ctx='full'] .co-ring { animation: co-heat 0.7s ease-in-out infinite; }
+
+/* ---- 1.7.0: the Cat and the Garden ---- */
+.scene[data-variant='cat'] { --c: var(--accent); }
+.scene[data-variant='garden'] { --c: var(--ok); }
+.scene[data-variant='cat'][data-mood='alert'] { --c: var(--warn); }
+.scene[data-variant='cat'][data-mood='cheer'], .scene[data-variant='garden'][data-mood='cheer'] { --c: var(--ok); }
+.ct-fur { fill: color-mix(in srgb, var(--text) 40%, var(--bg-solid)); }
+.ct-floor { fill: color-mix(in srgb, var(--accent) 16%, var(--bg-solid)); }
+.ct-eye { fill: var(--c); }
+.ct-lids { fill: none; stroke: color-mix(in srgb, var(--text) 16%, var(--bg-solid)); stroke-width: 1.3; stroke-linecap: round; opacity: 0; }
+.ct-nose { fill: color-mix(in srgb, var(--accent) 55%, var(--text)); }
+.ct-whisk { fill: none; stroke: color-mix(in srgb, var(--text) 55%, var(--bg-solid)); stroke-width: 0.6; opacity: 0.7; }
+.ct-tail { fill: none; stroke: color-mix(in srgb, var(--text) 40%, var(--bg-solid)); stroke-width: 6; stroke-linecap: round; transform-box: fill-box; transform-origin: 0% 100%; }
+.ct-paw { fill: color-mix(in srgb, var(--text) 52%, var(--bg-solid)); }
+.ct-keys { opacity: 0; }
+.ct-keys rect { fill: color-mix(in srgb, var(--text) 20%, var(--bg-solid)); stroke: var(--line); stroke-width: 0.5; }
+.ct-keys circle { fill: var(--c); opacity: 0.35; }
+.ct-zs, .ct-bang, .ct-sparks { opacity: 0; }
+.ct-zs text { fill: var(--faint); font: 700 8px ui-monospace, monospace; }
+.ct-bang circle { fill: var(--warn); }
+.ct-bang text { fill: var(--surface); font: 800 11px ui-monospace, monospace; }
+.ct-sparks path { fill: var(--c); }
+.ct-head, .ct-body, .ct-kit, .ct-cat, .ct-bang, .ct-sparks path { transform-box: fill-box; transform-origin: 50% 100%; }
+.ct-kit:not([data-state]) { opacity: 0; }
+.ct-kit[data-state='sleep'], .ct-kit[data-state='rest'] { opacity: 0.55; }
+.scene[data-variant='cat'][data-mood='sleep'] .ct-head { transform: translateY(9px); }
+.scene[data-variant='cat'][data-mood='sleep'] .ct-eyes { opacity: 0; }
+.scene[data-variant='cat'][data-mood='sleep'] .ct-lids { opacity: 1; }
+.scene[data-variant='cat'][data-mood='sleep'] .ct-zs { opacity: 1; }
+.scene[data-variant='cat'][data-mood='sleep'] .ct-body { transform: scaleY(0.92); }
+.scene[data-variant='cat'][data-mood='dig'] .ct-keys { opacity: 1; }
+.scene[data-variant='cat'][data-mood='alert'] .ct-bang { opacity: 1; }
+.scene[data-variant='cat'][data-mood='alert'] .ct-head { transform: translateY(-3px); }
+.scene[data-variant='cat'][data-mood='alert'] .ct-eye { ry: 3.2px; }
+.scene[data-variant='cat'][data-mood='alert'] .ct-tail { transform: rotate(-32deg); }
+.scene[data-variant='cat'][data-mood='cheer'] .ct-sparks { opacity: 1; }
+.scene[data-variant='cat'][data-fx='wince'] .ct-eyes { opacity: 0; }
+.scene[data-variant='cat'][data-fx='wince'] .ct-lids { opacity: 1; }
+.scene[data-variant='cat'][data-fx='think'] .ct-paw.r { transform: translateY(-9px); }
+@keyframes ct-tail { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(10deg); } }
+@keyframes ct-tap { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3.5px); } }
+@keyframes ct-key { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@keyframes ct-nod { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(2px); } }
+@keyframes ct-hop { 0%, 100% { transform: none; } 45% { transform: translateY(-9px); } }
+@keyframes ct-breathe { 0%, 100% { transform: scaleY(0.92); } 50% { transform: scaleY(0.95); } }
+:root:not([data-motion='off']) .scene[data-variant='cat']:not([data-mood='sleep']):not([data-mood='alert']) .ct-tail { animation: ct-tail calc(3.4s * var(--m)) ease-in-out infinite alternate; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='dig'] .ct-tail { animation-duration: 0.6s; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='rest'] .ct-eyes { animation: pet-idle-eyes 9s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 50%; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='dig'] .ct-paw.l { animation: ct-tap var(--t) ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='dig'] .ct-paw.r { animation: ct-tap var(--t) ease-in-out calc(var(--t) / 2) infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='dig'] .ct-keys circle { animation: ct-key calc(var(--t) * 2) ease-in-out infinite; animation-delay: calc(var(--n) * 0.12s); }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='dig'] .ct-head { animation: ct-nod 1.6s ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='sleep'] .ct-body { animation: ct-breathe 3.6s ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='cheer'] .ct-cat { animation: ct-hop 0.6s ease-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='alert'] .ct-bang { animation: pet-pop 0.7s ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='sleep'] .ct-zs text { animation: pet-z 2.6s ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='sleep'] .ct-zs text:nth-child(2) { animation-delay: 1.1s; }
+:root:not([data-motion='off']) .scene[data-variant='cat'][data-mood='cheer'] .ct-sparks path { animation: pet-twinkle 0.7s ease-in-out infinite; }
+:root:not([data-motion='off']) .ct-kit[data-state='dig'] { animation: ct-nod 0.5s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 0.1s); }
+:root:not([data-motion='off']) .ct-kit[data-state='cheer'] { animation: ct-hop 0.6s ease-out infinite; }
+
+.gd-soil { fill: color-mix(in srgb, var(--warn) 22%, var(--bg-solid)); }
+.gd-stem { fill: none; stroke: color-mix(in srgb, var(--ok) 70%, var(--bg-solid)); stroke-width: 2.6; stroke-linecap: round; }
+.gd-leaf { fill: color-mix(in srgb, var(--ok) 62%, var(--bg-solid)); }
+.gd-petal { fill: color-mix(in srgb, var(--accent) 80%, var(--text)); }
+.gd-petal:nth-child(2n) { fill: color-mix(in srgb, var(--danger) 45%, var(--accent)); }
+.gd-heart { fill: var(--warn); }
+.gd-bud { fill: var(--accent); opacity: 0; }
+.gd-grow { transform-box: fill-box; transform-origin: 50% 100%; transform: scale(0.5); transition: transform 0.8s ease-out; }
+.gd-bloom { opacity: 0; transform-box: fill-box; transform-origin: 50% 50%; transform: scale(0.3); transition: transform 0.6s ease-out, opacity 0.4s; }
+.gd-rain line { stroke: var(--info); stroke-width: 1.3; stroke-linecap: round; opacity: 0; }
+.gd-bang { opacity: 0; }
+.gd-bang circle { fill: var(--warn); }
+.gd-bang text { fill: var(--surface); font: 800 11px ui-monospace, monospace; }
+.gd-sprout { transform-box: fill-box; transform-origin: 50% 100%; transform: scale(0.55); transition: transform 0.6s ease-out; }
+.gd-sprout:not([data-state]) { opacity: 0; }
+.gd-sprout[data-state='dig'] { transform: scale(0.85); }
+.gd-sprout[data-state='cheer'] { transform: scale(1); }
+.gd-sprout[data-state='cheer'] .gd-bud { opacity: 1; }
+.scene[data-variant='garden'][data-mood='rest'] .gd-grow { transform: scale(0.7); }
+.scene[data-variant='garden'][data-mood='dig'] .gd-grow { transform: scale(0.8); }
+.scene[data-variant='garden'][data-mood='dig'][data-effort='1'] .gd-grow { transform: scale(0.88); }
+.scene[data-variant='garden'][data-mood='dig'][data-effort='2'] .gd-grow { transform: scale(0.96); }
+.scene[data-variant='garden'][data-mood='dig'][data-effort='3'] .gd-grow { transform: scale(1.04); }
+.scene[data-variant='garden'][data-mood='dig'] .gd-rain line { opacity: 0.6; }
+.scene[data-variant='garden'][data-mood='alert'] .gd-grow { transform: scale(0.75); rotate: 8deg; }
+.scene[data-variant='garden'][data-mood='alert'] .gd-bang { opacity: 1; }
+.scene[data-variant='garden'][data-mood='cheer'] .gd-grow { transform: scale(1); }
+.scene[data-variant='garden'][data-mood='cheer'] .gd-bloom { opacity: 1; transform: scale(1); }
+@keyframes gd-sway { 0%, 100% { rotate: -2.5deg; } 50% { rotate: 2.5deg; } }
+@keyframes gd-rain { 0% { transform: translateY(-6px); opacity: 0; } 20% { opacity: 0.9; } 100% { transform: translateY(48px); opacity: 0; } }
+:root:not([data-motion='off']) .scene[data-variant='garden'][data-mood='dig'] .gd-grow, :root:not([data-motion='off']) .scene[data-variant='garden'][data-mood='rest'] .gd-grow { animation: gd-sway calc(3.2s * var(--m)) ease-in-out infinite; }
+:root:not([data-motion='off']) .scene[data-variant='garden'][data-mood='dig'] .gd-rain line { animation: gd-rain 1.1s linear infinite; animation-delay: calc(var(--n) * 0.27s); }
+:root:not([data-motion='off']) .scene[data-variant='garden'] .gd-sprout[data-state='dig'] { animation: gd-sway 1.6s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 0.2s); }
+:root:not([data-motion='off']) .scene[data-variant='garden'][data-mood='alert'] .gd-bang { animation: pet-pop 0.7s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+.recent-tag { flex: none; margin-left: auto; padding: 1px 7px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.recent-tag[data-kind='fail'] { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+.run-clock { flex: none; margin-left: 6px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.now-details-toggle { align-self: flex-start; border: 0; background: none; padding: 2px 0; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.now-details-toggle:hover { color: var(--text); }
+.now-details { display: flex; flex-direction: column; gap: 6px; }
+.now-details[hidden] { display: none; }
+
+/* ---- 1.7.0: past conversations, a little calmer: the toggles are tabs, the rows breathe, the day labels are quieter ---- */
+.conv-toggles { gap: 6px; margin-bottom: 8px; }
+.conv-cost-toggle, .st-toggle, .conv-hidden-toggle { padding: 2px 9px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 11px; }
+.conv-cost-toggle::before, .st-toggle::before, .conv-cost-toggle[aria-expanded='true']::before, .st-toggle[aria-expanded='true']::before { content: none; }
+.conv-cost-toggle[aria-expanded='true'], .st-toggle[aria-expanded='true'], .conv-hidden-toggle[aria-pressed='true'] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+.conv-row { padding: 7px 8px; row-gap: 2px; }
+.conv-name { font-size: 12.5px; }
+.conv-dir { font-size: 10.5px; opacity: 0.85; }
+.conv-meta { font-size: 10.5px; }
+.conv-day-label { padding: 10px 6px 3px; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+/* (1.7.0) text under the companion: it steps back */
+.pet-corner { transition: opacity 0.3s ease; }
+.pet-corner[data-cover] { opacity: 0.22; }
+.pet-corner[data-side='left'] { right: auto; left: 22px; flex-direction: row; }
+.pet-corner[data-side='left'][data-companion]:not([data-companion='mole']) { left: 16px; }
+.pet-corner[data-side='left'] .pet-burst { right: auto; left: 56px; }
+
+/* ---- 1.7.0: while a terminal is in an ssh session its outline and chip say so; a host that looks like production is red ---- */
+.pane[data-remote]::before { content: ''; position: absolute; inset: 0; z-index: 1; border: 2px solid color-mix(in srgb, var(--info) 55%, transparent); pointer-events: none; }
+.pane[data-remote='prod']::before { border-color: color-mix(in srgb, var(--danger) 80%, transparent); }
+.pane[data-remote] .pn-chip::before { content: 'ssh'; margin-right: 4px; color: var(--info); }
+.pane[data-remote='prod'] .pn-chip::before { content: 'ssh · prod'; color: var(--danger); }

@@ -40,3 +40,12 @@ export function groupByFolder<T extends { cwd?: string }>(items: T[], home: stri
   }
   return [...groups.values()];
 }
+
+export type RecentMode = 'all' | 'failed' | 'slow';
+
+/** ⌘R's filters (1.7.0): *Failed* keeps the commands that exited with a number other than 0; *Slowest* the ones that took a second or more, longest first (at most 20). */
+export function filterRecent<T extends { exit: number | null; durMs: number }>(items: T[], mode: RecentMode): T[] {
+  if (mode === 'failed') return items.filter((c) => typeof c.exit === 'number' && c.exit !== 0);
+  if (mode === 'slow') return items.filter((c) => c.durMs >= 1000).sort((a, b) => b.durMs - a.durMs).slice(0, 20);
+  return items;
+}

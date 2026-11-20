@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isDozing, petMood, petTool } from '../src/shared/pet-mood';
+import { DOZE_AFTER_MS, isDozing, isDrowsy, petMood, petTool } from '../src/shared/pet-mood';
 import { processBadge } from '../src/shared/process-badge';
 
 const mood = (running: string | null, claude: Parameters<typeof processBadge>[1], cheering = false) => petMood({ badge: processBadge(running, claude), claude, cheering });
@@ -69,5 +69,14 @@ describe('isDozing: the companion dozes after ten minutes of nothing', () => {
   it('a clock that went backwards (or odd numbers) does not doze', () => {
     expect(isDozing(10_000, 5_000)).toBe(false);
     expect(isDozing(Number.NaN, 1e12)).toBe(false);
+  });
+});
+
+describe('isDrowsy: the stretch before the doze', () => {
+  it('is only in the last stretch before dozing', () => {
+    expect(isDrowsy(0, 1000)).toBe(false);
+    expect(isDrowsy(0, DOZE_AFTER_MS - 10_000)).toBe(true);
+    expect(isDrowsy(0, DOZE_AFTER_MS)).toBe(false); // (dozing takes over)
+    expect(isDrowsy(100, 50)).toBe(false); // (a clock that ran backwards)
   });
 });

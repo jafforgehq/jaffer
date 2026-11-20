@@ -11,6 +11,7 @@ import { askToExplain, Explain, explainCard, explainLast, explainSupported } fro
 import { terminals } from './TerminalView';
 import { ApprovalAsk } from './Chrome';
 import { InfoButton } from './InfoButton';
+import { copyTurnCard } from '../turn-card';
 
 const SLIDE_MS = 180;
 /** The arrow keys on the edge write `panel.width` (and fit the terminal) once they stop for this long. */
@@ -27,6 +28,8 @@ export function NowCard(): VNode {
   const m = nowCardModel(s, { now, cfg: c, today: claudeToday.value, typicalTurnMs: c?.typicalTurnMs ?? 0, turns: turnHistory.value, usage5h: usage5h.value });
   const timeline = todayTimeline(turnHistory.value, now, c?.showCost !== false);
   const [tlOpen, setTlOpen] = useState(false);
+  /** (1.7.0) The last 5 hours, the turn bars and today's list sit behind one button (memory only); the state, cost, context and the worked-today line stay in view. */
+  const [detailsOpen, setDetailsOpen] = useState(false);
   // a permission prompt waiting for a click (approvals): asked here too, and the terminal has no prompt to answer yet
   const ap = approvals.value[0];
   if (ap) m.hint = undefined;
@@ -81,39 +84,46 @@ export function NowCard(): VNode {
           <InfoButton id="turn" />
         </div>
       )}
-      {m.last5h && (
-        <div class="now-5h" title="An estimate from the token counts in Claude Code's transcripts of the last 5 hours, at API list prices; your plan's limits are counted by Anthropic, not here">
-          {m.last5h}
-        </div>
+      {(m.last5h || m.bars || timeline.length > 0) && (
+        <button class="now-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)}>
+          {detailsOpen ? 'Fewer details' : 'More details'}
+        </button>
       )}
-      {m.bars && (
-        <div class="lr-line">
-        <svg class="now-turns" viewBox={`0 0 ${m.bars.w} ${m.bars.h}`} width={m.bars.w} height={m.bars.h} role="img" aria-label={m.bars.label}>
-          {m.bars.bars.map((b, i) => (
-            <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="1.5" data-level={b.level}>
-              <title>{b.title}</title>
-            </rect>
-          ))}
-        </svg>
-        <InfoButton id="turn" />
-        </div>
-      )}
-      {timeline.length > 0 && (
-        <div class="now-tl">
-          <button class="now-tl-toggle" aria-expanded={tlOpen} onClick={() => setTlOpen(!tlOpen)}>
-            Today ({timeline.length})
-          </button>
-          {tlOpen && (
-            <ol class="now-tl-list">
-              {timeline.map((t, i) => (
-                <li key={i} title={t}>
-                  {t}
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
+      <div class="now-details" hidden={!detailsOpen}>
+        {m.last5h && (
+          <div class="now-5h" title="An estimate from the token counts in Claude Code's transcripts of the last 5 hours, at API list prices; your plan's limits are counted by Anthropic, not here">
+            {m.last5h}
+          </div>
+        )}
+        {m.bars && (
+          <div class="lr-line">
+          <svg class="now-turns" viewBox={`0 0 ${m.bars.w} ${m.bars.h}`} width={m.bars.w} height={m.bars.h} role="img" aria-label={m.bars.label}>
+            {m.bars.bars.map((b, i) => (
+              <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="1.5" data-level={b.level}>
+                <title>{b.title}</title>
+              </rect>
+            ))}
+          </svg>
+          <InfoButton id="turn" />
+          </div>
+        )}
+        {timeline.length > 0 && (
+          <div class="now-tl">
+            <button class="now-tl-toggle" aria-expanded={tlOpen} onClick={() => setTlOpen(!tlOpen)}>
+              Today ({timeline.length})
+            </button>
+            {tlOpen && (
+              <ol class="now-tl-list">
+                {timeline.map((t, i) => (
+                  <li key={i} title={t}>
+                    {t}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
+      </div>
       {m.agents.length > 0 && (
         <ul class="now-agents">
           {m.agents.map((a, n) => (
@@ -138,6 +148,11 @@ export function NowCard(): VNode {
           {cfg.value?.permissions?.explain === true && explainSupported.value !== false && (
             <button class="btn small now-explain" disabled={!!explainCard.value && 'busy' in explainCard.value} onClick={() => void explainLast(s.id)}>
               Explain the last answer
+            </button>
+          )}
+          {m.summary && (
+            <button class="btn ghost small now-card-copy" title="Copies the turn's summary as a picture to share (nothing is saved)" onClick={() => copyTurnCard(m.summary, m.files.map((f) => f.name), m.moreFiles)}>
+              Copy turn card
             </button>
           )}
           <button class="btn ghost small now-ask" title="Copies a prompt that asks the Claude in the terminal to explain; you paste it" onClick={askToExplain}>

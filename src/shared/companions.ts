@@ -6,6 +6,8 @@ export const COMPANIONS = [
   { id: 'warp', name: 'Warp', blurb: 'a starfield at speed, a wingman per agent' },
   { id: 'radar', name: 'Radar', blurb: 'a sweep and a blip per agent' },
   { id: 'core', name: 'Reactor core', blurb: 'rings, energy bars and orbiting agents' },
+  { id: 'cat', name: 'Cat', blurb: 'types while Claude works, a kitten per agent' },
+  { id: 'garden', name: 'Garden', blurb: 'a plant that grows while Claude works and blooms when it is done' },
 ] as const;
 
 export type Companion = (typeof COMPANIONS)[number]['id'];

@@ -1,7 +1,7 @@
 import { unescapeOsc } from '../shared/osc';
 import { SAVE_TEXT_MAX, utf8Bytes } from '../shared/save-text';
 import { COMMAND_HEAD } from '../shared/process-badge';
-import { isSensitiveCommand } from '../shared/redact';
+import { isSensitiveCommand, redactText } from '../shared/redact';
 
 /**
  * Command blocks, from the shell marks the integration scripts send (no xterm here: the terminal view feeds the marks and keeps the
@@ -95,6 +95,23 @@ export class BlockModel {
 export function failedPrompt(blocks: readonly Block[], top: number, dir: -1 | 1): number | undefined {
   const lines = blocks.filter((b) => typeof b.exit === 'number' && b.exit !== 0 && b.promptLine >= 0).map((b) => b.promptLine);
   return dir < 0 ? lines.filter((l) => l < top).at(-1) : lines.find((l) => l > top);
+}
+
+/** How much of a failed command's output goes into the fix prompt. */
+const FIX_LINES = 40;
+const FIX_CHARS = 4000;
+
+/**
+ * (1.7.0) A prompt for the person to paste into Claude Code after a command failed: the command (never a sensitive one), its exit and
+ * the tail of its output, redacted. It is only copied; Jaffer types nothing.
+ */
+export function fixPrompt(cmd: string | undefined, exit: number | null | undefined, output: string): string {
+  const lines = output.replace(/\s+$/, '').split('\n');
+  const tail = lines.slice(-FIX_LINES).join('\n').slice(-FIX_CHARS); // (clipped first: redaction runs only on bounded text)
+  const shown = cmd && !isSensitiveCommand(cmd) ? redactText(cmd.slice(0, 4 * COMMAND_HEAD)) : undefined;
+  const head = `This command failed${typeof exit === 'number' ? ` (exit ${exit})` : ''}.`;
+  const body = tail ? redactText(tail) : '(no output)';
+  return `${head}\n\n${fenceText(body, shown)}\n\nWhy did it fail, and what is the smallest fix?`;
 }
 
 /** `text` in a fenced code block for Markdown, `$ <cmd>` as its first line when given; the fence is longer than any backtick run in either. */

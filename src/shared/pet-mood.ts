@@ -29,3 +29,12 @@ export const DOZE_AFTER_MS = 600_000;
 export function isDozing(lastActivityAt: number, now: number, afterMs = DOZE_AFTER_MS): boolean {
   return now - lastActivityAt >= afterMs;
 }
+
+/** The companion yawns and stretches in the last stretch before it dozes. */
+export const DROWSY_BEFORE_MS = 40_000;
+
+/** Whether the companion is about to doze: `lastActivityAt` is nearly `afterMs` ago, but not yet. */
+export function isDrowsy(lastActivityAt: number, now: number, afterMs = DOZE_AFTER_MS): boolean {
+  const quiet = now - lastActivityAt;
+  return quiet >= afterMs - DROWSY_BEFORE_MS && quiet < afterMs;
+}

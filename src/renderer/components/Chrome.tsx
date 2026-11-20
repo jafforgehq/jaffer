@@ -204,6 +204,17 @@ export function ApprovalAsk({ a, place }: { a: ApprovalView; place: 'chip' | 'ca
   );
 }
 
+/** (1.7.0) How long the running command has run, from 5 seconds on (not for Claude: its ring and clock say it). Ticks once a second while it shows. */
+function RunClock({ since }: { since: number }): VNode | null {
+  const [, tick1] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick1((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ms = Date.now() - since;
+  return ms >= 5000 ? <span class="run-clock">{fmtDuration(ms)}</span> : null;
+}
+
 export function TitleBar(): VNode {
   const i = info.value;
   const c = cfg.value;
@@ -258,6 +269,7 @@ export function TitleBar(): VNode {
                 )}{' '}
                 {safeCommand(running).slice(0, 28)}
               </span>
+              {!isClaude && badge.spin && typeof i.busySince === 'number' && <RunClock since={i.busySince} />}
               {port.value && c?.terminal?.portLinks !== false && (
                 <button class="port-chip" title={`Open http://localhost:${port.value} in your browser`} onClick={() => void window.jaffer.openExternal(`http://localhost:${port.value}`)}>
                   :{port.value} ↗

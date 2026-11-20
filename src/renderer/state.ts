@@ -17,8 +17,11 @@ import { budgetLevels, parseProjectBudgets } from '../shared/project-budgets';
 import { weekId } from '../shared/usage-week';
 import { formatUsd } from '../shared/claude-cost';
 import { FailTracker } from './fail-tracker';
+import { winceExit } from '../shared/pet-fx';
+import type { Companion } from '../shared/companions';
 import { shouldTip, TIPS, type TipId } from '../shared/tips';
-import { resolveTheme, type JafferTheme } from './themes';
+import { resolveTheme, themeById, THEMES, type JafferTheme } from './themes';
+import { parseFolderThemes, themeForFolder } from '../shared/folder-themes';
 import { isPaneId } from '../shared/session-id';
 import { cleanPaneLabel, firstPaneId, movePane, reorderPanes } from '../shared/pane-tools';
 
@@ -121,7 +124,11 @@ export function removePane(id: string): void {
     const { [id]: _label, ...labels } = paneLabels.value;
     paneLabels.value = labels;
     if (zoomPane.value === id) zoomPane.value = null;
-    for (const s of [paneActivityAt, paneFixedAt, paneBellAt]) {
+    {
+      const { [id]: _c, ...left } = paneCompanion.value;
+      paneCompanion.value = left;
+    }
+    for (const s of [paneActivityAt, paneFixedAt, paneBellAt, paneFailedAt]) {
       const { [id]: _t, ...left } = s.value;
       s.value = left;
     }
@@ -228,6 +235,10 @@ export const bellAt = signal(0);
 export const paneActivityAt = signal<Record<string, number>>({});
 export const paneFixedAt = signal<Record<string, number>>({});
 export const paneBellAt = signal<Record<string, number>>({});
+/** (1.7.0) A different companion for one terminal than the Settings one (memory only, like the terminal names). */
+export const paneCompanion = signal<Record<string, Companion>>({});
+/** (1.7.0) When a command last failed in each terminal (memory only): the companion winces for a moment. */
+export const paneFailedAt = signal<Record<string, number>>({});
 const stamp = (s: typeof paneActivityAt, pane: string, t: number): void => void (s.value = { ...s.value, [pane]: t });
 /** Failures in a row, per terminal (a fix in one terminal is not the end of another's failures). */
 const fails = new Map<string, FailTracker>();
@@ -247,6 +258,9 @@ export const hour = signal(new Date().getHours());
 /** The theme that is on now: the chosen one, or the light one by macOS or by the hour. Reads signals, so an effect that calls it follows them. */
 export function activeTheme(): JafferTheme {
   const a = cfg.value?.appearance;
+  // (1.7.0) a theme the person tied to the focused terminal's folder wins over the chosen one
+  const byFolder = themeForFolder(parseFolderThemes(a?.folderThemes, homeDir(), (n) => THEMES.find((t) => t.id === n.toLowerCase() || t.name.toLowerCase() === n.toLowerCase())?.id), info.value.cwd);
+  if (byFolder) return themeById(byFolder);
   return resolveTheme({ autoTheme: a?.autoTheme ?? 'off', theme: a?.theme ?? '', lightTheme: a?.lightTheme ?? '', systemDark: systemDark.value, hour: hour.value });
 }
 /** Where the self-update stands (Settings → Updates). Null until the app answers. */
@@ -569,6 +583,7 @@ export async function bootstrap(): Promise<void> {
         stamp(paneActivityAt, pane, Date.now());
         setPaneInfo(pane, { busy: null, busySince: null });
         if (pane === activePane.value) port.value = null;
+        if (winceExit(data.exit)) stamp(paneFailedAt, pane, Date.now());
         if (failTracker(pane).record(String(data.cmd ?? ''), typeof data.exit === 'number' ? data.exit : null)) {
           fixedAt.value = Date.now();
           stamp(paneFixedAt, pane, Date.now());

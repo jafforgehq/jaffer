@@ -15,6 +15,7 @@ export const MENU_ITEMS: Record<string, { label: string; accelerator?: string }>
   'failed-prev': { label: 'Previous Failed Command', accelerator: 'Alt+Cmd+Up' }, // (1.6.5)
   'failed-next': { label: 'Next Failed Command', accelerator: 'Alt+Cmd+Down' },
   'select-output': { label: 'Select Output', accelerator: 'Alt+Cmd+A' },
+  'copy-output': { label: 'Copy Last Output', accelerator: 'Alt+Cmd+K' }, // (1.7.0)
   'recent-commands': { label: 'Recent Commands…', accelerator: 'Cmd+R' },
   history: { label: 'Past Claude Conversations…', accelerator: 'Shift+Cmd+O' },
   'resume-last': { label: 'Resume Last Conversation', accelerator: 'Shift+Cmd+R' },

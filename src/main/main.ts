@@ -939,6 +939,7 @@ function buildMenu(): void {
         item('failed-prev'),
         item('failed-next'),
         item('select-output'),
+        item('copy-output'),
         item('recent-commands'),
         item('history'),
         item('resume-last'),
