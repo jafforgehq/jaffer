@@ -6164,6 +6164,8 @@ describe('Jaffer UI end to end', () => {
       await inject([{ id: 'lr-1', state: 'idle', cost: { usd: 0.02, at: 2 }, context: { tokens: 300_000, window: 1_000_000, at: T } }], { usd: 1, date: 'today', workMs: 600_000 });
       await push({ items: [{ id: 'lr-ap', sessionId: 'lr-1', tool: 'Bash', detail: 'npm test', allowable: true, expiresAt: Date.now() + 20_000 }] });
       await page.waitForSelector('.now-turns', { state: 'attached' }); // (1.7.0: the turn bars sit under More details)
+      await page.evaluate(() => (document.querySelector('.now-details-toggle[aria-expanded="false"]') as HTMLElement | null)?.click());
+      await page.waitForSelector('.now-turns');
       await page.waitForSelector('.now-card .ap-ask');
       await page.click('.sx-head');
       await page.waitForSelector('.sx-body[data-loaded]');

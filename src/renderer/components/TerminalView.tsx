@@ -373,14 +373,7 @@ export function TerminalView({ pane }: { pane: string }) {
       term.options.macOptionIsMeta = ap.optionAsMeta;
       term.options.scrollback = ap.scrollback;
       syncImages();
-      requestAnimationFrame(() => {
-        try {
-          fit.fit();
-          placeRuler();
-        } catch {
-          /* not visible */
-        }
-      });
+      requestAnimationFrame(refit); // (1.7.0: the theme follows the folder, so this runs on a `cd` too: it must wait while the panel's edge is dragged)
     });
     const stopReader = effect(() => void (term.options.screenReaderMode = screenReaderOn(cfg.value?.terminal?.screenReader ?? 'auto', assistiveTech.value)));
     const stopFocus = effect(() => {
