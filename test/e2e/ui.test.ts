@@ -608,7 +608,7 @@ describe('Jaffer UI end to end', () => {
     await page.keyboard.press('ArrowLeft');
     await page.waitForSelector(`${corner('mole')} .pet`);
     await page.keyboard.press('ArrowLeft'); // and round the end of the list: the first one's neighbour is the last
-    await page.waitForSelector(`${corner('core')} .scene`);
+    await page.waitForSelector(`${corner('garden')} .scene`);
     await page.keyboard.press('ArrowRight');
     await page.waitForSelector(`${corner('mole')} .pet`);
     await shot('15-companions');
