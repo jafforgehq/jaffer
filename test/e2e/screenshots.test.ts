@@ -392,7 +392,7 @@ describe.skipIf(!OUT)('README screenshots', () => {
       fs.mkdirSync(OUT!, { recursive: true });
       await page.screenshot({ path: path.join(OUT!, `${name}.png`), clip: { x: b.x + b.width + pad - w, y: b.y + b.height + pad - h, width: w, height: h } });
     };
-    for (const companion of ['mole', 'matrix', 'agents', 'warp', 'radar', 'core']) {
+    for (const companion of ['mole', 'matrix', 'agents', 'warp', 'radar', 'core', 'cat', 'garden']) {
       await page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), companion);
       await page.waitForSelector(`.pet-corner[data-companion='${companion}']`);
       await busy();
@@ -501,7 +501,8 @@ describe.skipIf(!OUT)('README screenshots', () => {
       [repo] as const,
     );
     await page.waitForSelector('.now-card[data-state="working"] .now-files button');
-    await page.waitForSelector('.now-turns'); // (1.2.0)
+    await page.waitForSelector('.now-turns', { state: 'attached' }); // (1.2.0)
+    await page.evaluate(() => (document.querySelector('.now-details-toggle[aria-expanded="false"]') as HTMLElement | null)?.click()); // (1.7.0)
     await clearToasts();
     await sleep(400);
     await shot('19-side-panel');

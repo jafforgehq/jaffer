@@ -1,9 +1,10 @@
-import { activePane, addPin, cfg, focusMode, info, lastFind, openGlossary, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, startTour, toast, toggleZoom, togglePanel } from './state';
+import { paneCompanion, activePane, addPin, cfg, focusMode, info, lastFind, openGlossary, openOverlay, overlay, patchConfig, safeCommand, setFocusMode, showConversations, showWhatsNew, startTour, toast, toggleZoom, togglePanel } from './state';
 import { redactText } from '../shared/redact';
 import { COMMAND_HEAD } from '../shared/process-badge';
 import { isClaudeCommand } from '../shared/process-badge';
 import { FIND_OPTS, terminals } from './components/TerminalView';
 import { THEMES } from './themes';
+import { COMPANIONS, companionOf, type Companion } from '../shared/companions';
 import { resumeLast } from './resume';
 import { closeTerminal, cycleTerminal, focusTerminal, splitTerminal } from './components/PaneTree';
 
@@ -89,12 +90,15 @@ export const actions: Action[] = [
   { id: 'failed-prev', title: 'Previous failed command', section: 'Terminal', keys: '⌥⌘↑', keywords: 'jump error exit code red block scroll up', run: () => term()?.blocks.jumpFailed(-1) },
   { id: 'failed-next', title: 'Next failed command', section: 'Terminal', keys: '⌥⌘↓', keywords: 'jump error exit code red block scroll down', run: () => term()?.blocks.jumpFailed(1) },
   { id: 'select-output', title: 'Select output', section: 'Terminal', keys: '⌥⌘A', keywords: 'command block last output select copy', run: () => term()?.blocks.selectOutput() },
+  { id: 'copy-output', title: 'Copy last output', section: 'Terminal', keys: '⌥⌘K', keywords: 'command block clipboard result', run: () => term()?.blocks.copyOutput() },
+  { id: 'copy-fix-prompt', title: 'Copy a prompt to fix the last failed command', section: 'Terminal', keywords: 'error exit code claude ask why failed paste', run: () => term()?.blocks.copyFixPrompt() },
   { id: 'copy-markdown', title: 'Copy as Markdown', section: 'Terminal', keys: '⌥⌘C', keywords: 'selection fenced code block clipboard', run: () => term()?.blocks.copyMarkdown() },
   { id: 'focus-mode', get title() { return focusMode.value ? 'Leave focus mode' : 'Focus mode'; }, section: 'App', keys: '⌥⌘F', keywords: 'quiet distraction notifications hold fade', run: () => setFocusMode(!focusMode.value) },
   { id: 'restart-shell', title: 'Restart shell', section: 'Terminal', run: () => guarded(() => call('session.restart', { pane: activePane.value }), 'Shell restarted in the same folder.') },
   { id: 'split-terminal', title: 'Split terminal', section: 'Terminal', keys: '⌘D', keywords: 'new pane split view second shell', run: splitTerminal },
   { id: 'close-terminal', title: 'Close terminal', section: 'Terminal', keys: '⇧⌘W', keywords: 'end pane split delete', run: () => closeTerminal() },
   { id: 'zoom-terminal', title: 'Zoom terminal', section: 'Terminal', keys: '⇧⌘↩', keywords: 'pane split maximize full fill one', run: toggleZoom },
+  { id: 'terminal-companion', title: 'Companion for this terminal: next', section: 'Terminal', keywords: 'pet mole cat garden matrix radar different pane split', run: nextPaneCompanion },
   { id: 'next-terminal', title: 'Next terminal', section: 'Terminal', keys: '⌘]', keywords: 'pane split focus', run: () => cycleTerminal(1) },
   { id: 'prev-terminal', title: 'Previous terminal', section: 'Terminal', keys: '⌘[', keywords: 'pane split focus', run: () => cycleTerminal(-1) },
   { id: 'focus-terminal-1', title: 'Terminal 1', section: 'Terminal', keys: '⌘1', keywords: 'pane split focus first', run: () => focusTerminal(1) },
@@ -111,6 +115,18 @@ export const actions: Action[] = [
   { id: 'reveal-home', title: 'Reveal session folder in Finder', section: 'App', run: () => void window.jaffer.reveal() },
   ...THEMES.map<Action>((t) => ({ id: `theme:${t.id}`, title: `Theme: ${t.name}`, section: 'Appearance', keywords: 'color scheme', run: () => patchConfig({ appearance: { theme: t.id } }) })),
 ];
+
+/** (1.7.0) A different companion for this terminal only (memory only): each press moves to the next one, and after the last it is the Settings one again. */
+function nextPaneCompanion(): void {
+  const pane = activePane.value;
+  const cur = paneCompanion.value[pane];
+  const order: (Companion | undefined)[] = [undefined, ...COMPANIONS.map((c) => c.id)];
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  const { [pane]: _drop, ...rest } = paneCompanion.value;
+  paneCompanion.value = next ? { ...rest, [pane]: next } : rest;
+  const name = COMPANIONS.find((c) => c.id === companionOf(next ?? cfg.value?.appearance.companion))!.name;
+  toast({ kind: 'info', text: next ? `This terminal: ${name}` : `This terminal follows Settings again: ${name}` }, 2500);
+}
 
 function runAction(id: string): void {
   const a = actions.find((x) => x.id === id);

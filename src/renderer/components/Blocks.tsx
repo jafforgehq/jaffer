@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { effect, signal } from '@preact/signals';
 import type { IDecoration, IDisposable, IMarker, Terminal } from '@xterm/xterm';
-import { BlockModel, blockOutputText, failedPrompt, fenceText, saveName, type Block, type MarkKind } from '../blocks';
+import { BlockModel, blockOutputText, failedPrompt, fenceText, fixPrompt, saveName, type Block, type MarkKind } from '../blocks';
 import { activePane, activeTheme, cfg, paneLayout, safeCommand, toast } from '../state';
 import { drawBlockImage, layoutBlockImage } from '../block-image';
 import { isSensitiveCommand } from '../../shared/redact';
@@ -27,6 +27,10 @@ export interface BlocksHandle {
   jumpFailed(dir: -1 | 1): void;
   /** ⌥⌘A: select the output of the last command (scrolled to the bottom) or of the block at the top of the view. */
   selectOutput(): void;
+  /** ⌥⌘K: copy the output of the last command (or of the block at the top of the view when scrolled up). */
+  copyOutput(): void;
+  /** Copy a prompt that asks Claude why the last failed command failed (the command, its exit and the tail of its output; copied, never typed). */
+  copyFixPrompt(): void;
   /** ⌥⌘C: the selection as Markdown, with its block's command when it lies inside one block's output. */
   copyMarkdown(): void;
 }
@@ -230,6 +234,7 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
         },
       },
       { label: 'Select output', run: () => void selectBlock(b) },
+      ...(typeof b.exit === 'number' && b.exit !== 0 ? [{ label: 'Copy fix prompt', run: () => copy(fixPrompt(b.cmd, b.exit, output(b)), 'Copied: paste it into Claude') }] : []),
       { label: 'Copy as Markdown', run: () => copy(fenceText(output(b), shownCommand(b)), 'Copied as Markdown') },
       {
         label: 'Copy as image',
@@ -431,6 +436,23 @@ export function attachBlocks(term: Terminal, pane: string): BlocksHandle {
       const withOutput = model.blocks().filter((b) => tracked.has(b.id) && b.outputStart !== undefined);
       const b = buf.viewportY >= buf.baseY ? withOutput.at(-1) : model.blockAt(buf.viewportY);
       if (!b || !selectBlock(b)) toast({ kind: 'info', text: 'No output to select' }, 2500);
+    },
+    copyOutput: () => {
+      if (!on || term.buffer.active.type !== 'normal') return;
+      sync();
+      const buf = term.buffer.active;
+      const withOutput = model.blocks().filter((b) => tracked.has(b.id) && b.outputStart !== undefined);
+      const b = buf.viewportY >= buf.baseY ? withOutput.at(-1) : model.blockAt(buf.viewportY);
+      const text = b && someOutput(b);
+      if (text) copy(text, 'Copied');
+      else if (!b) toast({ kind: 'info', text: 'No output to copy' }, 2500);
+    },
+    copyFixPrompt: () => {
+      if (!on || term.buffer.active.type !== 'normal') return;
+      sync();
+      const b = model.blocks().filter((x) => tracked.has(x.id) && x.outputStart !== undefined && typeof x.exit === 'number' && x.exit !== 0).at(-1);
+      if (!b) return void toast({ kind: 'info', text: 'No failed command to ask about' }, 2500);
+      copy(fixPrompt(b.cmd, b.exit, output(b)), 'Copied: paste it into Claude');
     },
     copyMarkdown: () => {
       const text = term.getSelection();

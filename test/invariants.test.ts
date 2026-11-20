@@ -215,6 +215,7 @@ describe('invariants of CLAUDE.md', () => {
       'src/core/claude/history.ts': 1, // the title sliced to COMMAND_HEAD
       'src/core/claude/setup.ts': 1, // sliced to 4 * COMMAND_HEAD
       'src/core/claude/watcher.ts': 2, // sliced to 20 000; a path of at most MAX_PATH (1024)
+      'src/renderer/blocks.ts': 2, // the fix prompt: the command sliced to 4 * COMMAND_HEAD; the output's tail cut to its last 40 lines and 4000 characters first
       'src/renderer/actions.ts': 1, // a pinned line: the first line of a block's command, from safeCommand's head
       'src/renderer/components/TerminalView.tsx': 1, // the first line of a paste, cut by firstLine
       'src/renderer/state.ts': 2, // the cwd sliced to 4 * COMMAND_HEAD; safeCommand's head (COMMAND_HEAD)

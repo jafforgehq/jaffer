@@ -29,6 +29,10 @@ export interface JafferConfig {
     companion: Companion;
     /** How big the companion is drawn: small, normal, large or huge. Anything unknown is normal. */
     petSize: string;
+    /** (1.7.0) Which bottom corner the companion sits in: `right` or `left`. Anything unknown is right. */
+    petCorner: string;
+    /** (1.7.0) `"<folder>=<theme>"` lines: the window wears that theme while the focused terminal is in the folder. */
+    folderThemes: string[];
     /** A small seasonal touch for the companion on a few days of the year (a hat, a heart, a little snow). */
     seasonal: boolean;
     /** Small bars for CPU, memory and battery at the right of the title bar (the app samples them every 5 s only while this is on). */
@@ -167,6 +171,8 @@ export const DEFAULT_CONFIG: JafferConfig = {
     pet: true,
     companion: DEFAULT_COMPANION,
     petSize: 'normal',
+    petCorner: 'right',
+    folderThemes: [],
     seasonal: true,
     systemStats: false,
     glow: true,

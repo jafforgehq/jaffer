@@ -31,10 +31,10 @@ const inside = (p: { x: number; y: number }, margin = 0) => p.x >= margin && p.x
 const apart = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
 describe('companions', () => {
-  it('has the mole first and by default, and six companions with unique ids, names and a line each', () => {
+  it('has the mole first and by default, and eight companions with unique ids, names and a line each', () => {
     expect(COMPANIONS[0].id).toBe('mole');
     expect(DEFAULT_COMPANION).toBe('mole');
-    expect(COMPANIONS.map((c) => c.id)).toEqual(['mole', 'matrix', 'agents', 'warp', 'radar', 'core']);
+    expect(COMPANIONS.map((c) => c.id)).toEqual(['mole', 'matrix', 'agents', 'warp', 'radar', 'core', 'cat', 'garden']);
     expect(new Set(COMPANIONS.map((c) => c.name)).size).toBe(COMPANIONS.length);
     for (const c of COMPANIONS) expect(c.blurb.length).toBeGreaterThan(10);
   });

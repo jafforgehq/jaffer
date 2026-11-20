@@ -1,8 +1,9 @@
 import type { VNode } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { cfg, claudeFor, paneActivityAt, paneBellAt, paneFixedAt, paneInfo } from '../state';
+import { cfg, claudeFor, paneActivityAt, paneBellAt, paneCompanion, paneFailedAt, paneFixedAt, paneInfo } from '../state';
 import { processBadge } from '../../shared/process-badge';
-import { isDozing, petMood, petTool, type PetMood } from '../../shared/pet-mood';
+import { isDozing, isDrowsy, petMood, petTool, type PetMood } from '../../shared/pet-mood';
+import { contextShare, CONTEXT_FULL, isNight, petFx, WINCE_MS, type PetFx } from '../../shared/pet-fx';
 import { toolCategory, type ToolCategory } from '../../shared/tool-category';
 import { crewMoods, crewSize } from '../../shared/pet-crew';
 import { effortLevel, longestRunning, type Effort } from '../../shared/pet-effort';
@@ -10,6 +11,7 @@ import { COMPANIONS, companionOf, petScale, type Companion } from '../../shared/
 import { currentSeason } from '../season';
 import type { Season } from '../../shared/season';
 import { Scene } from './Scenes';
+import { terminals } from './TerminalView';
 
 /** What a scene says for itself (the mole's lines are about digging). */
 const SCENE_SAYS: Record<PetMood, string> = {
@@ -26,6 +28,35 @@ const SAYS: Record<PetMood, string> = {
   dig: 'Digging while something runs',
   alert: 'Claude needs you!',
   cheer: 'Done!',
+};
+
+/** Whether a line of the terminal's screen reaches under the companion's corner (a printed line longer than the column where the companion starts, in the rows it covers). */
+function textUnder(pane: string, el: HTMLElement): boolean {
+  const term = terminals.get(pane)?.term;
+  const screen = term?.element?.querySelector<HTMLElement>('.xterm-screen');
+  if (!term || !screen || term.cols < 1 || term.rows < 1) return false;
+  const s = screen.getBoundingClientRect();
+  const p = el.getBoundingClientRect();
+  if (s.width < 1 || s.height < 1) return false;
+  const cellW = s.width / term.cols;
+  const cellH = s.height / term.rows;
+  const col0 = Math.floor((p.left - s.left) / cellW);
+  const row0 = Math.max(0, Math.floor((p.top - s.top) / cellH));
+  const row1 = Math.min(term.rows, Math.ceil((p.bottom - s.top) / cellH));
+  const buf = term.buffer.active;
+  for (let r = row0; r < row1; r++) {
+    const line = buf.getLine(buf.viewportY + r);
+    if (line && line.translateToString(true).length > col0) return true;
+  }
+  return false;
+}
+
+/** What the extra pose says, for the screen reader and the hover title. */
+const FX_SAYS: Record<PetFx, string> = {
+  think: 'Claude is thinking',
+  wince: 'A command failed',
+  compact: 'Claude is compacting its context',
+  impatient: 'Claude has been waiting for you a while',
 };
 
 /** The main mole's seasonal touch, on its head: a pumpkin, a Santa hat, a heart. */
@@ -57,7 +88,7 @@ const BURST_MS = 1400;
 const FLINCH_MS = 400;
 
 /** One mole on its own molehill. The main one follows Claude and the terminal; a helper stands for one background agent. */
-function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood: PetMood; label: string; helper?: number; effort?: Effort; tool?: ToolCategory | null; dozing?: boolean; flinch?: boolean }): VNode {
+function Mole({ mood, label, helper, effort = 0, tool, dozing, drowsy, flinch, fx, ctx, night, swap }: { mood: PetMood; label: string; helper?: number; effort?: Effort; tool?: ToolCategory | null; dozing?: boolean; drowsy?: boolean; flinch?: boolean; fx?: PetFx | null; ctx?: number | null; night?: boolean; swap?: number }): VNode {
   const id = useRef(0);
   if (!id.current) id.current = ++moleCount;
   const clip = `pet-clip-${id.current}`; // one page can show nine moles: an id may be used once
@@ -69,10 +100,14 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
       data-effort={effort}
       data-role={helper === undefined ? 'main' : 'helper'}
       data-tool={tool ?? undefined}
-      data-idle={dozing ? 'doze' : undefined}
+      data-idle={dozing ? 'doze' : drowsy ? 'drowsy' : undefined}
       data-flinch={flinch ? '1' : undefined}
       data-season={season ?? undefined}
-      style={helper === undefined ? undefined : ({ '--i': helper + 1 } as never)}
+      data-fx={fx ?? undefined}
+      data-swapped={swap ? '1' : undefined}
+      data-ctx={typeof ctx === 'number' ? (ctx >= CONTEXT_FULL ? 'full' : 'some') : undefined}
+      data-night={night && !season ? '1' : undefined}
+      style={{ ...(helper === undefined ? {} : { '--i': helper + 1 }), ...(typeof ctx === 'number' ? { '--ctx': ctx.toFixed(2) } : {}) } as never}
       viewBox="0 0 120 72"
       role="img"
       aria-label={label}
@@ -85,6 +120,7 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
       </defs>
       <ellipse class="pet-hole" cx="60" cy="59" rx="27" ry="6" />
       <g clip-path={`url(#${clip})`}>
+        <g class="pet-swap" key={swap ?? 0}>
         <g class="pet-body">
           <ellipse class="pet-ear" cx="45" cy="30" rx="3.4" ry="3.4" />
           <ellipse class="pet-ear" cx="75" cy="30" rx="3.4" ry="3.4" />
@@ -97,6 +133,13 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
           </g>
           <path class="pet-lids" d="M49.4 38.4q2.6 2.6 5.2 0M65.4 38.4q2.6 2.6 5.2 0" />
           {season && <Accessory season={season} />}
+          {night && !season && (
+            <g class="pet-cap">
+              <path d="M47.5 29.6Q49 16 62 14.4Q60.5 22 72.5 29.6z" />
+              <rect x="45.5" y="27.6" width="29" height="4.2" rx="2.1" />
+              <circle cx="62.6" cy="14" r="2.6" />
+            </g>
+          )}
           <path class="pet-sweat" d="M73.5 28.5q-3.2 4.4-3.2 6.6a3.2 3.2 0 0 0 6.4 0q0-2.2-3.2-6.6z" />
           <g class="pet-hat">
             <path d="M46.5 30.4q13.5-17 27 0z" />
@@ -126,6 +169,7 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
             <path class="pet-wave two" d="M72.4 7q6.4 5.4 0 12.2" />
           </g>
         </g>
+        </g>
       </g>
       <g class="pet-dirt">
         <circle cx="60" cy="58" r="2.2" style={{ '--dx': '-26px', '--dy': '-30px', animationDelay: 'calc(0s + var(--i, 0) * 0.21s)' } as never} />
@@ -138,11 +182,25 @@ function Mole({ mood, label, helper, effort = 0, tool, dozing, flinch }: { mood:
       </g>
       <path class="pet-mound" d="M8 70Q26 55 60 57Q94 55 112 70Z" />
       <path class="pet-pile" d="M92 70Q106 46 120 70Z" />
+      <path class="pet-ctxpile" d="M-4 70Q10 44 28 70Z" />
       <circle class="pet-pebble" cx="24" cy="64" r="1.6" />
       <circle class="pet-pebble" cx="96" cy="63" r="2" />
       <g class="pet-zs">
         <text x="76" y="30">z</text>
         <text x="84" y="21">z</text>
+      </g>
+      <g class="pet-think">
+        <circle cx="74" cy="24" r="1.4" />
+        <circle cx="79" cy="19" r="2.2" />
+        <ellipse cx="90" cy="10" rx="10" ry="7" />
+        <circle class="td" cx="85" cy="10" r="1.3" />
+        <circle class="td" cx="90" cy="10" r="1.3" />
+        <circle class="td" cx="95" cy="10" r="1.3" />
+      </g>
+      <g class="pet-box">
+        <rect x="44" y="55" width="32" height="14" rx="1.6" />
+        <rect class="tape" x="57" y="55" width="6" height="14" />
+        <path d="M44 55l5-4h22l5 4" />
       </g>
       <g class="pet-bang">
         <circle cx="90" cy="20" r="9" />
@@ -208,7 +266,7 @@ export function Pet({ pane }: { pane: string }): VNode | null {
 
   // the longer something works, the harder its mole works: re-check every few seconds while anything is running
   const [, tick] = useState(0);
-  const active = live === 'working' || running > 0 || !!busy;
+  const active = live === 'working' || live === 'needs-you' || running > 0 || !!busy;
   useEffect(() => {
     if (!active) return;
     const t = setInterval(() => tick((n) => n + 1), 5000);
@@ -252,6 +310,16 @@ export function Pet({ pane }: { pane: string }): VNode | null {
     return () => clearTimeout(t);
   }, [fixed]);
 
+  // a failed command: a wince for a moment
+  const failed = paneFailedAt.value[pane];
+  const [wince, setWince] = useState(false);
+  useEffect(() => {
+    if (!failed || Date.now() - failed > WINCE_MS) return;
+    setWince(true);
+    const t = setTimeout(() => setWince(false), WINCE_MS);
+    return () => clearTimeout(t);
+  }, [failed]);
+
   // a bell: a flinch
   const bell = paneBellAt.value[pane];
   const [flinch, setFlinch] = useState(false);
@@ -275,7 +343,7 @@ export function Pet({ pane }: { pane: string }): VNode | null {
   const corner = useRef<HTMLDivElement>(null);
   const want = petScale(String(cfg.value?.appearance.petSize));
   const shownOn = cfg.value?.appearance.pet !== false;
-  const kind = companionOf(cfg.value?.appearance.companion);
+  const kind = companionOf(paneCompanion.value[pane] ?? cfg.value?.appearance.companion);
   useEffect(() => {
     const el = corner.current;
     const area = el?.parentElement;
@@ -291,8 +359,17 @@ export function Pet({ pane }: { pane: string }): VNode | null {
     return () => ro.disconnect();
   }, [want, shownOn, kind]);
 
+  // (1.7.0) text printed under the companion: it fades (checked every 0.8 s, only while it shows)
+  const [cover, setCover] = useState(false);
+  useEffect(() => {
+    const el = corner.current;
+    if (!el || !shownOn) return setCover(false);
+    const t = setInterval(() => setCover(textUnder(pane, el)), 800);
+    return () => clearInterval(t);
+  }, [pane, shownOn, kind]);
+
   if (cfg.value?.appearance.pet === false) return null;
-  const companion = companionOf(cfg.value?.appearance.companion);
+  const companion = kind;
   const mood = petMood({ badge: processBadge(busy, live), claude: live, cheering });
   const now = Date.now();
   const effort = mood === 'dig' ? effortLevel(longestRunning([live === 'working' ? session?.since : undefined, busy ? paneBusy?.busySince ?? undefined : undefined], now)) : 0;
@@ -301,28 +378,39 @@ export function Pet({ pane }: { pane: string }): VNode | null {
   const helpers = crewMoods(running, shown);
   const tool = petTool(session);
   const dozing = live !== 'working' && live !== 'needs-you' && running === 0 && !processBadge(busy, live).spin && isDozing(lastActivity, now);
+  const drowsy = !dozing && live !== 'working' && live !== 'needs-you' && running === 0 && !processBadge(busy, live).spin && isDrowsy(lastActivity, now);
+  const fx = petFx({ claude: live, compacting: session?.compacting, tool, agents: running, busy: !!busy, since: session?.since, failedAt: wince ? failed : undefined, now });
+  const ctx = session && live !== 'ended' ? contextShare(session.context) : null;
+  const night = isNight(new Date(now));
+  const swapRef = useRef({ mood, n: 0 }); // (a change of mood: the mole pops down and up; hooks above, so a plain ref)
+  if (swapRef.current.mood !== mood) swapRef.current = { mood, n: swapRef.current.n + 1 };
+  const fxSays = fx ? ` · ${FX_SAYS[fx]}` : '';
   const sparks = burst && cfg.value?.appearance.animations !== false ? <Burst key={burst} /> : null;
   if (companion !== 'mole') {
     const name = COMPANIONS.find((c) => c.id === companion)!.name;
     return (
-      <div class="pet-corner" data-companion={companion} ref={corner}>
+      <div class="pet-corner" data-companion={companion} data-cover={cover ? '1' : undefined} data-side={cfg.value?.appearance.petCorner === 'left' ? 'left' : undefined} ref={corner}>
         <Scene
           variant={companion}
           mood={mood}
           effort={effort}
           agents={helpers.map((m, i) => ({ mood: m, effort: m === 'dig' ? effortLevel(longestRunning([runningAgents[i]?.startedAt], now)) : (0 as Effort) }))}
-          label={`${name}: ${SCENE_SAYS[mood]}${tired}${crew}`}
+          label={`${name}: ${SCENE_SAYS[mood]}${tired}${fxSays}${crew}`}
           tool={tool}
           dozing={dozing}
+          drowsy={drowsy}
           flinch={flinch}
+          fx={fx}
+          ctx={ctx}
+          night={night}
         />
         {sparks}
       </div>
     );
   }
   return (
-    <div class="pet-corner" data-companion="mole" ref={corner}>
-      <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${dozing ? ' · dozing' : ''}${crew}`} tool={tool} dozing={dozing} flinch={flinch} />
+    <div class="pet-corner" data-companion="mole" data-cover={cover ? '1' : undefined} data-side={cfg.value?.appearance.petCorner === 'left' ? 'left' : undefined} ref={corner}>
+      <Mole mood={mood} effort={effort} label={`${SAYS[mood]}${tired}${fxSays}${dozing ? ' · dozing' : ''}${crew}`} tool={tool} dozing={dozing} drowsy={drowsy} flinch={flinch} fx={fx} ctx={ctx} night={night} swap={swapRef.current.n} />
       {helpers.map((m, i) => (
         <Mole
           key={i}

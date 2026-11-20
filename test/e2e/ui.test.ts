@@ -577,21 +577,21 @@ describe('Jaffer UI end to end', () => {
     await until(async () => (await page.getAttribute(main, 'data-effort')) === '0', 8_000, 'the effort to reset when the work stops');
   }, 90_000);
 
-  it('companions: Settings lists all six, choosing one swaps the corner, an unknown one is the mole, and the switch still turns it off', async () => {
+  it('companions: Settings lists all eight, choosing one swaps the corner, an unknown one is the mole, and the switch still turns it off', async () => {
     const setApp = (appearance: object) => page.evaluate((a) => window.jaffer.call('config.patch', { appearance: a }), appearance);
     const corner = (c: string) => `.pet-corner[data-companion='${c}']`;
     await page.keyboard.press('Meta+,');
     await page.waitForSelector('.settings');
     await page.locator('.settings-nav button', { hasText: 'Appearance' }).click();
     const cards = page.locator('.companions .companion-card');
-    expect(await cards.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.id))).toEqual(['mole', 'matrix', 'agents', 'warp', 'radar', 'core']);
+    expect(await cards.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.id))).toEqual(['mole', 'matrix', 'agents', 'warp', 'radar', 'core', 'cat', 'garden']);
     expect(await page.getAttribute('.companions', 'role')).toBe('radiogroup');
     // the mole is the one in use, and every tile is a live specimen (a scene, or the mole and its helper)
     expect(await page.getAttribute('.companion-card[data-id="mole"]', 'aria-checked')).toBe('true');
-    expect(await page.locator('.comp-prev .scene').count()).toBe(5);
+    expect(await page.locator('.comp-prev .scene').count()).toBe(7);
     expect(await page.locator('.comp-prev .pet').count()).toBe(2);
     expect(await page.locator(corner('mole')).count()).toBe(1);
-    // seven animations on the page at once (the corner and six previews): no id may exist twice (a clip path or a gradient would be the first one's)
+    // seven animations on the page at once (the corner and eight previews): no id may exist twice (a clip path or a gradient would be the first one's)
     expect(await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map((e) => e.id); return ids.filter((id, i) => ids.indexOf(id) !== i); })).toEqual([]);
     await page.locator('.companion-card[data-id="matrix"]').click();
     await page.waitForSelector(`${corner('matrix')} .scene[data-variant="matrix"]`);
@@ -4418,7 +4418,7 @@ describe('Jaffer UI end to end', () => {
       await page.waitForSelector('.now-card[data-state="idle"]');
       expect(await page.locator('.now-turns').count()).toBe(0);
       await finish(30_000, 0.01, 12);
-      await page.waitForSelector('.now-turns');
+      await page.waitForSelector('.now-turns', { state: 'attached' }); // (1.7.0: behind "More details")
       expect(await page.$$eval('.now-turns rect > title', (els) => els.map((e) => e.textContent))).toEqual(['1m 12s · ≈ $0.04', '30s · ≈ $0.01']);
       expect(await page.getAttribute('.now-turns', 'role')).toBe('img');
       expect(await page.getAttribute('.now-turns', 'aria-label')).toBe('Last 2 turns: the latest took 30s, the longest 1m 12s');
@@ -4535,6 +4535,7 @@ describe('Jaffer UI end to end', () => {
       await until(async () => (await textOf('.now-tl-toggle')) === 'Today (2)', 5_000, 'the Today list');
       expect(await page.getAttribute('.now-tl-toggle', 'aria-expanded')).toBe('false');
       expect(await page.locator('.now-tl-list').count()).toBe(0);
+      await page.evaluate(() => (document.querySelector('.now-details-toggle[aria-expanded="false"]') as HTMLElement | null)?.click()); // (1.7.0: the details open first)
       await page.click('.now-tl-toggle');
       await until(async () => (await page.locator('.now-tl-list li').count()) === 2, 5_000, 'the entries');
       expect(await page.getAttribute('.now-tl-toggle', 'aria-expanded')).toBe('true');
@@ -5673,7 +5674,7 @@ describe('Jaffer UI end to end', () => {
   it('the scenes carry data-tool too, and change their colour with the kind of work', async () => {
     try {
       await endClaude();
-      for (const variant of ['matrix', 'agents', 'warp', 'radar', 'core']) {
+      for (const variant of ['matrix', 'agents', 'warp', 'radar', 'core', 'cat', 'garden']) {
         await page.evaluate((c) => window.jaffer.call('config.patch', { appearance: { companion: c } }), variant);
         const scene = `.pet-corner[data-companion='${variant}'] .scene`;
         await page.waitForSelector(scene);

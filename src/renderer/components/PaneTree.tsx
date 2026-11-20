@@ -1,3 +1,4 @@
+import { sshTarget } from '../../shared/ssh-target';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { activePane, addPane, focusPane, claudeFor, closeAsk, daemonUp, overlay, paneLayout, paneInfo, paneKey, paneName, panes, removePane, resumeAsk, safeCommand, tildePath, toast, windowFocused, zoomPane } from '../state';
@@ -144,6 +145,12 @@ function ResumeConfirm({ id }: { id: string }): VNode {
   );
 }
 
+/** (1.7.0) `ssh` while a terminal runs an ssh connection, `prod` when its host looks like production: the outline and the chip say so (the host itself is never shown). */
+function remoteOf(id: string): 'ssh' | 'prod' | undefined {
+  const t = sshTarget(paneInfo.value[id]?.busy);
+  return t ? (t.prod ? 'prod' : 'ssh') : undefined;
+}
+
 export function PaneTree(): VNode {
   const list = panes.value.slice(0, MAX_PANES);
   const g = paneGrid(list.length);
@@ -168,7 +175,7 @@ export function PaneTree(): VNode {
         const live = claudeFor(id)?.state; // (the outline: only 'working' and 'needs-you' draw one)
         const cell = zoom === id ? { gridColumn: '1 / -1', gridRow: '1 / -1' } : { gridColumn: `${c.col}`, gridRow: `${c.row} / span ${c.rows}` };
         return (
-          <div key={paneKey(id)} class="pane" data-pane={id} data-claude={live === 'working' || live === 'needs-you' ? live : undefined} data-focused={multi && activePane.value === id ? '' : undefined} data-hidden={zoom && zoom !== id ? '' : undefined} style={cell} onMouseDown={() => focusPane(id)}>
+          <div key={paneKey(id)} class="pane" data-pane={id} data-remote={remoteOf(id)} data-claude={live === 'working' || live === 'needs-you' ? live : undefined} data-focused={multi && activePane.value === id ? '' : undefined} data-hidden={zoom && zoom !== id ? '' : undefined} style={cell} onMouseDown={() => focusPane(id)}>
             <TerminalView pane={id} />
             <Chip id={id} alone={!multi} zoomed={zoom === id} />
             {closeAsk.value === id && <Confirm id={id} />}

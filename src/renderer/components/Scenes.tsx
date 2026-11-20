@@ -4,6 +4,7 @@ import type { Companion } from '../../shared/companions';
 import type { CrewMood } from '../../shared/pet-crew';
 import type { Effort } from '../../shared/pet-effort';
 import type { PetMood } from '../../shared/pet-mood';
+import { CONTEXT_FULL, type PetFx } from '../../shared/pet-fx';
 import type { ToolCategory } from '../../shared/tool-category';
 import { currentSeason } from '../season';
 import {
@@ -50,7 +51,18 @@ export interface SceneProps {
   dozing?: boolean;
   /** A bell just rang: a flinch. */
   flinch?: boolean;
+  /** Nearly dozing: slower, a yawn. */
+  drowsy?: boolean;
+  /** (1.7.0) A one-off pose: thinking, a failed command, compacting, a long wait for the person. */
+  fx?: PetFx | null;
+  /** (1.7.0) The share of the context window in use (0 to 1), when known: a thin gauge along the bottom edge. */
+  ctx?: number | null;
+  /** (1.7.0) Late at night: dimmer. */
+  night?: boolean;
 }
+
+/** What a scene prints in its corner for a pose. */
+const FX_WORD: Record<PetFx, string> = { think: 'THINKING', wince: 'ERROR', compact: 'COMPACTING', impatient: 'WAITING' };
 
 /** What every scene draws from: the props, and the id its clip path, scan lines and gradient go by (one page can show seven scenes). */
 type Inner = SceneProps & { uid: string };
@@ -76,9 +88,12 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
       data-agents={p.agents.length}
       data-density={sceneDensity(p.mood, p.effort, p.tool)}
       data-tool={p.tool ?? undefined}
-      data-idle={p.dozing ? 'doze' : undefined}
+      data-idle={p.dozing ? 'doze' : p.drowsy ? 'drowsy' : undefined}
       data-flinch={p.flinch ? '1' : undefined}
       data-season={season ?? undefined}
+      data-fx={p.fx ?? undefined}
+      data-ctx={typeof p.ctx === 'number' ? (p.ctx >= CONTEXT_FULL ? 'full' : 'some') : undefined}
+      data-night={p.night ? '1' : undefined}
       style={{ '--t': `${sceneTempo(p.effort) * toolTempo(p.tool)}s` } as never}
       viewBox={`0 0 ${SCENE_W} ${SCENE_H}`}
       role="img"
@@ -107,6 +122,20 @@ function Frame({ p, children }: { p: Inner; children: ComponentChildren }): VNod
             ))}
           </g>
         )}
+        <g class="sc-fx" aria-hidden="true">
+          <rect class="sc-flash" x="0" y="0" width={SCENE_W} height={SCENE_H} />
+          <g class="sc-think">
+            {[0, 1, 2].map((i) => (
+              <circle key={i} cx={SCENE_W - 30 + i * 7} cy={SCENE_H - 12} r="1.8" style={{ '--n': i } as never} />
+            ))}
+          </g>
+          {p.fx && (
+            <text class="sc-word" x={SCENE_W - 8} y="12" text-anchor="end">
+              {FX_WORD[p.fx]}
+            </text>
+          )}
+          {typeof p.ctx === 'number' && <rect class="sc-ctx" x="0" y={SCENE_H - 2.5} width={(SCENE_W * Math.min(1, p.ctx)).toFixed(1)} height="2.5" />}
+        </g>
         <rect class="scene-scan" x="0" y="0" width={SCENE_W} height={SCENE_H} fill={`url(#${p.uid}-scan)`} />
       </g>
       <rect class="scene-edge" x="0.5" y="0.5" width={SCENE_W - 1} height={SCENE_H - 1} rx="9" />
@@ -149,6 +178,11 @@ function Matrix({ p }: { p: Inner }): VNode {
           {AGENT_LETTERS[i]}
         </text>
       ))}
+      <g class="mx-glitch" aria-hidden="true">
+        <rect x="38" y="0" width="5" height={SCENE_H} />
+        <rect x="96" y="0" width="3" height={SCENE_H} />
+        <rect x="150" y="0" width="6" height={SCENE_H} />
+      </g>
       <text class="mx-prompt" x="10" y="70">
         &gt;<tspan class="mx-cursor">_</tspan>
       </text>
@@ -267,6 +301,12 @@ function Warp({ p }: { p: Inner }): VNode {
           !
         </text>
       </g>
+      <g class="ws-jump" aria-hidden="true">
+        {Array.from({ length: 14 }, (_, i) => {
+          const a = (i / 14) * Math.PI * 2;
+          return <line key={i} x1={(WARP_FLAGSHIP.x + Math.cos(a) * 8).toFixed(1)} y1={(WARP_FLAGSHIP.y + Math.sin(a) * 8).toFixed(1)} x2={(WARP_FLAGSHIP.x + Math.cos(a) * 110).toFixed(1)} y2={(WARP_FLAGSHIP.y + Math.sin(a) * 110).toFixed(1)} pathLength="1" style={{ '--n': i % 4 } as never} />;
+        })}
+      </g>
       <rect class="ws-flash" x="0" y="0" width={SCENE_W} height={SCENE_H} />
     </Frame>
   );
@@ -324,6 +364,7 @@ function Radar({ p }: { p: Inner }): VNode {
         </g>
         <circle class="rd-ping" cx={SCOPE.x} cy={SCOPE.y} r="10" />
         <circle class="rd-ping two" cx={SCOPE.x} cy={SCOPE.y} r="10" />
+        <circle class="rd-fail" cx={SCOPE.x} cy={SCOPE.y} r="10" />
         {blips.map((b, i) => (
           <circle key={i} class="rd-blip" data-i={i} data-hue={AGENT_HUES[i]} data-state={p.agents[i]?.mood} cx={px(b.x)} cy={px(b.y)} r="2.4" style={{ '--a': b.angle } as never} />
         ))}
@@ -370,6 +411,136 @@ function Core({ p }: { p: Inner }): VNode {
   );
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------- Cat (1.7.0)
+
+/** One kitten: a background agent. */
+function Kitten({ x, i, a }: { x: number; i: number; a: SceneAgent | undefined }): VNode {
+  return (
+    <g transform={`translate(${x} 62)`}>
+      <g class="ct-kit" data-i={i} data-state={a?.mood} data-effort={a?.effort}>
+        <ellipse class="ct-fur" cx="0" cy="6" rx="9" ry="6.5" />
+        <path class="ct-fur" d="M-7 -4 L-6 -13 L-1.5 -7Z M7 -4 L6 -13 L1.5 -7Z" />
+        <circle class="ct-fur" cx="0" cy="-2" r="7.5" />
+        <circle class="ct-eye" cx="-2.8" cy="-2.6" r="1.1" />
+        <circle class="ct-eye" cx="2.8" cy="-2.6" r="1.1" />
+        <path class="ct-nose" d="M-1 0 L1 0 L0 1.4Z" />
+      </g>
+    </g>
+  );
+}
+
+function Cat({ p }: { p: Inner }): VNode {
+  return (
+    <Frame p={p}>
+      <rect class="ct-floor" x="0" y="74" width={SCENE_W} height="6" />
+      <g transform="translate(66 0)">
+        <g class="ct-cat">
+          <path class="ct-tail" d="M22 66 Q40 64 38 48 Q37 40 31 42" />
+          <g class="ct-body">
+            <ellipse class="ct-fur" cx="0" cy="60" rx="24" ry="13" />
+            <g class="ct-head">
+              <path class="ct-fur" d="M-14 30 L-12 12 L-3 23Z M14 30 L12 12 L3 23Z" />
+              <circle class="ct-fur" cx="0" cy="34" r="14.5" />
+              <g class="ct-eyes">
+                <ellipse class="ct-eye" cx="-5.5" cy="33" rx="1.9" ry="2.5" />
+                <ellipse class="ct-eye" cx="5.5" cy="33" rx="1.9" ry="2.5" />
+              </g>
+              <path class="ct-lids" d="M-8 33q2.5 2.4 5 0M3 33q2.5 2.4 5 0" />
+              <path class="ct-nose" d="M-1.8 38 L1.8 38 L0 40.2Z" />
+              <path class="ct-whisk" d="M-14 37 L-23 35 M-14 40 L-23 41.5 M14 37 L23 35 M14 40 L23 41.5" />
+            </g>
+            <ellipse class="ct-paw l" cx="-9" cy="70" rx="6.2" ry="3.6" />
+            <ellipse class="ct-paw r" cx="9" cy="70" rx="6.2" ry="3.6" />
+          </g>
+          <g class="ct-keys">
+            <rect x="-22" y="70.5" width="44" height="5" rx="1.4" />
+            {[-16, -9, -2, 5, 12].map((kx, i) => (
+              <circle key={kx} cx={kx} cy="73" r="1" style={{ '--n': i } as never} />
+            ))}
+          </g>
+          <g class="ct-zs">
+            <text x="18" y="22">
+              z
+            </text>
+            <text x="26" y="13">
+              z
+            </text>
+          </g>
+          <g class="ct-bang">
+            <circle cx="24" cy="14" r="7.5" />
+            <text x="24" y="18.5" text-anchor="middle">
+              !
+            </text>
+          </g>
+          <g class="ct-sparks">
+            <path d="M-26 20l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z" />
+            <path d="M26 30l1.2 3 3 1.2-3 1.2-1.2 3-1.2-3-3-1.2 3-1.2z" />
+          </g>
+        </g>
+      </g>
+      {[0, 1, 2].map((i) => (
+        <Kitten key={i} x={150 + i * 32} i={i} a={p.agents[i]} />
+      ))}
+    </Frame>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------- Garden (1.7.0)
+
+const PETALS = [0, 60, 120, 180, 240, 300];
+
+/** A small plant for a background agent. */
+function Sprout({ x, i, a }: { x: number; i: number; a: SceneAgent | undefined }): VNode {
+  return (
+    <g transform={`translate(${x} 72)`}>
+      <g class="gd-sprout" data-i={i} data-state={a?.mood} data-effort={a?.effort}>
+        <path class="gd-stem" d="M0 0 Q-1 -9 0 -16" />
+        <ellipse class="gd-leaf" cx="-5" cy="-9" rx="5" ry="2.6" transform="rotate(-28 -5 -9)" />
+        <ellipse class="gd-leaf" cx="5" cy="-13" rx="5" ry="2.6" transform="rotate(28 5 -13)" />
+        <circle class="gd-bud" cx="0" cy="-18" r="3" />
+      </g>
+    </g>
+  );
+}
+
+function Garden({ p }: { p: Inner }): VNode {
+  return (
+    <Frame p={p}>
+      <rect class="gd-soil" x="0" y="72" width={SCENE_W} height="8" />
+      <g class="gd-rain" aria-hidden="true">
+        {[44, 62, 80, 98].map((rx, i) => (
+          <line key={rx} x1={rx} y1="6" x2={rx - 2} y2="14" style={{ '--n': i } as never} />
+        ))}
+      </g>
+      <g transform="translate(70 72)">
+        <g class="gd-grow">
+          <path class="gd-stem" d="M0 0 Q-3 -18 0 -34 Q3 -44 0 -52" />
+          <ellipse class="gd-leaf" cx="-10" cy="-20" rx="10" ry="4.8" transform="rotate(-30 -10 -20)" />
+          <ellipse class="gd-leaf" cx="10" cy="-31" rx="10" ry="4.8" transform="rotate(30 10 -31)" />
+          <g transform="translate(0 -55)">
+            <g class="gd-bloom">
+              {PETALS.map((deg) => (
+                <ellipse key={deg} class="gd-petal" cx="0" cy="-6.2" rx="3.6" ry="5.6" transform={`rotate(${deg})`} />
+              ))}
+              <circle class="gd-heart" r="3.4" />
+            </g>
+          </g>
+        </g>
+        <g class="gd-bang">
+          <circle cx="28" cy="-52" r="8" />
+          <text x="28" y="-47" text-anchor="middle">
+            !
+          </text>
+        </g>
+      </g>
+      {[0, 1, 2].map((i) => (
+        <Sprout key={i} x={150 + i * 32} i={i} a={p.agents[i]} />
+      ))}
+    </Frame>
+  );
+}
+
 // ----------------------------------------------------------------------------------------------------------------
 
 /** One of the scenes that can replace the mole. */
@@ -388,5 +559,9 @@ export function Scene(props: SceneProps): VNode {
       return <Radar p={p} />;
     case 'core':
       return <Core p={p} />;
+    case 'cat':
+      return <Cat p={p} />;
+    case 'garden':
+      return <Garden p={p} />;
   }
 }

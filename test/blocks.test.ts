@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { BlockModel, MAX_BLOCKS, blockOutputText, failedPrompt, fenceText, saveName, type Block } from '../src/renderer/blocks';
+import { BlockModel, MAX_BLOCKS, blockOutputText, failedPrompt, fenceText, fixPrompt, saveName, type Block } from '../src/renderer/blocks';
 import { SAVE_TEXT_MAX, utf8Bytes } from '../src/shared/save-text';
 import { COMMAND_HEAD } from '../src/shared/process-badge';
 
@@ -247,5 +247,34 @@ describe('failedPrompt: the nearest failed command above or below the top of the
     expect(failedPrompt(b, 2, -1)).toBeUndefined();
     expect(failedPrompt(b, 6, 1)).toBeUndefined();
     expect(failedPrompt(b.filter((x) => x.exit === 0), 9, -1)).toBeUndefined();
+  });
+});
+
+describe('fixPrompt: what "Copy fix prompt" puts on the clipboard', () => {
+  it('has the command, its exit, the output in a fence and the question', () => {
+    const p = fixPrompt('npm test', 1, 'FAIL a.test.ts\nexpected 1 to be 2');
+    expect(p).toContain('This command failed (exit 1).');
+    expect(p).toContain('$ npm test');
+    expect(p).toContain('expected 1 to be 2');
+    expect(p.trimEnd().endsWith('Why did it fail, and what is the smallest fix?')).toBe(true);
+  });
+
+  it('keeps only the last 40 lines and 4000 characters of a long output', () => {
+    const out = Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n');
+    const p = fixPrompt('make', 2, out);
+    expect(p).toContain('line 199');
+    expect(p).not.toContain('line 100\n');
+    expect(fixPrompt('make', 2, 'x'.repeat(50_000)).length).toBeLessThan(4400);
+  });
+
+  it('redacts secrets and never names a sensitive command', () => {
+    const p = fixPrompt('cat ~/.ssh/id_rsa', 1, 'token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789');
+    expect(p).not.toContain('id_rsa');
+    expect(p).not.toContain('sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789');
+  });
+
+  it('copes with no command, no exit and no output', () => {
+    expect(fixPrompt(undefined, null, '')).toContain('(no output)');
+    expect(fixPrompt(undefined, null, '')).not.toContain('exit');
   });
 });
